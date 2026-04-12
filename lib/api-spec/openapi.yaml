@@ -3,20 +3,25 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Mass Tort Operating System API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: leads
+    description: Lead management
+  - name: documents
+    description: Document management
+  - name: dashboard
+    description: Dashboard analytics
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +29,253 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /leads:
+    get:
+      operationId: listLeads
+      tags: [leads]
+      summary: List all leads
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [new, qualified, signed, rejected]
+        - name: tort_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of leads
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Lead"
+    post:
+      operationId: createLead
+      tags: [leads]
+      summary: Create a new lead (intake)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLeadBody"
+      responses:
+        "201":
+          description: Lead created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+
+  /leads/{id}:
+    get:
+      operationId: getLead
+      tags: [leads]
+      summary: Get a single lead
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Lead details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateLead
+      tags: [leads]
+      summary: Update lead status or fields
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLeadBody"
+      responses:
+        "200":
+          description: Updated lead
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+    delete:
+      operationId: deleteLead
+      tags: [leads]
+      summary: Delete a lead
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /leads/{id}/qualify:
+    post:
+      operationId: qualifyLead
+      tags: [leads]
+      summary: Run Boolean Gatekeeper qualification on a lead
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Qualification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualificationResult"
+
+  /documents:
+    get:
+      operationId: listDocuments
+      tags: [documents]
+      summary: List all documents
+      parameters:
+        - name: lead_id
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of documents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Document"
+    post:
+      operationId: createDocument
+      tags: [documents]
+      summary: Upload or register a document
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDocumentBody"
+      responses:
+        "201":
+          description: Document created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+
+  /documents/{id}:
+    patch:
+      operationId: updateDocument
+      tags: [documents]
+      summary: Update document metadata or status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDocumentBody"
+      responses:
+        "200":
+          description: Updated document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+    delete:
+      operationId: deleteDocument
+      tags: [documents]
+      summary: Delete a document
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /dashboard/stats:
+    get:
+      operationId: getDashboardStats
+      tags: [dashboard]
+      summary: Get pipeline summary stats
+      responses:
+        "200":
+          description: Dashboard statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
+  /dashboard/pipeline:
+    get:
+      operationId: getPipelineBreakdown
+      tags: [dashboard]
+      summary: Get lead counts grouped by status and tort type
+      responses:
+        "200":
+          description: Pipeline breakdown
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PipelineBreakdown"
+
+  /dashboard/recent-activity:
+    get:
+      operationId: getRecentActivity
+      tags: [dashboard]
+      summary: Get recent lead activity feed
+      responses:
+        "200":
+          description: Recent activity items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActivityItem"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +283,355 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    Lead:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        tort_type:
+          type: string
+        exposure_start:
+          type: string
+          nullable: true
+        exposure_end:
+          type: string
+          nullable: true
+        diagnosis_confirmed:
+          type: boolean
+        diagnosis_type:
+          type: string
+          nullable: true
+        was_at_location:
+          type: boolean
+        location_name:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [new, qualified, signed, rejected]
+        rejection_reason:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        ad_spend:
+          type: number
+          nullable: true
+        source:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+        updated_at:
+          type: string
+      required:
+        - id
+        - name
+        - tort_type
+        - diagnosis_confirmed
+        - was_at_location
+        - status
+        - created_at
+        - updated_at
+
+    CreateLeadBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        tort_type:
+          type: string
+        exposure_start:
+          type: string
+          nullable: true
+        exposure_end:
+          type: string
+          nullable: true
+        diagnosis_confirmed:
+          type: boolean
+        diagnosis_type:
+          type: string
+          nullable: true
+        was_at_location:
+          type: boolean
+        location_name:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        ad_spend:
+          type: number
+          nullable: true
+        source:
+          type: string
+          nullable: true
+      required:
+        - name
+        - tort_type
+        - diagnosis_confirmed
+        - was_at_location
+
+    UpdateLeadBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        tort_type:
+          type: string
+        exposure_start:
+          type: string
+          nullable: true
+        exposure_end:
+          type: string
+          nullable: true
+        diagnosis_confirmed:
+          type: boolean
+        diagnosis_type:
+          type: string
+          nullable: true
+        was_at_location:
+          type: boolean
+        location_name:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [new, qualified, signed, rejected]
+        rejection_reason:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        ad_spend:
+          type: number
+          nullable: true
+        source:
+          type: string
+          nullable: true
+
+    QualificationResult:
+      type: object
+      properties:
+        lead_id:
+          type: integer
+        qualified:
+          type: boolean
+        status:
+          type: string
+          enum: [qualified, rejected]
+        reason:
+          type: string
+        gates_passed:
+          type: array
+          items:
+            type: string
+        gates_failed:
+          type: array
+          items:
+            type: string
+      required:
+        - lead_id
+        - qualified
+        - status
+        - reason
+        - gates_passed
+        - gates_failed
+
+    Document:
+      type: object
+      properties:
+        id:
+          type: integer
+        lead_id:
+          type: integer
+        document_type:
+          type: string
+          enum: [retainer, medical_record, intake_form, other]
+        file_name:
+          type: string
+        file_url:
+          type: string
+          nullable: true
+        signed:
+          type: boolean
+        signed_at:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+      required:
+        - id
+        - lead_id
+        - document_type
+        - file_name
+        - signed
+        - created_at
+
+    CreateDocumentBody:
+      type: object
+      properties:
+        lead_id:
+          type: integer
+        document_type:
+          type: string
+          enum: [retainer, medical_record, intake_form, other]
+        file_name:
+          type: string
+        file_url:
+          type: string
+          nullable: true
+        signed:
+          type: boolean
+        signed_at:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required:
+        - lead_id
+        - document_type
+        - file_name
+        - signed
+
+    UpdateDocumentBody:
+      type: object
+      properties:
+        document_type:
+          type: string
+          enum: [retainer, medical_record, intake_form, other]
+        file_name:
+          type: string
+        file_url:
+          type: string
+          nullable: true
+        signed:
+          type: boolean
+        signed_at:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+
+    DashboardStats:
+      type: object
+      properties:
+        total_leads:
+          type: integer
+        qualified_leads:
+          type: integer
+        signed_retainers:
+          type: integer
+        rejected_leads:
+          type: integer
+        new_leads:
+          type: integer
+        total_ad_spend:
+          type: number
+        cpsr:
+          type: number
+          nullable: true
+        qualification_rate:
+          type: number
+        conversion_rate:
+          type: number
+        leads_today:
+          type: integer
+        leads_this_week:
+          type: integer
+      required:
+        - total_leads
+        - qualified_leads
+        - signed_retainers
+        - rejected_leads
+        - new_leads
+        - total_ad_spend
+        - qualification_rate
+        - conversion_rate
+        - leads_today
+        - leads_this_week
+
+    PipelineBreakdown:
+      type: object
+      properties:
+        by_status:
+          type: array
+          items:
+            type: object
+            properties:
+              status:
+                type: string
+              count:
+                type: integer
+            required: [status, count]
+        by_tort_type:
+          type: array
+          items:
+            type: object
+            properties:
+              tort_type:
+                type: string
+              count:
+                type: integer
+              qualified:
+                type: integer
+              signed:
+                type: integer
+            required: [tort_type, count, qualified, signed]
+      required: [by_status, by_tort_type]
+
+    ActivityItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        lead_id:
+          type: integer
+        lead_name:
+          type: string
+        event_type:
+          type: string
+        description:
+          type: string
+        occurred_at:
+          type: string
+        tort_type:
+          type: string
+      required:
+        - id
+        - lead_id
+        - lead_name
+        - event_type
+        - description
+        - occurred_at
+        - tort_type
