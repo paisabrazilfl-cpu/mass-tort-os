@@ -63,6 +63,16 @@ export default function LeadIntake() {
           phone: values.phone || undefined,
         }
       });
+
+      if ((newLead as any)?._conflict?.output_state === "REVIEW_REQUIRED") {
+        toast({
+          title: "Sent to Review Queue",
+          description: (newLead as any)._conflict.details?.join(". ") || "Lead flagged for manual review due to detected conflicts.",
+          variant: "destructive",
+        });
+        setLocation("/review-queue");
+        return;
+      }
       
       const qualResult = await qualifyLead.mutateAsync({ id: newLead.id });
       
@@ -73,12 +83,26 @@ export default function LeadIntake() {
       });
       
       setLocation(`/leads/${newLead.id}`);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to submit intake form.",
-        variant: "destructive",
-      });
+    } catch (error: any) {
+      const responseData = error?.response?.data;
+      if (responseData?.output_state === "REJECT") {
+        toast({
+          title: "Lead Rejected",
+          description: responseData.details?.join(". ") || responseData.error || "Lead failed conflict validation.",
+          variant: "destructive",
+        });
+      } else if (responseData?.output_state === "REVIEW_REQUIRED") {
+        toast({
+          title: "Sent to Review",
+          description: responseData.details?.join(". ") || "Lead flagged for manual review due to conflicts.",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: responseData?.error || "Failed to submit intake form.",
+          variant: "destructive",
+        });
+      }
     }
   }
 

@@ -410,6 +410,98 @@ export const AnalyzeCaseFilesResponse = zod.object({
 });
 
 /**
+ * @summary List review queue items with optional filters
+ */
+export const ListReviewQueueQueryParams = zod.object({
+  resolution: zod.coerce.string().optional(),
+  conflict_type: zod.coerce.string().optional(),
+  severity: zod.coerce.string().optional(),
+  entity_type: zod.coerce.string().optional(),
+  limit: zod.coerce.string().optional(),
+});
+
+export const ListReviewQueueResponseItem = zod.object({
+  id: zod.number(),
+  entity_type: zod.string(),
+  entity_id: zod.string(),
+  conflict_type: zod.string(),
+  severity: zod.string(),
+  failsafe_mode: zod.string(),
+  source_module: zod.string(),
+  summary: zod.string(),
+  details: zod.object({}).passthrough().optional(),
+  resolution: zod.string(),
+  resolution_notes: zod.string().nullish(),
+  resolved_by: zod.string().nullish(),
+  resolved_at: zod.string().nullish(),
+  retry_count: zod.number(),
+  created_at: zod.string(),
+});
+export const ListReviewQueueResponse = zod.array(ListReviewQueueResponseItem);
+
+/**
+ * @summary Get review queue statistics
+ */
+export const GetReviewQueueStatsResponse = zod.object({
+  total_pending: zod.number(),
+  by_resolution: zod.array(
+    zod.object({
+      resolution: zod.string().optional(),
+      count: zod.number().optional(),
+    }),
+  ),
+  by_conflict_type: zod.array(
+    zod.object({
+      conflict_type: zod.string().optional(),
+      count: zod.number().optional(),
+    }),
+  ),
+  by_severity: zod.array(
+    zod.object({
+      severity: zod.string().optional(),
+      count: zod.number().optional(),
+    }),
+  ),
+  by_failsafe_mode: zod.array(
+    zod.object({
+      failsafe_mode: zod.string().optional(),
+      count: zod.number().optional(),
+    }),
+  ),
+});
+
+/**
+ * @summary Resolve a review queue item
+ */
+export const ResolveReviewItemParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ResolveReviewItemBody = zod.object({
+  resolution: zod.enum(["accepted", "rejected", "escalated"]),
+  resolution_notes: zod.string().optional(),
+  resolved_by: zod.string().optional(),
+});
+
+export const ResolveReviewItemResponse = zod.object({
+  id: zod.number(),
+  entity_type: zod.string(),
+  entity_id: zod.string(),
+  conflict_type: zod.string(),
+  severity: zod.string(),
+  failsafe_mode: zod.string(),
+  source_module: zod.string(),
+  summary: zod.string(),
+  details: zod.object({}).passthrough().optional(),
+  resolution: zod.string(),
+  resolution_notes: zod.string().nullish(),
+  resolved_by: zod.string().nullish(),
+  resolved_at: zod.string().nullish(),
+  retry_count: zod.number(),
+  created_at: zod.string(),
+});
+
+/**
  * @summary Search the NPI Registry for doctors and providers
  */
 export const SearchNpiQueryParams = zod.object({

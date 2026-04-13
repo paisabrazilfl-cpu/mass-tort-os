@@ -22,6 +22,8 @@ tags:
     description: Dashboard analytics
   - name: ocr
     description: Fax OCR inbox — Legora Grid extraction
+  - name: review-queue
+    description: Conflict resolution review queue
   - name: npi
     description: NPI Registry doctor lookup
   - name: paralegals
@@ -404,6 +406,85 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateCaseResponse"
+
+  /review-queue:
+    get:
+      operationId: listReviewQueue
+      tags: [review-queue]
+      summary: List review queue items with optional filters
+      parameters:
+        - name: resolution
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: conflict_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: severity
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: entity_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Review queue items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReviewQueueItem"
+
+  /review-queue/stats:
+    get:
+      operationId: getReviewQueueStats
+      tags: [review-queue]
+      summary: Get review queue statistics
+      responses:
+        "200":
+          description: Review queue stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewQueueStats"
+
+  /review-queue/{id}:
+    patch:
+      operationId: resolveReviewItem
+      tags: [review-queue]
+      summary: Resolve a review queue item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveReviewBody"
+      responses:
+        "200":
+          description: Resolved review item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewQueueItem"
 
   /npi/search:
     get:
@@ -1315,6 +1396,99 @@ components:
         vault_path:
           type: string
       required: [fax_result_id, status, job_id, vault_path]
+
+    ReviewQueueItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+        conflict_type:
+          type: string
+        severity:
+          type: string
+        failsafe_mode:
+          type: string
+        source_module:
+          type: string
+        summary:
+          type: string
+        details:
+          type: object
+        resolution:
+          type: string
+        resolution_notes:
+          type: string
+          nullable: true
+        resolved_by:
+          type: string
+          nullable: true
+        resolved_at:
+          type: string
+          nullable: true
+        retry_count:
+          type: integer
+        created_at:
+          type: string
+      required: [id, entity_type, entity_id, conflict_type, severity, failsafe_mode, source_module, summary, resolution, retry_count, created_at]
+
+    ReviewQueueStats:
+      type: object
+      properties:
+        total_pending:
+          type: integer
+        by_resolution:
+          type: array
+          items:
+            type: object
+            properties:
+              resolution:
+                type: string
+              count:
+                type: integer
+        by_conflict_type:
+          type: array
+          items:
+            type: object
+            properties:
+              conflict_type:
+                type: string
+              count:
+                type: integer
+        by_severity:
+          type: array
+          items:
+            type: object
+            properties:
+              severity:
+                type: string
+              count:
+                type: integer
+        by_failsafe_mode:
+          type: array
+          items:
+            type: object
+            properties:
+              failsafe_mode:
+                type: string
+              count:
+                type: integer
+      required: [total_pending, by_resolution, by_conflict_type, by_severity, by_failsafe_mode]
+
+    ResolveReviewBody:
+      type: object
+      properties:
+        resolution:
+          type: string
+          enum: [accepted, rejected, escalated]
+        resolution_notes:
+          type: string
+        resolved_by:
+          type: string
+      required: [resolution]
 
     NpiProvider:
       type: object

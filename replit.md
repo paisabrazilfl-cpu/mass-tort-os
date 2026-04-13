@@ -45,6 +45,7 @@ pnpm workspace monorepo using TypeScript. Full-stack Mass Tort Operating System 
   - `/compliance` — Compliance Audit Trail (event log, filters, JSON drill-down)
   - `/ocr-inbox` — OCR Inbox (Legora Grid, fax upload)
   - `/npi-lookup` — NPI Provider Lookup (CMS NPI Registry search)
+  - `/review-queue` — Review Queue (conflict resolution, error fallback items)
 
 ### API Server (`artifacts/api-server`)
 - **Type**: Express API, served at `/api`
@@ -57,6 +58,7 @@ pnpm workspace monorepo using TypeScript. Full-stack Mass Tort Operating System 
 - **Analytics routes**: `/api/analytics/overview`, `/api/analytics/pipeline-trend`, `/api/analytics/conversion-funnel`, `/api/analytics/tort-breakdown`, `/api/analytics/paralegal-leaderboard`
 - **Compliance routes**: `/api/compliance/audit-trail`, `/api/compliance/audit-summary`
 - **NPI routes**: `/api/npi/search`, `/api/npi/lookup/:npi`
+- **Review queue routes**: `/api/review-queue`, `/api/review-queue/stats`, `/api/review-queue/:id`
 
 ## Distributed Architecture
 
@@ -87,6 +89,7 @@ PostgreSQL Results + Audit Log
 
 ### CRM Tables
 - `paralegals` — Paralegal team (name, email, role, performance stats)
+- `review_queue` — Conflict resolution + error fallback items (entity, conflict_type, severity, failsafe_mode, resolution)
 
 ### Distributed Case Pipeline Tables
 - `cases` — Case records (id: UUID, data: JSONB, status)
@@ -156,5 +159,32 @@ GET /api/ocr/results → UI display
 
 ### Frontend
 - `/ocr-inbox` — Legora Grid table with queue stats, upload form, expandable raw text rows
+
+## Conflict Resolution + Error Fallback System
+
+### Conflict Detection Engine (`src/lib/conflict-engine.ts`)
+- **DATA_INTEGRITY_CONFLICT**: Missing required fields, garbage input, invalid email/phone
+- **LOGICAL_CONFLICT**: Foreign location (non-US), tort/diagnosis mismatch, date range errors
+- **AI_CLASSIFICATION_CONFLICT**: AI verdict disagrees with rule engine
+- **RULE_OVERRIDE_CONFLICT**: Buyer criteria contradicts global tort rules
+
+### Error Fallback (`src/lib/error-fallback.ts`)
+- `withErrorFallback()` — wraps any async operation with try/catch, retry (max 2), sanitized input retry, audit logging
+- `createLoopGuard()` — prevents infinite loops: max_retries=2, max_ai_rechecks=1, max_rule_re_evaluations=2
+- All failures logged to audit_log AND review_queue
+
+### Failsafe Modes
+- **SAFE_FAIL**: Auto-reject on garbage/uncertainty
+- **REVIEW_FAIL**: Route to manual review queue
+- **HARD_BLOCK**: Stop processing on compliance risk
+
+### System Output States
+Every module produces: `ACCEPT`, `REJECT`, `REVIEW_REQUIRED`, or `ERROR_FALLBACK`
+
+### Integration Points
+- Lead ingestion: conflict check runs before insert (garbage → REJECT, bad location → REVIEW_REQUIRED)
+- Worker analyze_case: wrapped in error fallback with loop guard
+- Worker process_fax: wrapped in error fallback with retry
+- All conflicts/failures: audit_log entry + review_queue entry
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.

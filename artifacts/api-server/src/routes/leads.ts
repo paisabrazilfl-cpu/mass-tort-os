@@ -10,6 +10,10 @@ import {
   DeleteLeadParams,
   QualifyLeadParams,
 } from "@workspace/api-zod";
+import { runFullConflictCheck, checkAIClassificationConflict, routeToReview } from "../lib/conflict-engine";
+import { withErrorFallback } from "../lib/error-fallback";
+import { auditLog } from "../lib/audit";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
@@ -50,8 +54,70 @@ router.post("/", async (req, res) => {
   }
 
   const data = parsed.data;
-  let status = "new";
 
+  const conflictCheck = await runFullConflictCheck({
+    entity_type: "lead",
+    entity_id: "pending",
+    source_module: "lead_ingestion",
+    lead_data: data as Record<string, unknown>,
+  });
+
+  if (conflictCheck.has_conflict) {
+    if (conflictCheck.output_state === "REJECT") {
+      res.status(422).json({
+        error: "Lead rejected by conflict detection",
+        output_state: "REJECT",
+        conflict_type: conflictCheck.conflict_type,
+        failsafe_mode: conflictCheck.failsafe_mode,
+        details: conflictCheck.details,
+      });
+      return;
+    }
+    if (conflictCheck.output_state === "REVIEW_REQUIRED") {
+      const [lead] = await db
+        .insert(leadsTable)
+        .values({
+          ...data,
+          status: "review_required",
+          rejection_reason: `Conflict: ${conflictCheck.details.join("; ")}`,
+          exposure_start: data.exposure_start ?? null,
+          exposure_end: data.exposure_end ?? null,
+          diagnosis_type: data.diagnosis_type ?? null,
+          location_name: data.location_name ?? null,
+          notes: data.notes ?? null,
+          ad_spend: data.ad_spend ? String(data.ad_spend) : null,
+          source: data.source ?? null,
+        })
+        .returning();
+
+      try {
+        const { reviewQueueTable } = await import("@workspace/db");
+        const { eq, and, sql: sqlTag } = await import("drizzle-orm");
+        await db
+          .update(reviewQueueTable)
+          .set({ entity_id: String(lead.id) })
+          .where(
+            and(
+              eq(reviewQueueTable.entity_id, "pending"),
+              eq(reviewQueueTable.entity_type, "lead"),
+              eq(reviewQueueTable.source_module, "lead_ingestion")
+            )
+          );
+      } catch (_) {}
+
+      res.status(201).json({
+        ...lead,
+        _conflict: {
+          output_state: "REVIEW_REQUIRED",
+          conflict_type: conflictCheck.conflict_type,
+          details: conflictCheck.details,
+        },
+      });
+      return;
+    }
+  }
+
+  let status = "new";
   if (!data.diagnosis_confirmed || !data.was_at_location) {
     status = "rejected";
   }
@@ -70,6 +136,8 @@ router.post("/", async (req, res) => {
       source: data.source ?? null,
     })
     .returning();
+
+  await auditLog("lead", String(lead.id), "created", { output_state: "ACCEPT", status });
 
   res.status(201).json(lead);
 });
@@ -167,6 +235,16 @@ router.post("/:id/qualify", async (req, res) => {
 
   if (!lead) {
     res.status(404).json({ error: "Lead not found" });
+    return;
+  }
+
+  if (lead.status === "review_required") {
+    res.status(409).json({
+      error: "Lead is pending manual review and cannot be auto-qualified",
+      lead_id: lead.id,
+      status: "review_required",
+      output_state: "REVIEW_REQUIRED",
+    });
     return;
   }
 

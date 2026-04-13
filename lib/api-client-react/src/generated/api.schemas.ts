@@ -332,6 +332,69 @@ export interface UploadFaxResponse {
   vault_path: string;
 }
 
+export type ReviewQueueItemDetails = { [key: string]: unknown };
+
+export interface ReviewQueueItem {
+  id: number;
+  entity_type: string;
+  entity_id: string;
+  conflict_type: string;
+  severity: string;
+  failsafe_mode: string;
+  source_module: string;
+  summary: string;
+  details?: ReviewQueueItemDetails;
+  resolution: string;
+  resolution_notes?: string | null;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  retry_count: number;
+  created_at: string;
+}
+
+export type ReviewQueueStatsByResolutionItem = {
+  resolution?: string;
+  count?: number;
+};
+
+export type ReviewQueueStatsByConflictTypeItem = {
+  conflict_type?: string;
+  count?: number;
+};
+
+export type ReviewQueueStatsBySeverityItem = {
+  severity?: string;
+  count?: number;
+};
+
+export type ReviewQueueStatsByFailsafeModeItem = {
+  failsafe_mode?: string;
+  count?: number;
+};
+
+export interface ReviewQueueStats {
+  total_pending: number;
+  by_resolution: ReviewQueueStatsByResolutionItem[];
+  by_conflict_type: ReviewQueueStatsByConflictTypeItem[];
+  by_severity: ReviewQueueStatsBySeverityItem[];
+  by_failsafe_mode: ReviewQueueStatsByFailsafeModeItem[];
+}
+
+export type ResolveReviewBodyResolution =
+  (typeof ResolveReviewBodyResolution)[keyof typeof ResolveReviewBodyResolution];
+
+export const ResolveReviewBodyResolution = {
+  accepted: "accepted",
+  rejected: "rejected",
+  escalated: "escalated",
+} as const;
+
+export interface ResolveReviewBody {
+  resolution: ResolveReviewBodyResolution;
+  resolution_notes?: string;
+  resolved_by?: string;
+}
+
 export interface NpiProvider {
   npi: string;
   provider_type: string;
@@ -489,6 +552,14 @@ export type ListDocumentsParams = {
 };
 
 export type CreateCaseBody = { [key: string]: unknown };
+
+export type ListReviewQueueParams = {
+  resolution?: string;
+  conflict_type?: string;
+  severity?: string;
+  entity_type?: string;
+  limit?: string;
+};
 
 export type SearchNpiParams = {
   npi_number?: string;

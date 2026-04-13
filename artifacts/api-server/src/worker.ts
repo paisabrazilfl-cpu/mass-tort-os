@@ -3,7 +3,7 @@
  * Polls the PostgreSQL job_queue table and processes jobs.
  * Runs as a separate process — started via "pnpm run worker" command.
  */
-import { db, casesTable, caseDocumentsTable, analysisTable, faxResultsTable } from "@workspace/db";
+import { db, casesTable, caseDocumentsTable, analysisTable, faxResultsTable, reviewQueueTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { claimNextJob, markJobDone, markJobFailed } from "./lib/queue";
@@ -13,6 +13,7 @@ import { scoreFeatures, scoreToVerdict } from "./lib/scoring";
 import { auditLog } from "./lib/audit";
 import { preprocessFaxBuffer, base64ToBuffer, detectMimeType } from "./lib/ocr-preprocess";
 import { extractOcrData } from "./lib/ai-ocr";
+import { withErrorFallback, createLoopGuard, DEFAULT_LIMITS } from "./lib/error-fallback";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -62,41 +63,90 @@ async function processJob(job: {
       return;
     }
 
+    const loopGuard = createLoopGuard(DEFAULT_LIMITS);
+    let successCount = 0;
+    let failCount = 0;
+
     for (const doc of docs) {
-      let text = "";
-      try {
-        text = await readFile(doc.path);
-      } catch (err) {
-        logger.warn({ err, path: doc.path }, "Could not read vault file");
-        continue;
+      if (!loopGuard.canRetry() && failCount > 0) {
+        await auditLog("case_analysis", case_id, "LOOP_ABORTED", {
+          reason: "Loop guard limits exceeded",
+          state: loopGuard.getState(),
+        });
+        logger.error({ case_id }, "LOOP_ABORTED — forced exit from analysis loop");
+        break;
       }
 
-      const features = await extractFeatures(text);
-      const score = scoreFeatures(features);
-      const verdict = scoreToVerdict(score);
+      const result = await withErrorFallback(
+        async (_input, attempt) => {
+          let text = "";
+          try {
+            text = await readFile(doc.path);
+          } catch (err) {
+            throw new Error(`Could not read vault file ${doc.path}: ${err}`);
+          }
 
-      await db.insert(analysisTable).values({
-        case_id,
-        features: features as Record<string, unknown>,
-        score,
-        ai_model: "claude-haiku-4-5",
-        raw_text_length: text.length,
-      });
+          const features = await extractFeatures(text);
+          const score = scoreFeatures(features);
+          const verdict = scoreToVerdict(score);
 
-      await auditLog("analysis", case_id, "analyzed", {
-        file: doc.file_name,
-        score,
-        verdict,
-        features,
-      });
+          if (attempt > 0) {
+            loopGuard.recordAIRecheck();
+          }
 
-      logger.info({ case_id, score, verdict }, "Analysis complete");
+          await db.insert(analysisTable).values({
+            case_id,
+            features: features as Record<string, unknown>,
+            score,
+            ai_model: "claude-haiku-4-5",
+            raw_text_length: text.length,
+          });
+
+          await auditLog("analysis", case_id, "analyzed", {
+            file: doc.file_name,
+            score,
+            verdict,
+            features,
+            attempt: attempt + 1,
+          });
+
+          logger.info({ case_id, score, verdict }, "Analysis complete");
+          return { score, verdict, features };
+        },
+        { case_id, file: doc.file_name },
+        {
+          entity_type: "case_analysis",
+          entity_id: case_id,
+          source_module: "worker_analyze_case",
+          failsafe_mode: "REVIEW_FAIL",
+        }
+      );
+
+      if (result.success) {
+        successCount++;
+      } else {
+        failCount++;
+        loopGuard.recordRetry();
+        logger.error(
+          { case_id, file: doc.file_name, output_state: result.output_state },
+          "Analysis failed — routed to review queue"
+        );
+      }
     }
 
+    const finalStatus = failCount === docs.length ? "review_required" : "analyzed";
     await db
       .update(casesTable)
-      .set({ status: "analyzed", updated_at: new Date() })
+      .set({ status: finalStatus, updated_at: new Date() })
       .where(eq(casesTable.id, case_id));
+
+    if (finalStatus === "review_required") {
+      await auditLog("case", case_id, "analysis_failed", {
+        total_docs: docs.length,
+        success_count: successCount,
+        fail_count: failCount,
+      });
+    }
   } else if (job.job_type === "process_fax") {
     const { fax_result_id, vault_path, source_file, mime_type } = payload as {
       fax_result_id: number;
@@ -110,39 +160,60 @@ async function processJob(job: {
       .set({ status: "processing" })
       .where(eq(faxResultsTable.id, fax_result_id));
 
-    const rawBase64 = await readFile(vault_path);
-    const rawBuffer = base64ToBuffer(rawBase64);
-    const detectedMime = detectMimeType(rawBase64) || mime_type;
+    const faxResult = await withErrorFallback(
+      async (_input, attempt) => {
+        const rawBase64 = await readFile(vault_path);
+        const rawBuffer = base64ToBuffer(rawBase64);
+        const detectedMime = detectMimeType(rawBase64) || mime_type;
 
-    const processedBuffer = await preprocessFaxBuffer(rawBuffer);
-    const processedBase64 = processedBuffer.toString("base64");
+        const processedBuffer = await preprocessFaxBuffer(rawBuffer);
+        const processedBase64 = processedBuffer.toString("base64");
 
-    const grid = await extractOcrData(processedBase64, detectedMime);
+        const grid = await extractOcrData(processedBase64, detectedMime);
 
-    await db
-      .update(faxResultsTable)
-      .set({
-        rx_number: grid.rx_number,
-        drug_name: grid.drug_name,
-        fill_date: grid.fill_date,
-        quantity: grid.quantity,
-        confidence: grid.confidence,
-        raw_text: grid.raw_text,
-        status: "done",
-        processed_at: new Date(),
-      })
-      .where(eq(faxResultsTable.id, fax_result_id));
+        await db
+          .update(faxResultsTable)
+          .set({
+            rx_number: grid.rx_number,
+            drug_name: grid.drug_name,
+            fill_date: grid.fill_date,
+            quantity: grid.quantity,
+            confidence: grid.confidence,
+            raw_text: grid.raw_text,
+            status: "done",
+            processed_at: new Date(),
+          })
+          .where(eq(faxResultsTable.id, fax_result_id));
 
-    await auditLog("fax", String(fax_result_id), "processed", {
-      source_file,
-      drug_name: grid.drug_name,
-      confidence: grid.confidence,
-    });
+        await auditLog("fax", String(fax_result_id), "processed", {
+          source_file,
+          drug_name: grid.drug_name,
+          confidence: grid.confidence,
+          attempt: attempt + 1,
+        });
 
-    logger.info(
-      { fax_result_id, drug_name: grid.drug_name, confidence: grid.confidence },
-      "Fax OCR complete"
+        logger.info(
+          { fax_result_id, drug_name: grid.drug_name, confidence: grid.confidence },
+          "Fax OCR complete"
+        );
+        return grid;
+      },
+      { fax_result_id, vault_path, source_file },
+      {
+        entity_type: "fax_ocr",
+        entity_id: String(fax_result_id),
+        source_module: "worker_process_fax",
+        failsafe_mode: "REVIEW_FAIL",
+      }
     );
+
+    if (!faxResult.success) {
+      await db
+        .update(faxResultsTable)
+        .set({ status: "error", processed_at: new Date() })
+        .where(eq(faxResultsTable.id, fax_result_id));
+      logger.error({ fax_result_id, output_state: faxResult.output_state }, "Fax OCR failed — routed to review");
+    }
   } else {
     logger.warn({ job_type: job.job_type }, "Unknown job type — skipping");
   }

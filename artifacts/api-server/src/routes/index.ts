@@ -9,6 +9,7 @@ import paralegalsRouter from "./paralegals";
 import analyticsRouter from "./analytics";
 import complianceRouter from "./compliance";
 import npiRouter from "./npi";
+import reviewQueueRouter from "./review-queue";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use("/paralegals", paralegalsRouter);
 router.use("/analytics", analyticsRouter);
 router.use("/compliance", complianceRouter);
 router.use("/npi", npiRouter);
+router.use("/review-queue", reviewQueueRouter);
 
 export default router;

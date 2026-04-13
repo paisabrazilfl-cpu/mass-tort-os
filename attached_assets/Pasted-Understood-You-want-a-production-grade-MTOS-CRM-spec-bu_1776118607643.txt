@@ -1,0 +1,574 @@
+Understood. You want a production-grade MTOS CRM spec + build instruction that Replit AI can execute with minimal ambiguity.
+
+
+---
+
+🧠 SYSTEM BUILD: MTOS CRM (Mass Torts Oriented System)
+
+
+---
+
+1. PROBLEM DEFINITION
+
+You need a secure, multi-user, compliance-aware CRM that:
+
+Manages mass tort leads/clients
+
+Enforces HIPAA/HITECH
+
+Automates qualification + document handling
+
+Integrates NPI registry
+
+Applies buyer criteria per tort
+
+Supports AI validation (MSA, leads)
+
+
+
+---
+
+2. CONSTRAINTS
+
+HIPAA / HITECH compliance (data privacy, audit logs, access control)
+
+Role-based access control (RBAC)
+
+No hallucinated medical/legal conclusions (AI = assistive, not authoritative)
+
+Real NPI API integration (NPPES)
+
+Secure file storage (encrypted at rest + in transit)
+
+Multi-tenant safe (if expanded later)
+
+Deterministic lead qualification (no garbage acceptance like “peepeee”)
+
+
+
+---
+
+3. INPUTS
+
+User accounts (admins, staff, attorneys)
+
+Leads / clients data
+
+Uploaded documents:
+
+Retainers
+
+HIPAA forms
+
+Affidavits
+
+MSA documents
+
+
+Buyer criteria (per tort)
+
+NPI registry data (external API)
+
+
+
+---
+
+4. OUTPUTS
+
+Structured client records
+
+Qualification decision (ACCEPT / REJECT / REVIEW)
+
+Document status tracking
+
+AI-assisted MSA analysis report
+
+Audit logs (who did what, when)
+
+Compliance-ready exports
+
+
+
+---
+
+5. FAILURE MODES
+
+Failure	Cause	Mitigation
+
+Unauthorized access	Weak auth	JWT + RBAC + bcrypt
+Bad lead qualification	Garbage input	Validation + rule engine
+AI hallucination	Over-trust	Rule-bound AI + disclaimers
+HIPAA violation	Data leak	Encryption + audit logs
+NPI mismatch	Bad parsing	Normalize + fuzzy match
+Document loss	Storage issue	Versioned storage
+
+
+
+---
+
+6. SYSTEM DESIGN
+
+
+---
+
+🏗️ CORE ARCHITECTURE
+
+Frontend (React / Next.js)
+    ↓
+Backend API (Node.js / Express)
+    ↓
+Services Layer
+    ├── Auth Service
+    ├── User Management
+    ├── Lead Engine
+    ├── Document Engine
+    ├── AI Engine
+    ├── NPI Integration
+    ├── Rules Engine (Mass Tort Criteria)
+    ↓
+Database (PostgreSQL)
+    ↓
+Storage (S3-compatible / Replit Object Storage)
+
+
+---
+
+🔐 7. AUTH + USER SYSTEM
+
+FEATURES
+
+Login per user
+
+Add users
+
+Manage clearances
+
+
+ROLES
+
+ADMIN
+ATTORNEY
+CASE_MANAGER
+INTAKE_AGENT
+VIEW_ONLY
+
+PERMISSIONS MATRIX (example)
+
+VIEW  EDIT  DELETE  UPLOAD  ADMIN
+ADMIN            ✔     ✔      ✔       ✔      ✔
+ATTORNEY         ✔     ✔      ✖       ✔      ✖
+CASE_MANAGER     ✔     ✔      ✖       ✔      ✖
+INTAKE_AGENT     ✔     ✔      ✖       ✖      ✖
+VIEW_ONLY        ✔     ✖      ✖       ✖      ✖
+
+IMPLEMENTATION (Replit prompt)
+
+Add authentication using JWT.
+Hash passwords with bcrypt.
+Create Role-Based Access Control (RBAC).
+
+Tables:
+- users (id, name, email, password_hash, role, created_at)
+- sessions (optional)
+
+Middleware:
+- authMiddleware()
+- roleMiddleware(requiredRole)
+
+
+---
+
+👥 8. USER MANAGEMENT
+
+Admin can:
+- Create user
+- Assign role
+- Deactivate user
+
+DB:
+
+users.status = ACTIVE | DISABLED
+
+
+---
+
+🧾 9. CLIENT + LEAD SYSTEM
+
+STRUCTURE
+
+leads
+clients
+mass_torts
+lead_tort_map
+
+
+---
+
+🧠 10. NPI AUTO SEARCH
+
+REQUIREMENT
+
+Automatically detect doctor inside lead/client text
+
+
+IMPLEMENTATION
+
+Step 1: Extract Doctor Name
+
+Regex + NLP:
+
+
+Dr. John Smith
+John Smith MD
+
+Step 2: Query NPPES API
+
+GET https://npiregistry.cms.hhs.gov/api/?version=2.1&name=John+Smith
+
+Step 3: Match Confidence
+
+IF score > threshold → attach NPI
+ELSE → flag for review
+
+
+---
+
+📄 11. DOCUMENT ENGINE
+
+REQUIRED TYPES
+
+RETainer
+HIPAA
+AFFIDAVIT_OF_TRUTH
+MSA
+
+STRUCTURE
+
+documents
+- id
+- client_id
+- tort_id
+- type
+- file_url
+- uploaded_by
+- created_at
+- version
+
+
+---
+
+FEATURES
+
+✅ Upload per:
+
+Client
+
+Tort
+
+
+✅ Track:
+
+Status (missing / uploaded / signed)
+
+
+
+---
+
+✍️ 12. E-SIGN (CRITICAL)
+
+Use:
+
+DocuSign API OR
+
+open-source e-sign (e.g., SignWell alternative)
+
+
+Flow:
+
+Generate document → Send → Client signs → Store signed PDF
+
+
+---
+
+🧠 13. AI MSA REVIEW ENGINE
+
+INPUT
+
+Uploaded MSA PDF
+
+
+PROCESS
+
+1. Extract text (PDF parser)
+
+
+2. Run AI analysis
+
+
+
+OUTPUT
+
+- Medicare compliance risk
+- Settlement allocation issues
+- Red flags
+- Missing clauses
+- Confidence score
+
+⚠️ MUST ADD:
+
+"AI analysis is not legal advice"
+
+
+---
+
+🤖 14. LEAD QUALIFICATION FIX (CRITICAL)
+
+CURRENT ISSUE
+
+System accepts garbage:
+
+condition = "peepeee"
+
+location = "Australia"
+
+
+SOLUTION = RULE ENGINE + VALIDATION
+
+
+---
+
+VALIDATION LAYER
+
+Reject if:
+- condition not in approved medical list
+- location not in allowed geography
+
+
+---
+
+RULE ENGINE
+
+mass_tort_criteria
+- tort_id
+- rules (JSON)
+
+Example:
+
+{
+  "required_conditions": ["Mesothelioma", "Lung Cancer"],
+  "allowed_locations": ["USA"],
+  "min_age": 18,
+  "exposure_required": true
+}
+
+
+---
+
+QUALIFICATION OUTPUT
+
+ACCEPT
+REJECT
+REVIEW
+
+
+---
+
+⚙️ 15. BUYER CRITERIA ENGINE (PER TORT)
+
+REQUIREMENT
+
+Upload criteria → auto-generate rules
+
+
+---
+
+IMPLEMENTATION
+
+INPUT
+
+Upload JSON / CSV / text
+
+AI PARSER
+
+Convert to structured rules:
+
+"Client must be US resident with lung cancer and exposure history"
+→
+{
+  "location": "USA",
+  "condition": "Lung Cancer",
+  "exposure": true
+}
+
+
+---
+
+EXECUTION ENGINE
+
+evaluateLead(lead, criteria):
+    IF all conditions met → ACCEPT
+    IF partial → REVIEW
+    ELSE → REJECT
+
+
+---
+
+🔒 16. HIPAA / HITECH COMPLIANCE
+
+REQUIRED
+
+Encryption at rest (AES-256)
+
+HTTPS only
+
+Audit logs
+
+Access logs
+
+
+AUDIT TABLE
+
+audit_logs
+- user_id
+- action
+- entity
+- timestamp
+- ip_address
+
+
+---
+
+📂 17. FILE STORAGE
+
+Use:
+
+AWS S3 OR Replit Object Storage
+
+
+/clients/{client_id}/torts/{tort_id}/documents/{type}/v1.pdf
+
+
+---
+
+🧩 18. REPLIT EXECUTION PROMPT (COPY/PASTE)
+
+Build a full-stack CRM for mass tort law firms.
+
+STACK:
+- Frontend: React
+- Backend: Node.js + Express
+- DB: PostgreSQL
+- Storage: S3-compatible
+
+FEATURES:
+
+1. Authentication
+- JWT login
+- bcrypt password hashing
+- RBAC (ADMIN, ATTORNEY, CASE_MANAGER, INTAKE_AGENT, VIEW_ONLY)
+
+2. User Management
+- Admin can create users
+- Assign roles
+- Disable users
+
+3. Leads & Clients
+- CRUD system
+- Link to mass torts
+
+4. NPI Integration
+- Extract doctor names from lead text
+- Call NPPES API
+- Attach NPI to record
+
+5. Document System
+- Upload per client + per tort:
+  - Retainer
+  - HIPAA
+  - Affidavit
+  - MSA
+- Versioning
+
+6. E-Sign
+- Integrate DocuSign API
+
+7. AI MSA Review
+- Extract PDF text
+- Analyze for compliance risks
+- Output structured report
+
+8. Lead Qualification Engine
+- Validate condition + location
+- Reject invalid inputs
+- Apply rules per tort
+
+9. Buyer Criteria Engine
+- Upload criteria
+- Convert to rules
+- Auto evaluate leads
+
+10. HIPAA Compliance
+- Encryption
+- Audit logs
+- Access control
+
+OUTPUT:
+Production-ready code with clear folder structure.
+
+
+---
+
+🧠 FINAL RESULT
+
+You now have:
+
+Secure multi-user CRM
+
+Mass tort rule engine
+
+AI-assisted document analysis
+
+Clean lead qualification (no garbage inputs)
+
+Full compliance scaffolding
+
+
+
+---
+
+🌳 ASCII TREE
+
+MTOS CRM
+├── Auth System
+│   ├── JWT Login
+│   ├── RBAC
+│   └── User Management
+├── Lead Engine
+│   ├── Validation Layer
+│   ├── Qualification Engine
+│   └── Buyer Criteria Rules
+├── Client System
+│   └── Tort Mapping
+├── NPI Integration
+│   ├── Name Extraction
+│   └── NPPES API կապ
+├── Document Engine
+│   ├── Retainer
+│   ├── HIPAA
+│   ├── Affidavit
+│   └── MSA
+├── E-Sign System
+├── AI Engine
+│   ├── Lead Qualification Fix
+│   └── MSA Review
+├── Compliance Layer
+│   ├── HIPAA
+│   ├── HITECH
+│   └── Audit Logs
+└── Storage Layer
+    └── S3 / Object Storage
+
+
+---
+
+If you want next step: I can generate the actual database schema + API routes + folder structure (ready to paste into Replit) 💡

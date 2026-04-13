@@ -38,6 +38,7 @@ import type {
   Lead,
   ListDocumentsParams,
   ListLeadsParams,
+  ListReviewQueueParams,
   NpiProvider,
   NpiSearchResponse,
   Paralegal,
@@ -48,6 +49,9 @@ import type {
   PipelineTrendPoint,
   QualificationResult,
   QueueStats,
+  ResolveReviewBody,
+  ReviewQueueItem,
+  ReviewQueueStats,
   SearchNpiParams,
   TortBreakdownRow,
   UpdateDocumentBody,
@@ -1701,6 +1705,262 @@ export const useAnalyzeCaseFiles = <
   TContext
 > => {
   return useMutation(getAnalyzeCaseFilesMutationOptions(options));
+};
+
+/**
+ * @summary List review queue items with optional filters
+ */
+export const getListReviewQueueUrl = (params?: ListReviewQueueParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/review-queue?${stringifiedParams}`
+    : `/api/review-queue`;
+};
+
+export const listReviewQueue = async (
+  params?: ListReviewQueueParams,
+  options?: RequestInit,
+): Promise<ReviewQueueItem[]> => {
+  return customFetch<ReviewQueueItem[]>(getListReviewQueueUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListReviewQueueQueryKey = (params?: ListReviewQueueParams) => {
+  return [`/api/review-queue`, ...(params ? [params] : [])] as const;
+};
+
+export const getListReviewQueueQueryOptions = <
+  TData = Awaited<ReturnType<typeof listReviewQueue>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListReviewQueueParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listReviewQueue>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListReviewQueueQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listReviewQueue>>> = ({
+    signal,
+  }) => listReviewQueue(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listReviewQueue>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListReviewQueueQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listReviewQueue>>
+>;
+export type ListReviewQueueQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List review queue items with optional filters
+ */
+
+export function useListReviewQueue<
+  TData = Awaited<ReturnType<typeof listReviewQueue>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListReviewQueueParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listReviewQueue>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListReviewQueueQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get review queue statistics
+ */
+export const getGetReviewQueueStatsUrl = () => {
+  return `/api/review-queue/stats`;
+};
+
+export const getReviewQueueStats = async (
+  options?: RequestInit,
+): Promise<ReviewQueueStats> => {
+  return customFetch<ReviewQueueStats>(getGetReviewQueueStatsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetReviewQueueStatsQueryKey = () => {
+  return [`/api/review-queue/stats`] as const;
+};
+
+export const getGetReviewQueueStatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getReviewQueueStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getReviewQueueStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetReviewQueueStatsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getReviewQueueStats>>
+  > = ({ signal }) => getReviewQueueStats({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getReviewQueueStats>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetReviewQueueStatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getReviewQueueStats>>
+>;
+export type GetReviewQueueStatsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get review queue statistics
+ */
+
+export function useGetReviewQueueStats<
+  TData = Awaited<ReturnType<typeof getReviewQueueStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getReviewQueueStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetReviewQueueStatsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Resolve a review queue item
+ */
+export const getResolveReviewItemUrl = (id: number) => {
+  return `/api/review-queue/${id}`;
+};
+
+export const resolveReviewItem = async (
+  id: number,
+  resolveReviewBody: ResolveReviewBody,
+  options?: RequestInit,
+): Promise<ReviewQueueItem> => {
+  return customFetch<ReviewQueueItem>(getResolveReviewItemUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(resolveReviewBody),
+  });
+};
+
+export const getResolveReviewItemMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resolveReviewItem>>,
+    TError,
+    { id: number; data: BodyType<ResolveReviewBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resolveReviewItem>>,
+  TError,
+  { id: number; data: BodyType<ResolveReviewBody> },
+  TContext
+> => {
+  const mutationKey = ["resolveReviewItem"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resolveReviewItem>>,
+    { id: number; data: BodyType<ResolveReviewBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return resolveReviewItem(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResolveReviewItemMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resolveReviewItem>>
+>;
+export type ResolveReviewItemMutationBody = BodyType<ResolveReviewBody>;
+export type ResolveReviewItemMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Resolve a review queue item
+ */
+export const useResolveReviewItem = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resolveReviewItem>>,
+    TError,
+    { id: number; data: BodyType<ResolveReviewBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resolveReviewItem>>,
+  TError,
+  { id: number; data: BodyType<ResolveReviewBody> },
+  TContext
+> => {
+  return useMutation(getResolveReviewItemMutationOptions(options));
 };
 
 /**
