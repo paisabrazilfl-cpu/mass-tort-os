@@ -206,6 +206,82 @@ export interface ActivityItem {
   tort_type: string;
 }
 
+export type CaseData = { [key: string]: unknown };
+
+export type CaseStatus = (typeof CaseStatus)[keyof typeof CaseStatus];
+
+export const CaseStatus = {
+  open: "open",
+  processing: "processing",
+  analyzed: "analyzed",
+  failed: "failed",
+} as const;
+
+export interface Case {
+  id: string;
+  data?: CaseData;
+  status: CaseStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CaseDocument {
+  id: number;
+  case_id: string;
+  path: string;
+  file_hash?: string | null;
+  file_name: string;
+  content_type?: string | null;
+  created_at: string;
+}
+
+export type CaseAnalysisFeatures = { [key: string]: unknown } | null;
+
+export interface CaseAnalysis {
+  id: number;
+  case_id: string;
+  features?: CaseAnalysisFeatures;
+  score?: number | null;
+  ai_model?: string | null;
+  raw_text_length?: number | null;
+  created_at: string;
+}
+
+export type AuditLogEntryDetails = { [key: string]: unknown } | null;
+
+export interface AuditLogEntry {
+  id: number;
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  details?: AuditLogEntryDetails;
+  ip_address?: string | null;
+  occurred_at: string;
+}
+
+export interface CaseDetail {
+  case: Case;
+  documents: CaseDocument[];
+  analyses: CaseAnalysis[];
+  audit_trail: AuditLogEntry[];
+}
+
+export interface CreateCaseResponse {
+  case_id: string;
+  status: string;
+  job_id: number;
+}
+
+export interface UploadCaseFileBody {
+  file_name: string;
+  content: string;
+  content_type?: string | null;
+}
+
+export interface QueueStats {
+  [key: string]: number;
+}
+
 export type ListLeadsParams = {
   status?: ListLeadsStatus;
   tort_type?: string;
@@ -225,3 +301,5 @@ export const ListLeadsStatus = {
 export type ListDocumentsParams = {
   lead_id?: number;
 };
+
+export type CreateCaseBody = { [key: string]: unknown };

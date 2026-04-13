@@ -14,6 +14,10 @@ tags:
     description: Lead management
   - name: documents
     description: Document management
+  - name: cases
+    description: Distributed case processing pipeline
+  - name: worker
+    description: Worker queue status
   - name: dashboard
     description: Dashboard analytics
 paths:
@@ -275,6 +279,121 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/ActivityItem"
+
+  /cases:
+    get:
+      operationId: listCases
+      tags: [cases]
+      summary: List all cases
+      responses:
+        "200":
+          description: List of cases
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Case"
+    post:
+      operationId: createCase
+      tags: [cases]
+      summary: Submit a new case to the processing queue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "201":
+          description: Case queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateCaseResponse"
+
+  /cases/worker/queue-stats:
+    get:
+      operationId: getQueueStats
+      tags: [worker]
+      summary: Get job queue statistics by status
+      responses:
+        "200":
+          description: Queue stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueStats"
+
+  /cases/{id}:
+    get:
+      operationId: getCase
+      tags: [cases]
+      summary: Get full case detail with documents, analyses, and audit trail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Case detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /cases/{id}/upload:
+    post:
+      operationId: uploadCaseFile
+      tags: [cases]
+      summary: Upload a document to the case vault
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadCaseFileBody"
+      responses:
+        "200":
+          description: File queued for ingestion
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateCaseResponse"
+
+  /cases/{id}/analyze:
+    post:
+      operationId: analyzeCaseFiles
+      tags: [cases]
+      summary: Queue AI extraction and scoring for all case documents
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Analysis queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateCaseResponse"
 
 components:
   schemas:
@@ -635,3 +754,134 @@ components:
         - description
         - occurred_at
         - tort_type
+
+    Case:
+      type: object
+      properties:
+        id:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          enum: [open, processing, analyzed, failed]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+      required: [id, status, created_at, updated_at]
+
+    CaseDocument:
+      type: object
+      properties:
+        id:
+          type: integer
+        case_id:
+          type: string
+        path:
+          type: string
+        file_hash:
+          type: string
+          nullable: true
+        file_name:
+          type: string
+        content_type:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+      required: [id, case_id, path, file_name, created_at]
+
+    CaseAnalysis:
+      type: object
+      properties:
+        id:
+          type: integer
+        case_id:
+          type: string
+        features:
+          type: object
+          additionalProperties: true
+          nullable: true
+        score:
+          type: number
+          nullable: true
+        ai_model:
+          type: string
+          nullable: true
+        raw_text_length:
+          type: number
+          nullable: true
+        created_at:
+          type: string
+      required: [id, case_id, created_at]
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+        action:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+        ip_address:
+          type: string
+          nullable: true
+        occurred_at:
+          type: string
+      required: [id, entity_type, entity_id, action, occurred_at]
+
+    CaseDetail:
+      type: object
+      properties:
+        case:
+          $ref: "#/components/schemas/Case"
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/CaseDocument"
+        analyses:
+          type: array
+          items:
+            $ref: "#/components/schemas/CaseAnalysis"
+        audit_trail:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLogEntry"
+      required: [case, documents, analyses, audit_trail]
+
+    CreateCaseResponse:
+      type: object
+      properties:
+        case_id:
+          type: string
+        status:
+          type: string
+        job_id:
+          type: integer
+      required: [case_id, status, job_id]
+
+    UploadCaseFileBody:
+      type: object
+      properties:
+        file_name:
+          type: string
+        content:
+          type: string
+        content_type:
+          type: string
+          nullable: true
+      required: [file_name, content]
+
+    QueueStats:
+      type: object
+      additionalProperties:
+        type: integer

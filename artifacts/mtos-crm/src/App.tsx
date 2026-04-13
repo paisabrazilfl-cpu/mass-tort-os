@@ -10,6 +10,9 @@ import Leads from "@/pages/leads";
 import LeadIntake from "@/pages/lead-intake";
 import LeadDetail from "@/pages/lead-detail";
 import Documents from "@/pages/documents";
+import Cases from "@/pages/cases";
+import CaseNew from "@/pages/case-new";
+import CaseDetail from "@/pages/case-detail";
 
 const queryClient = new QueryClient();
 
@@ -22,6 +25,9 @@ function Router() {
         <Route path="/leads/new" component={LeadIntake} />
         <Route path="/leads/:id" component={LeadDetail} />
         <Route path="/documents" component={Documents} />
+        <Route path="/cases" component={Cases} />
+        <Route path="/cases/new" component={CaseNew} />
+        <Route path="/cases/:id" component={CaseDetail} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

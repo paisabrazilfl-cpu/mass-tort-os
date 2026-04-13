@@ -298,3 +298,107 @@ export const GetRecentActivityResponseItem = zod.object({
 export const GetRecentActivityResponse = zod.array(
   GetRecentActivityResponseItem,
 );
+
+/**
+ * @summary List all cases
+ */
+export const ListCasesResponseItem = zod.object({
+  id: zod.string(),
+  data: zod.record(zod.string(), zod.unknown()).optional(),
+  status: zod.enum(["open", "processing", "analyzed", "failed"]),
+  created_at: zod.string(),
+  updated_at: zod.string(),
+});
+export const ListCasesResponse = zod.array(ListCasesResponseItem);
+
+/**
+ * @summary Submit a new case to the processing queue
+ */
+export const CreateCaseBody = zod.record(zod.string(), zod.unknown());
+
+/**
+ * @summary Get job queue statistics by status
+ */
+export const GetQueueStatsResponse = zod.record(zod.string(), zod.number());
+
+/**
+ * @summary Get full case detail with documents, analyses, and audit trail
+ */
+export const GetCaseParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetCaseResponse = zod.object({
+  case: zod.object({
+    id: zod.string(),
+    data: zod.record(zod.string(), zod.unknown()).optional(),
+    status: zod.enum(["open", "processing", "analyzed", "failed"]),
+    created_at: zod.string(),
+    updated_at: zod.string(),
+  }),
+  documents: zod.array(
+    zod.object({
+      id: zod.number(),
+      case_id: zod.string(),
+      path: zod.string(),
+      file_hash: zod.string().nullish(),
+      file_name: zod.string(),
+      content_type: zod.string().nullish(),
+      created_at: zod.string(),
+    }),
+  ),
+  analyses: zod.array(
+    zod.object({
+      id: zod.number(),
+      case_id: zod.string(),
+      features: zod.record(zod.string(), zod.unknown()).nullish(),
+      score: zod.number().nullish(),
+      ai_model: zod.string().nullish(),
+      raw_text_length: zod.number().nullish(),
+      created_at: zod.string(),
+    }),
+  ),
+  audit_trail: zod.array(
+    zod.object({
+      id: zod.number(),
+      entity_type: zod.string(),
+      entity_id: zod.string(),
+      action: zod.string(),
+      details: zod.record(zod.string(), zod.unknown()).nullish(),
+      ip_address: zod.string().nullish(),
+      occurred_at: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * @summary Upload a document to the case vault
+ */
+export const UploadCaseFileParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UploadCaseFileBody = zod.object({
+  file_name: zod.string(),
+  content: zod.string(),
+  content_type: zod.string().nullish(),
+});
+
+export const UploadCaseFileResponse = zod.object({
+  case_id: zod.string(),
+  status: zod.string(),
+  job_id: zod.number(),
+});
+
+/**
+ * @summary Queue AI extraction and scoring for all case documents
+ */
+export const AnalyzeCaseFilesParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AnalyzeCaseFilesResponse = zod.object({
+  case_id: zod.string(),
+  status: zod.string(),
+  job_id: zod.number(),
+});

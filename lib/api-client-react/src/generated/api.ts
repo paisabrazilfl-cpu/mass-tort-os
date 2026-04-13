@@ -18,6 +18,10 @@ import type {
 
 import type {
   ActivityItem,
+  Case,
+  CaseDetail,
+  CreateCaseBody,
+  CreateCaseResponse,
   CreateDocumentBody,
   CreateLeadBody,
   DashboardStats,
@@ -29,8 +33,10 @@ import type {
   ListLeadsParams,
   PipelineBreakdown,
   QualificationResult,
+  QueueStats,
   UpdateDocumentBody,
   UpdateLeadBody,
+  UploadCaseFileBody,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -1204,3 +1210,477 @@ export function useGetRecentActivity<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary List all cases
+ */
+export const getListCasesUrl = () => {
+  return `/api/cases`;
+};
+
+export const listCases = async (options?: RequestInit): Promise<Case[]> => {
+  return customFetch<Case[]>(getListCasesUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListCasesQueryKey = () => {
+  return [`/api/cases`] as const;
+};
+
+export const getListCasesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listCases>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof listCases>>, TError, TData>;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListCasesQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listCases>>> = ({
+    signal,
+  }) => listCases({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listCases>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListCasesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listCases>>
+>;
+export type ListCasesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all cases
+ */
+
+export function useListCases<
+  TData = Awaited<ReturnType<typeof listCases>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof listCases>>, TError, TData>;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListCasesQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Submit a new case to the processing queue
+ */
+export const getCreateCaseUrl = () => {
+  return `/api/cases`;
+};
+
+export const createCase = async (
+  createCaseBody: CreateCaseBody,
+  options?: RequestInit,
+): Promise<CreateCaseResponse> => {
+  return customFetch<CreateCaseResponse>(getCreateCaseUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createCaseBody),
+  });
+};
+
+export const getCreateCaseMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createCase>>,
+    TError,
+    { data: BodyType<CreateCaseBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createCase>>,
+  TError,
+  { data: BodyType<CreateCaseBody> },
+  TContext
+> => {
+  const mutationKey = ["createCase"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createCase>>,
+    { data: BodyType<CreateCaseBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createCase(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateCaseMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createCase>>
+>;
+export type CreateCaseMutationBody = BodyType<CreateCaseBody>;
+export type CreateCaseMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Submit a new case to the processing queue
+ */
+export const useCreateCase = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createCase>>,
+    TError,
+    { data: BodyType<CreateCaseBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createCase>>,
+  TError,
+  { data: BodyType<CreateCaseBody> },
+  TContext
+> => {
+  return useMutation(getCreateCaseMutationOptions(options));
+};
+
+/**
+ * @summary Get job queue statistics by status
+ */
+export const getGetQueueStatsUrl = () => {
+  return `/api/cases/worker/queue-stats`;
+};
+
+export const getQueueStats = async (
+  options?: RequestInit,
+): Promise<QueueStats> => {
+  return customFetch<QueueStats>(getGetQueueStatsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetQueueStatsQueryKey = () => {
+  return [`/api/cases/worker/queue-stats`] as const;
+};
+
+export const getGetQueueStatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getQueueStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getQueueStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetQueueStatsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getQueueStats>>> = ({
+    signal,
+  }) => getQueueStats({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getQueueStats>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetQueueStatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getQueueStats>>
+>;
+export type GetQueueStatsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get job queue statistics by status
+ */
+
+export function useGetQueueStats<
+  TData = Awaited<ReturnType<typeof getQueueStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getQueueStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetQueueStatsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get full case detail with documents, analyses, and audit trail
+ */
+export const getGetCaseUrl = (id: string) => {
+  return `/api/cases/${id}`;
+};
+
+export const getCase = async (
+  id: string,
+  options?: RequestInit,
+): Promise<CaseDetail> => {
+  return customFetch<CaseDetail>(getGetCaseUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetCaseQueryKey = (id: string) => {
+  return [`/api/cases/${id}`] as const;
+};
+
+export const getGetCaseQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCase>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<Awaited<ReturnType<typeof getCase>>, TError, TData>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetCaseQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getCase>>> = ({
+    signal,
+  }) => getCase(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getCase>>, TError, TData> & {
+    queryKey: QueryKey;
+  };
+};
+
+export type GetCaseQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCase>>
+>;
+export type GetCaseQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Get full case detail with documents, analyses, and audit trail
+ */
+
+export function useGetCase<
+  TData = Awaited<ReturnType<typeof getCase>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<Awaited<ReturnType<typeof getCase>>, TError, TData>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetCaseQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Upload a document to the case vault
+ */
+export const getUploadCaseFileUrl = (id: string) => {
+  return `/api/cases/${id}/upload`;
+};
+
+export const uploadCaseFile = async (
+  id: string,
+  uploadCaseFileBody: UploadCaseFileBody,
+  options?: RequestInit,
+): Promise<CreateCaseResponse> => {
+  return customFetch<CreateCaseResponse>(getUploadCaseFileUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(uploadCaseFileBody),
+  });
+};
+
+export const getUploadCaseFileMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadCaseFile>>,
+    TError,
+    { id: string; data: BodyType<UploadCaseFileBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof uploadCaseFile>>,
+  TError,
+  { id: string; data: BodyType<UploadCaseFileBody> },
+  TContext
+> => {
+  const mutationKey = ["uploadCaseFile"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof uploadCaseFile>>,
+    { id: string; data: BodyType<UploadCaseFileBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return uploadCaseFile(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UploadCaseFileMutationResult = NonNullable<
+  Awaited<ReturnType<typeof uploadCaseFile>>
+>;
+export type UploadCaseFileMutationBody = BodyType<UploadCaseFileBody>;
+export type UploadCaseFileMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Upload a document to the case vault
+ */
+export const useUploadCaseFile = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadCaseFile>>,
+    TError,
+    { id: string; data: BodyType<UploadCaseFileBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof uploadCaseFile>>,
+  TError,
+  { id: string; data: BodyType<UploadCaseFileBody> },
+  TContext
+> => {
+  return useMutation(getUploadCaseFileMutationOptions(options));
+};
+
+/**
+ * @summary Queue AI extraction and scoring for all case documents
+ */
+export const getAnalyzeCaseFilesUrl = (id: string) => {
+  return `/api/cases/${id}/analyze`;
+};
+
+export const analyzeCaseFiles = async (
+  id: string,
+  options?: RequestInit,
+): Promise<CreateCaseResponse> => {
+  return customFetch<CreateCaseResponse>(getAnalyzeCaseFilesUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getAnalyzeCaseFilesMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof analyzeCaseFiles>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof analyzeCaseFiles>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["analyzeCaseFiles"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof analyzeCaseFiles>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return analyzeCaseFiles(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AnalyzeCaseFilesMutationResult = NonNullable<
+  Awaited<ReturnType<typeof analyzeCaseFiles>>
+>;
+
+export type AnalyzeCaseFilesMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Queue AI extraction and scoring for all case documents
+ */
+export const useAnalyzeCaseFiles = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof analyzeCaseFiles>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof analyzeCaseFiles>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getAnalyzeCaseFilesMutationOptions(options));
+};

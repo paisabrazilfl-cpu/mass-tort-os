@@ -2,7 +2,7 @@
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+pnpm workspace monorepo using TypeScript. Full-stack Mass Tort Operating System (MTOS) — a distributed case processing CRM for mass tort law firms.
 
 ## Stack
 
@@ -15,6 +15,7 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
+- **AI**: Anthropic Claude (via Replit AI Integrations) — for medical document extraction
 
 ## Key Commands
 
@@ -23,34 +24,81 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
+- `pnpm --filter @workspace/api-server run worker` — run distributed worker
 
 ## Artifacts
 
 ### Mass Tort OS (`artifacts/mtos-crm`)
 - **Type**: react-vite, served at `/`
-- **Purpose**: Full-stack Mass Tort Operating System (MTOS) CRM
-- **Features**:
-  - Dashboard with real-time pipeline stats (Total Leads, Qualified, Signed Retainers, CPSR)
-  - Lead management with Boolean Gatekeeper qualification engine
-  - Intake form with conditional disqualification logic
-  - Document management for retainer PDFs
-  - Dark-mode professional legal-tech UI with Recharts pipeline charts
-  - Recent activity feed
+- **Pages**:
+  - `/` — Dashboard (pipeline stats, CPSR, pipeline chart, activity feed)
+  - `/leads` — Lead list (filterable, searchable)
+  - `/leads/new` — Intake form (Boolean Gatekeeper qualification)
+  - `/leads/:id` — Lead detail with documents
+  - `/documents` — All documents
+  - `/cases` — Distributed Case Pipeline (queue stats, case list)
+  - `/cases/new` — Submit Case (to processing queue)
+  - `/cases/:id` — Case detail (documents, AI analysis, audit trail)
 
 ### API Server (`artifacts/api-server`)
 - **Type**: Express API, served at `/api`
-- **Routes**: `/api/leads`, `/api/documents`, `/api/dashboard/stats`, `/api/dashboard/pipeline`, `/api/dashboard/recent-activity`
+- **Lead routes**: `/api/leads`, `/api/leads/:id`, `/api/leads/:id/qualify`
+- **Document routes**: `/api/documents`
+- **Dashboard routes**: `/api/dashboard/stats`, `/api/dashboard/pipeline`, `/api/dashboard/recent-activity`
+- **Cases routes**: `/api/cases`, `/api/cases/:id`, `/api/cases/:id/upload`, `/api/cases/:id/analyze`
+- **Worker routes**: `/api/cases/worker/queue-stats`
+
+## Distributed Architecture
+
+```
+FastAPI Gateway (Express)
+    ↓
+PostgreSQL Job Queue (job_queue table)
+    ↓
+Worker Process (dist/worker.mjs)
+    ├── create_case → writes to cases table
+    ├── ingest_file → saves to vault/, writes to case_documents
+    └── analyze_case → reads vault/, calls Claude AI, scores, writes to analysis
+    ↓
+PostgreSQL Results + Audit Log
+```
+
+### Worker Workflow
+- **Name**: "MTOS Worker: Job Processor"  
+- **Command**: `pnpm --filter @workspace/api-server run build && pnpm --filter @workspace/api-server run worker`
+- Polls `job_queue` table every 2 seconds for pending jobs
+- Uses PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED` for safe concurrent processing
 
 ## Database Schema
 
-### `leads` table
-- id, name, email, phone, tort_type, exposure_start, exposure_end
-- diagnosis_confirmed, diagnosis_type, was_at_location, location_name
-- status (new|qualified|signed|rejected), rejection_reason
-- notes, ad_spend, source, created_at, updated_at
+### Lead/Document Tables (original CRM)
+- `leads` — Lead records with Boolean Gatekeeper fields
+- `documents` — Retainer PDFs and intake forms
 
-### `documents` table
-- id, lead_id (FK→leads), document_type (retainer|medical_record|intake_form|other)
-- file_name, file_url, signed, signed_at, notes, created_at
+### Distributed Case Pipeline Tables
+- `cases` — Case records (id: UUID, data: JSONB, status)
+- `case_documents` — Vault file references (path to filesystem)
+- `analysis` — AI extraction results + deterministic scores (0-100)
+- `job_queue` — PostgreSQL-based job broker (replaces Redis in MVP)
+- `audit_log` — Full audit trail for all case actions
+
+## Scoring Engine (`src/lib/scoring.ts`)
+Deterministic, zero-hallucination scoring:
+- Gate 1: Diagnosis confirmed (+40pts)
+- Gate 2: Exposure confirmed (+30pts, +10pts if unclear)
+- Gate 3: Severity > 0.7 (+20pts), > 0.5 (+12pts), > 0.3 (+5pts)
+- Gate 4: No contradictions (+10pts, -6pts per contradiction after first)
+- **Verdicts**: Strong (80+), Moderate (50-79), Weak (25-49), Disqualified (<25)
+
+## File Vault (`vault/`)
+- Files stored at `vault/<case_id>/<timestamp>_<filename>`
+- SHA-256 hash stored in `case_documents.file_hash`
+- Read by worker during analysis phase
+
+## AI Integration
+- Provider: Anthropic Claude Haiku (via Replit AI Integrations — no user API key needed)
+- Charged to Replit credits
+- Env vars: `AI_INTEGRATIONS_ANTHROPIC_BASE_URL`, `AI_INTEGRATIONS_ANTHROPIC_API_KEY`
+- Extracts: diagnosis_present, exposure, severity, contradictions, tort_type, diagnosis_type, exposure_period_years
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.

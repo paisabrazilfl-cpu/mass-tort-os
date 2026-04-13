@@ -1,10 +1,11 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Users, FileText, PlusCircle } from "lucide-react";
+import { LayoutDashboard, Users, FileText, PlusCircle, Briefcase } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Leads", href: "/leads", icon: Users },
+  { name: "Cases", href: "/cases", icon: Briefcase },
   { name: "Documents", href: "/documents", icon: FileText },
   { name: "New Intake", href: "/leads/new", icon: PlusCircle },
 ];

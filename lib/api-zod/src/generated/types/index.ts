@@ -7,6 +7,17 @@
  */
 
 export * from "./activityItem";
+export * from "./auditLogEntry";
+export * from "./auditLogEntryDetails";
+export * from "./case";
+export * from "./caseAnalysis";
+export * from "./caseAnalysisFeatures";
+export * from "./caseData";
+export * from "./caseDetail";
+export * from "./caseDocument";
+export * from "./caseStatus";
+export * from "./createCaseBody";
+export * from "./createCaseResponse";
 export * from "./createDocumentBody";
 export * from "./createDocumentBodyDocumentType";
 export * from "./createLeadBody";
@@ -25,7 +36,9 @@ export * from "./pipelineBreakdownByStatusItem";
 export * from "./pipelineBreakdownByTortTypeItem";
 export * from "./qualificationResult";
 export * from "./qualificationResultStatus";
+export * from "./queueStats";
 export * from "./updateDocumentBody";
 export * from "./updateDocumentBodyDocumentType";
 export * from "./updateLeadBody";
 export * from "./updateLeadBodyStatus";
+export * from "./uploadCaseFileBody";
