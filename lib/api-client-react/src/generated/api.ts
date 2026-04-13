@@ -18,23 +18,35 @@ import type {
 
 import type {
   ActivityItem,
+  AnalyticsOverview,
+  AuditLogEntry,
+  AuditSummary,
   Case,
   CaseDetail,
   CreateCaseBody,
   CreateCaseResponse,
   CreateDocumentBody,
   CreateLeadBody,
+  CreateParalegalBody,
   DashboardStats,
   Document,
   ErrorResponse,
   FaxResult,
+  FunnelStage,
+  GetAuditTrailParams,
   HealthStatus,
   Lead,
   ListDocumentsParams,
   ListLeadsParams,
+  Paralegal,
+  ParalegalDetail,
+  ParalegalLeaderboardRow,
+  ParalegalPerformance,
   PipelineBreakdown,
+  PipelineTrendPoint,
   QualificationResult,
   QueueStats,
+  TortBreakdownRow,
   UpdateDocumentBody,
   UpdateLeadBody,
   UploadCaseFileBody,
@@ -1687,6 +1699,891 @@ export const useAnalyzeCaseFiles = <
 > => {
   return useMutation(getAnalyzeCaseFilesMutationOptions(options));
 };
+
+/**
+ * @summary List all paralegals
+ */
+export const getListParalegalsUrl = () => {
+  return `/api/paralegals`;
+};
+
+export const listParalegals = async (
+  options?: RequestInit,
+): Promise<Paralegal[]> => {
+  return customFetch<Paralegal[]>(getListParalegalsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListParalegalsQueryKey = () => {
+  return [`/api/paralegals`] as const;
+};
+
+export const getListParalegalsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listParalegals>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listParalegals>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListParalegalsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listParalegals>>> = ({
+    signal,
+  }) => listParalegals({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listParalegals>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListParalegalsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listParalegals>>
+>;
+export type ListParalegalsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all paralegals
+ */
+
+export function useListParalegals<
+  TData = Awaited<ReturnType<typeof listParalegals>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listParalegals>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListParalegalsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a new paralegal
+ */
+export const getCreateParalegalUrl = () => {
+  return `/api/paralegals`;
+};
+
+export const createParalegal = async (
+  createParalegalBody: CreateParalegalBody,
+  options?: RequestInit,
+): Promise<Paralegal> => {
+  return customFetch<Paralegal>(getCreateParalegalUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createParalegalBody),
+  });
+};
+
+export const getCreateParalegalMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createParalegal>>,
+    TError,
+    { data: BodyType<CreateParalegalBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createParalegal>>,
+  TError,
+  { data: BodyType<CreateParalegalBody> },
+  TContext
+> => {
+  const mutationKey = ["createParalegal"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createParalegal>>,
+    { data: BodyType<CreateParalegalBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createParalegal(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateParalegalMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createParalegal>>
+>;
+export type CreateParalegalMutationBody = BodyType<CreateParalegalBody>;
+export type CreateParalegalMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a new paralegal
+ */
+export const useCreateParalegal = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createParalegal>>,
+    TError,
+    { data: BodyType<CreateParalegalBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createParalegal>>,
+  TError,
+  { data: BodyType<CreateParalegalBody> },
+  TContext
+> => {
+  return useMutation(getCreateParalegalMutationOptions(options));
+};
+
+/**
+ * @summary Get paralegal detail with assigned leads
+ */
+export const getGetParalegalUrl = (id: number) => {
+  return `/api/paralegals/${id}`;
+};
+
+export const getParalegal = async (
+  id: number,
+  options?: RequestInit,
+): Promise<ParalegalDetail> => {
+  return customFetch<ParalegalDetail>(getGetParalegalUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetParalegalQueryKey = (id: number) => {
+  return [`/api/paralegals/${id}`] as const;
+};
+
+export const getGetParalegalQueryOptions = <
+  TData = Awaited<ReturnType<typeof getParalegal>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getParalegal>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetParalegalQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getParalegal>>> = ({
+    signal,
+  }) => getParalegal(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getParalegal>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetParalegalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getParalegal>>
+>;
+export type GetParalegalQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Get paralegal detail with assigned leads
+ */
+
+export function useGetParalegal<
+  TData = Awaited<ReturnType<typeof getParalegal>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getParalegal>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetParalegalQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get paralegal performance breakdown
+ */
+export const getGetParalegalPerformanceUrl = (id: number) => {
+  return `/api/paralegals/${id}/performance`;
+};
+
+export const getParalegalPerformance = async (
+  id: number,
+  options?: RequestInit,
+): Promise<ParalegalPerformance> => {
+  return customFetch<ParalegalPerformance>(getGetParalegalPerformanceUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetParalegalPerformanceQueryKey = (id: number) => {
+  return [`/api/paralegals/${id}/performance`] as const;
+};
+
+export const getGetParalegalPerformanceQueryOptions = <
+  TData = Awaited<ReturnType<typeof getParalegalPerformance>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getParalegalPerformance>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetParalegalPerformanceQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getParalegalPerformance>>
+  > = ({ signal }) =>
+    getParalegalPerformance(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getParalegalPerformance>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetParalegalPerformanceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getParalegalPerformance>>
+>;
+export type GetParalegalPerformanceQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get paralegal performance breakdown
+ */
+
+export function useGetParalegalPerformance<
+  TData = Awaited<ReturnType<typeof getParalegalPerformance>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getParalegalPerformance>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetParalegalPerformanceQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Full analytics overview across all modules
+ */
+export const getGetAnalyticsOverviewUrl = () => {
+  return `/api/analytics/overview`;
+};
+
+export const getAnalyticsOverview = async (
+  options?: RequestInit,
+): Promise<AnalyticsOverview> => {
+  return customFetch<AnalyticsOverview>(getGetAnalyticsOverviewUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAnalyticsOverviewQueryKey = () => {
+  return [`/api/analytics/overview`] as const;
+};
+
+export const getGetAnalyticsOverviewQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAnalyticsOverview>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAnalyticsOverview>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAnalyticsOverviewQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAnalyticsOverview>>
+  > = ({ signal }) => getAnalyticsOverview({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAnalyticsOverview>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAnalyticsOverviewQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAnalyticsOverview>>
+>;
+export type GetAnalyticsOverviewQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Full analytics overview across all modules
+ */
+
+export function useGetAnalyticsOverview<
+  TData = Awaited<ReturnType<typeof getAnalyticsOverview>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAnalyticsOverview>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAnalyticsOverviewQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Daily pipeline trend data
+ */
+export const getGetPipelineTrendUrl = () => {
+  return `/api/analytics/pipeline-trend`;
+};
+
+export const getPipelineTrend = async (
+  options?: RequestInit,
+): Promise<PipelineTrendPoint[]> => {
+  return customFetch<PipelineTrendPoint[]>(getGetPipelineTrendUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPipelineTrendQueryKey = () => {
+  return [`/api/analytics/pipeline-trend`] as const;
+};
+
+export const getGetPipelineTrendQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPipelineTrend>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getPipelineTrend>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPipelineTrendQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPipelineTrend>>
+  > = ({ signal }) => getPipelineTrend({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPipelineTrend>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPipelineTrendQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPipelineTrend>>
+>;
+export type GetPipelineTrendQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Daily pipeline trend data
+ */
+
+export function useGetPipelineTrend<
+  TData = Awaited<ReturnType<typeof getPipelineTrend>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getPipelineTrend>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPipelineTrendQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Conversion funnel stages
+ */
+export const getGetConversionFunnelUrl = () => {
+  return `/api/analytics/conversion-funnel`;
+};
+
+export const getConversionFunnel = async (
+  options?: RequestInit,
+): Promise<FunnelStage[]> => {
+  return customFetch<FunnelStage[]>(getGetConversionFunnelUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetConversionFunnelQueryKey = () => {
+  return [`/api/analytics/conversion-funnel`] as const;
+};
+
+export const getGetConversionFunnelQueryOptions = <
+  TData = Awaited<ReturnType<typeof getConversionFunnel>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getConversionFunnel>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetConversionFunnelQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getConversionFunnel>>
+  > = ({ signal }) => getConversionFunnel({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getConversionFunnel>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetConversionFunnelQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getConversionFunnel>>
+>;
+export type GetConversionFunnelQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Conversion funnel stages
+ */
+
+export function useGetConversionFunnel<
+  TData = Awaited<ReturnType<typeof getConversionFunnel>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getConversionFunnel>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetConversionFunnelQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Breakdown by tort type
+ */
+export const getGetTortBreakdownUrl = () => {
+  return `/api/analytics/tort-breakdown`;
+};
+
+export const getTortBreakdown = async (
+  options?: RequestInit,
+): Promise<TortBreakdownRow[]> => {
+  return customFetch<TortBreakdownRow[]>(getGetTortBreakdownUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetTortBreakdownQueryKey = () => {
+  return [`/api/analytics/tort-breakdown`] as const;
+};
+
+export const getGetTortBreakdownQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTortBreakdown>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getTortBreakdown>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetTortBreakdownQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getTortBreakdown>>
+  > = ({ signal }) => getTortBreakdown({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTortBreakdown>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetTortBreakdownQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTortBreakdown>>
+>;
+export type GetTortBreakdownQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Breakdown by tort type
+ */
+
+export function useGetTortBreakdown<
+  TData = Awaited<ReturnType<typeof getTortBreakdown>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getTortBreakdown>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetTortBreakdownQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Paralegal performance leaderboard
+ */
+export const getGetParalegalLeaderboardUrl = () => {
+  return `/api/analytics/paralegal-leaderboard`;
+};
+
+export const getParalegalLeaderboard = async (
+  options?: RequestInit,
+): Promise<ParalegalLeaderboardRow[]> => {
+  return customFetch<ParalegalLeaderboardRow[]>(
+    getGetParalegalLeaderboardUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetParalegalLeaderboardQueryKey = () => {
+  return [`/api/analytics/paralegal-leaderboard`] as const;
+};
+
+export const getGetParalegalLeaderboardQueryOptions = <
+  TData = Awaited<ReturnType<typeof getParalegalLeaderboard>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getParalegalLeaderboard>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetParalegalLeaderboardQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getParalegalLeaderboard>>
+  > = ({ signal }) => getParalegalLeaderboard({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getParalegalLeaderboard>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetParalegalLeaderboardQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getParalegalLeaderboard>>
+>;
+export type GetParalegalLeaderboardQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Paralegal performance leaderboard
+ */
+
+export function useGetParalegalLeaderboard<
+  TData = Awaited<ReturnType<typeof getParalegalLeaderboard>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getParalegalLeaderboard>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetParalegalLeaderboardQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Full audit trail with optional filters
+ */
+export const getGetAuditTrailUrl = (params?: GetAuditTrailParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/compliance/audit-trail?${stringifiedParams}`
+    : `/api/compliance/audit-trail`;
+};
+
+export const getAuditTrail = async (
+  params?: GetAuditTrailParams,
+  options?: RequestInit,
+): Promise<AuditLogEntry[]> => {
+  return customFetch<AuditLogEntry[]>(getGetAuditTrailUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAuditTrailQueryKey = (params?: GetAuditTrailParams) => {
+  return [`/api/compliance/audit-trail`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetAuditTrailQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAuditTrail>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetAuditTrailParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAuditTrail>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAuditTrailQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAuditTrail>>> = ({
+    signal,
+  }) => getAuditTrail(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAuditTrail>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAuditTrailQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAuditTrail>>
+>;
+export type GetAuditTrailQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Full audit trail with optional filters
+ */
+
+export function useGetAuditTrail<
+  TData = Awaited<ReturnType<typeof getAuditTrail>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetAuditTrailParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAuditTrail>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAuditTrailQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Audit trail summary with counts
+ */
+export const getGetAuditSummaryUrl = () => {
+  return `/api/compliance/audit-summary`;
+};
+
+export const getAuditSummary = async (
+  options?: RequestInit,
+): Promise<AuditSummary> => {
+  return customFetch<AuditSummary>(getGetAuditSummaryUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAuditSummaryQueryKey = () => {
+  return [`/api/compliance/audit-summary`] as const;
+};
+
+export const getGetAuditSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAuditSummary>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAuditSummary>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAuditSummaryQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAuditSummary>>> = ({
+    signal,
+  }) => getAuditSummary({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAuditSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAuditSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAuditSummary>>
+>;
+export type GetAuditSummaryQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Audit trail summary with counts
+ */
+
+export function useGetAuditSummary<
+  TData = Awaited<ReturnType<typeof getAuditSummary>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAuditSummary>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAuditSummaryQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Upload a fax image for OCR processing

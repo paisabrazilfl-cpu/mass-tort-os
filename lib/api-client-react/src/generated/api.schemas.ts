@@ -22,6 +22,14 @@ export const LeadStatus = {
   rejected: "rejected",
 } as const;
 
+export type LeadRouting = (typeof LeadRouting)[keyof typeof LeadRouting] | null;
+
+export const LeadRouting = {
+  hot: "hot",
+  warm: "warm",
+  cold: "cold",
+} as const;
+
 export interface Lead {
   id: number;
   name: string;
@@ -39,6 +47,8 @@ export interface Lead {
   notes?: string | null;
   ad_spend?: number | null;
   source?: string | null;
+  assigned_to?: number | null;
+  routing?: LeadRouting;
   created_at: string;
   updated_at: string;
 }
@@ -322,6 +332,116 @@ export interface UploadFaxResponse {
   vault_path: string;
 }
 
+export interface Paralegal {
+  id: number;
+  name: string;
+  email?: string | null;
+  role: string;
+  active_cases: number;
+  signed_cases: number;
+  total_assigned: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateParalegalBody {
+  name: string;
+  email?: string | null;
+  role?: string | null;
+}
+
+export interface ParalegalDetail {
+  id: number;
+  name: string;
+  email?: string | null;
+  role: string;
+  leads: Lead[];
+  signed_cases: number;
+  active_cases: number;
+  total_assigned: number;
+  conversion_rate: number;
+}
+
+export type ParalegalPerformanceBreakdownItem = {
+  status: string;
+  count: number;
+};
+
+export interface ParalegalPerformance {
+  paralegal: Paralegal;
+  breakdown: ParalegalPerformanceBreakdownItem[];
+  total_assigned: number;
+  signed: number;
+  qualified: number;
+  conversion_rate: number;
+}
+
+export type AnalyticsOverviewLeads = { [key: string]: unknown };
+
+export type AnalyticsOverviewCases = { [key: string]: unknown };
+
+export type AnalyticsOverviewAnalysis = { [key: string]: unknown };
+
+export type AnalyticsOverviewFaxes = { [key: string]: unknown };
+
+export interface AnalyticsOverview {
+  leads: AnalyticsOverviewLeads;
+  cases: AnalyticsOverviewCases;
+  analysis: AnalyticsOverviewAnalysis;
+  faxes: AnalyticsOverviewFaxes;
+}
+
+export interface PipelineTrendPoint {
+  date: string;
+  total: number;
+  qualified: number;
+  signed: number;
+}
+
+export interface FunnelStage {
+  stage: string;
+  count: number;
+  color: string;
+}
+
+export interface TortBreakdownRow {
+  tort_type: string;
+  total: number;
+  qualified: number;
+  signed: number;
+  rejected: number;
+  avg_ad_spend: number;
+}
+
+export interface ParalegalLeaderboardRow {
+  id: number;
+  name: string;
+  role: string;
+  total_assigned: number;
+  signed: number;
+  qualified: number;
+  rejected: number;
+  conversion_rate: number;
+}
+
+export type AuditSummaryByEntityItem = {
+  entity_type: string;
+  count: number;
+};
+
+export type AuditSummaryByActionItem = {
+  action: string;
+  count: number;
+};
+
+export interface AuditSummary {
+  by_entity: AuditSummaryByEntityItem[];
+  by_action: AuditSummaryByActionItem[];
+  total_events: number;
+  last_24h: number;
+  last_7d: number;
+}
+
 export type ListLeadsParams = {
   status?: ListLeadsStatus;
   tort_type?: string;
@@ -343,3 +463,9 @@ export type ListDocumentsParams = {
 };
 
 export type CreateCaseBody = { [key: string]: unknown };
+
+export type GetAuditTrailParams = {
+  limit?: number;
+  entity_type?: string;
+  action?: string;
+};

@@ -1,8 +1,8 @@
-import { useGetDashboardStats, useGetPipelineBreakdown, useGetRecentActivity, getGetDashboardStatsQueryKey, getGetPipelineBreakdownQueryKey, getGetRecentActivityQueryKey } from "@workspace/api-client-react";
+import { useGetDashboardStats, useGetPipelineBreakdown, useGetRecentActivity, useGetParalegalLeaderboard, getGetDashboardStatsQueryKey, getGetPipelineBreakdownQueryKey, getGetRecentActivityQueryKey, getGetParalegalLeaderboardQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Activity, DollarSign, Users, CheckCircle, AlertTriangle } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import { Activity, DollarSign, Users, CheckCircle, Percent, Flame } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
 import { format } from "date-fns";
 
 export default function Dashboard() {
@@ -15,8 +15,11 @@ export default function Dashboard() {
   const { data: activity, isLoading: activityLoading } = useGetRecentActivity({
     query: { queryKey: getGetRecentActivityQueryKey() }
   });
+  const { data: leaderboard, isLoading: leaderboardLoading } = useGetParalegalLeaderboard({
+    query: { queryKey: getGetParalegalLeaderboardQueryKey() }
+  });
 
-  const COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))'];
+  const COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))', 'hsl(var(--chart-5))'];
 
   return (
     <div className="space-y-6">
@@ -28,11 +31,17 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
         <StatCard
-          title="Total Leads"
+          title="Total Claimants"
           value={stats?.total_leads}
           icon={Users}
+          loading={statsLoading}
+        />
+        <StatCard
+          title="Hot Leads"
+          value={stats?.new_leads}
+          icon={Flame}
           loading={statsLoading}
         />
         <StatCard
@@ -53,14 +62,57 @@ export default function Dashboard() {
           icon={DollarSign}
           loading={statsLoading}
         />
+        <StatCard
+          title="ROI %"
+          value={stats?.conversion_rate ? `${stats.conversion_rate.toFixed(1)}%` : 'N/A'}
+          icon={Percent}
+          loading={statsLoading}
+        />
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-        <Card className="col-span-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
           <CardHeader>
-            <CardTitle>Pipeline by Tort Type</CardTitle>
+            <CardTitle>Pipeline Status</CardTitle>
           </CardHeader>
-          <CardContent className="pl-2">
+          <CardContent>
+            {pipelineLoading ? (
+              <Skeleton className="h-[300px] w-full" />
+            ) : (
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={pipeline?.by_status || []}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={100}
+                      fill="#8884d8"
+                      paddingAngle={5}
+                      dataKey="count"
+                      nameKey="status"
+                    >
+                      {(pipeline?.by_status || []).map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <RechartsTooltip 
+                      contentStyle={{ backgroundColor: 'hsl(var(--popover))', borderColor: 'hsl(var(--border))' }}
+                    />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardHeader>
+            <CardTitle>Cases by Tort Type</CardTitle>
+          </CardHeader>
+          <CardContent>
             {pipelineLoading ? (
               <Skeleton className="h-[300px] w-full" />
             ) : (
@@ -74,15 +126,62 @@ export default function Dashboard() {
                       cursor={{fill: 'hsl(var(--muted))'}}
                       contentStyle={{ backgroundColor: 'hsl(var(--popover))', borderColor: 'hsl(var(--border))' }}
                     />
-                    <Bar dataKey="qualified" stackId="a" fill="hsl(var(--chart-2))" radius={[0, 0, 4, 4]} />
-                    <Bar dataKey="signed" stackId="a" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} />
+                    <Legend />
+                    <Bar dataKey="qualified" stackId="a" fill="hsl(var(--chart-2))" name="Qualified" radius={[0, 0, 4, 4]} />
+                    <Bar dataKey="signed" stackId="a" fill="hsl(var(--chart-1))" name="Signed" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             )}
           </CardContent>
         </Card>
-        
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+        <Card className="col-span-4">
+          <CardHeader>
+            <CardTitle>Paralegal Leaderboard</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {leaderboardLoading ? (
+              <div className="space-y-4">
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs text-muted-foreground uppercase bg-muted/50 border-b">
+                    <tr>
+                      <th className="px-4 py-3">Rank</th>
+                      <th className="px-4 py-3">Name</th>
+                      <th className="px-4 py-3">Signed</th>
+                      <th className="px-4 py-3">Qualified</th>
+                      <th className="px-4 py-3">Conv Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(leaderboard || []).slice(0, 4).map((row, idx) => (
+                      <tr key={row.id} className="border-b last:border-0 hover:bg-muted/50 transition-colors">
+                        <td className="px-4 py-3 font-medium">#{idx + 1}</td>
+                        <td className="px-4 py-3">
+                          <div className="font-medium">{row.name}</div>
+                          <div className="text-xs text-muted-foreground">{row.role}</div>
+                        </td>
+                        <td className="px-4 py-3 font-bold text-primary">{row.signed}</td>
+                        <td className="px-4 py-3">{row.qualified}</td>
+                        <td className="px-4 py-3">{row.conversion_rate.toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         <Card className="col-span-3">
           <CardHeader>
             <CardTitle>Recent Activity</CardTitle>
@@ -98,7 +197,7 @@ export default function Dashboard() {
               <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2">
                 {activity?.map((item) => (
                   <div key={item.id} className="flex items-start gap-4 text-sm">
-                    <div className="mt-0.5 rounded-full bg-primary/10 p-1.5">
+                    <div className="mt-0.5 rounded-full bg-primary/10 p-1.5 flex-shrink-0">
                       <Activity className="h-3 w-3 text-primary" />
                     </div>
                     <div className="flex-1 space-y-1">

@@ -22,6 +22,12 @@ tags:
     description: Dashboard analytics
   - name: ocr
     description: Fax OCR inbox — Legora Grid extraction
+  - name: paralegals
+    description: Paralegal management and assignment
+  - name: analytics
+    description: ROI tracking, conversion funnels, and performance analytics
+  - name: compliance
+    description: Audit trail and compliance tracking
 paths:
   /healthz:
     get:
@@ -397,6 +403,199 @@ paths:
               schema:
                 $ref: "#/components/schemas/CreateCaseResponse"
 
+  /paralegals:
+    get:
+      operationId: listParalegals
+      tags: [paralegals]
+      summary: List all paralegals
+      responses:
+        "200":
+          description: Paralegals list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Paralegal"
+    post:
+      operationId: createParalegal
+      tags: [paralegals]
+      summary: Create a new paralegal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateParalegalBody"
+      responses:
+        "201":
+          description: Paralegal created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Paralegal"
+
+  /paralegals/{id}:
+    get:
+      operationId: getParalegal
+      tags: [paralegals]
+      summary: Get paralegal detail with assigned leads
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Paralegal detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParalegalDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /paralegals/{id}/performance:
+    get:
+      operationId: getParalegalPerformance
+      tags: [paralegals]
+      summary: Get paralegal performance breakdown
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Performance stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParalegalPerformance"
+
+  /analytics/overview:
+    get:
+      operationId: getAnalyticsOverview
+      tags: [analytics]
+      summary: Full analytics overview across all modules
+      responses:
+        "200":
+          description: Analytics overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsOverview"
+
+  /analytics/pipeline-trend:
+    get:
+      operationId: getPipelineTrend
+      tags: [analytics]
+      summary: Daily pipeline trend data
+      responses:
+        "200":
+          description: Pipeline trend
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PipelineTrendPoint"
+
+  /analytics/conversion-funnel:
+    get:
+      operationId: getConversionFunnel
+      tags: [analytics]
+      summary: Conversion funnel stages
+      responses:
+        "200":
+          description: Funnel stages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FunnelStage"
+
+  /analytics/tort-breakdown:
+    get:
+      operationId: getTortBreakdown
+      tags: [analytics]
+      summary: Breakdown by tort type
+      responses:
+        "200":
+          description: Tort breakdown
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TortBreakdownRow"
+
+  /analytics/paralegal-leaderboard:
+    get:
+      operationId: getParalegalLeaderboard
+      tags: [analytics]
+      summary: Paralegal performance leaderboard
+      responses:
+        "200":
+          description: Leaderboard
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ParalegalLeaderboardRow"
+
+  /compliance/audit-trail:
+    get:
+      operationId: getAuditTrail
+      tags: [compliance]
+      summary: Full audit trail with optional filters
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: entity_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audit trail
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditLogEntry"
+
+  /compliance/audit-summary:
+    get:
+      operationId: getAuditSummary
+      tags: [compliance]
+      summary: Audit trail summary with counts
+      responses:
+        "200":
+          description: Audit summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditSummary"
+
   /ocr/upload:
     post:
       operationId: uploadFax
@@ -535,6 +734,13 @@ components:
         source:
           type: string
           nullable: true
+        assigned_to:
+          type: integer
+          nullable: true
+        routing:
+          type: string
+          nullable: true
+          enum: [hot, warm, cold]
         created_at:
           type: string
         updated_at:
@@ -1027,3 +1233,201 @@ components:
         vault_path:
           type: string
       required: [fax_result_id, status, job_id, vault_path]
+
+    Paralegal:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+          nullable: true
+        role:
+          type: string
+        active_cases:
+          type: integer
+        signed_cases:
+          type: integer
+        total_assigned:
+          type: integer
+        created_at:
+          type: string
+        updated_at:
+          type: string
+      required: [id, name, role, active_cases, signed_cases, total_assigned, created_at, updated_at]
+
+    CreateParalegalBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          nullable: true
+        role:
+          type: string
+          nullable: true
+      required: [name]
+
+    ParalegalDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+          nullable: true
+        role:
+          type: string
+        leads:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lead"
+        signed_cases:
+          type: integer
+        active_cases:
+          type: integer
+        total_assigned:
+          type: integer
+        conversion_rate:
+          type: integer
+      required: [id, name, role, leads, signed_cases, active_cases, total_assigned, conversion_rate]
+
+    ParalegalPerformance:
+      type: object
+      properties:
+        paralegal:
+          $ref: "#/components/schemas/Paralegal"
+        breakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              status:
+                type: string
+              count:
+                type: integer
+            required: [status, count]
+        total_assigned:
+          type: integer
+        signed:
+          type: integer
+        qualified:
+          type: integer
+        conversion_rate:
+          type: integer
+      required: [paralegal, breakdown, total_assigned, signed, qualified, conversion_rate]
+
+    AnalyticsOverview:
+      type: object
+      properties:
+        leads:
+          type: object
+          additionalProperties: true
+        cases:
+          type: object
+          additionalProperties: true
+        analysis:
+          type: object
+          additionalProperties: true
+        faxes:
+          type: object
+          additionalProperties: true
+      required: [leads, cases, analysis, faxes]
+
+    PipelineTrendPoint:
+      type: object
+      properties:
+        date:
+          type: string
+        total:
+          type: integer
+        qualified:
+          type: integer
+        signed:
+          type: integer
+      required: [date, total, qualified, signed]
+
+    FunnelStage:
+      type: object
+      properties:
+        stage:
+          type: string
+        count:
+          type: integer
+        color:
+          type: string
+      required: [stage, count, color]
+
+    TortBreakdownRow:
+      type: object
+      properties:
+        tort_type:
+          type: string
+        total:
+          type: integer
+        qualified:
+          type: integer
+        signed:
+          type: integer
+        rejected:
+          type: integer
+        avg_ad_spend:
+          type: number
+      required: [tort_type, total, qualified, signed, rejected, avg_ad_spend]
+
+    ParalegalLeaderboardRow:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        role:
+          type: string
+        total_assigned:
+          type: integer
+        signed:
+          type: integer
+        qualified:
+          type: integer
+        rejected:
+          type: integer
+        conversion_rate:
+          type: integer
+      required: [id, name, role, total_assigned, signed, qualified, rejected, conversion_rate]
+
+    AuditSummary:
+      type: object
+      properties:
+        by_entity:
+          type: array
+          items:
+            type: object
+            properties:
+              entity_type:
+                type: string
+              count:
+                type: integer
+            required: [entity_type, count]
+        by_action:
+          type: array
+          items:
+            type: object
+            properties:
+              action:
+                type: string
+              count:
+                type: integer
+            required: [action, count]
+        total_events:
+          type: integer
+        last_24h:
+          type: integer
+        last_7d:
+          type: integer
+      required: [by_entity, by_action, total_events, last_24h, last_7d]

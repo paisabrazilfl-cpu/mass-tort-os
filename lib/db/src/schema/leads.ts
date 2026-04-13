@@ -1,6 +1,7 @@
 import {
   pgTable,
   serial,
+  integer,
   varchar,
   text,
   boolean,
@@ -28,6 +29,8 @@ export const leadsTable = pgTable("leads", {
   notes: text("notes"),
   ad_spend: decimal("ad_spend", { precision: 10, scale: 2 }),
   source: varchar("source", { length: 100 }),
+  assigned_to: integer("assigned_to"),
+  routing: varchar("routing", { length: 20 }).default("cold"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });

@@ -5,6 +5,9 @@ import documentsRouter from "./documents";
 import dashboardRouter from "./dashboard";
 import casesRouter from "./cases";
 import ocrRouter from "./ocr";
+import paralegalsRouter from "./paralegals";
+import analyticsRouter from "./analytics";
+import complianceRouter from "./compliance";
 
 const router: IRouter = Router();
 
@@ -14,5 +17,8 @@ router.use("/documents", documentsRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/cases", casesRouter);
 router.use("/ocr", ocrRouter);
+router.use("/paralegals", paralegalsRouter);
+router.use("/analytics", analyticsRouter);
+router.use("/compliance", complianceRouter);
 
 export default router;

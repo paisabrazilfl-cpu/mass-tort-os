@@ -5,6 +5,7 @@
  * Mass Tort Operating System API
  * OpenAPI spec version: 0.1.0
  */
+import type { LeadRouting } from "./leadRouting";
 import type { LeadStatus } from "./leadStatus";
 
 export interface Lead {
@@ -24,6 +25,8 @@ export interface Lead {
   notes?: string | null;
   ad_spend?: number | null;
   source?: string | null;
+  assigned_to?: number | null;
+  routing?: LeadRouting;
   created_at: string;
   updated_at: string;
 }

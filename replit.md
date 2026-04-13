@@ -39,6 +39,11 @@ pnpm workspace monorepo using TypeScript. Full-stack Mass Tort Operating System 
   - `/cases` — Distributed Case Pipeline (queue stats, case list)
   - `/cases/new` — Submit Case (to processing queue)
   - `/cases/:id` — Case detail (documents, AI analysis, audit trail)
+  - `/pipeline` — Pipeline View (conversion funnel, trend charts, tort breakdown)
+  - `/paralegals` — Paralegal Management (cards, leaderboard, add paralegal)
+  - `/analytics` — Analytics & ROI (KPIs, conversion funnel, score distribution)
+  - `/compliance` — Compliance Audit Trail (event log, filters, JSON drill-down)
+  - `/ocr-inbox` — OCR Inbox (Legora Grid, fax upload)
 
 ### API Server (`artifacts/api-server`)
 - **Type**: Express API, served at `/api`
@@ -47,6 +52,9 @@ pnpm workspace monorepo using TypeScript. Full-stack Mass Tort Operating System 
 - **Dashboard routes**: `/api/dashboard/stats`, `/api/dashboard/pipeline`, `/api/dashboard/recent-activity`
 - **Cases routes**: `/api/cases`, `/api/cases/:id`, `/api/cases/:id/upload`, `/api/cases/:id/analyze`
 - **Worker routes**: `/api/cases/worker/queue-stats`
+- **Paralegal routes**: `/api/paralegals`, `/api/paralegals/:id`, `/api/paralegals/:id/performance`
+- **Analytics routes**: `/api/analytics/overview`, `/api/analytics/pipeline-trend`, `/api/analytics/conversion-funnel`, `/api/analytics/tort-breakdown`, `/api/analytics/paralegal-leaderboard`
+- **Compliance routes**: `/api/compliance/audit-trail`, `/api/compliance/audit-summary`
 
 ## Distributed Architecture
 
@@ -74,6 +82,9 @@ PostgreSQL Results + Audit Log
 ### Lead/Document Tables (original CRM)
 - `leads` — Lead records with Boolean Gatekeeper fields
 - `documents` — Retainer PDFs and intake forms
+
+### CRM Tables
+- `paralegals` — Paralegal team (name, email, role, performance stats)
 
 ### Distributed Case Pipeline Tables
 - `cases` — Case records (id: UUID, data: JSONB, status)

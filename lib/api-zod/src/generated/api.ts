@@ -40,6 +40,8 @@ export const ListLeadsResponseItem = zod.object({
   notes: zod.string().nullish(),
   ad_spend: zod.number().nullish(),
   source: zod.string().nullish(),
+  assigned_to: zod.number().nullish(),
+  routing: zod.enum(["hot", "warm", "cold"]).nullish(),
   created_at: zod.string(),
   updated_at: zod.string(),
 });
@@ -88,6 +90,8 @@ export const GetLeadResponse = zod.object({
   notes: zod.string().nullish(),
   ad_spend: zod.number().nullish(),
   source: zod.string().nullish(),
+  assigned_to: zod.number().nullish(),
+  routing: zod.enum(["hot", "warm", "cold"]).nullish(),
   created_at: zod.string(),
   updated_at: zod.string(),
 });
@@ -134,6 +138,8 @@ export const UpdateLeadResponse = zod.object({
   notes: zod.string().nullish(),
   ad_spend: zod.number().nullish(),
   source: zod.string().nullish(),
+  assigned_to: zod.number().nullish(),
+  routing: zod.enum(["hot", "warm", "cold"]).nullish(),
   created_at: zod.string(),
   updated_at: zod.string(),
 });
@@ -401,6 +407,208 @@ export const AnalyzeCaseFilesResponse = zod.object({
   case_id: zod.string(),
   status: zod.string(),
   job_id: zod.number(),
+});
+
+/**
+ * @summary List all paralegals
+ */
+export const ListParalegalsResponseItem = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  email: zod.string().nullish(),
+  role: zod.string(),
+  active_cases: zod.number(),
+  signed_cases: zod.number(),
+  total_assigned: zod.number(),
+  created_at: zod.string(),
+  updated_at: zod.string(),
+});
+export const ListParalegalsResponse = zod.array(ListParalegalsResponseItem);
+
+/**
+ * @summary Create a new paralegal
+ */
+export const CreateParalegalBody = zod.object({
+  name: zod.string(),
+  email: zod.string().nullish(),
+  role: zod.string().nullish(),
+});
+
+/**
+ * @summary Get paralegal detail with assigned leads
+ */
+export const GetParalegalParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetParalegalResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  email: zod.string().nullish(),
+  role: zod.string(),
+  leads: zod.array(
+    zod.object({
+      id: zod.number(),
+      name: zod.string(),
+      email: zod.string().optional(),
+      phone: zod.string().optional(),
+      tort_type: zod.string(),
+      exposure_start: zod.string().nullish(),
+      exposure_end: zod.string().nullish(),
+      diagnosis_confirmed: zod.boolean(),
+      diagnosis_type: zod.string().nullish(),
+      was_at_location: zod.boolean(),
+      location_name: zod.string().nullish(),
+      status: zod.enum(["new", "qualified", "signed", "rejected"]),
+      rejection_reason: zod.string().nullish(),
+      notes: zod.string().nullish(),
+      ad_spend: zod.number().nullish(),
+      source: zod.string().nullish(),
+      assigned_to: zod.number().nullish(),
+      routing: zod.enum(["hot", "warm", "cold"]).nullish(),
+      created_at: zod.string(),
+      updated_at: zod.string(),
+    }),
+  ),
+  signed_cases: zod.number(),
+  active_cases: zod.number(),
+  total_assigned: zod.number(),
+  conversion_rate: zod.number(),
+});
+
+/**
+ * @summary Get paralegal performance breakdown
+ */
+export const GetParalegalPerformanceParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetParalegalPerformanceResponse = zod.object({
+  paralegal: zod.object({
+    id: zod.number(),
+    name: zod.string(),
+    email: zod.string().nullish(),
+    role: zod.string(),
+    active_cases: zod.number(),
+    signed_cases: zod.number(),
+    total_assigned: zod.number(),
+    created_at: zod.string(),
+    updated_at: zod.string(),
+  }),
+  breakdown: zod.array(
+    zod.object({
+      status: zod.string(),
+      count: zod.number(),
+    }),
+  ),
+  total_assigned: zod.number(),
+  signed: zod.number(),
+  qualified: zod.number(),
+  conversion_rate: zod.number(),
+});
+
+/**
+ * @summary Full analytics overview across all modules
+ */
+export const GetAnalyticsOverviewResponse = zod.object({
+  leads: zod.record(zod.string(), zod.unknown()),
+  cases: zod.record(zod.string(), zod.unknown()),
+  analysis: zod.record(zod.string(), zod.unknown()),
+  faxes: zod.record(zod.string(), zod.unknown()),
+});
+
+/**
+ * @summary Daily pipeline trend data
+ */
+export const GetPipelineTrendResponseItem = zod.object({
+  date: zod.string(),
+  total: zod.number(),
+  qualified: zod.number(),
+  signed: zod.number(),
+});
+export const GetPipelineTrendResponse = zod.array(GetPipelineTrendResponseItem);
+
+/**
+ * @summary Conversion funnel stages
+ */
+export const GetConversionFunnelResponseItem = zod.object({
+  stage: zod.string(),
+  count: zod.number(),
+  color: zod.string(),
+});
+export const GetConversionFunnelResponse = zod.array(
+  GetConversionFunnelResponseItem,
+);
+
+/**
+ * @summary Breakdown by tort type
+ */
+export const GetTortBreakdownResponseItem = zod.object({
+  tort_type: zod.string(),
+  total: zod.number(),
+  qualified: zod.number(),
+  signed: zod.number(),
+  rejected: zod.number(),
+  avg_ad_spend: zod.number(),
+});
+export const GetTortBreakdownResponse = zod.array(GetTortBreakdownResponseItem);
+
+/**
+ * @summary Paralegal performance leaderboard
+ */
+export const GetParalegalLeaderboardResponseItem = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  role: zod.string(),
+  total_assigned: zod.number(),
+  signed: zod.number(),
+  qualified: zod.number(),
+  rejected: zod.number(),
+  conversion_rate: zod.number(),
+});
+export const GetParalegalLeaderboardResponse = zod.array(
+  GetParalegalLeaderboardResponseItem,
+);
+
+/**
+ * @summary Full audit trail with optional filters
+ */
+export const GetAuditTrailQueryParams = zod.object({
+  limit: zod.coerce.number().optional(),
+  entity_type: zod.coerce.string().optional(),
+  action: zod.coerce.string().optional(),
+});
+
+export const GetAuditTrailResponseItem = zod.object({
+  id: zod.number(),
+  entity_type: zod.string(),
+  entity_id: zod.string(),
+  action: zod.string(),
+  details: zod.record(zod.string(), zod.unknown()).nullish(),
+  ip_address: zod.string().nullish(),
+  occurred_at: zod.string(),
+});
+export const GetAuditTrailResponse = zod.array(GetAuditTrailResponseItem);
+
+/**
+ * @summary Audit trail summary with counts
+ */
+export const GetAuditSummaryResponse = zod.object({
+  by_entity: zod.array(
+    zod.object({
+      entity_type: zod.string(),
+      count: zod.number(),
+    }),
+  ),
+  by_action: zod.array(
+    zod.object({
+      action: zod.string(),
+      count: zod.number(),
+    }),
+  ),
+  total_events: zod.number(),
+  last_24h: zod.number(),
+  last_7d: zod.number(),
 });
 
 /**

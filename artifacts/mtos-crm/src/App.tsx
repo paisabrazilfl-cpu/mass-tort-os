@@ -6,14 +6,18 @@ import NotFound from "@/pages/not-found";
 
 import { Layout } from "@/components/layout/layout";
 import Dashboard from "@/pages/dashboard";
+import Pipeline from "@/pages/pipeline";
 import Leads from "@/pages/leads";
 import LeadIntake from "@/pages/lead-intake";
 import LeadDetail from "@/pages/lead-detail";
+import Paralegals from "@/pages/paralegals";
 import Documents from "@/pages/documents";
 import OcrInbox from "@/pages/ocr-inbox";
 import Cases from "@/pages/cases";
 import CaseNew from "@/pages/case-new";
 import CaseDetail from "@/pages/case-detail";
+import Analytics from "@/pages/analytics";
+import Compliance from "@/pages/compliance";
 
 const queryClient = new QueryClient();
 
@@ -22,14 +26,18 @@ function Router() {
     <Layout>
       <Switch>
         <Route path="/" component={Dashboard} />
+        <Route path="/pipeline" component={Pipeline} />
         <Route path="/leads" component={Leads} />
         <Route path="/leads/new" component={LeadIntake} />
         <Route path="/leads/:id" component={LeadDetail} />
+        <Route path="/paralegals" component={Paralegals} />
         <Route path="/documents" component={Documents} />
         <Route path="/ocr-inbox" component={OcrInbox} />
         <Route path="/cases" component={Cases} />
         <Route path="/cases/new" component={CaseNew} />
         <Route path="/cases/:id" component={CaseDetail} />
+        <Route path="/analytics" component={Analytics} />
+        <Route path="/compliance" component={Compliance} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
