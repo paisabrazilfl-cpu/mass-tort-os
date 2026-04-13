@@ -47,6 +47,15 @@ export const ListLeadsResponseItem = zod.object({
   hospital_name: zod.string().nullish(),
   hospital_fax: zod.string().nullish(),
   hospital_contact_info: zod.string().nullish(),
+  tcpa_consent: zod.boolean().nullish(),
+  trustedform_cert_url: zod.string().nullish(),
+  trustedform_ip: zod.string().nullish(),
+  trustedform_user_agent: zod.string().nullish(),
+  trustedform_timestamp: zod.string().nullish(),
+  email_validation_status: zod.string().nullish(),
+  address_validation_status: zod.string().nullish(),
+  background_check_status: zod.string().nullish(),
+  background_check_data: zod.string().nullish(),
   exposure_start: zod.string().nullish(),
   exposure_end: zod.string().nullish(),
   diagnosis_confirmed: zod.boolean(),
@@ -139,6 +148,15 @@ export const GetLeadResponse = zod.object({
   hospital_name: zod.string().nullish(),
   hospital_fax: zod.string().nullish(),
   hospital_contact_info: zod.string().nullish(),
+  tcpa_consent: zod.boolean().nullish(),
+  trustedform_cert_url: zod.string().nullish(),
+  trustedform_ip: zod.string().nullish(),
+  trustedform_user_agent: zod.string().nullish(),
+  trustedform_timestamp: zod.string().nullish(),
+  email_validation_status: zod.string().nullish(),
+  address_validation_status: zod.string().nullish(),
+  background_check_status: zod.string().nullish(),
+  background_check_data: zod.string().nullish(),
   exposure_start: zod.string().nullish(),
   exposure_end: zod.string().nullish(),
   diagnosis_confirmed: zod.boolean(),
@@ -192,6 +210,8 @@ export const UpdateLeadBody = zod.object({
   hospital_name: zod.string().optional(),
   hospital_fax: zod.string().optional(),
   hospital_contact_info: zod.string().optional(),
+  tcpa_consent: zod.boolean().optional(),
+  trustedform_cert_url: zod.string().optional(),
   exposure_start: zod.string().nullish(),
   exposure_end: zod.string().nullish(),
   diagnosis_confirmed: zod.boolean().optional(),
@@ -231,6 +251,15 @@ export const UpdateLeadResponse = zod.object({
   hospital_name: zod.string().nullish(),
   hospital_fax: zod.string().nullish(),
   hospital_contact_info: zod.string().nullish(),
+  tcpa_consent: zod.boolean().nullish(),
+  trustedform_cert_url: zod.string().nullish(),
+  trustedform_ip: zod.string().nullish(),
+  trustedform_user_agent: zod.string().nullish(),
+  trustedform_timestamp: zod.string().nullish(),
+  email_validation_status: zod.string().nullish(),
+  address_validation_status: zod.string().nullish(),
+  background_check_status: zod.string().nullish(),
+  background_check_data: zod.string().nullish(),
   exposure_start: zod.string().nullish(),
   exposure_end: zod.string().nullish(),
   diagnosis_confirmed: zod.boolean(),
@@ -679,6 +708,156 @@ export const LookupNpiResponse = zod.object({
 });
 
 /**
+ * @summary Get all tort campaign form configurations
+ */
+export const GetFormConfigsResponse = zod.object({
+  tort_campaigns: zod.array(
+    zod.object({
+      id: zod.string(),
+      label: zod.string(),
+      fields: zod.array(zod.string()),
+      rules: zod.array(zod.string()),
+    }),
+  ),
+});
+
+/**
+ * @summary Get a single tort form configuration
+ */
+export const GetFormConfigParams = zod.object({
+  tortId: zod.coerce.string(),
+});
+
+export const GetFormConfigResponse = zod.object({
+  id: zod.string(),
+  label: zod.string(),
+  fields: zod.array(zod.string()),
+  rules: zod.array(zod.string()),
+});
+
+/**
+ * @summary Validate email (RFC + typo detection)
+ */
+export const ValidateEmailBody = zod.object({
+  email: zod.string(),
+});
+
+export const ValidateEmailResponse = zod.object({
+  valid: zod.boolean(),
+  errors: zod.array(zod.string()),
+  suggestion: zod.string().nullish(),
+});
+
+/**
+ * @summary Validate address (US format)
+ */
+export const ValidateAddressBody = zod.object({
+  street_address: zod.string(),
+  city: zod.string(),
+  state: zod.string(),
+  zip: zod.string(),
+});
+
+export const ValidateAddressResponse = zod.object({
+  valid: zod.boolean(),
+  errors: zod.array(zod.string()),
+});
+
+/**
+ * @summary Submit intake form with full compliance validation
+ */
+export const SubmitFormBody = zod.object({
+  first_name: zod.string(),
+  last_name: zod.string(),
+  date_of_birth: zod.string(),
+  street_address: zod.string(),
+  city: zod.string(),
+  state: zod.string(),
+  zip: zod.string(),
+  phone_primary: zod.string(),
+  email: zod.string(),
+  last_4_ssn: zod.string(),
+  diagnosis: zod.string(),
+  diagnosis_date: zod.string(),
+  diagnosis_confirmed: zod.boolean().optional(),
+  was_at_location: zod.boolean().optional(),
+  location_name: zod.string().nullish(),
+  physician_first_name: zod.string(),
+  physician_last_name: zod.string(),
+  physician_full_address: zod.string(),
+  physician_contact_info: zod.string(),
+  hospital_name: zod.string(),
+  hospital_fax: zod.string(),
+  hospital_contact_info: zod.string(),
+  tort_type: zod.string(),
+  tcpa_consent: zod.boolean(),
+  trustedform_cert_url: zod.string(),
+  trustedform_ip: zod.string().nullish(),
+  trustedform_user_agent: zod.string().nullish(),
+  trustedform_timestamp: zod.string().nullish(),
+  exposure_start: zod.string().nullish(),
+  exposure_end: zod.string().nullish(),
+  source: zod.string().nullish(),
+  notes: zod.string().nullish(),
+});
+
+/**
+ * @summary Get embeddable JavaScript form for a tort campaign
+ */
+export const GetFormEmbedParams = zod.object({
+  tortId: zod.coerce.string(),
+});
+
+/**
+ * @summary Run background check on a person
+ */
+export const RunBackgroundCheckBody = zod.object({
+  first_name: zod.string(),
+  last_name: zod.string(),
+  state: zod.string().optional(),
+  date_of_birth: zod.string().optional(),
+});
+
+export const RunBackgroundCheckResponse = zod.object({
+  status: zod.enum(["clean", "flagged", "not_found", "error"]),
+  source: zod.string(),
+  checked_at: zod.string(),
+  records: zod.array(
+    zod.object({
+      type: zod.string(),
+      description: zod.string(),
+      date: zod.string().nullish(),
+      jurisdiction: zod.string().nullish(),
+      severity: zod.enum(["low", "medium", "high"]),
+    }),
+  ),
+  summary: zod.string(),
+});
+
+/**
+ * @summary Run background check on an existing lead
+ */
+export const RunLeadBackgroundCheckParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const RunLeadBackgroundCheckResponse = zod.object({
+  status: zod.enum(["clean", "flagged", "not_found", "error"]),
+  source: zod.string(),
+  checked_at: zod.string(),
+  records: zod.array(
+    zod.object({
+      type: zod.string(),
+      description: zod.string(),
+      date: zod.string().nullish(),
+      jurisdiction: zod.string().nullish(),
+      severity: zod.enum(["low", "medium", "high"]),
+    }),
+  ),
+  summary: zod.string(),
+});
+
+/**
  * @summary List all paralegals
  */
 export const ListParalegalsResponseItem = zod.object({
@@ -740,6 +919,15 @@ export const GetParalegalResponse = zod.object({
       hospital_name: zod.string().nullish(),
       hospital_fax: zod.string().nullish(),
       hospital_contact_info: zod.string().nullish(),
+      tcpa_consent: zod.boolean().nullish(),
+      trustedform_cert_url: zod.string().nullish(),
+      trustedform_ip: zod.string().nullish(),
+      trustedform_user_agent: zod.string().nullish(),
+      trustedform_timestamp: zod.string().nullish(),
+      email_validation_status: zod.string().nullish(),
+      address_validation_status: zod.string().nullish(),
+      background_check_status: zod.string().nullish(),
+      background_check_data: zod.string().nullish(),
       exposure_start: zod.string().nullish(),
       exposure_end: zod.string().nullish(),
       diagnosis_confirmed: zod.boolean(),

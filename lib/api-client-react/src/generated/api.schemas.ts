@@ -55,6 +55,15 @@ export interface Lead {
   hospital_name?: string | null;
   hospital_fax?: string | null;
   hospital_contact_info?: string | null;
+  tcpa_consent?: boolean | null;
+  trustedform_cert_url?: string | null;
+  trustedform_ip?: string | null;
+  trustedform_user_agent?: string | null;
+  trustedform_timestamp?: string | null;
+  email_validation_status?: string | null;
+  address_validation_status?: string | null;
+  background_check_status?: string | null;
+  background_check_data?: string | null;
   exposure_start?: string | null;
   exposure_end?: string | null;
   diagnosis_confirmed: boolean;
@@ -140,6 +149,8 @@ export interface UpdateLeadBody {
   hospital_name?: string;
   hospital_fax?: string;
   hospital_contact_info?: string;
+  tcpa_consent?: boolean;
+  trustedform_cert_url?: string;
   exposure_start?: string | null;
   exposure_end?: string | null;
   diagnosis_confirmed?: boolean;
@@ -587,6 +598,118 @@ export interface AuditSummary {
   last_7d: number;
 }
 
+export interface FormConfig {
+  id: string;
+  label: string;
+  fields: string[];
+  rules: string[];
+}
+
+export interface FormConfigList {
+  tort_campaigns: FormConfig[];
+}
+
+export interface EmailValidationResult {
+  valid: boolean;
+  errors: string[];
+  suggestion?: string | null;
+}
+
+export interface AddressValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+export interface FormSubmission {
+  first_name: string;
+  last_name: string;
+  date_of_birth: string;
+  street_address: string;
+  city: string;
+  state: string;
+  zip: string;
+  phone_primary: string;
+  email: string;
+  last_4_ssn: string;
+  diagnosis: string;
+  diagnosis_date: string;
+  diagnosis_confirmed?: boolean;
+  was_at_location?: boolean;
+  location_name?: string | null;
+  physician_first_name: string;
+  physician_last_name: string;
+  physician_full_address: string;
+  physician_contact_info: string;
+  hospital_name: string;
+  hospital_fax: string;
+  hospital_contact_info: string;
+  tort_type: string;
+  tcpa_consent: boolean;
+  trustedform_cert_url: string;
+  trustedform_ip?: string | null;
+  trustedform_user_agent?: string | null;
+  trustedform_timestamp?: string | null;
+  exposure_start?: string | null;
+  exposure_end?: string | null;
+  source?: string | null;
+  notes?: string | null;
+}
+
+export type FormSubmissionResultBackgroundCheck = {
+  status?: string;
+  summary?: string;
+} | null;
+
+export interface FormSubmissionResult {
+  status: string;
+  lead_id: number;
+  lead_status: string;
+  background_check?: FormSubmissionResultBackgroundCheck;
+  output_state: string;
+}
+
+export interface FormRejection {
+  status: string;
+  errors: string[];
+  action: string;
+  details?: string[] | null;
+}
+
+export type BackgroundCheckResultStatus =
+  (typeof BackgroundCheckResultStatus)[keyof typeof BackgroundCheckResultStatus];
+
+export const BackgroundCheckResultStatus = {
+  clean: "clean",
+  flagged: "flagged",
+  not_found: "not_found",
+  error: "error",
+} as const;
+
+export type BackgroundCheckResultRecordsItemSeverity =
+  (typeof BackgroundCheckResultRecordsItemSeverity)[keyof typeof BackgroundCheckResultRecordsItemSeverity];
+
+export const BackgroundCheckResultRecordsItemSeverity = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+} as const;
+
+export type BackgroundCheckResultRecordsItem = {
+  type: string;
+  description: string;
+  date?: string | null;
+  jurisdiction?: string | null;
+  severity: BackgroundCheckResultRecordsItemSeverity;
+};
+
+export interface BackgroundCheckResult {
+  status: BackgroundCheckResultStatus;
+  source: string;
+  checked_at: string;
+  records: BackgroundCheckResultRecordsItem[];
+  summary: string;
+}
+
 export type ListLeadsParams = {
   status?: ListLeadsStatus;
   tort_type?: string;
@@ -625,6 +748,24 @@ export type SearchNpiParams = {
   state?: string;
   specialty?: string;
   limit?: string;
+};
+
+export type ValidateEmailBody = {
+  email: string;
+};
+
+export type ValidateAddressBody = {
+  street_address: string;
+  city: string;
+  state: string;
+  zip: string;
+};
+
+export type RunBackgroundCheckBody = {
+  first_name: string;
+  last_name: string;
+  state?: string;
+  date_of_birth?: string;
 };
 
 export type GetAuditTrailParams = {

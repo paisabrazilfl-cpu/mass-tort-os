@@ -187,4 +187,51 @@ Every module produces: `ACCEPT`, `REJECT`, `REVIEW_REQUIRED`, or `ERROR_FALLBACK
 - Worker process_fax: wrapped in error fallback with retry
 - All conflicts/failures: audit_log entry + review_queue entry
 
+## Form Engine (TCPA + TrustedForm Compliance)
+
+### Architecture
+```
+Form Engine
+├── Form Builder (Tort-Based) — 10 campaigns with auto-generated configs
+├── Embeddable JS Script — GET /api/forms/embed/:tortId
+├── Live Validation Layer
+│   ├── Email Validator (RFC + typo detection) — POST /api/forms/validate/email
+│   ├── Address Validator (US format) — POST /api/forms/validate/address
+│   └── TCPA + TrustedForm Validator (server-side)
+├── Background Check — CourtListener (free) + OFAC sanctions
+│   ├── POST /api/forms/background-check
+│   └── POST /api/forms/background-check/lead/:id
+├── Submission Pipeline — POST /api/forms/submit
+│   ├── Schema validation → Email validation → Address validation
+│   ├── TCPA consent check → TrustedForm cert check
+│   ├── Tort-specific rules enforcement
+│   ├── Conflict detection → NPI enrichment
+│   └── Background check (post-insert, async)
+└── GET /api/forms/config — all tort campaign configs
+
+### Compliance Fields (leads table)
+- tcpa_consent, trustedform_cert_url, trustedform_ip, trustedform_user_agent, trustedform_timestamp
+- email_validation_status, address_validation_status
+- background_check_status, background_check_data
+
+### Email Validation Engine
+- RFC regex, typo domain detection (gnail→gmail, hotmial→hotmail, etc.)
+- Malformed TLD detection (.vom, .con, .cmo)
+- Disposable email blocking, suspicious pattern detection
+- Server-side final gate on form submission
+
+### Background Check
+- Sources: CourtListener (free court records API), OFAC sanctions list
+- Returns: clean, flagged, not_found, or error
+- Distinguishes "no matches" from "source unreachable" (never false-clean on failure)
+
+### Embeddable Form
+- `<script src="/api/forms/embed/:tortId"></script><div id="mtos-form"></div>`
+- Auto-renders TCPA-compliant form with TrustedForm script injection
+- Live email validation on blur
+- Submits directly to /api/forms/submit
+
+### Frontend
+- `/form-engine` — Form Engine dashboard (3 tabs: Form Builder, Validation Tools, Background Check)
+
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.

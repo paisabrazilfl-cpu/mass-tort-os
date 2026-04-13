@@ -10,6 +10,7 @@ import analyticsRouter from "./analytics";
 import complianceRouter from "./compliance";
 import npiRouter from "./npi";
 import reviewQueueRouter from "./review-queue";
+import formsRouter from "./forms";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use("/analytics", analyticsRouter);
 router.use("/compliance", complianceRouter);
 router.use("/npi", npiRouter);
 router.use("/review-queue", reviewQueueRouter);
+router.use("/forms", formsRouter);
 
 export default router;

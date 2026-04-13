@@ -54,6 +54,17 @@ export const leadsTable = pgTable("leads", {
   hospital_fax: varchar("hospital_fax", { length: 50 }),
   hospital_contact_info: text("hospital_contact_info"),
 
+  tcpa_consent: boolean("tcpa_consent").default(false),
+  trustedform_cert_url: text("trustedform_cert_url"),
+  trustedform_ip: varchar("trustedform_ip", { length: 45 }),
+  trustedform_user_agent: text("trustedform_user_agent"),
+  trustedform_timestamp: timestamp("trustedform_timestamp"),
+
+  email_validation_status: varchar("email_validation_status", { length: 20 }),
+  address_validation_status: varchar("address_validation_status", { length: 20 }),
+  background_check_status: varchar("background_check_status", { length: 20 }),
+  background_check_data: text("background_check_data"),
+
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });

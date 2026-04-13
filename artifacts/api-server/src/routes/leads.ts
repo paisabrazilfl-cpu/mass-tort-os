@@ -273,6 +273,8 @@ router.patch("/:id", async (req, res) => {
   if (body.hospital_name !== undefined) updateData.hospital_name = body.hospital_name;
   if (body.hospital_fax !== undefined) updateData.hospital_fax = body.hospital_fax;
   if (body.hospital_contact_info !== undefined) updateData.hospital_contact_info = body.hospital_contact_info;
+  if (body.tcpa_consent !== undefined) updateData.tcpa_consent = body.tcpa_consent;
+  if (body.trustedform_cert_url !== undefined) updateData.trustedform_cert_url = body.trustedform_cert_url;
   if (body.first_name !== undefined || body.last_name !== undefined) {
     const [existing] = await db.select({ first_name: leadsTable.first_name, last_name: leadsTable.last_name }).from(leadsTable).where(eq(leadsTable.id, paramsParsed.data.id));
     if (existing) {

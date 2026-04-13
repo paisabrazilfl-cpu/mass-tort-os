@@ -32,6 +32,15 @@ export interface Lead {
   hospital_name?: string | null;
   hospital_fax?: string | null;
   hospital_contact_info?: string | null;
+  tcpa_consent?: boolean | null;
+  trustedform_cert_url?: string | null;
+  trustedform_ip?: string | null;
+  trustedform_user_agent?: string | null;
+  trustedform_timestamp?: string | null;
+  email_validation_status?: string | null;
+  address_validation_status?: string | null;
+  background_check_status?: string | null;
+  background_check_data?: string | null;
   exposure_start?: string | null;
   exposure_end?: string | null;
   diagnosis_confirmed: boolean;

@@ -30,6 +30,8 @@ export interface UpdateLeadBody {
   hospital_name?: string;
   hospital_fax?: string;
   hospital_contact_info?: string;
+  tcpa_consent?: boolean;
+  trustedform_cert_url?: string;
   exposure_start?: string | null;
   exposure_end?: string | null;
   diagnosis_confirmed?: boolean;

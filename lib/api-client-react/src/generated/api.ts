@@ -18,9 +18,11 @@ import type {
 
 import type {
   ActivityItem,
+  AddressValidationResult,
   AnalyticsOverview,
   AuditLogEntry,
   AuditSummary,
+  BackgroundCheckResult,
   Case,
   CaseDetail,
   CreateCaseBody,
@@ -30,8 +32,14 @@ import type {
   CreateParalegalBody,
   DashboardStats,
   Document,
+  EmailValidationResult,
   ErrorResponse,
   FaxResult,
+  FormConfig,
+  FormConfigList,
+  FormRejection,
+  FormSubmission,
+  FormSubmissionResult,
   FunnelStage,
   GetAuditTrailParams,
   HealthStatus,
@@ -52,6 +60,7 @@ import type {
   ResolveReviewBody,
   ReviewQueueItem,
   ReviewQueueStats,
+  RunBackgroundCheckBody,
   SearchNpiParams,
   TortBreakdownRow,
   UpdateDocumentBody,
@@ -59,6 +68,8 @@ import type {
   UploadCaseFileBody,
   UploadFaxBody,
   UploadFaxResponse,
+  ValidateAddressBody,
+  ValidateEmailBody,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -2141,6 +2152,683 @@ export function useLookupNpi<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Get all tort campaign form configurations
+ */
+export const getGetFormConfigsUrl = () => {
+  return `/api/forms/config`;
+};
+
+export const getFormConfigs = async (
+  options?: RequestInit,
+): Promise<FormConfigList> => {
+  return customFetch<FormConfigList>(getGetFormConfigsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetFormConfigsQueryKey = () => {
+  return [`/api/forms/config`] as const;
+};
+
+export const getGetFormConfigsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getFormConfigs>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getFormConfigs>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetFormConfigsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getFormConfigs>>> = ({
+    signal,
+  }) => getFormConfigs({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getFormConfigs>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetFormConfigsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getFormConfigs>>
+>;
+export type GetFormConfigsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get all tort campaign form configurations
+ */
+
+export function useGetFormConfigs<
+  TData = Awaited<ReturnType<typeof getFormConfigs>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getFormConfigs>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetFormConfigsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get a single tort form configuration
+ */
+export const getGetFormConfigUrl = (tortId: string) => {
+  return `/api/forms/config/${tortId}`;
+};
+
+export const getFormConfig = async (
+  tortId: string,
+  options?: RequestInit,
+): Promise<FormConfig> => {
+  return customFetch<FormConfig>(getGetFormConfigUrl(tortId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetFormConfigQueryKey = (tortId: string) => {
+  return [`/api/forms/config/${tortId}`] as const;
+};
+
+export const getGetFormConfigQueryOptions = <
+  TData = Awaited<ReturnType<typeof getFormConfig>>,
+  TError = ErrorType<unknown>,
+>(
+  tortId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getFormConfig>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetFormConfigQueryKey(tortId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getFormConfig>>> = ({
+    signal,
+  }) => getFormConfig(tortId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!tortId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getFormConfig>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetFormConfigQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getFormConfig>>
+>;
+export type GetFormConfigQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get a single tort form configuration
+ */
+
+export function useGetFormConfig<
+  TData = Awaited<ReturnType<typeof getFormConfig>>,
+  TError = ErrorType<unknown>,
+>(
+  tortId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getFormConfig>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetFormConfigQueryOptions(tortId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Validate email (RFC + typo detection)
+ */
+export const getValidateEmailUrl = () => {
+  return `/api/forms/validate/email`;
+};
+
+export const validateEmail = async (
+  validateEmailBody: ValidateEmailBody,
+  options?: RequestInit,
+): Promise<EmailValidationResult> => {
+  return customFetch<EmailValidationResult>(getValidateEmailUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(validateEmailBody),
+  });
+};
+
+export const getValidateEmailMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof validateEmail>>,
+    TError,
+    { data: BodyType<ValidateEmailBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof validateEmail>>,
+  TError,
+  { data: BodyType<ValidateEmailBody> },
+  TContext
+> => {
+  const mutationKey = ["validateEmail"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof validateEmail>>,
+    { data: BodyType<ValidateEmailBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return validateEmail(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ValidateEmailMutationResult = NonNullable<
+  Awaited<ReturnType<typeof validateEmail>>
+>;
+export type ValidateEmailMutationBody = BodyType<ValidateEmailBody>;
+export type ValidateEmailMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Validate email (RFC + typo detection)
+ */
+export const useValidateEmail = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof validateEmail>>,
+    TError,
+    { data: BodyType<ValidateEmailBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof validateEmail>>,
+  TError,
+  { data: BodyType<ValidateEmailBody> },
+  TContext
+> => {
+  return useMutation(getValidateEmailMutationOptions(options));
+};
+
+/**
+ * @summary Validate address (US format)
+ */
+export const getValidateAddressUrl = () => {
+  return `/api/forms/validate/address`;
+};
+
+export const validateAddress = async (
+  validateAddressBody: ValidateAddressBody,
+  options?: RequestInit,
+): Promise<AddressValidationResult> => {
+  return customFetch<AddressValidationResult>(getValidateAddressUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(validateAddressBody),
+  });
+};
+
+export const getValidateAddressMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof validateAddress>>,
+    TError,
+    { data: BodyType<ValidateAddressBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof validateAddress>>,
+  TError,
+  { data: BodyType<ValidateAddressBody> },
+  TContext
+> => {
+  const mutationKey = ["validateAddress"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof validateAddress>>,
+    { data: BodyType<ValidateAddressBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return validateAddress(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ValidateAddressMutationResult = NonNullable<
+  Awaited<ReturnType<typeof validateAddress>>
+>;
+export type ValidateAddressMutationBody = BodyType<ValidateAddressBody>;
+export type ValidateAddressMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Validate address (US format)
+ */
+export const useValidateAddress = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof validateAddress>>,
+    TError,
+    { data: BodyType<ValidateAddressBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof validateAddress>>,
+  TError,
+  { data: BodyType<ValidateAddressBody> },
+  TContext
+> => {
+  return useMutation(getValidateAddressMutationOptions(options));
+};
+
+/**
+ * @summary Submit intake form with full compliance validation
+ */
+export const getSubmitFormUrl = () => {
+  return `/api/forms/submit`;
+};
+
+export const submitForm = async (
+  formSubmission: FormSubmission,
+  options?: RequestInit,
+): Promise<FormSubmissionResult> => {
+  return customFetch<FormSubmissionResult>(getSubmitFormUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(formSubmission),
+  });
+};
+
+export const getSubmitFormMutationOptions = <
+  TError = ErrorType<FormRejection>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof submitForm>>,
+    TError,
+    { data: BodyType<FormSubmission> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof submitForm>>,
+  TError,
+  { data: BodyType<FormSubmission> },
+  TContext
+> => {
+  const mutationKey = ["submitForm"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof submitForm>>,
+    { data: BodyType<FormSubmission> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return submitForm(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SubmitFormMutationResult = NonNullable<
+  Awaited<ReturnType<typeof submitForm>>
+>;
+export type SubmitFormMutationBody = BodyType<FormSubmission>;
+export type SubmitFormMutationError = ErrorType<FormRejection>;
+
+/**
+ * @summary Submit intake form with full compliance validation
+ */
+export const useSubmitForm = <
+  TError = ErrorType<FormRejection>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof submitForm>>,
+    TError,
+    { data: BodyType<FormSubmission> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof submitForm>>,
+  TError,
+  { data: BodyType<FormSubmission> },
+  TContext
+> => {
+  return useMutation(getSubmitFormMutationOptions(options));
+};
+
+/**
+ * @summary Get embeddable JavaScript form for a tort campaign
+ */
+export const getGetFormEmbedUrl = (tortId: string) => {
+  return `/api/forms/embed/${tortId}`;
+};
+
+export const getFormEmbed = async (
+  tortId: string,
+  options?: RequestInit,
+): Promise<string> => {
+  return customFetch<string>(getGetFormEmbedUrl(tortId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetFormEmbedQueryKey = (tortId: string) => {
+  return [`/api/forms/embed/${tortId}`] as const;
+};
+
+export const getGetFormEmbedQueryOptions = <
+  TData = Awaited<ReturnType<typeof getFormEmbed>>,
+  TError = ErrorType<unknown>,
+>(
+  tortId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getFormEmbed>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetFormEmbedQueryKey(tortId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getFormEmbed>>> = ({
+    signal,
+  }) => getFormEmbed(tortId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!tortId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getFormEmbed>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetFormEmbedQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getFormEmbed>>
+>;
+export type GetFormEmbedQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get embeddable JavaScript form for a tort campaign
+ */
+
+export function useGetFormEmbed<
+  TData = Awaited<ReturnType<typeof getFormEmbed>>,
+  TError = ErrorType<unknown>,
+>(
+  tortId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getFormEmbed>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetFormEmbedQueryOptions(tortId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Run background check on a person
+ */
+export const getRunBackgroundCheckUrl = () => {
+  return `/api/forms/background-check`;
+};
+
+export const runBackgroundCheck = async (
+  runBackgroundCheckBody: RunBackgroundCheckBody,
+  options?: RequestInit,
+): Promise<BackgroundCheckResult> => {
+  return customFetch<BackgroundCheckResult>(getRunBackgroundCheckUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(runBackgroundCheckBody),
+  });
+};
+
+export const getRunBackgroundCheckMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runBackgroundCheck>>,
+    TError,
+    { data: BodyType<RunBackgroundCheckBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof runBackgroundCheck>>,
+  TError,
+  { data: BodyType<RunBackgroundCheckBody> },
+  TContext
+> => {
+  const mutationKey = ["runBackgroundCheck"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof runBackgroundCheck>>,
+    { data: BodyType<RunBackgroundCheckBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return runBackgroundCheck(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RunBackgroundCheckMutationResult = NonNullable<
+  Awaited<ReturnType<typeof runBackgroundCheck>>
+>;
+export type RunBackgroundCheckMutationBody = BodyType<RunBackgroundCheckBody>;
+export type RunBackgroundCheckMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Run background check on a person
+ */
+export const useRunBackgroundCheck = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runBackgroundCheck>>,
+    TError,
+    { data: BodyType<RunBackgroundCheckBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof runBackgroundCheck>>,
+  TError,
+  { data: BodyType<RunBackgroundCheckBody> },
+  TContext
+> => {
+  return useMutation(getRunBackgroundCheckMutationOptions(options));
+};
+
+/**
+ * @summary Run background check on an existing lead
+ */
+export const getRunLeadBackgroundCheckUrl = (id: number) => {
+  return `/api/forms/background-check/lead/${id}`;
+};
+
+export const runLeadBackgroundCheck = async (
+  id: number,
+  options?: RequestInit,
+): Promise<BackgroundCheckResult> => {
+  return customFetch<BackgroundCheckResult>(getRunLeadBackgroundCheckUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRunLeadBackgroundCheckMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runLeadBackgroundCheck>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof runLeadBackgroundCheck>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["runLeadBackgroundCheck"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof runLeadBackgroundCheck>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return runLeadBackgroundCheck(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RunLeadBackgroundCheckMutationResult = NonNullable<
+  Awaited<ReturnType<typeof runLeadBackgroundCheck>>
+>;
+
+export type RunLeadBackgroundCheckMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Run background check on an existing lead
+ */
+export const useRunLeadBackgroundCheck = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runLeadBackgroundCheck>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof runLeadBackgroundCheck>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getRunLeadBackgroundCheckMutationOptions(options));
+};
 
 /**
  * @summary List all paralegals

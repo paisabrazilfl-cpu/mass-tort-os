@@ -32,6 +32,8 @@ tags:
     description: ROI tracking, conversion funnels, and performance analytics
   - name: compliance
     description: Audit trail and compliance tracking
+  - name: forms
+    description: Form engine — embeddable intake forms with compliance validation
 paths:
   /healthz:
     get:
@@ -566,6 +568,182 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /forms/config:
+    get:
+      operationId: getFormConfigs
+      tags: [forms]
+      summary: Get all tort campaign form configurations
+      responses:
+        "200":
+          description: Form configurations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FormConfigList"
+
+  /forms/config/{tortId}:
+    get:
+      operationId: getFormConfig
+      tags: [forms]
+      summary: Get a single tort form configuration
+      parameters:
+        - name: tortId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Form configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FormConfig"
+
+  /forms/validate/email:
+    post:
+      operationId: validateEmail
+      tags: [forms]
+      summary: Validate email (RFC + typo detection)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+              required: [email]
+      responses:
+        "200":
+          description: Email validation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailValidationResult"
+
+  /forms/validate/address:
+    post:
+      operationId: validateAddress
+      tags: [forms]
+      summary: Validate address (US format)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                street_address:
+                  type: string
+                city:
+                  type: string
+                state:
+                  type: string
+                zip:
+                  type: string
+              required: [street_address, city, state, zip]
+      responses:
+        "200":
+          description: Address validation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AddressValidationResult"
+
+  /forms/submit:
+    post:
+      operationId: submitForm
+      tags: [forms]
+      summary: Submit intake form with full compliance validation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FormSubmission"
+      responses:
+        "201":
+          description: Lead accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FormSubmissionResult"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FormRejection"
+
+  /forms/embed/{tortId}:
+    get:
+      operationId: getFormEmbed
+      tags: [forms]
+      summary: Get embeddable JavaScript form for a tort campaign
+      parameters:
+        - name: tortId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: JavaScript embed code
+          content:
+            application/javascript:
+              schema:
+                type: string
+
+  /forms/background-check:
+    post:
+      operationId: runBackgroundCheck
+      tags: [forms]
+      summary: Run background check on a person
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                first_name:
+                  type: string
+                last_name:
+                  type: string
+                state:
+                  type: string
+                date_of_birth:
+                  type: string
+              required: [first_name, last_name]
+      responses:
+        "200":
+          description: Background check result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackgroundCheckResult"
+
+  /forms/background-check/lead/{id}:
+    post:
+      operationId: runLeadBackgroundCheck
+      tags: [forms]
+      summary: Run background check on an existing lead
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Background check result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackgroundCheckResult"
+
   /paralegals:
     get:
       operationId: listParalegals
@@ -920,6 +1098,33 @@ components:
         hospital_contact_info:
           type: string
           nullable: true
+        tcpa_consent:
+          type: boolean
+          nullable: true
+        trustedform_cert_url:
+          type: string
+          nullable: true
+        trustedform_ip:
+          type: string
+          nullable: true
+        trustedform_user_agent:
+          type: string
+          nullable: true
+        trustedform_timestamp:
+          type: string
+          nullable: true
+        email_validation_status:
+          type: string
+          nullable: true
+        address_validation_status:
+          type: string
+          nullable: true
+        background_check_status:
+          type: string
+          nullable: true
+        background_check_data:
+          type: string
+          nullable: true
         exposure_start:
           type: string
           nullable: true
@@ -1114,6 +1319,10 @@ components:
         hospital_fax:
           type: string
         hospital_contact_info:
+          type: string
+        tcpa_consent:
+          type: boolean
+        trustedform_cert_url:
           type: string
         exposure_start:
           type: string
@@ -1883,3 +2092,225 @@ components:
         last_7d:
           type: integer
       required: [by_entity, by_action, total_events, last_24h, last_7d]
+
+    FormConfig:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        fields:
+          type: array
+          items:
+            type: string
+        rules:
+          type: array
+          items:
+            type: string
+      required: [id, label, fields, rules]
+
+    FormConfigList:
+      type: object
+      properties:
+        tort_campaigns:
+          type: array
+          items:
+            $ref: "#/components/schemas/FormConfig"
+      required: [tort_campaigns]
+
+    EmailValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        suggestion:
+          type: string
+          nullable: true
+      required: [valid, errors]
+
+    AddressValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+      required: [valid, errors]
+
+    FormSubmission:
+      type: object
+      properties:
+        first_name:
+          type: string
+        last_name:
+          type: string
+        date_of_birth:
+          type: string
+        street_address:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        zip:
+          type: string
+        phone_primary:
+          type: string
+        email:
+          type: string
+        last_4_ssn:
+          type: string
+        diagnosis:
+          type: string
+        diagnosis_date:
+          type: string
+        diagnosis_confirmed:
+          type: boolean
+        was_at_location:
+          type: boolean
+        location_name:
+          type: string
+          nullable: true
+        physician_first_name:
+          type: string
+        physician_last_name:
+          type: string
+        physician_full_address:
+          type: string
+        physician_contact_info:
+          type: string
+        hospital_name:
+          type: string
+        hospital_fax:
+          type: string
+        hospital_contact_info:
+          type: string
+        tort_type:
+          type: string
+        tcpa_consent:
+          type: boolean
+        trustedform_cert_url:
+          type: string
+        trustedform_ip:
+          type: string
+          nullable: true
+        trustedform_user_agent:
+          type: string
+          nullable: true
+        trustedform_timestamp:
+          type: string
+          nullable: true
+        exposure_start:
+          type: string
+          nullable: true
+        exposure_end:
+          type: string
+          nullable: true
+        source:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required:
+        - first_name
+        - last_name
+        - date_of_birth
+        - street_address
+        - city
+        - state
+        - zip
+        - phone_primary
+        - email
+        - last_4_ssn
+        - diagnosis
+        - diagnosis_date
+        - physician_first_name
+        - physician_last_name
+        - physician_full_address
+        - physician_contact_info
+        - hospital_name
+        - hospital_fax
+        - hospital_contact_info
+        - tort_type
+        - tcpa_consent
+        - trustedform_cert_url
+
+    FormSubmissionResult:
+      type: object
+      properties:
+        status:
+          type: string
+        lead_id:
+          type: integer
+        lead_status:
+          type: string
+        background_check:
+          type: object
+          nullable: true
+          properties:
+            status:
+              type: string
+            summary:
+              type: string
+        output_state:
+          type: string
+      required: [status, lead_id, lead_status, output_state]
+
+    FormRejection:
+      type: object
+      properties:
+        status:
+          type: string
+        errors:
+          type: array
+          items:
+            type: string
+        action:
+          type: string
+        details:
+          type: array
+          items:
+            type: string
+          nullable: true
+      required: [status, errors, action]
+
+    BackgroundCheckResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [clean, flagged, not_found, error]
+        source:
+          type: string
+        checked_at:
+          type: string
+        records:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              description:
+                type: string
+              date:
+                type: string
+                nullable: true
+              jurisdiction:
+                type: string
+                nullable: true
+              severity:
+                type: string
+                enum: [low, medium, high]
+            required: [type, description, severity]
+        summary:
+          type: string
+      required: [status, source, checked_at, records, summary]
