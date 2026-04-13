@@ -7,6 +7,7 @@ import { useCreateLead, useQualifyLead } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -15,16 +16,52 @@ import { AlertTriangle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 const formSchema = z.object({
-  name: z.string().min(2, "Name must be at least 2 characters."),
-  email: z.string().email("Invalid email address.").optional().or(z.literal("")),
-  phone: z.string().optional().or(z.literal("")),
-  tort_type: z.string().min(1, "Please select a tort type."),
+  first_name: z.string().min(2, "First name is required"),
+  last_name: z.string().min(2, "Last name is required"),
+  date_of_birth: z.string().min(1, "Date of birth is required"),
+  street_address: z.string().min(2, "Street address is required"),
+  city: z.string().min(2, "City is required"),
+  state: z.string().min(2, "State is required"),
+  zip: z.string().min(5, "Zip code is required"),
+  phone_primary: z.string().min(10, "Phone number is required"),
+  last_4_ssn: z.string().length(4, "Must be exactly 4 digits").regex(/^\d{4}$/, "Must be 4 digits"),
+  email: z.string().email().optional().or(z.literal("")),
+  tort_type: z.string().min(1, "Tort type is required"),
+  diagnosis: z.string().min(2, "Diagnosis is required"),
+  diagnosis_date: z.string().min(1, "Diagnosis date is required"),
   diagnosis_confirmed: z.boolean(),
-  diagnosis_type: z.string().optional(),
   was_at_location: z.boolean(),
   location_name: z.string().optional(),
+  physician_first_name: z.string().min(2, "Physician first name is required"),
+  physician_last_name: z.string().min(2, "Physician last name is required"),
+  physician_full_address: z.string().min(5, "Physician address is required"),
+  physician_contact_info: z.string().min(5, "Physician contact info is required"),
+  hospital_name: z.string().min(2, "Hospital name is required"),
+  hospital_fax: z.string().min(10, "Hospital fax is required"),
+  hospital_contact_info: z.string().min(5, "Hospital contact info is required"),
   source: z.string().optional(),
+  notes: z.string().optional(),
 });
+
+const STATES = [
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", 
+  "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", 
+  "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", 
+  "WV", "WI", "WY"
+];
+
+const TORT_CAMPAIGNS = [
+  "Camp Lejeune",
+  "AFFF Firefighting Foam",
+  "Necrotizing Enterocolitis",
+  "Roundup",
+  "Talcum Powder",
+  "Asbestos",
+  "Paraquat",
+  "Zantac",
+  "Hair Relaxer",
+  "Tylenol"
+];
 
 export default function LeadIntake() {
   const [, setLocation] = useLocation();
@@ -36,15 +73,31 @@ export default function LeadIntake() {
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      name: "",
+      first_name: "",
+      last_name: "",
+      date_of_birth: "",
+      street_address: "",
+      city: "",
+      state: "",
+      zip: "",
+      phone_primary: "",
+      last_4_ssn: "",
       email: "",
-      phone: "",
       tort_type: "",
+      diagnosis: "",
+      diagnosis_date: "",
       diagnosis_confirmed: false,
-      diagnosis_type: "",
       was_at_location: false,
       location_name: "",
+      physician_first_name: "",
+      physician_last_name: "",
+      physician_full_address: "",
+      physician_contact_info: "",
+      hospital_name: "",
+      hospital_fax: "",
+      hospital_contact_info: "",
       source: "Manual Intake",
+      notes: "",
     },
   });
 
@@ -52,15 +105,17 @@ export default function LeadIntake() {
   const wasAtLocation = form.watch("was_at_location");
   
   const isDisqualified = !diagnosisConfirmed || !wasAtLocation;
-  const tortType = form.watch("tort_type");
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     try {
       const newLead = await createLead.mutateAsync({
         data: {
           ...values,
+          name: `${values.first_name} ${values.last_name}`,
           email: values.email || undefined,
-          phone: values.phone || undefined,
+          location_name: values.location_name || undefined,
+          source: values.source || undefined,
+          notes: values.notes || undefined,
         }
       });
 
@@ -107,15 +162,15 @@ export default function LeadIntake() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6 pb-20">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">New Intake</h1>
         <p className="text-muted-foreground mt-2">
-          Run Boolean Gatekeeper protocol for incoming prospects.
+          Complete the intake form to run the Boolean Gatekeeper protocol.
         </p>
       </div>
 
-      {tortType && isDisqualified && (
+      {isDisqualified && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Probable Disqualification</AlertTitle>
@@ -125,22 +180,63 @@ export default function LeadIntake() {
         </Alert>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Prospect Details</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+          
+          {/* SECTION 1: Personal Information */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Personal Information</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                   control={form.control}
-                  name="name"
+                  name="first_name"
                   render={({ field }) => (
-                    <FormItem className="col-span-2">
-                      <FormLabel>Full Name</FormLabel>
+                    <FormItem>
+                      <FormLabel>First Name *</FormLabel>
                       <FormControl>
-                        <Input placeholder="Jane Doe" {...field} />
+                        <Input placeholder="First Name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="last_name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Last Name *</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Last Name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="date_of_birth"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Date of Birth *</FormLabel>
+                      <FormControl>
+                        <Input type="date" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="phone_primary"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Phone *</FormLabel>
+                      <FormControl>
+                        <Input type="tel" placeholder="555-555-0100" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -161,28 +257,99 @@ export default function LeadIntake() {
                 />
                 <FormField
                   control={form.control}
-                  name="phone"
+                  name="last_4_ssn"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Phone</FormLabel>
+                      <FormLabel>Last 4 of SSN *</FormLabel>
                       <FormControl>
-                        <Input type="tel" placeholder="555-0100" {...field} />
+                        <Input placeholder="0000" maxLength={4} pattern="\d{4}" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
+                <FormField
+                  control={form.control}
+                  name="street_address"
+                  render={({ field }) => (
+                    <FormItem className="md:col-span-2">
+                      <FormLabel>Street Address *</FormLabel>
+                      <FormControl>
+                        <Input placeholder="123 Main St" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="city"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>City *</FormLabel>
+                      <FormControl>
+                        <Input placeholder="City" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <div className="grid grid-cols-2 gap-6">
+                  <FormField
+                    control={form.control}
+                    name="state"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>State *</FormLabel>
+                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="State" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {STATES.map((state) => (
+                              <SelectItem key={state} value={state}>
+                                {state}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="zip"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Zip *</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Zip" maxLength={10} {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
               </div>
+            </CardContent>
+          </Card>
 
-              <div className="space-y-4 border-t pt-4">
-                <h3 className="font-medium text-lg">Qualification Gates</h3>
-                
+          {/* SECTION 2: Medical Information */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Medical Information</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                   control={form.control}
                   name="tort_type"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Tort Campaign</FormLabel>
+                      <FormLabel>Tort Campaign *</FormLabel>
                       <Select onValueChange={field.onChange} defaultValue={field.value}>
                         <FormControl>
                           <SelectTrigger>
@@ -190,105 +357,259 @@ export default function LeadIntake() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="Camp Lejeune">Camp Lejeune</SelectItem>
-                          <SelectItem value="AFFF Firefighting Foam">AFFF Firefighting Foam</SelectItem>
-                          <SelectItem value="Necrotizing Enterocolitis">Necrotizing Enterocolitis</SelectItem>
+                          {TORT_CAMPAIGNS.map((campaign) => (
+                            <SelectItem key={campaign} value={campaign}>
+                              {campaign}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
+                <div className="hidden md:block" />
 
-                {tortType && (
-                  <div className="space-y-4 bg-muted/30 p-4 rounded-md border">
-                    <FormField
-                      control={form.control}
-                      name="diagnosis_confirmed"
-                      render={({ field }) => (
-                        <FormItem className="flex flex-row items-start space-x-3 space-y-0">
-                          <FormControl>
-                            <Checkbox
-                              checked={field.value}
-                              onCheckedChange={field.onChange}
-                            />
-                          </FormControl>
-                          <div className="space-y-1 leading-none">
-                            <FormLabel>Medical diagnosis confirmed?</FormLabel>
-                            <FormDescription>
-                              Does the prospect have a formal medical diagnosis for a qualifying condition?
-                            </FormDescription>
-                          </div>
-                        </FormItem>
-                      )}
-                    />
-                    
-                    {diagnosisConfirmed && (
-                      <FormField
-                        control={form.control}
-                        name="diagnosis_type"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Specific Diagnosis</FormLabel>
-                            <FormControl>
-                              <Input placeholder="e.g. Kidney Cancer" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    )}
+                <FormField
+                  control={form.control}
+                  name="diagnosis"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Diagnosis *</FormLabel>
+                      <FormControl>
+                        <Input placeholder="e.g. Non-Hodgkin Lymphoma" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="diagnosis_date"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Diagnosis Date *</FormLabel>
+                      <FormControl>
+                        <Input type="date" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                
+                <FormField
+                  control={form.control}
+                  name="diagnosis_confirmed"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-start space-x-3 space-y-0 md:col-span-2">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                      <div className="space-y-1 leading-none">
+                        <FormLabel>Medical diagnosis has been confirmed by a physician</FormLabel>
+                      </div>
+                    </FormItem>
+                  )}
+                />
 
-                    <FormField
-                      control={form.control}
-                      name="was_at_location"
-                      render={({ field }) => (
-                        <FormItem className="flex flex-row items-start space-x-3 space-y-0 mt-4">
-                          <FormControl>
-                            <Checkbox
-                              checked={field.value}
-                              onCheckedChange={field.onChange}
-                            />
-                          </FormControl>
-                          <div className="space-y-1 leading-none">
-                            <FormLabel>Location exposure confirmed?</FormLabel>
-                            <FormDescription>
-                              Was the prospect at the qualifying location for the required duration?
-                            </FormDescription>
-                          </div>
-                        </FormItem>
-                      )}
-                    />
-                    
-                    {wasAtLocation && (
-                      <FormField
-                        control={form.control}
-                        name="location_name"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Specific Location</FormLabel>
-                            <FormControl>
-                              <Input placeholder="e.g. MCB Camp Lejeune" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
+                <FormField
+                  control={form.control}
+                  name="was_at_location"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-start space-x-3 space-y-0 md:col-span-2">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                      <div className="space-y-1 leading-none">
+                        <FormLabel>Client was at the qualifying location for the required duration</FormLabel>
+                      </div>
+                    </FormItem>
+                  )}
+                />
+
+                {wasAtLocation && (
+                  <FormField
+                    control={form.control}
+                    name="location_name"
+                    render={({ field }) => (
+                      <FormItem className="md:col-span-2">
+                        <FormLabel>Location Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g. MCB Camp Lejeune" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
                     )}
-                  </div>
+                  />
                 )}
               </div>
+            </CardContent>
+          </Card>
 
-              <div className="flex justify-end gap-4 pt-4">
-                <Button type="button" variant="outline" onClick={() => setLocation("/leads")}>Cancel</Button>
-                <Button type="submit" disabled={createLead.isPending || qualifyLead.isPending}>
-                  {createLead.isPending || qualifyLead.isPending ? "Processing..." : "Run Gatekeeper & Submit"}
-                </Button>
+          {/* SECTION 3: Physician Information */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Physician Information</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <FormField
+                  control={form.control}
+                  name="physician_first_name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Physician First Name *</FormLabel>
+                      <FormControl>
+                        <Input placeholder="First Name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="physician_last_name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Physician Last Name *</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Last Name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="physician_full_address"
+                  render={({ field }) => (
+                    <FormItem className="md:col-span-2">
+                      <FormLabel>Physician Full Address *</FormLabel>
+                      <FormControl>
+                        <Textarea placeholder="Full Address" className="resize-none" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="physician_contact_info"
+                  render={({ field }) => (
+                    <FormItem className="md:col-span-2">
+                      <FormLabel>Physician Contact Info *</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Phone or email" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </div>
-            </form>
-          </Form>
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+
+          {/* SECTION 4: Hospital Information */}
+          <Card className="border-l-4 border-l-destructive">
+            <CardHeader>
+              <CardTitle className="text-destructive">Hospital Information</CardTitle>
+              <CardDescription className="text-destructive font-medium">
+                All hospital fields are mandatory. Leads without complete hospital information will be rejected.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <FormField
+                  control={form.control}
+                  name="hospital_name"
+                  render={({ field }) => (
+                    <FormItem className="md:col-span-2">
+                      <FormLabel>Hospital Name *</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Hospital Name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="hospital_fax"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Hospital Fax *</FormLabel>
+                      <FormControl>
+                        <Input type="tel" placeholder="555-555-0100" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="hospital_contact_info"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Hospital Contact Info *</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Phone, email, or contact person" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* BOTTOM SECTION */}
+          <Card>
+            <CardContent className="pt-6">
+              <div className="grid grid-cols-1 gap-6">
+                <FormField
+                  control={form.control}
+                  name="source"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Source</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Manual Intake" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="notes"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Notes</FormLabel>
+                      <FormControl>
+                        <Textarea placeholder="Additional notes..." className="min-h-[100px]" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="flex justify-end gap-4">
+            <Button type="button" variant="outline" onClick={() => setLocation("/leads")}>Cancel</Button>
+            <Button type="submit" disabled={createLead.isPending || qualifyLead.isPending}>
+              {createLead.isPending || qualifyLead.isPending ? "Processing..." : "Run Gatekeeper & Submit"}
+            </Button>
+          </div>
+        </form>
+      </Form>
     </div>
   );
 }

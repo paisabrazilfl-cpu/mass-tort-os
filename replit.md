@@ -84,7 +84,7 @@ PostgreSQL Results + Audit Log
 ## Database Schema
 
 ### Lead/Document Tables (original CRM)
-- `leads` — Lead records with Boolean Gatekeeper fields
+- `leads` — Lead records with Boolean Gatekeeper fields + expanded schema (29 columns): personal (first_name, last_name, date_of_birth, street_address, city, state, zip, phone_primary, last_4_ssn), medical (diagnosis, diagnosis_date), physician (first/last name, full_address, contact_info), hospital (name, fax, contact_info). Hospital fields are mandatory — leads missing hospital info are rejected at API level.
 - `documents` — Retainer PDFs and intake forms
 
 ### CRM Tables

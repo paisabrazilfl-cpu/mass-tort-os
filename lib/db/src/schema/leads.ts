@@ -31,6 +31,29 @@ export const leadsTable = pgTable("leads", {
   source: varchar("source", { length: 100 }),
   assigned_to: integer("assigned_to"),
   routing: varchar("routing", { length: 20 }).default("cold"),
+
+  first_name: varchar("first_name", { length: 255 }),
+  last_name: varchar("last_name", { length: 255 }),
+  date_of_birth: date("date_of_birth"),
+  street_address: varchar("street_address", { length: 500 }),
+  city: varchar("city", { length: 100 }),
+  state: varchar("state", { length: 2 }),
+  zip: varchar("zip", { length: 10 }),
+  phone_primary: varchar("phone_primary", { length: 50 }),
+  last_4_ssn: varchar("last_4_ssn", { length: 4 }),
+
+  diagnosis: varchar("diagnosis", { length: 500 }),
+  diagnosis_date: date("diagnosis_date"),
+
+  physician_first_name: varchar("physician_first_name", { length: 255 }),
+  physician_last_name: varchar("physician_last_name", { length: 255 }),
+  physician_full_address: text("physician_full_address"),
+  physician_contact_info: text("physician_contact_info"),
+
+  hospital_name: varchar("hospital_name", { length: 500 }),
+  hospital_fax: varchar("hospital_fax", { length: 50 }),
+  hospital_contact_info: text("hospital_contact_info"),
+
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });

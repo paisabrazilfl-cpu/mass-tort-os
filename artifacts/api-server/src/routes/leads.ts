@@ -55,11 +55,69 @@ router.post("/", async (req, res) => {
 
   const data = parsed.data;
 
+  const hospitalMissing: string[] = [];
+  if (!data.hospital_name?.trim()) hospitalMissing.push("hospital_name");
+  if (!data.hospital_fax?.trim()) hospitalMissing.push("hospital_fax");
+  if (!data.hospital_contact_info?.trim()) hospitalMissing.push("hospital_contact_info");
+
+  if (hospitalMissing.length > 0) {
+    await auditLog("lead", "rejected", "hospital_validation_failed", {
+      missing_fields: hospitalMissing,
+      output_state: "REJECT",
+    });
+    res.status(422).json({
+      status: "INVALID_LEAD",
+      error_code: "HOSPITAL_REQUIRED_FIELDS_MISSING",
+      action: "REJECT",
+      missing_fields: hospitalMissing,
+      error: `Hospital fields are required: ${hospitalMissing.join(", ")}`,
+    });
+    return;
+  }
+
+  const requiredFieldErrors: string[] = [];
+  const requiredChecks: [string, unknown][] = [
+    ["first_name", data.first_name],
+    ["last_name", data.last_name],
+    ["date_of_birth", data.date_of_birth],
+    ["street_address", data.street_address],
+    ["city", data.city],
+    ["state", data.state],
+    ["zip", data.zip],
+    ["phone_primary", data.phone_primary],
+    ["last_4_ssn", data.last_4_ssn],
+    ["diagnosis", data.diagnosis],
+    ["diagnosis_date", data.diagnosis_date],
+    ["physician_first_name", data.physician_first_name],
+    ["physician_last_name", data.physician_last_name],
+    ["physician_full_address", data.physician_full_address],
+    ["physician_contact_info", data.physician_contact_info],
+  ];
+
+  for (const [field, value] of requiredChecks) {
+    if (!value || (typeof value === "string" && !value.trim())) {
+      requiredFieldErrors.push(field);
+    }
+  }
+
+  if (requiredFieldErrors.length > 0) {
+    res.status(422).json({
+      status: "INVALID_LEAD",
+      error_code: "REQUIRED_FIELDS_MISSING",
+      action: "REJECT",
+      missing_fields: requiredFieldErrors,
+      error: `Required fields missing: ${requiredFieldErrors.join(", ")}`,
+    });
+    return;
+  }
+
+  const fullName = `${data.first_name} ${data.last_name}`.trim();
+
   const conflictCheck = await runFullConflictCheck({
     entity_type: "lead",
     entity_id: "pending",
     source_module: "lead_ingestion",
-    lead_data: data as Record<string, unknown>,
+    lead_data: { ...data, name: fullName } as Record<string, unknown>,
   });
 
   if (conflictCheck.has_conflict) {
@@ -78,6 +136,7 @@ router.post("/", async (req, res) => {
         .insert(leadsTable)
         .values({
           ...data,
+          name: fullName,
           status: "review_required",
           rejection_reason: `Conflict: ${conflictCheck.details.join("; ")}`,
           exposure_start: data.exposure_start ?? null,
@@ -92,15 +151,15 @@ router.post("/", async (req, res) => {
 
       try {
         const { reviewQueueTable } = await import("@workspace/db");
-        const { eq, and, sql: sqlTag } = await import("drizzle-orm");
+        const { eq: eqOp, and: andOp } = await import("drizzle-orm");
         await db
           .update(reviewQueueTable)
           .set({ entity_id: String(lead.id) })
           .where(
-            and(
-              eq(reviewQueueTable.entity_id, "pending"),
-              eq(reviewQueueTable.entity_type, "lead"),
-              eq(reviewQueueTable.source_module, "lead_ingestion")
+            andOp(
+              eqOp(reviewQueueTable.entity_id, "pending"),
+              eqOp(reviewQueueTable.entity_type, "lead"),
+              eqOp(reviewQueueTable.source_module, "lead_ingestion")
             )
           );
       } catch (_) {}
@@ -126,6 +185,7 @@ router.post("/", async (req, res) => {
     .insert(leadsTable)
     .values({
       ...data,
+      name: fullName,
       status,
       exposure_start: data.exposure_start ?? null,
       exposure_end: data.exposure_end ?? null,
@@ -195,6 +255,32 @@ router.patch("/:id", async (req, res) => {
   if (body.notes !== undefined) updateData.notes = body.notes;
   if (body.ad_spend !== undefined) updateData.ad_spend = body.ad_spend !== null ? String(body.ad_spend) : null;
   if (body.source !== undefined) updateData.source = body.source;
+  if (body.first_name !== undefined) updateData.first_name = body.first_name;
+  if (body.last_name !== undefined) updateData.last_name = body.last_name;
+  if (body.date_of_birth !== undefined) updateData.date_of_birth = body.date_of_birth;
+  if (body.street_address !== undefined) updateData.street_address = body.street_address;
+  if (body.city !== undefined) updateData.city = body.city;
+  if (body.state !== undefined) updateData.state = body.state;
+  if (body.zip !== undefined) updateData.zip = body.zip;
+  if (body.phone_primary !== undefined) updateData.phone_primary = body.phone_primary;
+  if (body.last_4_ssn !== undefined) updateData.last_4_ssn = body.last_4_ssn;
+  if (body.diagnosis !== undefined) updateData.diagnosis = body.diagnosis;
+  if (body.diagnosis_date !== undefined) updateData.diagnosis_date = body.diagnosis_date;
+  if (body.physician_first_name !== undefined) updateData.physician_first_name = body.physician_first_name;
+  if (body.physician_last_name !== undefined) updateData.physician_last_name = body.physician_last_name;
+  if (body.physician_full_address !== undefined) updateData.physician_full_address = body.physician_full_address;
+  if (body.physician_contact_info !== undefined) updateData.physician_contact_info = body.physician_contact_info;
+  if (body.hospital_name !== undefined) updateData.hospital_name = body.hospital_name;
+  if (body.hospital_fax !== undefined) updateData.hospital_fax = body.hospital_fax;
+  if (body.hospital_contact_info !== undefined) updateData.hospital_contact_info = body.hospital_contact_info;
+  if (body.first_name !== undefined || body.last_name !== undefined) {
+    const [existing] = await db.select({ first_name: leadsTable.first_name, last_name: leadsTable.last_name }).from(leadsTable).where(eq(leadsTable.id, paramsParsed.data.id));
+    if (existing) {
+      const fn = body.first_name ?? existing.first_name ?? "";
+      const ln = body.last_name ?? existing.last_name ?? "";
+      if (fn || ln) updateData.name = `${fn} ${ln}`.trim();
+    }
+  }
 
   const [lead] = await db
     .update(leadsTable)

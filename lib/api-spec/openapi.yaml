@@ -866,6 +866,60 @@ components:
           type: string
         tort_type:
           type: string
+        first_name:
+          type: string
+          nullable: true
+        last_name:
+          type: string
+          nullable: true
+        date_of_birth:
+          type: string
+          nullable: true
+        street_address:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        state:
+          type: string
+          nullable: true
+        zip:
+          type: string
+          nullable: true
+        phone_primary:
+          type: string
+          nullable: true
+        last_4_ssn:
+          type: string
+          nullable: true
+        diagnosis:
+          type: string
+          nullable: true
+        diagnosis_date:
+          type: string
+          nullable: true
+        physician_first_name:
+          type: string
+          nullable: true
+        physician_last_name:
+          type: string
+          nullable: true
+        physician_full_address:
+          type: string
+          nullable: true
+        physician_contact_info:
+          type: string
+          nullable: true
+        hospital_name:
+          type: string
+          nullable: true
+        hospital_fax:
+          type: string
+          nullable: true
+        hospital_contact_info:
+          type: string
+          nullable: true
         exposure_start:
           type: string
           nullable: true
@@ -884,7 +938,7 @@ components:
           nullable: true
         status:
           type: string
-          enum: [new, qualified, signed, rejected]
+          enum: [new, qualified, signed, rejected, review_required]
         rejection_reason:
           type: string
           nullable: true
@@ -929,6 +983,42 @@ components:
           type: string
         tort_type:
           type: string
+        first_name:
+          type: string
+        last_name:
+          type: string
+        date_of_birth:
+          type: string
+        street_address:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        zip:
+          type: string
+        phone_primary:
+          type: string
+        last_4_ssn:
+          type: string
+        diagnosis:
+          type: string
+        diagnosis_date:
+          type: string
+        physician_first_name:
+          type: string
+        physician_last_name:
+          type: string
+        physician_full_address:
+          type: string
+        physician_contact_info:
+          type: string
+        hospital_name:
+          type: string
+        hospital_fax:
+          type: string
+        hospital_contact_info:
+          type: string
         exposure_start:
           type: string
           nullable: true
@@ -959,6 +1049,24 @@ components:
         - tort_type
         - diagnosis_confirmed
         - was_at_location
+        - first_name
+        - last_name
+        - date_of_birth
+        - street_address
+        - city
+        - state
+        - zip
+        - phone_primary
+        - last_4_ssn
+        - diagnosis
+        - diagnosis_date
+        - physician_first_name
+        - physician_last_name
+        - physician_full_address
+        - physician_contact_info
+        - hospital_name
+        - hospital_fax
+        - hospital_contact_info
 
     UpdateLeadBody:
       type: object
@@ -970,6 +1078,42 @@ components:
         phone:
           type: string
         tort_type:
+          type: string
+        first_name:
+          type: string
+        last_name:
+          type: string
+        date_of_birth:
+          type: string
+        street_address:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        zip:
+          type: string
+        phone_primary:
+          type: string
+        last_4_ssn:
+          type: string
+        diagnosis:
+          type: string
+        diagnosis_date:
+          type: string
+        physician_first_name:
+          type: string
+        physician_last_name:
+          type: string
+        physician_full_address:
+          type: string
+        physician_contact_info:
+          type: string
+        hospital_name:
+          type: string
+        hospital_fax:
+          type: string
+        hospital_contact_info:
           type: string
         exposure_start:
           type: string
@@ -989,7 +1133,7 @@ components:
           nullable: true
         status:
           type: string
-          enum: [new, qualified, signed, rejected]
+          enum: [new, qualified, signed, rejected, review_required]
         rejection_reason:
           type: string
           nullable: true

@@ -20,6 +20,7 @@ export const LeadStatus = {
   qualified: "qualified",
   signed: "signed",
   rejected: "rejected",
+  review_required: "review_required",
 } as const;
 
 export type LeadRouting = (typeof LeadRouting)[keyof typeof LeadRouting] | null;
@@ -36,6 +37,24 @@ export interface Lead {
   email?: string;
   phone?: string;
   tort_type: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  date_of_birth?: string | null;
+  street_address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  phone_primary?: string | null;
+  last_4_ssn?: string | null;
+  diagnosis?: string | null;
+  diagnosis_date?: string | null;
+  physician_first_name?: string | null;
+  physician_last_name?: string | null;
+  physician_full_address?: string | null;
+  physician_contact_info?: string | null;
+  hospital_name?: string | null;
+  hospital_fax?: string | null;
+  hospital_contact_info?: string | null;
   exposure_start?: string | null;
   exposure_end?: string | null;
   diagnosis_confirmed: boolean;
@@ -58,6 +77,24 @@ export interface CreateLeadBody {
   email?: string;
   phone?: string;
   tort_type: string;
+  first_name: string;
+  last_name: string;
+  date_of_birth: string;
+  street_address: string;
+  city: string;
+  state: string;
+  zip: string;
+  phone_primary: string;
+  last_4_ssn: string;
+  diagnosis: string;
+  diagnosis_date: string;
+  physician_first_name: string;
+  physician_last_name: string;
+  physician_full_address: string;
+  physician_contact_info: string;
+  hospital_name: string;
+  hospital_fax: string;
+  hospital_contact_info: string;
   exposure_start?: string | null;
   exposure_end?: string | null;
   diagnosis_confirmed: boolean;
@@ -77,6 +114,7 @@ export const UpdateLeadBodyStatus = {
   qualified: "qualified",
   signed: "signed",
   rejected: "rejected",
+  review_required: "review_required",
 } as const;
 
 export interface UpdateLeadBody {
@@ -84,6 +122,24 @@ export interface UpdateLeadBody {
   email?: string;
   phone?: string;
   tort_type?: string;
+  first_name?: string;
+  last_name?: string;
+  date_of_birth?: string;
+  street_address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  phone_primary?: string;
+  last_4_ssn?: string;
+  diagnosis?: string;
+  diagnosis_date?: string;
+  physician_first_name?: string;
+  physician_last_name?: string;
+  physician_full_address?: string;
+  physician_contact_info?: string;
+  hospital_name?: string;
+  hospital_fax?: string;
+  hospital_contact_info?: string;
   exposure_start?: string | null;
   exposure_end?: string | null;
   diagnosis_confirmed?: boolean;
