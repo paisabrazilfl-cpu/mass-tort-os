@@ -3,7 +3,7 @@
  * Polls the PostgreSQL job_queue table and processes jobs.
  * Runs as a separate process — started via "pnpm run worker" command.
  */
-import { db, casesTable, caseDocumentsTable, analysisTable } from "@workspace/db";
+import { db, casesTable, caseDocumentsTable, analysisTable, faxResultsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { claimNextJob, markJobDone, markJobFailed } from "./lib/queue";
@@ -11,6 +11,8 @@ import { saveFile, readFile, listCaseFiles } from "./lib/vault";
 import { extractFeatures } from "./lib/ai-extract";
 import { scoreFeatures, scoreToVerdict } from "./lib/scoring";
 import { auditLog } from "./lib/audit";
+import { preprocessFaxBuffer, base64ToBuffer, detectMimeType } from "./lib/ocr-preprocess";
+import { extractOcrData } from "./lib/ai-ocr";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -95,6 +97,52 @@ async function processJob(job: {
       .update(casesTable)
       .set({ status: "analyzed", updated_at: new Date() })
       .where(eq(casesTable.id, case_id));
+  } else if (job.job_type === "process_fax") {
+    const { fax_result_id, vault_path, source_file, mime_type } = payload as {
+      fax_result_id: number;
+      vault_path: string;
+      source_file: string;
+      mime_type: string;
+    };
+
+    await db
+      .update(faxResultsTable)
+      .set({ status: "processing" })
+      .where(eq(faxResultsTable.id, fax_result_id));
+
+    const rawBase64 = await readFile(vault_path);
+    const rawBuffer = base64ToBuffer(rawBase64);
+    const detectedMime = detectMimeType(rawBase64) || mime_type;
+
+    const processedBuffer = await preprocessFaxBuffer(rawBuffer);
+    const processedBase64 = processedBuffer.toString("base64");
+
+    const grid = await extractOcrData(processedBase64, detectedMime);
+
+    await db
+      .update(faxResultsTable)
+      .set({
+        rx_number: grid.rx_number,
+        drug_name: grid.drug_name,
+        fill_date: grid.fill_date,
+        quantity: grid.quantity,
+        confidence: grid.confidence,
+        raw_text: grid.raw_text,
+        status: "done",
+        processed_at: new Date(),
+      })
+      .where(eq(faxResultsTable.id, fax_result_id));
+
+    await auditLog("fax", String(fax_result_id), "processed", {
+      source_file,
+      drug_name: grid.drug_name,
+      confidence: grid.confidence,
+    });
+
+    logger.info(
+      { fax_result_id, drug_name: grid.drug_name, confidence: grid.confidence },
+      "Fax OCR complete"
+    );
   } else {
     logger.warn({ job_type: job.job_type }, "Unknown job type — skipping");
   }

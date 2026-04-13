@@ -101,4 +101,47 @@ Deterministic, zero-hallucination scoring:
 - Env vars: `AI_INTEGRATIONS_ANTHROPIC_BASE_URL`, `AI_INTEGRATIONS_ANTHROPIC_API_KEY`
 - Extracts: diagnosis_present, exposure, severity, contradictions, tort_type, diagnosis_type, exposure_period_years
 
+## OCR Engine — Fax Inbox → Legora Grid
+
+**Problem**: PaddleOCR (Python/GPU) doesn't run in Node.js. **Solution**: Claude Vision + Sharp.
+
+### Pipeline
+```
+POST /api/ocr/upload (base64 image)
+    ↓
+vault save (vault/fax_<timestamp>/<filename>)
+    ↓
+job_queue: process_fax job
+    ↓
+Worker: reads vault → Sharp preprocessing → Claude Vision OCR
+    ↓
+fax_results table (Legora Grid row)
+    ↓
+GET /api/ocr/results → UI display
+```
+
+### OCR Routes
+- `POST /api/ocr/upload` — accepts `{ file_name, image_base64, mime_type }`, stores to vault, enqueues
+- `GET /api/ocr/results` — all Legora Grid rows
+- `GET /api/ocr/results/:id` — single result
+- `GET /api/ocr/queue-stats` — pending/processing/done/failed counts
+
+### Preprocessing (Sharp, `src/lib/ocr-preprocess.ts`)
+1. Grayscale conversion
+2. 2x upsample (for Rx label detail)
+3. Unsharp mask / sharpen (sigma 1.5)
+4. Normalize contrast
+5. PNG output → base64 → Claude Vision
+
+### AI OCR (`src/lib/ai-ocr.ts`)
+- Model: `claude-haiku-4-5` (vision)
+- Extracts: `rx_number`, `drug_name`, `fill_date`, `quantity`, `confidence`, `raw_text`
+- Legora Grid format — ready for litigation case linking
+
+### DB Table
+`fax_results`: id, job_id, source_file, vault_path, rx_number, drug_name, fill_date, quantity, confidence, raw_text, status (pending|processing|done|failed), error, created_at, processed_at
+
+### Frontend
+- `/ocr-inbox` — Legora Grid table with queue stats, upload form, expandable raw text rows
+
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.

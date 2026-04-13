@@ -20,6 +20,8 @@ tags:
     description: Worker queue status
   - name: dashboard
     description: Dashboard analytics
+  - name: ocr
+    description: Fax OCR inbox — Legora Grid extraction
 paths:
   /healthz:
     get:
@@ -394,6 +396,84 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateCaseResponse"
+
+  /ocr/upload:
+    post:
+      operationId: uploadFax
+      tags: [ocr]
+      summary: Upload a fax image for OCR processing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadFaxBody"
+      responses:
+        "200":
+          description: Fax queued for processing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadFaxResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /ocr/results:
+    get:
+      operationId: listFaxResults
+      tags: [ocr]
+      summary: List all Legora Grid results
+      responses:
+        "200":
+          description: Legora Grid results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FaxResult"
+
+  /ocr/results/{id}:
+    get:
+      operationId: getFaxResult
+      tags: [ocr]
+      summary: Get a single Legora Grid result
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Legora Grid result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaxResult"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /ocr/queue-stats:
+    get:
+      operationId: getOcrQueueStats
+      tags: [ocr]
+      summary: OCR fax processing queue stats
+      responses:
+        "200":
+          description: OCR queue stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueStats"
 
 components:
   schemas:
@@ -885,3 +965,65 @@ components:
       type: object
       additionalProperties:
         type: integer
+
+    FaxResult:
+      type: object
+      properties:
+        id:
+          type: integer
+        job_id:
+          type: integer
+          nullable: true
+        source_file:
+          type: string
+        vault_path:
+          type: string
+        rx_number:
+          type: string
+        drug_name:
+          type: string
+        fill_date:
+          type: string
+        quantity:
+          type: string
+        confidence:
+          type: number
+        raw_text:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, done, failed]
+        error:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+        processed_at:
+          type: string
+          nullable: true
+      required: [id, source_file, vault_path, rx_number, drug_name, fill_date, quantity, confidence, raw_text, status, created_at]
+
+    UploadFaxBody:
+      type: object
+      properties:
+        file_name:
+          type: string
+        image_base64:
+          type: string
+        mime_type:
+          type: string
+          nullable: true
+      required: [file_name, image_base64]
+
+    UploadFaxResponse:
+      type: object
+      properties:
+        fax_result_id:
+          type: integer
+        status:
+          type: string
+        job_id:
+          type: integer
+        vault_path:
+          type: string
+      required: [fax_result_id, status, job_id, vault_path]

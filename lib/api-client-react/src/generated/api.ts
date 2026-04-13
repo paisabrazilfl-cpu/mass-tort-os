@@ -27,6 +27,7 @@ import type {
   DashboardStats,
   Document,
   ErrorResponse,
+  FaxResult,
   HealthStatus,
   Lead,
   ListDocumentsParams,
@@ -37,6 +38,8 @@ import type {
   UpdateDocumentBody,
   UpdateLeadBody,
   UploadCaseFileBody,
+  UploadFaxBody,
+  UploadFaxResponse,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -1684,3 +1687,326 @@ export const useAnalyzeCaseFiles = <
 > => {
   return useMutation(getAnalyzeCaseFilesMutationOptions(options));
 };
+
+/**
+ * @summary Upload a fax image for OCR processing
+ */
+export const getUploadFaxUrl = () => {
+  return `/api/ocr/upload`;
+};
+
+export const uploadFax = async (
+  uploadFaxBody: UploadFaxBody,
+  options?: RequestInit,
+): Promise<UploadFaxResponse> => {
+  return customFetch<UploadFaxResponse>(getUploadFaxUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(uploadFaxBody),
+  });
+};
+
+export const getUploadFaxMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadFax>>,
+    TError,
+    { data: BodyType<UploadFaxBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof uploadFax>>,
+  TError,
+  { data: BodyType<UploadFaxBody> },
+  TContext
+> => {
+  const mutationKey = ["uploadFax"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof uploadFax>>,
+    { data: BodyType<UploadFaxBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return uploadFax(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UploadFaxMutationResult = NonNullable<
+  Awaited<ReturnType<typeof uploadFax>>
+>;
+export type UploadFaxMutationBody = BodyType<UploadFaxBody>;
+export type UploadFaxMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Upload a fax image for OCR processing
+ */
+export const useUploadFax = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadFax>>,
+    TError,
+    { data: BodyType<UploadFaxBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof uploadFax>>,
+  TError,
+  { data: BodyType<UploadFaxBody> },
+  TContext
+> => {
+  return useMutation(getUploadFaxMutationOptions(options));
+};
+
+/**
+ * @summary List all Legora Grid results
+ */
+export const getListFaxResultsUrl = () => {
+  return `/api/ocr/results`;
+};
+
+export const listFaxResults = async (
+  options?: RequestInit,
+): Promise<FaxResult[]> => {
+  return customFetch<FaxResult[]>(getListFaxResultsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListFaxResultsQueryKey = () => {
+  return [`/api/ocr/results`] as const;
+};
+
+export const getListFaxResultsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listFaxResults>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listFaxResults>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListFaxResultsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listFaxResults>>> = ({
+    signal,
+  }) => listFaxResults({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listFaxResults>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListFaxResultsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listFaxResults>>
+>;
+export type ListFaxResultsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all Legora Grid results
+ */
+
+export function useListFaxResults<
+  TData = Awaited<ReturnType<typeof listFaxResults>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listFaxResults>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListFaxResultsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get a single Legora Grid result
+ */
+export const getGetFaxResultUrl = (id: number) => {
+  return `/api/ocr/results/${id}`;
+};
+
+export const getFaxResult = async (
+  id: number,
+  options?: RequestInit,
+): Promise<FaxResult> => {
+  return customFetch<FaxResult>(getGetFaxResultUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetFaxResultQueryKey = (id: number) => {
+  return [`/api/ocr/results/${id}`] as const;
+};
+
+export const getGetFaxResultQueryOptions = <
+  TData = Awaited<ReturnType<typeof getFaxResult>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getFaxResult>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetFaxResultQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getFaxResult>>> = ({
+    signal,
+  }) => getFaxResult(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getFaxResult>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetFaxResultQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getFaxResult>>
+>;
+export type GetFaxResultQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Get a single Legora Grid result
+ */
+
+export function useGetFaxResult<
+  TData = Awaited<ReturnType<typeof getFaxResult>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getFaxResult>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetFaxResultQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary OCR fax processing queue stats
+ */
+export const getGetOcrQueueStatsUrl = () => {
+  return `/api/ocr/queue-stats`;
+};
+
+export const getOcrQueueStats = async (
+  options?: RequestInit,
+): Promise<QueueStats> => {
+  return customFetch<QueueStats>(getGetOcrQueueStatsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetOcrQueueStatsQueryKey = () => {
+  return [`/api/ocr/queue-stats`] as const;
+};
+
+export const getGetOcrQueueStatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getOcrQueueStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getOcrQueueStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetOcrQueueStatsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getOcrQueueStats>>
+  > = ({ signal }) => getOcrQueueStats({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getOcrQueueStats>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetOcrQueueStatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getOcrQueueStats>>
+>;
+export type GetOcrQueueStatsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary OCR fax processing queue stats
+ */
+
+export function useGetOcrQueueStats<
+  TData = Awaited<ReturnType<typeof getOcrQueueStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getOcrQueueStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetOcrQueueStatsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

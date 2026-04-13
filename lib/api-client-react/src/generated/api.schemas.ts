@@ -282,6 +282,46 @@ export interface QueueStats {
   [key: string]: number;
 }
 
+export type FaxResultStatus =
+  (typeof FaxResultStatus)[keyof typeof FaxResultStatus];
+
+export const FaxResultStatus = {
+  pending: "pending",
+  processing: "processing",
+  done: "done",
+  failed: "failed",
+} as const;
+
+export interface FaxResult {
+  id: number;
+  job_id?: number | null;
+  source_file: string;
+  vault_path: string;
+  rx_number: string;
+  drug_name: string;
+  fill_date: string;
+  quantity: string;
+  confidence: number;
+  raw_text: string;
+  status: FaxResultStatus;
+  error?: string | null;
+  created_at: string;
+  processed_at?: string | null;
+}
+
+export interface UploadFaxBody {
+  file_name: string;
+  image_base64: string;
+  mime_type?: string | null;
+}
+
+export interface UploadFaxResponse {
+  fax_result_id: number;
+  status: string;
+  job_id: number;
+  vault_path: string;
+}
+
 export type ListLeadsParams = {
   status?: ListLeadsStatus;
   tort_type?: string;

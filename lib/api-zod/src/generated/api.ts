@@ -402,3 +402,69 @@ export const AnalyzeCaseFilesResponse = zod.object({
   status: zod.string(),
   job_id: zod.number(),
 });
+
+/**
+ * @summary Upload a fax image for OCR processing
+ */
+export const UploadFaxBody = zod.object({
+  file_name: zod.string(),
+  image_base64: zod.string(),
+  mime_type: zod.string().nullish(),
+});
+
+export const UploadFaxResponse = zod.object({
+  fax_result_id: zod.number(),
+  status: zod.string(),
+  job_id: zod.number(),
+  vault_path: zod.string(),
+});
+
+/**
+ * @summary List all Legora Grid results
+ */
+export const ListFaxResultsResponseItem = zod.object({
+  id: zod.number(),
+  job_id: zod.number().nullish(),
+  source_file: zod.string(),
+  vault_path: zod.string(),
+  rx_number: zod.string(),
+  drug_name: zod.string(),
+  fill_date: zod.string(),
+  quantity: zod.string(),
+  confidence: zod.number(),
+  raw_text: zod.string(),
+  status: zod.enum(["pending", "processing", "done", "failed"]),
+  error: zod.string().nullish(),
+  created_at: zod.string(),
+  processed_at: zod.string().nullish(),
+});
+export const ListFaxResultsResponse = zod.array(ListFaxResultsResponseItem);
+
+/**
+ * @summary Get a single Legora Grid result
+ */
+export const GetFaxResultParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetFaxResultResponse = zod.object({
+  id: zod.number(),
+  job_id: zod.number().nullish(),
+  source_file: zod.string(),
+  vault_path: zod.string(),
+  rx_number: zod.string(),
+  drug_name: zod.string(),
+  fill_date: zod.string(),
+  quantity: zod.string(),
+  confidence: zod.number(),
+  raw_text: zod.string(),
+  status: zod.enum(["pending", "processing", "done", "failed"]),
+  error: zod.string().nullish(),
+  created_at: zod.string(),
+  processed_at: zod.string().nullish(),
+});
+
+/**
+ * @summary OCR fax processing queue stats
+ */
+export const GetOcrQueueStatsResponse = zod.record(zod.string(), zod.number());
