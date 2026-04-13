@@ -410,6 +410,73 @@ export const AnalyzeCaseFilesResponse = zod.object({
 });
 
 /**
+ * @summary Search the NPI Registry for doctors and providers
+ */
+export const SearchNpiQueryParams = zod.object({
+  npi_number: zod.coerce.string().optional(),
+  first_name: zod.coerce.string().optional(),
+  last_name: zod.coerce.string().optional(),
+  city: zod.coerce.string().optional(),
+  state: zod.coerce.string().optional(),
+  specialty: zod.coerce.string().optional(),
+  limit: zod.coerce.string().optional(),
+});
+
+export const SearchNpiResponse = zod.object({
+  results: zod.array(
+    zod.object({
+      npi: zod.string(),
+      provider_type: zod.string(),
+      name: zod.string(),
+      first_name: zod.string().optional(),
+      last_name: zod.string().optional(),
+      credential: zod.string().optional(),
+      gender: zod.string().optional(),
+      specialty: zod.string(),
+      address_line_1: zod.string().optional(),
+      address_line_2: zod.string().optional(),
+      city: zod.string(),
+      state: zod.string(),
+      postal_code: zod.string().optional(),
+      phone: zod.string(),
+      fax: zod.string().optional(),
+      enumeration_date: zod.string().optional(),
+      last_updated: zod.string().optional(),
+      npi_registry_url: zod.string(),
+    }),
+  ),
+  result_count: zod.number(),
+});
+
+/**
+ * @summary Look up a single provider by NPI number
+ */
+export const LookupNpiParams = zod.object({
+  npi: zod.coerce.string(),
+});
+
+export const LookupNpiResponse = zod.object({
+  npi: zod.string(),
+  provider_type: zod.string(),
+  name: zod.string(),
+  first_name: zod.string().optional(),
+  last_name: zod.string().optional(),
+  credential: zod.string().optional(),
+  gender: zod.string().optional(),
+  specialty: zod.string(),
+  address_line_1: zod.string().optional(),
+  address_line_2: zod.string().optional(),
+  city: zod.string(),
+  state: zod.string(),
+  postal_code: zod.string().optional(),
+  phone: zod.string(),
+  fax: zod.string().optional(),
+  enumeration_date: zod.string().optional(),
+  last_updated: zod.string().optional(),
+  npi_registry_url: zod.string(),
+});
+
+/**
  * @summary List all paralegals
  */
 export const ListParalegalsResponseItem = zod.object({

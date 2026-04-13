@@ -38,6 +38,8 @@ import type {
   Lead,
   ListDocumentsParams,
   ListLeadsParams,
+  NpiProvider,
+  NpiSearchResponse,
   Paralegal,
   ParalegalDetail,
   ParalegalLeaderboardRow,
@@ -46,6 +48,7 @@ import type {
   PipelineTrendPoint,
   QualificationResult,
   QueueStats,
+  SearchNpiParams,
   TortBreakdownRow,
   UpdateDocumentBody,
   UpdateLeadBody,
@@ -1699,6 +1702,185 @@ export const useAnalyzeCaseFiles = <
 > => {
   return useMutation(getAnalyzeCaseFilesMutationOptions(options));
 };
+
+/**
+ * @summary Search the NPI Registry for doctors and providers
+ */
+export const getSearchNpiUrl = (params?: SearchNpiParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/npi/search?${stringifiedParams}`
+    : `/api/npi/search`;
+};
+
+export const searchNpi = async (
+  params?: SearchNpiParams,
+  options?: RequestInit,
+): Promise<NpiSearchResponse> => {
+  return customFetch<NpiSearchResponse>(getSearchNpiUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getSearchNpiQueryKey = (params?: SearchNpiParams) => {
+  return [`/api/npi/search`, ...(params ? [params] : [])] as const;
+};
+
+export const getSearchNpiQueryOptions = <
+  TData = Awaited<ReturnType<typeof searchNpi>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  params?: SearchNpiParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof searchNpi>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getSearchNpiQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof searchNpi>>> = ({
+    signal,
+  }) => searchNpi(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof searchNpi>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type SearchNpiQueryResult = NonNullable<
+  Awaited<ReturnType<typeof searchNpi>>
+>;
+export type SearchNpiQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Search the NPI Registry for doctors and providers
+ */
+
+export function useSearchNpi<
+  TData = Awaited<ReturnType<typeof searchNpi>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  params?: SearchNpiParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof searchNpi>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getSearchNpiQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Look up a single provider by NPI number
+ */
+export const getLookupNpiUrl = (npi: string) => {
+  return `/api/npi/lookup/${npi}`;
+};
+
+export const lookupNpi = async (
+  npi: string,
+  options?: RequestInit,
+): Promise<NpiProvider> => {
+  return customFetch<NpiProvider>(getLookupNpiUrl(npi), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getLookupNpiQueryKey = (npi: string) => {
+  return [`/api/npi/lookup/${npi}`] as const;
+};
+
+export const getLookupNpiQueryOptions = <
+  TData = Awaited<ReturnType<typeof lookupNpi>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  npi: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof lookupNpi>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getLookupNpiQueryKey(npi);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof lookupNpi>>> = ({
+    signal,
+  }) => lookupNpi(npi, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!npi,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof lookupNpi>>, TError, TData> & {
+    queryKey: QueryKey;
+  };
+};
+
+export type LookupNpiQueryResult = NonNullable<
+  Awaited<ReturnType<typeof lookupNpi>>
+>;
+export type LookupNpiQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Look up a single provider by NPI number
+ */
+
+export function useLookupNpi<
+  TData = Awaited<ReturnType<typeof lookupNpi>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  npi: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof lookupNpi>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getLookupNpiQueryOptions(npi, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary List all paralegals

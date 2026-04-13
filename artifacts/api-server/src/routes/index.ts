@@ -8,6 +8,7 @@ import ocrRouter from "./ocr";
 import paralegalsRouter from "./paralegals";
 import analyticsRouter from "./analytics";
 import complianceRouter from "./compliance";
+import npiRouter from "./npi";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use("/ocr", ocrRouter);
 router.use("/paralegals", paralegalsRouter);
 router.use("/analytics", analyticsRouter);
 router.use("/compliance", complianceRouter);
+router.use("/npi", npiRouter);
 
 export default router;

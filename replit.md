@@ -44,6 +44,7 @@ pnpm workspace monorepo using TypeScript. Full-stack Mass Tort Operating System 
   - `/analytics` — Analytics & ROI (KPIs, conversion funnel, score distribution)
   - `/compliance` — Compliance Audit Trail (event log, filters, JSON drill-down)
   - `/ocr-inbox` — OCR Inbox (Legora Grid, fax upload)
+  - `/npi-lookup` — NPI Provider Lookup (CMS NPI Registry search)
 
 ### API Server (`artifacts/api-server`)
 - **Type**: Express API, served at `/api`
@@ -55,6 +56,7 @@ pnpm workspace monorepo using TypeScript. Full-stack Mass Tort Operating System 
 - **Paralegal routes**: `/api/paralegals`, `/api/paralegals/:id`, `/api/paralegals/:id/performance`
 - **Analytics routes**: `/api/analytics/overview`, `/api/analytics/pipeline-trend`, `/api/analytics/conversion-funnel`, `/api/analytics/tort-breakdown`, `/api/analytics/paralegal-leaderboard`
 - **Compliance routes**: `/api/compliance/audit-trail`, `/api/compliance/audit-summary`
+- **NPI routes**: `/api/npi/search`, `/api/npi/lookup/:npi`
 
 ## Distributed Architecture
 

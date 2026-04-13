@@ -22,6 +22,8 @@ tags:
     description: Dashboard analytics
   - name: ocr
     description: Fax OCR inbox — Legora Grid extraction
+  - name: npi
+    description: NPI Registry doctor lookup
   - name: paralegals
     description: Paralegal management and assignment
   - name: analytics
@@ -402,6 +404,86 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateCaseResponse"
+
+  /npi/search:
+    get:
+      operationId: searchNpi
+      tags: [npi]
+      summary: Search the NPI Registry for doctors and providers
+      parameters:
+        - name: npi_number
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: first_name
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: last_name
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: city
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: specialty
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: NPI search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NpiSearchResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /npi/lookup/{npi}:
+    get:
+      operationId: lookupNpi
+      tags: [npi]
+      summary: Look up a single provider by NPI number
+      parameters:
+        - name: npi
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Provider detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NpiProvider"
+        "404":
+          description: NPI not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /paralegals:
     get:
@@ -1233,6 +1315,58 @@ components:
         vault_path:
           type: string
       required: [fax_result_id, status, job_id, vault_path]
+
+    NpiProvider:
+      type: object
+      properties:
+        npi:
+          type: string
+        provider_type:
+          type: string
+        name:
+          type: string
+        first_name:
+          type: string
+        last_name:
+          type: string
+        credential:
+          type: string
+        gender:
+          type: string
+        specialty:
+          type: string
+        address_line_1:
+          type: string
+        address_line_2:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        postal_code:
+          type: string
+        phone:
+          type: string
+        fax:
+          type: string
+        enumeration_date:
+          type: string
+        last_updated:
+          type: string
+        npi_registry_url:
+          type: string
+      required: [npi, provider_type, name, specialty, city, state, phone, npi_registry_url]
+
+    NpiSearchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/NpiProvider"
+        result_count:
+          type: integer
+      required: [results, result_count]
 
     Paralegal:
       type: object

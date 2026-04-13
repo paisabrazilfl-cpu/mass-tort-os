@@ -332,6 +332,32 @@ export interface UploadFaxResponse {
   vault_path: string;
 }
 
+export interface NpiProvider {
+  npi: string;
+  provider_type: string;
+  name: string;
+  first_name?: string;
+  last_name?: string;
+  credential?: string;
+  gender?: string;
+  specialty: string;
+  address_line_1?: string;
+  address_line_2?: string;
+  city: string;
+  state: string;
+  postal_code?: string;
+  phone: string;
+  fax?: string;
+  enumeration_date?: string;
+  last_updated?: string;
+  npi_registry_url: string;
+}
+
+export interface NpiSearchResponse {
+  results: NpiProvider[];
+  result_count: number;
+}
+
 export interface Paralegal {
   id: number;
   name: string;
@@ -463,6 +489,16 @@ export type ListDocumentsParams = {
 };
 
 export type CreateCaseBody = { [key: string]: unknown };
+
+export type SearchNpiParams = {
+  npi_number?: string;
+  first_name?: string;
+  last_name?: string;
+  city?: string;
+  state?: string;
+  specialty?: string;
+  limit?: string;
+};
 
 export type GetAuditTrailParams = {
   limit?: number;

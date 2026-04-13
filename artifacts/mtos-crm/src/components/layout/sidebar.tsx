@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Users, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck, BarChart3, Shield } from "lucide-react";
+import { LayoutDashboard, Users, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck, BarChart3, Shield, Stethoscope } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -10,6 +10,7 @@ const navigation = [
   { name: "Paralegals", href: "/paralegals", icon: UserCheck },
   { name: "Documents", href: "/documents", icon: FileText },
   { name: "OCR Inbox", href: "/ocr-inbox", icon: Inbox },
+  { name: "NPI Lookup", href: "/npi-lookup", icon: Stethoscope },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
   { name: "Compliance", href: "/compliance", icon: Shield },
   { name: "New Intake", href: "/leads/new", icon: PlusCircle },
