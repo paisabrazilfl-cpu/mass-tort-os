@@ -61,3 +61,19 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **Background Checks**: CourtListener (free court records API), OFAC sanctions list
 *   **NPI Lookup**: NPPES API (CMS NPI Registry)
 *   **Security**: Helmet.js (security headers), express-rate-limit (rate limiting)
+*   **News Feeds**: Google News RSS, Yahoo Finance RSS, MarketWatch RSS, CNBC RSS (real-time, 10min cache)
+
+# Integrations Hub
+
+Supports 16 pre-built connectors and custom API/vendor/webpage connections:
+
+**CRMs**: Zapier, HubSpot, Clio Manage, Law Ruler, Salesforce, Litify, Filevine, Smokeball, MyCase, Pipedrive, Lead Docket
+**Services**: Blacklist Alliance, TCPA Litigator List, TrustedForm, Jornaya, LexisNexis
+**Custom**: Custom API, Vendor API, Web Page connections with configurable sync direction
+
+Routes: `/api/integrations` (CRUD), `/api/integrations/presets` (list connectors), `/api/integrations/:id/test` (connection test), `/api/integrations/:id/sync` (data sync). DB table: `integrations`. Page: `/integrations`.
+
+# News Feeds
+
+*   **Mass Tort News** (`/news`): Real-time RSS from 5 Google News queries (mass tort, pharmaceutical class action, MDL, product liability, toxic tort). Filterable by category with search. Route: `/api/news/mass-tort`.
+*   **Financial News** (`/financial-news`): RSS from Yahoo Finance, MarketWatch, CNBC, plus pharma/FDA and legal-impact focused feeds. Source breakdown dashboard. Route: `/api/news/financial`.

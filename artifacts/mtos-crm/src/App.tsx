@@ -27,6 +27,9 @@ import DocReview from "@/pages/doc-review";
 import Timeline from "@/pages/timeline";
 import Drafting from "@/pages/drafting";
 import Predictive from "@/pages/predictive";
+import IntegrationsPage from "@/pages/integrations";
+import News from "@/pages/news";
+import FinancialNews from "@/pages/financial-news";
 
 const queryClient = new QueryClient();
 
@@ -56,6 +59,9 @@ function Router() {
         <Route path="/timeline" component={Timeline} />
         <Route path="/drafting" component={Drafting} />
         <Route path="/predictive" component={Predictive} />
+        <Route path="/integrations" component={IntegrationsPage} />
+        <Route path="/news" component={News} />
+        <Route path="/financial-news" component={FinancialNews} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

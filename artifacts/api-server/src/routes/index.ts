@@ -16,6 +16,8 @@ import securityRouter from "./security";
 import timelineRouter from "./timeline";
 import draftingRouter from "./drafting";
 import authRouter from "./auth";
+import integrationsRouter from "./integrations";
+import newsRouter from "./news";
 import { authMiddleware } from "../lib/rbac";
 
 const router: IRouter = Router();
@@ -38,5 +40,7 @@ router.use("/vendors", vendorsRouter);
 router.use("/security", securityRouter);
 router.use("/timeline", timelineRouter);
 router.use("/drafting", draftingRouter);
+router.use("/integrations", integrationsRouter);
+router.use("/news", newsRouter);
 
 export default router;
