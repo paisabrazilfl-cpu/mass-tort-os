@@ -14,29 +14,31 @@ const TAXONOMY_DIAGNOSIS_MAP: Record<string, string[]> = {
   "gynecology": [
     "ovarian cancer", "uterine cancer", "endometrial cancer", "uterine fibroids",
   ],
-  "gastroenterology": [
-    "gastroparesis", "gi injury", "gastrointestinal", "bowel obstruction",
-    "pancreatitis", "gallbladder", "necrotizing enterocolitis", "nec",
-    "stomach paralysis", "intestinal",
+  "urology": [
+    "bladder cancer", "kidney cancer", "testicular cancer", "prostate cancer",
+    "renal cell",
   ],
   "hematology": [
     "leukemia", "lymphoma", "myeloma", "aplastic anemia", "myelodysplastic",
     "non-hodgkin", "hodgkin", "aml", "cll", "blood cancer",
   ],
+  "gastroenterology": [
+    "gastroparesis", "gi injury", "gastrointestinal", "bowel obstruction",
+    "pancreatitis", "gallbladder", "necrotizing enterocolitis", "nec",
+    "stomach paralysis", "intestinal",
+  ],
   "oncology": [
     "cancer", "carcinoma", "mesothelioma", "melanoma",
     "sarcoma", "tumor", "neoplasm", "metastatic", "malignant",
-    "renal cell", "bladder cancer", "kidney cancer",
-    "liver cancer", "lung cancer",
-    "testicular cancer", "thyroid cancer", "pancreatic cancer", "gastric cancer",
-    "esophageal cancer", "colorectal cancer", "prostate cancer", "breast cancer",
+    "liver cancer", "lung cancer", "thyroid cancer", "pancreatic cancer",
+    "gastric cancer", "esophageal cancer", "colorectal cancer", "breast cancer",
   ],
   "orthopedics": [
     "metallosis", "implant failure", "revision surgery", "bone deterioration",
     "chronic pain", "hernia", "mesh migration", "organ damage", "pseudotumor",
   ],
   "pulmonology": [
-    "respiratory injury", "lung cancer", "mesothelioma", "asbestosis",
+    "respiratory injury", "asbestosis",
     "pleural disease", "pleural thickening", "foam degradation",
     "respiratory", "cpap",
   ],
@@ -46,27 +48,28 @@ const TAXONOMY_DIAGNOSIS_MAP: Record<string, string[]> = {
     "suicidal ideation", "behavioral harm", "mental health",
     "autism", "adhd", "attention deficit",
   ],
-  "general_surgery": [
+  "emergency_medicine": [
     "assault", "physical injury", "collision injury", "spinal injury",
     "wrongful death", "workplace injury", "battery", "accident",
-    "sexual assault",
+    "sexual assault", "trauma",
   ],
-  "urology": [
-    "bladder cancer", "kidney cancer", "testicular cancer", "prostate cancer",
+  "general_practice": [
+    "fallback",
   ],
 };
 
 const SPECIALTY_CATEGORY_MAP: Record<string, string[]> = {
-  "oncology": ["oncology", "hematology/oncology", "medical oncology", "surgical oncology", "gynecologic oncology", "hematology", "neuro-oncology"],
+  "oncology": ["oncology", "hematology/oncology", "medical oncology", "surgical oncology", "gynecologic oncology", "neuro-oncology"],
   "hematology": ["hematology", "hematology/oncology", "pathology"],
   "neurology": ["neurology", "neurological surgery", "neuro-oncology", "neuropsychiatry"],
   "gastroenterology": ["gastroenterology", "internal medicine", "pediatrics", "neonatology"],
   "orthopedics": ["orthopedic surgery", "surgery", "pain medicine", "general surgery"],
-  "pulmonology": ["pulmonary disease", "pulmonology", "critical care medicine", "internal medicine"],
+  "pulmonology": ["pulmonary disease", "pulmonology", "critical care medicine"],
   "psychiatry": ["psychiatry", "psychology", "child psychiatry", "behavioral health"],
-  "general_surgery": ["surgery", "emergency medicine", "trauma surgery", "general practice", "family medicine"],
+  "emergency_medicine": ["emergency medicine", "trauma surgery", "surgery", "general practice", "family medicine"],
   "gynecology": ["obstetrics & gynecology", "gynecology", "gynecologic oncology", "reproductive medicine"],
   "urology": ["urology", "urologic surgery", "urological oncology"],
+  "general_practice": ["internal medicine", "family medicine", "general practice", "primary care"],
 };
 
 export interface TaxonomyMatchResult {
@@ -89,6 +92,7 @@ export function matchTaxonomyToDiagnosis(
 
   let diagnosisCategory: string | null = null;
   for (const [category, diagnoses] of Object.entries(TAXONOMY_DIAGNOSIS_MAP)) {
+    if (category === "general_practice") continue;
     if (diagnoses.some(d => diagLower.includes(d))) {
       diagnosisCategory = category;
       break;
@@ -154,7 +158,7 @@ export function matchTaxonomyToDiagnosis(
     physician_specialty: physicianSpecialty,
     expected_specialties: expectedSpecialties,
     diagnosis_category: diagnosisCategory,
-    fraud_indicators,
+    fraud_indicators: fraudIndicators,
     confidence,
   };
 }

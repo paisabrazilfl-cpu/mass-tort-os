@@ -8,6 +8,7 @@ import { runFullConflictCheck } from "../lib/conflict-engine";
 import { TORT_REGISTRY, validateTortClaim, getTortCategories } from "../lib/tort-engine";
 import { lookupNpiAndMatch } from "../lib/taxonomy-engine";
 import { runFraudDetection } from "../lib/fraud-engine";
+import { finalArbiter } from "../lib/final-arbiter";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 
@@ -215,18 +216,6 @@ router.post("/submit", async (req, res) => {
 
     if (!tortValidation.valid) {
       step6.errors = tortValidation.errors;
-      if (tortValidation.errors.includes("UNKNOWN_TORT_TYPE")) {
-        step6.status = "failed";
-        pipeline.push(step6);
-        res.status(422).json({
-          status: "REJECTED",
-          errors: ["UNKNOWN_TORT_TYPE"],
-          action: "FIX_AND_RESUBMIT",
-          pipeline,
-          failed_step: "TORT_CLASSIFICATION",
-        });
-        return;
-      }
       step6.status = "failed";
     }
   } catch (err) {
@@ -272,8 +261,8 @@ router.post("/submit", async (req, res) => {
   }
   pipeline.push(step7);
 
-  // STEP 8: Fraud detection engine
-  const step8: PipelineStep = { name: "FRAUD_DETECTION", status: "passed", errors: [], data: {} };
+  // STEP 8: Fraud flagging (flags only — does NOT decide outcome)
+  const step8: PipelineStep = { name: "FRAUD_FLAGGING", status: "passed", errors: [], data: {} };
   let fraudResult;
   try {
     fraudResult = runFraudDetection({
@@ -282,34 +271,20 @@ router.post("/submit", async (req, res) => {
       taxonomy_match: npiResult.taxonomy_match,
       npi_found: npiResult.npi_found,
     });
-    step8.data = { fraud_score: fraudResult.fraud_score, fraud_status: fraudResult.status, indicators: fraudResult.indicators.length };
-
-    if (fraudResult.status === "REJECTED") {
-      step8.status = "failed";
+    step8.data = {
+      fraud_score: fraudResult.fraud_score,
+      hard_block: fraudResult.hard_block,
+      has_flags: fraudResult.has_flags,
+      indicators: fraudResult.indicators.length,
+    };
+    if (fraudResult.has_flags) {
       step8.errors = fraudResult.indicators.map(i => `FRAUD:${i.type}`);
-      pipeline.push(step8);
-
-      await auditLog("lead", "rejected", "fraud_detection", {
-        fraud_score: fraudResult.fraud_score,
-        indicators: fraudResult.indicators,
-      });
-
-      res.status(422).json({
-        status: "REJECTED",
-        errors: step8.errors,
-        action: "REJECTED",
-        pipeline,
-        failed_step: "FRAUD_DETECTION",
-        fraud_score: fraudResult.fraud_score,
-        fraud_summary: fraudResult.summary,
-      });
-      return;
     }
   } catch (err) {
     step8.status = "error";
     step8.errors.push("FRAUD_DETECTION_ERROR");
     logger.error({ err }, "Fraud detection error");
-    fraudResult = { status: "TO_BE_REVIEWED" as const, fraud_score: 0, indicators: [], summary: "Fraud check error — routed to review" };
+    fraudResult = { hard_block: false, hard_block_reason: null, has_flags: false, fraud_score: 0, indicators: [], summary: "Fraud check error — routed to review" };
   }
   pipeline.push(step8);
 
@@ -325,27 +300,6 @@ router.post("/submit", async (req, res) => {
       lead_data: { ...data, name: fullName },
     });
     step9.data = { has_conflict: conflictCheck.has_conflict, output_state: conflictCheck.output_state };
-
-    if (conflictCheck.has_conflict && conflictCheck.output_state === "REJECT") {
-      step9.status = "failed";
-      step9.errors = conflictCheck.details;
-      pipeline.push(step9);
-
-      await auditLog("lead", "rejected", "form_engine_conflict", {
-        conflict_type: conflictCheck.conflict_type,
-        details: conflictCheck.details,
-      });
-
-      res.status(422).json({
-        status: "REJECTED",
-        errors: [`CONFLICT:${conflictCheck.conflict_type}`],
-        details: conflictCheck.details,
-        action: "REJECTED",
-        pipeline,
-        failed_step: "CONFLICT_DETECTION",
-      });
-      return;
-    }
   } catch (err) {
     step9.status = "error";
     step9.errors.push("CONFLICT_CHECK_ERROR");
@@ -354,24 +308,62 @@ router.post("/submit", async (req, res) => {
   }
   pipeline.push(step9);
 
-  // STEP 10: Determine final status + insert
-  let status = "new";
-  if (fraudResult!.status === "TO_BE_REVIEWED") {
-    status = "review_required";
-  }
-  if (conflictCheck!.has_conflict && conflictCheck!.output_state === "REVIEW_REQUIRED") {
-    status = "review_required";
-  }
-  if (!tortValidation!.valid) {
-    status = "review_required";
-  }
-  if (!data.diagnosis_confirmed) {
+  // STEP 10: FINAL ARBITER — single source of truth for decision
+  const complianceErrors = pipeline
+    .filter(s => ["TCPA_COMPLIANCE", "TRUSTEDFORM_VALIDATION"].includes(s.name) && s.status !== "passed")
+    .flatMap(s => s.errors);
+  const validationErrors = pipeline
+    .filter(s => ["SCHEMA_VALIDATION", "EMAIL_VALIDATION", "ADDRESS_VALIDATION"].includes(s.name) && s.status !== "passed")
+    .flatMap(s => s.errors);
+
+  const arbiterResult = finalArbiter({
+    compliance_passed: complianceErrors.length === 0,
+    compliance_errors: complianceErrors,
+    validation_passed: validationErrors.length === 0,
+    validation_errors: validationErrors,
+    tort_validation: tortValidation!,
+    taxonomy_match: npiResult.taxonomy_match,
+    fraud_result: fraudResult!,
+    npi_found: npiResult.npi_found,
+    diagnosis_confirmed: !!data.diagnosis_confirmed,
+    exposure_confirmed: !!data.was_at_location,
+    exposure_start: data.exposure_start,
+    conflict_reject: conflictCheck!.has_conflict && conflictCheck!.output_state === "REJECT",
+    conflict_review: conflictCheck!.has_conflict && conflictCheck!.output_state === "REVIEW_REQUIRED",
+  });
+
+  let status: string;
+  if (arbiterResult.decision === "REJECTED") {
     status = "rejected";
+  } else if (arbiterResult.decision === "TO_BE_REVIEWED") {
+    status = "review_required";
+  } else {
+    status = "new";
   }
-  const tort = tortValidation!.tort_id ? TORT_REGISTRY[tortValidation!.tort_id] : null;
-  if (tort?.required_exposure && !data.was_at_location && !data.exposure_start) {
-    status = "rejected";
+
+  if (arbiterResult.decision === "REJECTED") {
+    await auditLog("lead", "rejected", arbiterResult.deciding_engine, {
+      reason: arbiterResult.reason,
+      fraud_score: fraudResult!.fraud_score,
+      fraud_indicators: fraudResult!.indicators,
+      conflict: conflictCheck!.has_conflict ? conflictCheck!.conflict_type : null,
+    });
+
+    pipeline.push({ name: "FINAL_ARBITER", status: "failed", errors: [arbiterResult.reason], data: { decision: arbiterResult.decision, deciding_engine: arbiterResult.deciding_engine } });
+
+    res.status(422).json({
+      status: "REJECTED",
+      errors: [arbiterResult.reason],
+      action: "REJECTED",
+      pipeline,
+      failed_step: arbiterResult.deciding_engine,
+      fraud_score: fraudResult!.fraud_score,
+      fraud_summary: fraudResult!.summary,
+    });
+    return;
   }
+
+  pipeline.push({ name: "FINAL_ARBITER", status: "passed", errors: [], data: { decision: arbiterResult.decision, reason: arbiterResult.reason, deciding_engine: arbiterResult.deciding_engine } });
 
   const step10: PipelineStep = { name: "CRM_STORAGE", status: "passed", errors: [], data: {} };
   try {
@@ -415,7 +407,7 @@ router.post("/submit", async (req, res) => {
         npi_number: npiResult.npi_number,
         physician_taxonomy: npiResult.specialty,
         fraud_score: fraudResult!.fraud_score,
-        fraud_status: fraudResult!.status,
+        fraud_status: arbiterResult.decision,
         fraud_indicators: fraudResult!.indicators.length > 0 ? JSON.stringify(fraudResult!.indicators) : null,
         exposure_start: data.exposure_start ?? null,
         exposure_end: data.exposure_end ?? null,
@@ -480,15 +472,15 @@ router.post("/submit", async (req, res) => {
     pipeline.push(step10);
 
     res.status(201).json({
-      status: "ACCEPTED",
+      status: arbiterResult.decision,
       lead_id: lead.id,
       lead_status: status,
       tort_id: tortValidation!.tort_id,
       fraud_score: fraudResult!.fraud_score,
-      fraud_status: fraudResult!.status,
+      fraud_flags: fraudResult!.has_flags,
       npi_verified: npiResult.npi_found,
       background_check: bgCheck ? { status: bgCheck.status, summary: bgCheck.summary } : null,
-      output_state: status === "review_required" ? "REVIEW_REQUIRED" : status === "rejected" ? "REJECT" : "ACCEPT",
+      arbiter: { decision: arbiterResult.decision, reason: arbiterResult.reason, deciding_engine: arbiterResult.deciding_engine },
       pipeline,
     });
   } catch (err) {

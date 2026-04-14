@@ -209,9 +209,10 @@ Form Engine
 │   ├── Step 5: TrustedForm cert
 │   ├── Step 6: Tort classification engine
 │   ├── Step 7: NPI lookup + taxonomy matching
-│   ├── Step 8: Fraud detection engine
+│   ├── Step 8: Fraud flagging (flags only — no decision authority)
 │   ├── Step 9: Conflict detection
-│   └── Step 10: CRM storage + background check (post-insert)
+│   ├── Step 10: FINAL ARBITER (single source of truth — sole decider)
+│   └── Step 11: CRM storage + background check (post-insert)
 ├── GET /api/forms/config — all tort campaign configs
 ├── GET /api/forms/categories — grouped by category
 ├── POST /api/forms/npi-verify — NPI taxonomy matching
@@ -233,15 +234,23 @@ Form Engine
 - Camp Lejeune: exposure date 1953-1987 range check
 
 ### Taxonomy Engine (`src/lib/taxonomy-engine.ts`)
-- Maps NPI taxonomy codes to diagnosis categories (oncology, neurology, gastroenterology, etc.)
+- Deduped categories (checked top-to-bottom): neurology, gynecology, urology, hematology, gastroenterology, oncology, orthopedics, pulmonology, psychiatry, emergency_medicine, general_practice (fallback)
+- No duplicate diagnosis keywords across categories (e.g., bladder/kidney/prostate cancer in urology only, not oncology)
 - Detects: pediatric physician + adult cancer, specialty outside scope, non-medical provider
 - `lookupNpiAndMatch()` — queries NPPES API, matches taxonomy to diagnosis
 - Confidence levels: high (exact match), medium (generalist), low (mismatch)
 
-### Fraud Detection Engine (`src/lib/fraud-engine.ts`)
-- Scoring 0-100: ≥60 → REJECTED, ≥20 → TO_BE_REVIEWED, <20 → ACCEPTED
-- Triggers: taxonomy mismatch, missing NPI, diagnosis mismatch, impossible timeline, exposure before birth, future diagnosis date
-- Returns: status, fraud_score, indicators array, summary
+### Fraud Engine (`src/lib/fraud-engine.ts`) — FLAGS ONLY
+- Fraud engine does NOT decide outcome — only flags indicators for the Final Arbiter
+- Hard blocks (absolute): IMPOSSIBLE_TIMELINE, FUTURE_DIAGNOSIS_DATE, IMPOSSIBLE_MEDICAL_TIMELINE, EXPOSURE_BEFORE_BIRTH
+- Soft flags (review priority only): TAXONOMY_MISMATCH, NPI_NOT_FOUND, INVALID_TORT_MAPPING, etc.
+- Returns: `{ hard_block, hard_block_reason, has_flags, fraud_score, indicators[], summary }`
+- fraud_score is for priority/sorting only — never determines final outcome
+
+### Final Arbiter (`src/lib/final-arbiter.ts`) — SINGLE DECISION AUTHORITY
+- Sole decider of ACCEPTED / REJECTED / TO_BE_REVIEWED
+- Strict priority order: Compliance > Validation > Conflict > Fraud Hard Block > Tort Rules > Fraud Flags > Taxonomy > NPI > Diagnosis Match
+- No other engine can independently reject or accept a lead
 
 ### FBI Escalation
 - POST /api/forms/escalate/fbi — logs to audit_log, marks lead as "escalated"
