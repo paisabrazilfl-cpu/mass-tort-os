@@ -82,9 +82,12 @@ async function searchCourtRecords(person: {
   state?: string;
 }): Promise<BackgroundRecord[] | null> {
   const records: BackgroundRecord[] = [];
+  const firstName = person.first_name.trim().toLowerCase();
+  const lastName = person.last_name.trim().toLowerCase();
+  const fullName = `${firstName} ${lastName}`;
 
   try {
-    const query = encodeURIComponent(`${person.first_name} ${person.last_name}`);
+    const query = encodeURIComponent(`"${person.first_name} ${person.last_name}"`);
     const stateParam = person.state ? `&state=${encodeURIComponent(person.state)}` : "";
     const url = `https://www.courtlistener.com/api/rest/v4/search/?q=${query}&type=r${stateParam}&format=json`;
 
@@ -102,14 +105,29 @@ async function searchCourtRecords(person: {
     if (response.ok) {
       const data = await response.json() as { results?: Array<{ caseName?: string; dateFiled?: string; court?: string; docketNumber?: string }> };
       if (data.results && Array.isArray(data.results)) {
-        for (const result of data.results.slice(0, 10)) {
-          records.push({
-            type: "COURT_RECORD",
-            description: result.caseName || "Court record found",
-            date: result.dateFiled || undefined,
-            jurisdiction: result.court || undefined,
-            severity: "medium",
-          });
+        for (const result of data.results.slice(0, 20)) {
+          const caseName = (result.caseName || "").toLowerCase();
+          const hasFullName = caseName.includes(fullName);
+          const hasLastName = caseName.includes(lastName);
+          const hasFirstName = caseName.includes(firstName);
+
+          if (hasFullName) {
+            records.push({
+              type: "COURT_RECORD",
+              description: result.caseName || "Court record found",
+              date: result.dateFiled || undefined,
+              jurisdiction: result.court || undefined,
+              severity: "high",
+            });
+          } else if (hasLastName && hasFirstName) {
+            records.push({
+              type: "COURT_RECORD",
+              description: result.caseName || "Court record found",
+              date: result.dateFiled || undefined,
+              jurisdiction: result.court || undefined,
+              severity: "medium",
+            });
+          }
         }
       }
     }
@@ -118,7 +136,7 @@ async function searchCourtRecords(person: {
     return null;
   }
 
-  return records;
+  return records.slice(0, 10);
 }
 
 async function checkOFACList(person: {
