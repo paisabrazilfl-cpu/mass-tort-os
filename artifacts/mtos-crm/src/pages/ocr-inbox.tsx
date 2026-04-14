@@ -105,7 +105,7 @@ export default function OcrInbox() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-foreground">OCR Inbox</h2>
-          <p className="text-muted-foreground mt-1">The Legora Grid - Process and manage incoming faxes.</p>
+          <p className="text-muted-foreground mt-1">Process and manage incoming faxes.</p>
         </div>
         <div className="flex items-center space-x-2">
           <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
