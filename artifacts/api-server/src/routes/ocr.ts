@@ -9,6 +9,7 @@ import { logger } from "../lib/logger";
 import { saveFile } from "../lib/vault";
 import { auditLog } from "../lib/audit";
 import { extractMedicalFields, analyzeDocumentText } from "../lib/ai-fields";
+import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
@@ -17,7 +18,7 @@ const router = Router();
  * Upload a fax image (base64-encoded) → enqueues process_fax job
  * Body: { file_name: string, image_base64: string, mime_type?: string }
  */
-router.post("/upload", async (req, res) => {
+router.post("/upload", requireRole("paralegal", "attorney", "admin"), auditAction("ocr_upload"), async (req, res) => {
   const { file_name, image_base64, mime_type } = req.body as {
     file_name: string;
     image_base64: string;
@@ -126,7 +127,7 @@ router.get("/queue-stats", async (_req, res) => {
   res.json(stats);
 });
 
-router.post("/ai-fields", async (req, res) => {
+router.post("/ai-fields", requireRole("paralegal", "attorney", "admin"), auditAction("ai_fields_extract"), async (req, res) => {
   const { image_base64, mime_type, text } = req.body;
 
   if (!image_base64 && !text) {
@@ -148,7 +149,7 @@ router.post("/ai-fields", async (req, res) => {
   }
 });
 
-router.post("/ai-fields/result/:id", async (req, res) => {
+router.post("/ai-fields/result/:id", requireRole("paralegal", "attorney", "admin"), async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 

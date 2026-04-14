@@ -9,6 +9,7 @@ import {
   DeleteVendorParams,
 } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
+import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
@@ -20,7 +21,7 @@ router.get("/", async (_req, res) => {
   res.json(vendors);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireRole("attorney", "admin"), auditAction("create_vendor"), async (req, res) => {
   const parsed = CreateVendorBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -64,7 +65,7 @@ router.get("/:id", async (req, res) => {
   res.json(vendor);
 });
 
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", requireRole("attorney", "admin"), auditAction("update_vendor"), async (req, res) => {
   const paramsParsed = UpdateVendorParams.safeParse(req.params);
   if (!paramsParsed.success) {
     res.status(400).json({ error: paramsParsed.error.message });
@@ -92,7 +93,7 @@ router.patch("/:id", async (req, res) => {
   res.json(vendor);
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireRole("admin"), auditAction("delete_vendor"), async (req, res) => {
   const parsed = DeleteVendorParams.safeParse(req.params);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });

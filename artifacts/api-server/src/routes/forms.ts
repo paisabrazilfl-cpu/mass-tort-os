@@ -12,6 +12,7 @@ import { runFraudDetection } from "../lib/fraud-engine";
 import { finalArbiter } from "../lib/final-arbiter";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
+import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
@@ -82,7 +83,7 @@ interface PipelineStep {
   data?: Record<string, unknown>;
 }
 
-router.post("/submit", async (req, res) => {
+router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditAction("form_submit"), async (req, res) => {
   const data = req.body;
   const pipeline: PipelineStep[] = [];
 
@@ -614,7 +615,7 @@ router.post("/fraud-check", async (req, res) => {
   }
 });
 
-router.post("/escalate/fbi", async (req, res) => {
+router.post("/escalate/fbi", requireRole("attorney", "admin"), auditAction("escalate_fbi"), async (req, res) => {
   const { lead_id, reason, fraud_indicators } = req.body;
   if (!lead_id || !reason) {
     res.status(400).json({ error: "lead_id and reason are required" });

@@ -4,10 +4,11 @@ import { eq, sql, desc } from "drizzle-orm";
 import { enqueueJob, getQueueStats } from "../lib/queue";
 import { auditLog } from "../lib/audit";
 import crypto from "crypto";
+import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
-router.post("/", async (req, res) => {
+router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("create_case"), async (req, res) => {
   const data = req.body as Record<string, unknown>;
   const case_id = crypto.randomUUID();
 
@@ -21,7 +22,7 @@ router.post("/", async (req, res) => {
   res.status(201).json({ case_id, status: "queued", job_id });
 });
 
-router.post("/:id/upload", async (req, res) => {
+router.post("/:id/upload", requireRole("paralegal", "attorney", "admin"), auditAction("upload_case_file"), async (req, res) => {
   const case_id = req.params.id;
 
   const { file_name, content, content_type } = req.body as {

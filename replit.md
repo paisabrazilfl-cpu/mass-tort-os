@@ -45,7 +45,19 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **Security Infrastructure**: Comprehensive security layer protecting ePHI/PII data:
     *   **Field-level Encryption**: AES-256-GCM encryption for sensitive fields (last_4_ssn, date_of_birth, diagnosis, diagnosis_date, street_address, phone_primary, phone, medications, notes, physician_full_address, physician_contact_info, hospital_contact_info, background_check_data) using `ENCRYPTION_KEY` env var. Encrypted values prefixed with `enc:`. Decryption errors return `[DECRYPTION_ERROR]` instead of raw ciphertext. Note: `name`, `email`, `first_name`, `last_name` remain unencrypted for search/filter functionality.
     *   **Security Headers & Rate Limiting**: Helmet.js (CSP, HSTS, X-Content-Type, referrer policy), express-rate-limit (500 req/15min global, 20 req/15min auth), 1MB request body limit. CORS restricted to app domain in production.
-    *   **Route-level Access Control**: Security dashboard routes require admin role via `requireRole("admin")`. Health check endpoint exempt from auth for monitoring probes.
+    *   **Route-level Access Control**: RBAC enforced on all write operations across all route files:
+        - **Leads**: Create/update/qualify require `paralegal+`, delete/export require `attorney+`
+        - **Documents**: Create/update/redact/highlight require `paralegal+`, delete requires `attorney+`
+        - **Cases**: Create/upload require `paralegal+`
+        - **Vendors**: Create/update require `attorney+`, delete requires `admin`
+        - **OCR**: Upload/AI-fields require `paralegal+`
+        - **Forms**: Submit require `paralegal+`, FBI escalation requires `attorney+`
+        - **Drafting**: Generate/PDF require `paralegal+`
+        - **Paralegals**: Create requires `admin`
+        - **Security**: All routes require `admin`
+        - **Integrations**: Write routes require `admin`
+        - Health check endpoint exempt from auth for monitoring probes.
+        - All write operations include audit logging via `auditAction` middleware.
     *   **Intrusion Detection System (IDS)**: Middleware scanning for SQL injection, XSS, path traversal, command injection, brute force (100 req/60s). Auto-blocks critical threat IPs for 24h via `blocked_ips` table. All threats logged to `security_alerts` table.
     *   **AI Threat Analysis**: Claude Haiku classifies attack patterns, suggests countermeasures, updates alert records.
     *   **Security Dashboard**: CRM page at `/security` showing threat level, stats (24h alerts, critical count, blocked IPs), attack type/severity breakdowns, blocked IP management, alert table with dismiss, manual IP blocking, and AI analysis trigger.

@@ -9,6 +9,7 @@ import {
   DeleteDocumentParams,
 } from "@workspace/api-zod";
 import { redactPdf, highlightPdfRegions, getPdfPageCount } from "../lib/pdf-redaction";
+import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
@@ -28,7 +29,7 @@ router.get("/", async (req, res) => {
   res.json(docs);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("create_document"), async (req, res) => {
   const parsed = CreateDocumentBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -52,7 +53,7 @@ router.post("/", async (req, res) => {
   res.status(201).json(doc);
 });
 
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction("update_document"), async (req, res) => {
   const paramsParsed = UpdateDocumentParams.safeParse({ id: Number(req.params.id) });
   if (!paramsParsed.success) {
     res.status(400).json({ error: paramsParsed.error.message });
@@ -89,7 +90,7 @@ router.patch("/:id", async (req, res) => {
   res.json(doc);
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireRole("attorney", "admin"), auditAction("delete_document"), async (req, res) => {
   const parsed = DeleteDocumentParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -100,7 +101,7 @@ router.delete("/:id", async (req, res) => {
   res.status(204).send();
 });
 
-router.post("/redact", async (req, res) => {
+router.post("/redact", requireRole("paralegal", "attorney", "admin"), auditAction("redact_document"), async (req, res) => {
   const { pdf_base64, rules } = req.body;
   if (!pdf_base64) { res.status(400).json({ error: "pdf_base64 is required" }); return; }
 
@@ -113,7 +114,7 @@ router.post("/redact", async (req, res) => {
   }
 });
 
-router.post("/highlight", async (req, res) => {
+router.post("/highlight", requireRole("paralegal", "attorney", "admin"), async (req, res) => {
   const { pdf_base64, highlights } = req.body;
   if (!pdf_base64) { res.status(400).json({ error: "pdf_base64 is required" }); return; }
 

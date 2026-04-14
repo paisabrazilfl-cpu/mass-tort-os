@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, paralegalsTable, leadsTable } from "@workspace/db";
 import { eq, sql, desc } from "drizzle-orm";
 import { decryptLeadArray } from "../lib/encryption";
+import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
@@ -13,7 +14,7 @@ router.get("/", async (_req, res) => {
   res.json(paralegals);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireRole("admin"), auditAction("create_paralegal"), async (req, res) => {
   const { name, email, role } = req.body;
   if (!name) {
     res.status(400).json({ error: "name is required" });

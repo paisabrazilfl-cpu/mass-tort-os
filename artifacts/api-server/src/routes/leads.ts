@@ -16,6 +16,7 @@ import { withErrorFallback } from "../lib/error-fallback";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { encryptLeadFields, decryptLeadFields, decryptLeadArray } from "../lib/encryption";
+import { requireRole, auditAction } from "../lib/rbac";
 
 function buildLeadFilters(data: {
   status?: string;
@@ -53,7 +54,7 @@ function buildLeadFilters(data: {
 
 const router = Router();
 
-router.get("/export", async (req, res) => {
+router.get("/export", requireRole("attorney", "admin"), auditAction("export_leads"), async (req, res) => {
   const parsed = ExportLeadsQueryParams.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -114,7 +115,7 @@ router.get("/", async (req, res) => {
   res.json(decryptLeadArray(leads));
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("create_lead"), async (req, res) => {
   const parsed = CreateLeadBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -290,7 +291,7 @@ router.get("/:id", async (req, res) => {
   res.json(decryptLeadFields(lead));
 });
 
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction("update_lead"), async (req, res) => {
   const paramsParsed = UpdateLeadParams.safeParse({ id: Number(req.params.id) });
   if (!paramsParsed.success) {
     res.status(400).json({ error: paramsParsed.error.message });
@@ -368,7 +369,7 @@ router.patch("/:id", async (req, res) => {
   res.json(decryptLeadFields(lead));
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireRole("attorney", "admin"), auditAction("delete_lead"), async (req, res) => {
   const parsed = DeleteLeadParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -379,7 +380,7 @@ router.delete("/:id", async (req, res) => {
   res.status(204).send();
 });
 
-router.post("/:id/qualify", async (req, res) => {
+router.post("/:id/qualify", requireRole("paralegal", "attorney", "admin"), auditAction("qualify_lead"), async (req, res) => {
   const parsed = QualifyLeadParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
