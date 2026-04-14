@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, leadsTable } from "@workspace/db";
+import { db, leadsTable, documentsTable } from "@workspace/db";
 import { eq, ilike, and, or, sql, gte, lte } from "drizzle-orm";
 import {
   ListLeadsQueryParams,
@@ -17,6 +17,7 @@ import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { encryptLeadFields, decryptLeadFields, decryptLeadArray } from "../lib/encryption";
 import { requireRole, auditAction } from "../lib/rbac";
+import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 
 function buildLeadFilters(data: {
   status?: string;
@@ -451,6 +452,74 @@ router.post("/:id/qualify", requireRole("paralegal", "attorney", "admin"), audit
     gates_passed: gatesPassed,
     gates_failed: gatesFailed,
   });
+});
+
+router.post("/:id/intelligence", requireRole("paralegal", "attorney", "admin"), auditAction("score_lead_intelligence"), async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    if (isNaN(leadId)) {
+      res.status(400).json({ error: "Invalid lead identifier" });
+      return;
+    }
+
+    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    if (!lead) {
+      res.status(404).json({ error: "Lead record not found" });
+      return;
+    }
+
+    const decryptedLead = decryptLeadFields(lead);
+
+    let documents: any[] = [];
+    try {
+      documents = await db.select().from(documentsTable).where(eq(documentsTable.lead_id, leadId));
+    } catch (docErr) {
+      logger.warn("Document retrieval failed during intelligence scoring — proceeding without documents", docErr);
+    }
+
+    const result = await scoreLeadIntelligence({
+      lead: decryptedLead,
+      documents,
+    });
+
+    res.json(result);
+  } catch (err) {
+    logger.error("Lead intelligence scoring encountered an unrecoverable error", err);
+    res.status(500).json({ error: "Intelligence scoring temporarily unavailable. Please retry." });
+  }
+});
+
+router.patch("/:id/notes", requireRole("paralegal", "attorney", "admin"), auditAction("update_lead_notes"), async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    if (isNaN(leadId)) {
+      res.status(400).json({ error: "Invalid lead identifier" });
+      return;
+    }
+
+    const { notes } = req.body;
+    if (typeof notes !== "string") {
+      res.status(400).json({ error: "Notes must be provided as a text string" });
+      return;
+    }
+
+    const encryptedUpdate = encryptLeadFields({ notes, updated_at: new Date() });
+    const [lead] = await db
+      .update(leadsTable)
+      .set(encryptedUpdate)
+      .where(eq(leadsTable.id, leadId))
+      .returning();
+
+    if (!lead) {
+      res.status(404).json({ error: "Lead record not found" });
+      return;
+    }
+
+    res.json({ success: true, updated_at: lead.updated_at });
+  } catch (err) {
+    logger.error("Notes update failed", err);
+    res.status(500).json({ error: "Unable to save notes. Please retry." });
+  }
 });
 
 export default router;
