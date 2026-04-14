@@ -18,9 +18,16 @@ export const HealthCheckResponse = zod.object({
  * @summary List all leads
  */
 export const ListLeadsQueryParams = zod.object({
-  status: zod.enum(["new", "qualified", "signed", "rejected"]).optional(),
+  status: zod
+    .enum(["new", "qualified", "signed", "rejected", "review_required"])
+    .optional(),
   tort_type: zod.coerce.string().optional(),
   search: zod.coerce.string().optional(),
+  vendor_id: zod.coerce.number().optional(),
+  law_firm: zod.coerce.string().optional(),
+  client_id: zod.coerce.string().optional(),
+  date_from: zod.coerce.string().optional(),
+  date_to: zod.coerce.string().optional(),
 });
 
 export const ListLeadsResponseItem = zod.object({
@@ -75,6 +82,9 @@ export const ListLeadsResponseItem = zod.object({
   source: zod.string().nullish(),
   assigned_to: zod.number().nullish(),
   routing: zod.enum(["hot", "warm", "cold"]).nullish(),
+  vendor_id: zod.number().nullish(),
+  law_firm: zod.string().nullish(),
+  client_id: zod.string().nullish(),
   created_at: zod.string(),
   updated_at: zod.string(),
 });
@@ -115,6 +125,9 @@ export const CreateLeadBody = zod.object({
   notes: zod.string().nullish(),
   ad_spend: zod.number().nullish(),
   source: zod.string().nullish(),
+  vendor_id: zod.number().nullish(),
+  law_firm: zod.string().nullish(),
+  client_id: zod.string().nullish(),
 });
 
 /**
@@ -176,6 +189,9 @@ export const GetLeadResponse = zod.object({
   source: zod.string().nullish(),
   assigned_to: zod.number().nullish(),
   routing: zod.enum(["hot", "warm", "cold"]).nullish(),
+  vendor_id: zod.number().nullish(),
+  law_firm: zod.string().nullish(),
+  client_id: zod.string().nullish(),
   created_at: zod.string(),
   updated_at: zod.string(),
 });
@@ -225,6 +241,9 @@ export const UpdateLeadBody = zod.object({
   notes: zod.string().nullish(),
   ad_spend: zod.number().nullish(),
   source: zod.string().nullish(),
+  vendor_id: zod.number().nullish(),
+  law_firm: zod.string().nullish(),
+  client_id: zod.string().nullish(),
 });
 
 export const UpdateLeadResponse = zod.object({
@@ -279,6 +298,9 @@ export const UpdateLeadResponse = zod.object({
   source: zod.string().nullish(),
   assigned_to: zod.number().nullish(),
   routing: zod.enum(["hot", "warm", "cold"]).nullish(),
+  vendor_id: zod.number().nullish(),
+  law_firm: zod.string().nullish(),
+  client_id: zod.string().nullish(),
   created_at: zod.string(),
   updated_at: zod.string(),
 });
@@ -304,6 +326,109 @@ export const QualifyLeadResponse = zod.object({
   reason: zod.string(),
   gates_passed: zod.array(zod.string()),
   gates_failed: zod.array(zod.string()),
+});
+
+/**
+ * @summary Export leads as CSV
+ */
+export const ExportLeadsQueryParams = zod.object({
+  lead_id: zod.coerce.number().optional(),
+  status: zod.coerce.string().optional(),
+  tort_type: zod.coerce.string().optional(),
+  vendor_id: zod.coerce.number().optional(),
+  law_firm: zod.coerce.string().optional(),
+  client_id: zod.coerce.string().optional(),
+  date_from: zod.coerce.string().optional(),
+  date_to: zod.coerce.string().optional(),
+  source: zod.coerce.string().optional(),
+  fields: zod.coerce.string().optional(),
+});
+
+/**
+ * @summary List all vendors
+ */
+export const ListVendorsResponseItem = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  contact_name: zod.string().nullish(),
+  contact_email: zod.string().nullish(),
+  contact_phone: zod.string().nullish(),
+  type: zod.string(),
+  status: zod.string(),
+  notes: zod.string().nullish(),
+  created_at: zod.string(),
+  updated_at: zod.string(),
+});
+export const ListVendorsResponse = zod.array(ListVendorsResponseItem);
+
+/**
+ * @summary Create a new vendor
+ */
+export const CreateVendorBody = zod.object({
+  name: zod.string(),
+  contact_name: zod.string().nullish(),
+  contact_email: zod.string().nullish(),
+  contact_phone: zod.string().nullish(),
+  type: zod.string().optional(),
+  status: zod.string().optional(),
+  notes: zod.string().nullish(),
+});
+
+/**
+ * @summary Get a single vendor
+ */
+export const GetVendorParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetVendorResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  contact_name: zod.string().nullish(),
+  contact_email: zod.string().nullish(),
+  contact_phone: zod.string().nullish(),
+  type: zod.string(),
+  status: zod.string(),
+  notes: zod.string().nullish(),
+  created_at: zod.string(),
+  updated_at: zod.string(),
+});
+
+/**
+ * @summary Update a vendor
+ */
+export const UpdateVendorParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateVendorBody = zod.object({
+  name: zod.string().optional(),
+  contact_name: zod.string().nullish(),
+  contact_email: zod.string().nullish(),
+  contact_phone: zod.string().nullish(),
+  type: zod.string().optional(),
+  status: zod.string().optional(),
+  notes: zod.string().nullish(),
+});
+
+export const UpdateVendorResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  contact_name: zod.string().nullish(),
+  contact_email: zod.string().nullish(),
+  contact_phone: zod.string().nullish(),
+  type: zod.string(),
+  status: zod.string(),
+  notes: zod.string().nullish(),
+  created_at: zod.string(),
+  updated_at: zod.string(),
+});
+
+/**
+ * @summary Delete a vendor
+ */
+export const DeleteVendorParams = zod.object({
+  id: zod.coerce.number(),
 });
 
 /**
@@ -1043,6 +1168,9 @@ export const GetParalegalResponse = zod.object({
       source: zod.string().nullish(),
       assigned_to: zod.number().nullish(),
       routing: zod.enum(["hot", "warm", "cold"]).nullish(),
+      vendor_id: zod.number().nullish(),
+      law_firm: zod.string().nullish(),
+      client_id: zod.string().nullish(),
       created_at: zod.string(),
       updated_at: zod.string(),
     }),

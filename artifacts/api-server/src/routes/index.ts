@@ -11,6 +11,7 @@ import complianceRouter from "./compliance";
 import npiRouter from "./npi";
 import reviewQueueRouter from "./review-queue";
 import formsRouter from "./forms";
+import vendorsRouter from "./vendors";
 
 const router: IRouter = Router();
 
@@ -26,5 +27,6 @@ router.use("/compliance", complianceRouter);
 router.use("/npi", npiRouter);
 router.use("/review-queue", reviewQueueRouter);
 router.use("/forms", formsRouter);
+router.use("/vendors", vendorsRouter);
 
 export default router;

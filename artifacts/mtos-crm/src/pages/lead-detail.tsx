@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
-import { ArrowLeft, Trash2, FileText, CheckCircle, XCircle, FileSignature, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Trash2, FileText, CheckCircle, XCircle, FileSignature, AlertTriangle, Download } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
 export default function LeadDetail() {
@@ -89,6 +89,16 @@ export default function LeadDetail() {
               Mark as Signed
             </Button>
           )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              window.open(`/api/leads/export?lead_id=${lead.id}`, "_blank");
+            }}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export
+          </Button>
           <Badge variant={
             lead.status === "signed" ? "default" :
             lead.status === "qualified" ? "secondary" :
@@ -122,6 +132,14 @@ export default function LeadDetail() {
               <div>
                 <div className="text-sm font-medium text-muted-foreground">Ad Spend</div>
                 <div>{lead.ad_spend ? `$${lead.ad_spend.toFixed(2)}` : "—"}</div>
+              </div>
+              <div>
+                <div className="text-sm font-medium text-muted-foreground">Law Firm</div>
+                <div>{lead.law_firm || "—"}</div>
+              </div>
+              <div>
+                <div className="text-sm font-medium text-muted-foreground">Client ID</div>
+                <div>{lead.client_id || "—"}</div>
               </div>
             </CardContent>
           </Card>

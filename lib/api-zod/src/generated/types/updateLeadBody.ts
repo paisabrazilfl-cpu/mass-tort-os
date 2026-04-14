@@ -43,4 +43,7 @@ export interface UpdateLeadBody {
   notes?: string | null;
   ad_spend?: number | null;
   source?: string | null;
+  vendor_id?: number | null;
+  law_firm?: string | null;
+  client_id?: string | null;
 }

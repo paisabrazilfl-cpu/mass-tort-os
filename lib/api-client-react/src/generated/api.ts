@@ -30,12 +30,14 @@ import type {
   CreateDocumentBody,
   CreateLeadBody,
   CreateParalegalBody,
+  CreateVendorBody,
   DashboardStats,
   Document,
   EmailValidationResult,
   ErrorResponse,
   EscalateToFbi200,
   EscalateToFbiBody,
+  ExportLeadsParams,
   FaxResult,
   FormConfig,
   FormConfigList,
@@ -71,11 +73,13 @@ import type {
   TortBreakdownRow,
   UpdateDocumentBody,
   UpdateLeadBody,
+  UpdateVendorBody,
   UploadCaseFileBody,
   UploadFaxBody,
   UploadFaxResponse,
   ValidateAddressBody,
   ValidateEmailBody,
+  Vendor,
   VerifyNpiBody,
 } from "./api.schemas";
 
@@ -673,6 +677,515 @@ export const useQualifyLead = <
   TContext
 > => {
   return useMutation(getQualifyLeadMutationOptions(options));
+};
+
+/**
+ * @summary Export leads as CSV
+ */
+export const getExportLeadsUrl = (params?: ExportLeadsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/leads/export?${stringifiedParams}`
+    : `/api/leads/export`;
+};
+
+export const exportLeads = async (
+  params?: ExportLeadsParams,
+  options?: RequestInit,
+): Promise<string> => {
+  return customFetch<string>(getExportLeadsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getExportLeadsQueryKey = (params?: ExportLeadsParams) => {
+  return [`/api/leads/export`, ...(params ? [params] : [])] as const;
+};
+
+export const getExportLeadsQueryOptions = <
+  TData = Awaited<ReturnType<typeof exportLeads>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ExportLeadsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof exportLeads>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getExportLeadsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof exportLeads>>> = ({
+    signal,
+  }) => exportLeads(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof exportLeads>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ExportLeadsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof exportLeads>>
+>;
+export type ExportLeadsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Export leads as CSV
+ */
+
+export function useExportLeads<
+  TData = Awaited<ReturnType<typeof exportLeads>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ExportLeadsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof exportLeads>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getExportLeadsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List all vendors
+ */
+export const getListVendorsUrl = () => {
+  return `/api/vendors`;
+};
+
+export const listVendors = async (options?: RequestInit): Promise<Vendor[]> => {
+  return customFetch<Vendor[]>(getListVendorsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListVendorsQueryKey = () => {
+  return [`/api/vendors`] as const;
+};
+
+export const getListVendorsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listVendors>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listVendors>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListVendorsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listVendors>>> = ({
+    signal,
+  }) => listVendors({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listVendors>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListVendorsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listVendors>>
+>;
+export type ListVendorsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all vendors
+ */
+
+export function useListVendors<
+  TData = Awaited<ReturnType<typeof listVendors>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listVendors>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListVendorsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a new vendor
+ */
+export const getCreateVendorUrl = () => {
+  return `/api/vendors`;
+};
+
+export const createVendor = async (
+  createVendorBody: CreateVendorBody,
+  options?: RequestInit,
+): Promise<Vendor> => {
+  return customFetch<Vendor>(getCreateVendorUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createVendorBody),
+  });
+};
+
+export const getCreateVendorMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createVendor>>,
+    TError,
+    { data: BodyType<CreateVendorBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createVendor>>,
+  TError,
+  { data: BodyType<CreateVendorBody> },
+  TContext
+> => {
+  const mutationKey = ["createVendor"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createVendor>>,
+    { data: BodyType<CreateVendorBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createVendor(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateVendorMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createVendor>>
+>;
+export type CreateVendorMutationBody = BodyType<CreateVendorBody>;
+export type CreateVendorMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a new vendor
+ */
+export const useCreateVendor = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createVendor>>,
+    TError,
+    { data: BodyType<CreateVendorBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createVendor>>,
+  TError,
+  { data: BodyType<CreateVendorBody> },
+  TContext
+> => {
+  return useMutation(getCreateVendorMutationOptions(options));
+};
+
+/**
+ * @summary Get a single vendor
+ */
+export const getGetVendorUrl = (id: number) => {
+  return `/api/vendors/${id}`;
+};
+
+export const getVendor = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Vendor> => {
+  return customFetch<Vendor>(getGetVendorUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetVendorQueryKey = (id: number) => {
+  return [`/api/vendors/${id}`] as const;
+};
+
+export const getGetVendorQueryOptions = <
+  TData = Awaited<ReturnType<typeof getVendor>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getVendor>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetVendorQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getVendor>>> = ({
+    signal,
+  }) => getVendor(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getVendor>>, TError, TData> & {
+    queryKey: QueryKey;
+  };
+};
+
+export type GetVendorQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getVendor>>
+>;
+export type GetVendorQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get a single vendor
+ */
+
+export function useGetVendor<
+  TData = Awaited<ReturnType<typeof getVendor>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getVendor>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetVendorQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Update a vendor
+ */
+export const getUpdateVendorUrl = (id: number) => {
+  return `/api/vendors/${id}`;
+};
+
+export const updateVendor = async (
+  id: number,
+  updateVendorBody: UpdateVendorBody,
+  options?: RequestInit,
+): Promise<Vendor> => {
+  return customFetch<Vendor>(getUpdateVendorUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateVendorBody),
+  });
+};
+
+export const getUpdateVendorMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateVendor>>,
+    TError,
+    { id: number; data: BodyType<UpdateVendorBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateVendor>>,
+  TError,
+  { id: number; data: BodyType<UpdateVendorBody> },
+  TContext
+> => {
+  const mutationKey = ["updateVendor"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateVendor>>,
+    { id: number; data: BodyType<UpdateVendorBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateVendor(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateVendorMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateVendor>>
+>;
+export type UpdateVendorMutationBody = BodyType<UpdateVendorBody>;
+export type UpdateVendorMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update a vendor
+ */
+export const useUpdateVendor = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateVendor>>,
+    TError,
+    { id: number; data: BodyType<UpdateVendorBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateVendor>>,
+  TError,
+  { id: number; data: BodyType<UpdateVendorBody> },
+  TContext
+> => {
+  return useMutation(getUpdateVendorMutationOptions(options));
+};
+
+/**
+ * @summary Delete a vendor
+ */
+export const getDeleteVendorUrl = (id: number) => {
+  return `/api/vendors/${id}`;
+};
+
+export const deleteVendor = async (
+  id: number,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeleteVendorUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteVendorMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteVendor>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteVendor>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deleteVendor"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteVendor>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteVendor(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteVendorMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteVendor>>
+>;
+
+export type DeleteVendorMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Delete a vendor
+ */
+export const useDeleteVendor = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteVendor>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteVendor>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDeleteVendorMutationOptions(options));
 };
 
 /**

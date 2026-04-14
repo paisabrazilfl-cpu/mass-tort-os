@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, leadsTable } from "@workspace/db";
-import { eq, ilike, and, or, sql } from "drizzle-orm";
+import { eq, ilike, and, or, sql, gte, lte } from "drizzle-orm";
 import {
   ListLeadsQueryParams,
   CreateLeadBody,
@@ -9,13 +9,92 @@ import {
   UpdateLeadParams,
   DeleteLeadParams,
   QualifyLeadParams,
+  ExportLeadsQueryParams,
 } from "@workspace/api-zod";
 import { runFullConflictCheck, checkAIClassificationConflict, routeToReview } from "../lib/conflict-engine";
 import { withErrorFallback } from "../lib/error-fallback";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 
+function buildLeadFilters(data: {
+  status?: string;
+  tort_type?: string;
+  search?: string;
+  vendor_id?: number;
+  law_firm?: string;
+  client_id?: string;
+  date_from?: string;
+  date_to?: string;
+  lead_id?: number;
+  source?: string;
+}) {
+  const conditions = [];
+  if (data.status) conditions.push(eq(leadsTable.status, data.status));
+  if (data.tort_type) conditions.push(eq(leadsTable.tort_type, data.tort_type));
+  if (data.search) {
+    conditions.push(
+      or(
+        ilike(leadsTable.name, `%${data.search}%`),
+        ilike(leadsTable.email, `%${data.search}%`),
+        ilike(leadsTable.tort_type, `%${data.search}%`)
+      )
+    );
+  }
+  if (data.vendor_id) conditions.push(eq(leadsTable.vendor_id, data.vendor_id));
+  if (data.law_firm) conditions.push(ilike(leadsTable.law_firm, `%${data.law_firm}%`));
+  if (data.client_id) conditions.push(eq(leadsTable.client_id, data.client_id));
+  if (data.date_from) conditions.push(gte(leadsTable.created_at, new Date(data.date_from)));
+  if (data.date_to) conditions.push(lte(leadsTable.created_at, new Date(data.date_to)));
+  if (data.lead_id) conditions.push(eq(leadsTable.id, data.lead_id));
+  if (data.source) conditions.push(eq(leadsTable.source, data.source));
+  return conditions;
+}
+
 const router = Router();
+
+router.get("/export", async (req, res) => {
+  const parsed = ExportLeadsQueryParams.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const conditions = buildLeadFilters(parsed.data);
+  const leads =
+    conditions.length > 0
+      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(sql`${leadsTable.created_at} DESC`)
+      : await db.select().from(leadsTable).orderBy(sql`${leadsTable.created_at} DESC`);
+
+  if (leads.length === 0) {
+    res.status(200).type("text/csv").send("No leads found");
+    return;
+  }
+
+  const requestedFields = parsed.data.fields?.split(",").map((f: string) => f.trim()).filter(Boolean);
+  const allKeys = Object.keys(leads[0]);
+  const fields = requestedFields && requestedFields.length > 0
+    ? requestedFields.filter((f: string) => allKeys.includes(f))
+    : allKeys;
+
+  const escapeCSV = (val: unknown): string => {
+    if (val === null || val === undefined) return "";
+    const str = String(val);
+    if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  const header = fields.join(",");
+  const rows = leads.map((lead: Record<string, unknown>) =>
+    fields.map((f: string) => escapeCSV(lead[f])).join(",")
+  );
+
+  const csv = [header, ...rows].join("\n");
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename=leads-export-${Date.now()}.csv`);
+  res.send(csv);
+});
 
 router.get("/", async (req, res) => {
   const parsed = ListLeadsQueryParams.safeParse(req.query);
@@ -23,21 +102,8 @@ router.get("/", async (req, res) => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  const { status, tort_type, search } = parsed.data;
 
-  const conditions = [];
-  if (status) conditions.push(eq(leadsTable.status, status));
-  if (tort_type) conditions.push(eq(leadsTable.tort_type, tort_type));
-  if (search) {
-    conditions.push(
-      or(
-        ilike(leadsTable.name, `%${search}%`),
-        ilike(leadsTable.email, `%${search}%`),
-        ilike(leadsTable.tort_type, `%${search}%`)
-      )
-    );
-  }
-
+  const conditions = buildLeadFilters(parsed.data);
   const leads =
     conditions.length > 0
       ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(sql`${leadsTable.created_at} DESC`)

@@ -77,6 +77,9 @@ export interface Lead {
   source?: string | null;
   assigned_to?: number | null;
   routing?: LeadRouting;
+  vendor_id?: number | null;
+  law_firm?: string | null;
+  client_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -113,6 +116,9 @@ export interface CreateLeadBody {
   notes?: string | null;
   ad_spend?: number | null;
   source?: string | null;
+  vendor_id?: number | null;
+  law_firm?: string | null;
+  client_id?: string | null;
 }
 
 export type UpdateLeadBodyStatus =
@@ -162,6 +168,42 @@ export interface UpdateLeadBody {
   notes?: string | null;
   ad_spend?: number | null;
   source?: string | null;
+  vendor_id?: number | null;
+  law_firm?: string | null;
+  client_id?: string | null;
+}
+
+export interface Vendor {
+  id: number;
+  name: string;
+  contact_name?: string | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  type: string;
+  status: string;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateVendorBody {
+  name: string;
+  contact_name?: string | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  type?: string;
+  status?: string;
+  notes?: string | null;
+}
+
+export interface UpdateVendorBody {
+  name?: string;
+  contact_name?: string | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  type?: string;
+  status?: string;
+  notes?: string | null;
 }
 
 export type QualificationResultStatus =
@@ -776,6 +818,11 @@ export type ListLeadsParams = {
   status?: ListLeadsStatus;
   tort_type?: string;
   search?: string;
+  vendor_id?: number;
+  law_firm?: string;
+  client_id?: string;
+  date_from?: string;
+  date_to?: string;
 };
 
 export type ListLeadsStatus =
@@ -786,7 +833,21 @@ export const ListLeadsStatus = {
   qualified: "qualified",
   signed: "signed",
   rejected: "rejected",
+  review_required: "review_required",
 } as const;
+
+export type ExportLeadsParams = {
+  lead_id?: number;
+  status?: string;
+  tort_type?: string;
+  vendor_id?: number;
+  law_firm?: string;
+  client_id?: string;
+  date_from?: string;
+  date_to?: string;
+  source?: string;
+  fields?: string;
+};
 
 export type ListDocumentsParams = {
   lead_id?: number;

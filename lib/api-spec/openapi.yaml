@@ -34,6 +34,8 @@ tags:
     description: Audit trail and compliance tracking
   - name: forms
     description: Form engine — embeddable intake forms with compliance validation
+  - name: vendors
+    description: Vendor management
 paths:
   /healthz:
     get:
@@ -59,13 +61,38 @@ paths:
           required: false
           schema:
             type: string
-            enum: [new, qualified, signed, rejected]
+            enum: [new, qualified, signed, rejected, review_required]
         - name: tort_type
           in: query
           required: false
           schema:
             type: string
         - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: vendor_id
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: law_firm
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: client_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: date_from
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: date_to
           in: query
           required: false
           schema:
@@ -176,6 +203,157 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/QualificationResult"
+
+  /leads/export:
+    get:
+      operationId: exportLeads
+      tags: [leads]
+      summary: Export leads as CSV
+      parameters:
+        - name: lead_id
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: tort_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: vendor_id
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: law_firm
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: client_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: date_from
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: date_to
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: fields
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+
+  /vendors:
+    get:
+      operationId: listVendors
+      tags: [vendors]
+      summary: List all vendors
+      responses:
+        "200":
+          description: List of vendors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Vendor"
+    post:
+      operationId: createVendor
+      tags: [vendors]
+      summary: Create a new vendor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVendorBody"
+      responses:
+        "201":
+          description: Vendor created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+
+  /vendors/{id}:
+    get:
+      operationId: getVendor
+      tags: [vendors]
+      summary: Get a single vendor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Vendor details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+    patch:
+      operationId: updateVendor
+      tags: [vendors]
+      summary: Update a vendor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVendorBody"
+      responses:
+        "200":
+          description: Updated vendor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+    delete:
+      operationId: deleteVendor
+      tags: [vendors]
+      summary: Delete a vendor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Vendor deleted
 
   /documents:
     get:
@@ -1287,6 +1465,15 @@ components:
           type: string
           nullable: true
           enum: [hot, warm, cold]
+        vendor_id:
+          type: integer
+          nullable: true
+        law_firm:
+          type: string
+          nullable: true
+        client_id:
+          type: string
+          nullable: true
         created_at:
           type: string
         updated_at:
@@ -1371,6 +1558,15 @@ components:
           type: number
           nullable: true
         source:
+          type: string
+          nullable: true
+        vendor_id:
+          type: integer
+          nullable: true
+        law_firm:
+          type: string
+          nullable: true
+        client_id:
           type: string
           nullable: true
       required:
@@ -1477,6 +1673,96 @@ components:
           type: number
           nullable: true
         source:
+          type: string
+          nullable: true
+        vendor_id:
+          type: integer
+          nullable: true
+        law_firm:
+          type: string
+          nullable: true
+        client_id:
+          type: string
+          nullable: true
+
+    Vendor:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        contact_name:
+          type: string
+          nullable: true
+        contact_email:
+          type: string
+          nullable: true
+        contact_phone:
+          type: string
+          nullable: true
+        type:
+          type: string
+        status:
+          type: string
+        notes:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+        updated_at:
+          type: string
+      required:
+        - id
+        - name
+        - type
+        - status
+        - created_at
+        - updated_at
+
+    CreateVendorBody:
+      type: object
+      properties:
+        name:
+          type: string
+        contact_name:
+          type: string
+          nullable: true
+        contact_email:
+          type: string
+          nullable: true
+        contact_phone:
+          type: string
+          nullable: true
+        type:
+          type: string
+        status:
+          type: string
+        notes:
+          type: string
+          nullable: true
+      required:
+        - name
+
+    UpdateVendorBody:
+      type: object
+      properties:
+        name:
+          type: string
+        contact_name:
+          type: string
+          nullable: true
+        contact_email:
+          type: string
+          nullable: true
+        contact_phone:
+          type: string
+          nullable: true
+        type:
+          type: string
+        status:
+          type: string
+        notes:
           type: string
           nullable: true
 

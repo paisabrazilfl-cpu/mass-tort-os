@@ -41,6 +41,8 @@ const formSchema = z.object({
   hospital_contact_info: z.string().min(5, "Hospital contact info is required"),
   source: z.string().optional(),
   notes: z.string().optional(),
+  law_firm: z.string().optional(),
+  client_id: z.string().optional(),
 });
 
 const STATES = [
@@ -98,6 +100,8 @@ export default function LeadIntake() {
       hospital_contact_info: "",
       source: "Manual Intake",
       notes: "",
+      law_firm: "",
+      client_id: "",
     },
   });
 
@@ -116,6 +120,8 @@ export default function LeadIntake() {
           location_name: values.location_name || undefined,
           source: values.source || undefined,
           notes: values.notes || undefined,
+          law_firm: values.law_firm || undefined,
+          client_id: values.client_id || undefined,
         }
       });
 
@@ -572,19 +578,47 @@ export default function LeadIntake() {
           <Card>
             <CardContent className="pt-6">
               <div className="grid grid-cols-1 gap-6">
-                <FormField
-                  control={form.control}
-                  name="source"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Source</FormLabel>
-                      <FormControl>
-                        <Input placeholder="Manual Intake" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <FormField
+                    control={form.control}
+                    name="source"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Source</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Manual Intake" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="law_firm"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Law Firm</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Referring law firm" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="client_id"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Client ID</FormLabel>
+                        <FormControl>
+                          <Input placeholder="External client ID" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
                 <FormField
                   control={form.control}
                   name="notes"

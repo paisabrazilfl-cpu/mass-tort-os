@@ -5,15 +5,16 @@
  * Mass Tort Operating System API
  * OpenAPI spec version: 0.1.0
  */
-import type { ListLeadsStatus } from "./listLeadsStatus";
 
-export type ListLeadsParams = {
-  status?: ListLeadsStatus;
+export type ExportLeadsParams = {
+  lead_id?: number;
+  status?: string;
   tort_type?: string;
-  search?: string;
   vendor_id?: number;
   law_firm?: string;
   client_id?: string;
   date_from?: string;
   date_to?: string;
+  source?: string;
+  fields?: string;
 };

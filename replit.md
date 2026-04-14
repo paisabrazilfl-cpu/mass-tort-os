@@ -26,7 +26,7 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 **Key Features & Implementations:**
 
 *   **Dashboard**: Overview of pipeline stats, CPSR, pipeline chart, and activity feed.
-*   **Lead Management**: Features lead listing, intake forms with Boolean Gatekeeper qualification, and detailed lead views with documents.
+*   **Lead Management**: Features lead listing, intake forms with Boolean Gatekeeper qualification, detailed lead views with documents, CSV export (single lead + bulk with filters: status, tort type, date range, law firm, client ID, vendor, custom field selection).
 *   **Case Management**: Distributed case pipeline, case submission, detailed case views with AI analysis and audit trails.
 *   **Document Management**: Centralized document view and OCR inbox with Legora Grid for fax processing.
 *   **Paralegal Management**: Tools for managing paralegal teams, performance tracking, and leaderboards.
@@ -34,6 +34,7 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **NPI Lookup**: Integration with the CMS NPI Registry.
 *   **Review Queue**: Manages conflict resolution and error fallback items, with UI for manual review and FBI escalation.
 *   **OCR Engine**: Processes fax images using Sharp for preprocessing and Claude Vision for OCR, extracting structured data into a `fax_results` table.
+*   **Vendor Management**: Full CRUD for vendors (lead gen, law firm, marketing, referral types) with status tracking. Leads can be associated with vendors via `vendor_id`, `law_firm`, and `client_id` fields.
 
 # External Dependencies
 

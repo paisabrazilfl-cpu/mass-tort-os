@@ -21,6 +21,7 @@ import ReviewQueue from "@/pages/review-queue";
 import Analytics from "@/pages/analytics";
 import Compliance from "@/pages/compliance";
 import FormEngine from "@/pages/form-engine";
+import Vendors from "@/pages/vendors";
 
 const queryClient = new QueryClient();
 
@@ -44,6 +45,7 @@ function Router() {
         <Route path="/analytics" component={Analytics} />
         <Route path="/compliance" component={Compliance} />
         <Route path="/form-engine" component={FormEngine} />
+        <Route path="/vendors" component={Vendors} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

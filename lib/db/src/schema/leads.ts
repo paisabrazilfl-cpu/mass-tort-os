@@ -73,6 +73,10 @@ export const leadsTable = pgTable("leads", {
   background_check_status: varchar("background_check_status", { length: 20 }),
   background_check_data: text("background_check_data"),
 
+  vendor_id: integer("vendor_id"),
+  law_firm: varchar("law_firm", { length: 255 }),
+  client_id: varchar("client_id", { length: 100 }),
+
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });

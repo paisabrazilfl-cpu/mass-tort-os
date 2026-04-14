@@ -54,6 +54,9 @@ export interface Lead {
   source?: string | null;
   assigned_to?: number | null;
   routing?: LeadRouting;
+  vendor_id?: number | null;
+  law_firm?: string | null;
+  client_id?: string | null;
   created_at: string;
   updated_at: string;
 }

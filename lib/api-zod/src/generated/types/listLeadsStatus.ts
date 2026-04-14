@@ -14,4 +14,5 @@ export const ListLeadsStatus = {
   qualified: "qualified",
   signed: "signed",
   rejected: "rejected",
+  review_required: "review_required",
 } as const;
