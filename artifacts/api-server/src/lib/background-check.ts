@@ -14,6 +14,7 @@ export interface BackgroundRecord {
   date?: string;
   jurisdiction?: string;
   severity: "low" | "medium" | "high";
+  role?: "party" | "mentioned";
 }
 
 export async function runBackgroundCheck(person: {
@@ -52,10 +53,24 @@ export async function runBackgroundCheck(person: {
       };
     }
 
-    const status = results.length === 0 ? "clean" : "flagged";
-    const summary = results.length === 0
-      ? `No records found for ${fullName}`
-      : `${results.length} record(s) found for ${fullName}`;
+    const partyRecords = results.filter((r) => r.role === "party");
+    const mentionRecords = results.filter((r) => r.role === "mentioned");
+    const nonCourtRecords = results.filter((r) => r.type !== "COURT_RECORD");
+    const hasFlaggable = partyRecords.length > 0 || nonCourtRecords.length > 0;
+    const status = hasFlaggable ? "flagged" : "clean";
+    const parts: string[] = [];
+    if (partyRecords.length > 0) {
+      parts.push(`${partyRecords.length} case(s) as party`);
+    }
+    if (mentionRecords.length > 0) {
+      parts.push(`${mentionRecords.length} mention(s) in other cases`);
+    }
+    if (nonCourtRecords.length > 0) {
+      parts.push(`${nonCourtRecords.length} non-court record(s)`);
+    }
+    const summary = parts.length > 0
+      ? `${parts.join(", ")} for ${fullName}`
+      : `No records found for ${fullName}`;
 
     return {
       status,
@@ -117,22 +132,22 @@ function nameMatchesResult(
   result: CourtResult,
   firstName: string,
   lastName: string,
-): { match: boolean; confidence: "exact" | "strong" | "none" } {
+): { match: boolean; confidence: "exact" | "strong" | "none"; role: "party" | "mentioned" } {
   const caseName = result.caseName || "";
   const caseMatch = textContainsName(caseName, firstName, lastName);
-  if (caseMatch === "exact") return { match: true, confidence: "exact" };
-  if (caseMatch === "initial") return { match: true, confidence: "strong" };
+  if (caseMatch === "exact") return { match: true, confidence: "exact", role: "party" };
+  if (caseMatch === "initial") return { match: true, confidence: "strong", role: "party" };
 
   const caseParties = caseName.split(/\s+v\.?\s+|\s+vs\.?\s+|\s+and\s+/i);
   for (const party of caseParties) {
     const pm = textContainsName(party.trim(), firstName, lastName);
-    if (pm) return { match: true, confidence: pm === "exact" ? "exact" : "strong" };
+    if (pm) return { match: true, confidence: pm === "exact" ? "exact" : "strong", role: "party" };
   }
 
   if (result.party && Array.isArray(result.party)) {
     for (const p of result.party) {
       const pm = textContainsName(p, firstName, lastName);
-      if (pm) return { match: true, confidence: pm === "exact" ? "exact" : "strong" };
+      if (pm) return { match: true, confidence: pm === "exact" ? "exact" : "strong", role: "party" };
     }
   }
 
@@ -140,11 +155,11 @@ function nameMatchesResult(
     for (const doc of result.recap_documents) {
       const searchable = `${doc.description || ""} ${doc.snippet || ""}`;
       const dm = textContainsName(searchable, firstName, lastName);
-      if (dm) return { match: true, confidence: "strong" };
+      if (dm) return { match: true, confidence: "strong", role: "mentioned" };
     }
   }
 
-  return { match: false, confidence: "none" };
+  return { match: false, confidence: "none", role: "mentioned" };
 }
 
 async function fetchCourtListenerResults(
@@ -188,6 +203,29 @@ async function searchCourtRecords(person: {
   const seen = new Set<string>();
   const records: BackgroundRecord[] = [];
 
+  function buildRecord(result: CourtResult, role: "party" | "mentioned", confidence: "exact" | "strong" | "none"): BackgroundRecord {
+    const caseName = result.caseName || "Court record found";
+    let severity: "low" | "medium" | "high";
+    let description: string;
+
+    if (role === "party") {
+      severity = confidence === "exact" ? "high" : "medium";
+      description = caseName;
+    } else {
+      severity = "low";
+      description = `${caseName} (named in documents, not a listed party)`;
+    }
+
+    return {
+      type: "COURT_RECORD",
+      description,
+      date: result.dateFiled || undefined,
+      jurisdiction: result.court || undefined,
+      severity,
+      role,
+    };
+  }
+
   try {
     const exactBatches = await Promise.all(
       exactSearches.map((q) => fetchCourtListenerResults(q, stateParam)),
@@ -200,15 +238,8 @@ async function searchCourtRecords(person: {
         if (seen.has(key)) continue;
         seen.add(key);
 
-        const { confidence } = nameMatchesResult(result, firstName, lastName);
-
-        records.push({
-          type: "COURT_RECORD",
-          description: caseName || "Court record found",
-          date: result.dateFiled || undefined,
-          jurisdiction: result.court || undefined,
-          severity: confidence === "exact" ? "high" : "medium",
-        });
+        const { confidence, role } = nameMatchesResult(result, firstName, lastName);
+        records.push(buildRecord(result, role, confidence));
       }
     }
 
@@ -220,16 +251,9 @@ async function searchCourtRecords(person: {
       if (seen.has(key)) continue;
       seen.add(key);
 
-      const { match, confidence } = nameMatchesResult(result, firstName, lastName);
+      const { match, confidence, role } = nameMatchesResult(result, firstName, lastName);
       if (!match) continue;
-
-      records.push({
-        type: "COURT_RECORD",
-        description: caseName || "Court record found",
-        date: result.dateFiled || undefined,
-        jurisdiction: result.court || undefined,
-        severity: confidence === "exact" ? "high" : "medium",
-      });
+      records.push(buildRecord(result, role, confidence));
     }
   } catch (err) {
     logger.warn({ err }, "Court record search failed — continuing");
@@ -239,16 +263,9 @@ async function searchCourtRecords(person: {
   if (records.length === 0) {
     const fallback = await fetchCourtListenerResults(lastName, stateParam);
     for (const result of fallback) {
-      const { match, confidence } = nameMatchesResult(result, firstName, lastName);
+      const { match, confidence, role } = nameMatchesResult(result, firstName, lastName);
       if (!match) continue;
-      const caseName = result.caseName || "";
-      records.push({
-        type: "COURT_RECORD",
-        description: caseName || "Court record found",
-        date: result.dateFiled || undefined,
-        jurisdiction: result.court || undefined,
-        severity: confidence === "exact" ? "high" : "medium",
-      });
+      records.push(buildRecord(result, role, confidence));
     }
   }
 
