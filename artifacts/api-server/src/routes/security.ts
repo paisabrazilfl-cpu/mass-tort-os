@@ -3,8 +3,11 @@ import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, desc, sql, gte, and, count } from "drizzle-orm";
 import { analyzeThreats } from "../lib/threat-analyzer";
 import { logger } from "../lib/logger";
+import { requireRole } from "../lib/rbac";
 
 const router = Router();
+
+router.use(requireRole("admin"));
 
 router.get("/alerts", async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);

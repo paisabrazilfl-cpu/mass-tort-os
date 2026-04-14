@@ -39,8 +39,8 @@ export function decrypt(ciphertext: string): string {
     const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
     return decrypted.toString("utf8");
   } catch (err) {
-    logger.error({ err }, "Decryption failed — returning raw value");
-    return ciphertext;
+    logger.error({ err }, "Decryption failed — data may be corrupted or key mismatch");
+    return "[DECRYPTION_ERROR]";
   }
 }
 
@@ -53,6 +53,11 @@ export const ENCRYPTED_FIELDS = [
   "phone_primary",
   "phone",
   "medications",
+  "notes",
+  "physician_full_address",
+  "physician_contact_info",
+  "hospital_contact_info",
+  "background_check_data",
 ] as const;
 
 export function encryptLeadFields(data: Record<string, any>): Record<string, any> {

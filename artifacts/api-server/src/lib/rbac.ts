@@ -38,7 +38,7 @@ export function generateToken(user: AuthUser): string {
 
 export function verifyToken(token: string): AuthUser | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as AuthUser;
+    return jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as AuthUser;
   } catch {
     return null;
   }
@@ -47,8 +47,12 @@ export function verifyToken(token: string): AuthUser | null {
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
-    req.user = { id: 0, email: "system@mtos.local", name: "System", role: "admin" };
-    next();
+    if (process.env.NODE_ENV !== "production") {
+      req.user = { id: 0, email: "dev@mtos.local", name: "Dev Admin", role: "admin" };
+      next();
+      return;
+    }
+    res.status(401).json({ error: "Authentication required. Provide a Bearer token." });
     return;
   }
 

@@ -20,10 +20,9 @@ import { authMiddleware } from "../lib/rbac";
 
 const router: IRouter = Router();
 
+router.use(healthRouter);
 router.use("/auth", authRouter);
 router.use(authMiddleware);
-
-router.use(healthRouter);
 router.use("/leads", leadsRouter);
 router.use("/documents", documentsRouter);
 router.use("/dashboard", dashboardRouter);
