@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, paralegalsTable, leadsTable } from "@workspace/db";
 import { eq, sql, desc } from "drizzle-orm";
+import { decryptLeadArray } from "../lib/encryption";
 
 const router = Router();
 
@@ -40,7 +41,7 @@ router.get("/:id", async (req, res) => {
 
   res.json({
     ...p,
-    leads,
+    leads: decryptLeadArray(leads),
     signed_cases: signedCount,
     active_cases: totalAssigned - signedCount,
     total_assigned: totalAssigned,

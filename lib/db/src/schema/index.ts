@@ -10,3 +10,5 @@ export * from "./paralegals";
 export * from "./review_queue";
 export * from "./vendors";
 export * from "./security_alerts";
+export * from "./conversations";
+export * from "./messages";

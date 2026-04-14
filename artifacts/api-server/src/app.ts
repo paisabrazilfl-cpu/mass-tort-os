@@ -73,4 +73,9 @@ app.use(idsMiddleware());
 
 app.use("/api", router);
 
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  logger.error({ err: err.message, stack: err.stack }, "Unhandled error");
+  res.status(err.status || 500).json({ error: "Internal server error" });
+});
+
 export default app;

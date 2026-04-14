@@ -1,6 +1,7 @@
 import {
   pgTable,
   serial,
+  integer,
   varchar,
   text,
   timestamp,
@@ -18,7 +19,7 @@ export const caseDocumentsTable = pgTable("case_documents", {
   file_hash: varchar("file_hash", { length: 64 }),
   file_name: varchar("file_name", { length: 255 }).notNull(),
   content_type: varchar("content_type", { length: 100 }),
-  size_bytes: serial("size_bytes"),
+  size_bytes: integer("size_bytes"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
