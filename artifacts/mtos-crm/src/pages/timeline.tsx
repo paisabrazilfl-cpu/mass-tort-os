@@ -54,7 +54,7 @@ export default function Timeline() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold tracking-tight">MedChron Timeline Builder</h1>
+      <h1 className="text-3xl font-bold tracking-tight">Medical Timeline Builder</h1>
       <p className="text-muted-foreground">Generate exposure and medical timelines from lead data, OCR results, and NPI records.</p>
 
       <Card>
