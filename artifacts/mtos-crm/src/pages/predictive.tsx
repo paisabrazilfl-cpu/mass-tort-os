@@ -85,7 +85,7 @@ export default function Predictive() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <h1 className="text-3xl font-bold tracking-tight">Lens AI Analytics</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Praxis AI Analytics</h1>
         <div className="grid gap-4 md:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => <Card key={i}><CardContent className="pt-6"><Skeleton className="h-20" /></CardContent></Card>)}
         </div>
@@ -102,7 +102,7 @@ export default function Predictive() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Lens AI Analytics</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Praxis AI Analytics</h1>
           <p className="text-muted-foreground">Predictive scoring and quality analysis across your lead pipeline.</p>
         </div>
         <Button variant="outline" onClick={fetchData}><RefreshCw className="h-4 w-4 mr-2" />Refresh</Button>

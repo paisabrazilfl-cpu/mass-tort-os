@@ -20,7 +20,7 @@ const navigation = [
   { name: "Doc Review", href: "/doc-review", icon: FileSearch },
   { name: "Timeline", href: "/timeline", icon: Clock },
   { name: "Drafting AI", href: "/drafting", icon: Sparkles },
-  { name: "Lens AI", href: "/predictive", icon: Brain },
+  { name: "Praxis AI", href: "/predictive", icon: Brain },
   { name: "Integrations", href: "/integrations", icon: Plug },
   { name: "Tort News", href: "/news", icon: Newspaper },
   { name: "Financial", href: "/financial-news", icon: TrendingUp },
