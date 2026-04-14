@@ -192,7 +192,7 @@ Every module produces: `ACCEPT`, `REJECT`, `REVIEW_REQUIRED`, or `ERROR_FALLBACK
 ### Architecture
 ```
 Form Engine
-├── Form Builder (Tort-Based) — 10 campaigns with auto-generated configs
+├── Form Builder (Tort-Based) — 24 tort campaigns across 6 categories
 ├── Embeddable JS Script — GET /api/forms/embed/:tortId
 ├── Live Validation Layer
 │   ├── Email Validator (RFC + typo detection) — POST /api/forms/validate/email
@@ -201,18 +201,59 @@ Form Engine
 ├── Background Check — CourtListener (free) + OFAC sanctions
 │   ├── POST /api/forms/background-check
 │   └── POST /api/forms/background-check/lead/:id
-├── Submission Pipeline — POST /api/forms/submit
-│   ├── Schema validation → Email validation → Address validation
-│   ├── TCPA consent check → TrustedForm cert check
-│   ├── Tort-specific rules enforcement
-│   ├── Conflict detection → NPI enrichment
-│   └── Background check (post-insert, async)
-└── GET /api/forms/config — all tort campaign configs
+├── Submission Pipeline — POST /api/forms/submit (10-step with fallbacks)
+│   ├── Step 1: Schema validation
+│   ├── Step 2: Email validation
+│   ├── Step 3: Address validation
+│   ├── Step 4: TCPA consent
+│   ├── Step 5: TrustedForm cert
+│   ├── Step 6: Tort classification engine
+│   ├── Step 7: NPI lookup + taxonomy matching
+│   ├── Step 8: Fraud detection engine
+│   ├── Step 9: Conflict detection
+│   └── Step 10: CRM storage + background check (post-insert)
+├── GET /api/forms/config — all tort campaign configs
+├── GET /api/forms/categories — grouped by category
+├── POST /api/forms/npi-verify — NPI taxonomy matching
+├── POST /api/forms/fraud-check — standalone fraud detection
+└── POST /api/forms/escalate/fbi — FBI tip escalation + audit
+```
+
+### Tort Registry (24 torts, 6 categories)
+- **Pharmaceutical**: Roundup, Paraquat, Zantac, Depo-Provera, GLP-1, NEC, Tylenol
+- **Product Liability**: Talcum Powder, Hair Relaxer, Asbestos, Benzene
+- **Medical Device**: Hernia Mesh, Hip Implants, IVC Filters, CPAP
+- **Environmental**: Camp Lejeune, AFFF/PFAS, Industrial Water
+- **Transportation**: Uber/Lyft Assault, Delivery Platform Injury, Autonomous Vehicles
+- **Digital Platform**: Roblox, Social Media Harm, Online Gaming
+
+### Tort Engine (`src/lib/tort-engine.ts`)
+- Each tort has: valid_diagnoses, required_exposure flag, exposure_fields, extra_fields, rules, rejection_conditions
+- `validateTortClaim()` — diagnosis matching, exposure validation, rule enforcement
+- Camp Lejeune: exposure date 1953-1987 range check
+
+### Taxonomy Engine (`src/lib/taxonomy-engine.ts`)
+- Maps NPI taxonomy codes to diagnosis categories (oncology, neurology, gastroenterology, etc.)
+- Detects: pediatric physician + adult cancer, specialty outside scope, non-medical provider
+- `lookupNpiAndMatch()` — queries NPPES API, matches taxonomy to diagnosis
+- Confidence levels: high (exact match), medium (generalist), low (mismatch)
+
+### Fraud Detection Engine (`src/lib/fraud-engine.ts`)
+- Scoring 0-100: ≥60 → REJECTED, ≥20 → TO_BE_REVIEWED, <20 → ACCEPTED
+- Triggers: taxonomy mismatch, missing NPI, diagnosis mismatch, impossible timeline, exposure before birth, future diagnosis date
+- Returns: status, fraud_score, indicators array, summary
+
+### FBI Escalation
+- POST /api/forms/escalate/fbi — logs to audit_log, marks lead as "escalated"
+- Review Queue UI: "Send to FBI" button on critical/high severity items
+- Opens https://tips.fbi.gov/ in new tab
 
 ### Compliance Fields (leads table)
 - tcpa_consent, trustedform_cert_url, trustedform_ip, trustedform_user_agent, trustedform_timestamp
 - email_validation_status, address_validation_status
 - background_check_status, background_check_data
+- medications, npi_verified, npi_number, physician_taxonomy
+- fraud_score, fraud_status, fraud_indicators
 
 ### Email Validation Engine
 - RFC regex, typo domain detection (gnail→gmail, hotmial→hotmail, etc.)
@@ -228,10 +269,11 @@ Form Engine
 ### Embeddable Form
 - `<script src="/api/forms/embed/:tortId"></script><div id="mtos-form"></div>`
 - Auto-renders TCPA-compliant form with TrustedForm script injection
-- Live email validation on blur
+- Live email validation on blur, medications field, exposure dates per tort
 - Submits directly to /api/forms/submit
 
 ### Frontend
 - `/form-engine` — Form Engine dashboard (3 tabs: Form Builder, Validation Tools, Background Check)
+- `/review-queue` — FBI escalation button on critical/high severity review items
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.

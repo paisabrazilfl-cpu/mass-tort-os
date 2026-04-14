@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { ChevronDown, ChevronRight, Check, X, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Check, X, Search, AlertTriangle } from "lucide-react";
 
 import {
   useListReviewQueue,
@@ -203,13 +203,59 @@ function ReviewQueueRow({ item }: { item: ReviewQueueItem }) {
                   </div>
                 )}
               </div>
-              <div>
-                <h4 className="font-medium text-sm mb-1 text-muted-foreground">Details</h4>
-                <div className="bg-muted rounded-md p-4 overflow-auto max-h-[300px]">
-                  <pre className="text-xs font-mono text-foreground">
-                    {JSON.stringify(item.details || {}, null, 2)}
-                  </pre>
+              <div className="space-y-4">
+                <div>
+                  <h4 className="font-medium text-sm mb-1 text-muted-foreground">Details</h4>
+                  <div className="bg-muted rounded-md p-4 overflow-auto max-h-[300px]">
+                    <pre className="text-xs font-mono text-foreground">
+                      {JSON.stringify(item.details || {}, null, 2)}
+                    </pre>
+                  </div>
                 </div>
+                {item.resolution === "pending" && (item.severity === "critical" || item.severity === "high") && (
+                  <div className="border border-red-200 bg-red-50 dark:bg-red-900/10 rounded-md p-4">
+                    <h4 className="font-medium text-sm mb-2 text-red-700 dark:text-red-400 flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4" /> Escalation
+                    </h4>
+                    <p className="text-xs text-red-600 dark:text-red-500 mb-3">
+                      For suspected fraud or criminal activity, escalate to FBI tip line.
+                    </p>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const apiBase = import.meta.env.BASE_URL.replace(/\/$/, "");
+                        fetch(`${apiBase}/api/forms/escalate/fbi`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            lead_id: item.entity_id,
+                            reason: `Review queue escalation: ${item.conflict_type} - ${item.summary}`,
+                            fraud_indicators: item.details,
+                          }),
+                        })
+                        .then(r => r.json())
+                        .then(d => {
+                          toast({
+                            title: "Escalated to FBI",
+                            description: "Case logged. Submit tip at tips.fbi.gov",
+                          });
+                          window.open("https://tips.fbi.gov/", "_blank");
+                        })
+                        .catch(() => {
+                          toast({
+                            title: "Escalation failed",
+                            description: "Could not log escalation. Please try again.",
+                            variant: "destructive",
+                          });
+                        });
+                      }}
+                    >
+                      <AlertTriangle className="mr-1 h-3 w-3" /> Send to FBI
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           </TableCell>

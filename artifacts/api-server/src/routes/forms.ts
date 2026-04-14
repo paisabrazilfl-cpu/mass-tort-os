@@ -4,80 +4,45 @@ import { eq } from "drizzle-orm";
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
 import { runBackgroundCheck } from "../lib/background-check";
-import { runFullConflictCheck, routeToReview } from "../lib/conflict-engine";
+import { runFullConflictCheck } from "../lib/conflict-engine";
+import { TORT_REGISTRY, validateTortClaim, getTortCategories } from "../lib/tort-engine";
+import { lookupNpiAndMatch } from "../lib/taxonomy-engine";
+import { runFraudDetection } from "../lib/fraud-engine";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 
 const router = Router();
 
-const TORT_CONFIGS: Record<string, { label: string; fields: string[]; rules: string[] }> = {
-  "camp-lejeune": {
-    label: "Camp Lejeune",
-    fields: ["location_name", "exposure_start", "exposure_end"],
-    rules: ["LOCATION_REQUIRED", "EXPOSURE_DATES_REQUIRED"],
-  },
-  "afff": {
-    label: "AFFF Firefighting Foam",
-    fields: ["location_name", "exposure_start"],
-    rules: ["LOCATION_REQUIRED"],
-  },
-  "nec": {
-    label: "Necrotizing Enterocolitis",
-    fields: [],
-    rules: [],
-  },
-  "roundup": {
-    label: "Roundup",
-    fields: ["exposure_start"],
-    rules: [],
-  },
-  "talcum-powder": {
-    label: "Talcum Powder",
-    fields: [],
-    rules: [],
-  },
-  "asbestos": {
-    label: "Asbestos",
-    fields: ["location_name", "exposure_start", "exposure_end"],
-    rules: ["LOCATION_REQUIRED", "EXPOSURE_DATES_REQUIRED"],
-  },
-  "paraquat": {
-    label: "Paraquat",
-    fields: ["exposure_start"],
-    rules: [],
-  },
-  "zantac": {
-    label: "Zantac",
-    fields: [],
-    rules: [],
-  },
-  "hair-relaxer": {
-    label: "Hair Relaxer",
-    fields: [],
-    rules: [],
-  },
-  "tylenol": {
-    label: "Tylenol",
-    fields: [],
-    rules: [],
-  },
-};
-
 router.get("/config", (_req, res) => {
-  const configs = Object.entries(TORT_CONFIGS).map(([id, config]) => ({
+  const configs = Object.entries(TORT_REGISTRY).map(([id, config]) => ({
     id,
-    ...config,
+    label: config.label,
+    category: config.category,
+    fields: [...config.extra_fields, ...config.exposure_fields],
+    rules: config.rules,
+    valid_diagnoses: config.valid_diagnoses,
   }));
   res.json({ tort_campaigns: configs });
 });
 
 router.get("/config/:tortId", (req, res) => {
-  const config = TORT_CONFIGS[req.params.tortId];
+  const config = TORT_REGISTRY[req.params.tortId];
   if (!config) {
     res.status(404).json({ error: "Tort campaign not found" });
     return;
   }
-  res.json({ id: req.params.tortId, ...config });
+  res.json({
+    id: req.params.tortId,
+    label: config.label,
+    category: config.category,
+    fields: [...config.extra_fields, ...config.exposure_fields],
+    rules: config.rules,
+    valid_diagnoses: config.valid_diagnoses,
+  });
+});
+
+router.get("/categories", (_req, res) => {
+  res.json(getTortCategories());
 });
 
 router.post("/validate/email", (req, res) => {
@@ -93,7 +58,7 @@ router.post("/validate/address", (req, res) => {
 
 router.get("/embed/:tortId", (req, res) => {
   const tortId = req.params.tortId;
-  const config = TORT_CONFIGS[tortId];
+  const config = TORT_REGISTRY[tortId];
   if (!config) {
     res.status(404).json({ error: "Tort campaign not found" });
     return;
@@ -108,104 +73,307 @@ router.get("/embed/:tortId", (req, res) => {
   res.send(embedScript);
 });
 
+interface PipelineStep {
+  name: string;
+  status: "passed" | "failed" | "skipped" | "error";
+  errors: string[];
+  data?: Record<string, unknown>;
+}
+
 router.post("/submit", async (req, res) => {
   const data = req.body;
-  const errors: string[] = [];
+  const pipeline: PipelineStep[] = [];
 
-  const requiredFields = [
-    "first_name", "last_name", "date_of_birth", "street_address", "city",
-    "state", "zip", "phone_primary", "email", "last_4_ssn",
-    "diagnosis", "diagnosis_date",
-    "physician_first_name", "physician_last_name", "physician_full_address", "physician_contact_info",
-    "hospital_name", "hospital_fax", "hospital_contact_info",
-    "tort_type",
-  ];
+  // STEP 1: Schema validation
+  const step1: PipelineStep = { name: "SCHEMA_VALIDATION", status: "passed", errors: [] };
+  try {
+    const requiredFields = [
+      "first_name", "last_name", "date_of_birth", "street_address", "city",
+      "state", "zip", "phone_primary", "email", "last_4_ssn",
+      "diagnosis", "diagnosis_date",
+      "physician_first_name", "physician_last_name", "physician_full_address", "physician_contact_info",
+      "hospital_name", "hospital_fax", "hospital_contact_info",
+      "tort_type",
+    ];
 
-  for (const field of requiredFields) {
-    if (!data[field] || (typeof data[field] === "string" && !data[field].trim())) {
-      errors.push(`MISSING_${field.toUpperCase()}`);
-    }
-  }
-
-  if (errors.length > 0) {
-    res.status(422).json({ status: "REJECTED", errors, action: "FIX_AND_RESUBMIT" });
-    return;
-  }
-
-  const emailResult = validateEmail(data.email);
-  if (!emailResult.valid) {
-    errors.push(...emailResult.errors.map((e: string) => `INVALID_EMAIL:${e}`));
-  }
-
-  const addressResult = validateAddress({
-    street_address: data.street_address,
-    city: data.city,
-    state: data.state,
-    zip: data.zip,
-  });
-  if (!addressResult.valid) {
-    errors.push(...addressResult.errors.map((e: string) => `INVALID_ADDRESS:${e}`));
-  }
-
-  if (!data.tcpa_consent || data.tcpa_consent !== true) {
-    errors.push("MISSING_TCPA_CONSENT");
-  }
-
-  if (!data.trustedform_cert_url || typeof data.trustedform_cert_url !== "string" || !data.trustedform_cert_url.startsWith("https://cert.trustedform.com/")) {
-    errors.push("MISSING_OR_INVALID_TRUSTEDFORM");
-  }
-
-  const tortKey = Object.keys(TORT_CONFIGS).find(
-    k => TORT_CONFIGS[k].label === data.tort_type || k === data.tort_type
-  );
-  if (tortKey) {
-    const tortConfig = TORT_CONFIGS[tortKey];
-    for (const rule of tortConfig.rules) {
-      if (rule === "LOCATION_REQUIRED" && (!data.location_name || !data.location_name.trim())) {
-        errors.push("TORT_RULE:LOCATION_REQUIRED");
-      }
-      if (rule === "EXPOSURE_DATES_REQUIRED" && (!data.exposure_start || !data.exposure_start.trim())) {
-        errors.push("TORT_RULE:EXPOSURE_DATES_REQUIRED");
+    for (const field of requiredFields) {
+      if (!data[field] || (typeof data[field] === "string" && !data[field].trim())) {
+        step1.errors.push(`MISSING_${field.toUpperCase()}`);
       }
     }
-  }
 
-  if (errors.length > 0) {
-    res.status(422).json({ status: "REJECTED", errors, action: "FIX_AND_RESUBMIT" });
+    if (step1.errors.length > 0) {
+      step1.status = "failed";
+      pipeline.push(step1);
+      res.status(422).json({
+        status: "REJECTED",
+        errors: step1.errors,
+        action: "FIX_AND_RESUBMIT",
+        pipeline,
+        failed_step: "SCHEMA_VALIDATION",
+      });
+      return;
+    }
+  } catch (err) {
+    step1.status = "error";
+    step1.errors.push("SCHEMA_VALIDATION_ERROR");
+    pipeline.push(step1);
+    logger.error({ err }, "Schema validation error");
+    res.status(500).json({ status: "ERROR", errors: ["SCHEMA_VALIDATION_ERROR"], action: "RETRY", pipeline, failed_step: "SCHEMA_VALIDATION" });
     return;
   }
+  pipeline.push(step1);
 
-  const fullName = `${data.first_name} ${data.last_name}`.trim();
+  // STEP 2: Email validation
+  const step2: PipelineStep = { name: "EMAIL_VALIDATION", status: "passed", errors: [] };
+  try {
+    const emailResult = validateEmail(data.email);
+    if (!emailResult.valid) {
+      step2.errors = emailResult.errors.map((e: string) => `INVALID_EMAIL:${e}`);
+      step2.status = "failed";
+      step2.data = { suggestion: emailResult.suggestion };
+    }
+  } catch (err) {
+    step2.status = "error";
+    step2.errors.push("EMAIL_VALIDATION_ERROR");
+    logger.error({ err }, "Email validation error");
+  }
+  pipeline.push(step2);
 
-  const conflictCheck = await runFullConflictCheck({
-    entity_type: "lead",
-    entity_id: "pending",
-    source_module: "form_engine",
-    lead_data: { ...data, name: fullName },
-  });
-
-  if (conflictCheck.has_conflict && conflictCheck.output_state === "REJECT") {
-    await auditLog("lead", "rejected", "form_engine_conflict", {
-      conflict_type: conflictCheck.conflict_type,
-      details: conflictCheck.details,
+  // STEP 3: Address validation
+  const step3: PipelineStep = { name: "ADDRESS_VALIDATION", status: "passed", errors: [] };
+  try {
+    const addressResult = validateAddress({
+      street_address: data.street_address,
+      city: data.city,
+      state: data.state,
+      zip: data.zip,
     });
+    if (!addressResult.valid) {
+      step3.errors = addressResult.errors.map((e: string) => `INVALID_ADDRESS:${e}`);
+      step3.status = "failed";
+    }
+  } catch (err) {
+    step3.status = "error";
+    step3.errors.push("ADDRESS_VALIDATION_ERROR");
+    logger.error({ err }, "Address validation error");
+  }
+  pipeline.push(step3);
+
+  // STEP 4: TCPA consent
+  const step4: PipelineStep = { name: "TCPA_COMPLIANCE", status: "passed", errors: [] };
+  try {
+    if (!data.tcpa_consent || data.tcpa_consent !== true) {
+      step4.errors.push("MISSING_TCPA_CONSENT");
+      step4.status = "failed";
+    }
+  } catch (err) {
+    step4.status = "error";
+    step4.errors.push("TCPA_CHECK_ERROR");
+  }
+  pipeline.push(step4);
+
+  // STEP 5: TrustedForm
+  const step5: PipelineStep = { name: "TRUSTEDFORM_VALIDATION", status: "passed", errors: [] };
+  try {
+    if (!data.trustedform_cert_url || typeof data.trustedform_cert_url !== "string" || !data.trustedform_cert_url.startsWith("https://cert.trustedform.com/")) {
+      step5.errors.push("MISSING_OR_INVALID_TRUSTEDFORM");
+      step5.status = "failed";
+    }
+  } catch (err) {
+    step5.status = "error";
+    step5.errors.push("TRUSTEDFORM_CHECK_ERROR");
+  }
+  pipeline.push(step5);
+
+  // Collect all pre-tort errors
+  const preErrors = pipeline.filter(s => s.status === "failed" || s.status === "error").flatMap(s => s.errors);
+  if (preErrors.length > 0) {
     res.status(422).json({
       status: "REJECTED",
-      errors: [`CONFLICT:${conflictCheck.conflict_type}`],
-      details: conflictCheck.details,
-      action: "REJECTED",
+      errors: preErrors,
+      action: "FIX_AND_RESUBMIT",
+      pipeline,
+      failed_step: pipeline.find(s => s.status !== "passed")?.name,
     });
     return;
   }
 
+  // STEP 6: Tort classification engine
+  const step6: PipelineStep = { name: "TORT_CLASSIFICATION", status: "passed", errors: [], data: {} };
+  let tortValidation;
+  try {
+    tortValidation = validateTortClaim({
+      tort_type: data.tort_type,
+      diagnosis: data.diagnosis,
+      exposure_start: data.exposure_start,
+      exposure_end: data.exposure_end,
+      location_name: data.location_name,
+      was_at_location: data.was_at_location,
+    });
+    step6.data = { tort_id: tortValidation.tort_id, category: tortValidation.category, diagnosis_match: tortValidation.diagnosis_match };
+
+    if (!tortValidation.valid) {
+      step6.errors = tortValidation.errors;
+      if (tortValidation.errors.includes("UNKNOWN_TORT_TYPE")) {
+        step6.status = "failed";
+        pipeline.push(step6);
+        res.status(422).json({
+          status: "REJECTED",
+          errors: ["UNKNOWN_TORT_TYPE"],
+          action: "FIX_AND_RESUBMIT",
+          pipeline,
+          failed_step: "TORT_CLASSIFICATION",
+        });
+        return;
+      }
+      step6.status = "failed";
+    }
+  } catch (err) {
+    step6.status = "error";
+    step6.errors.push("TORT_CLASSIFICATION_ERROR");
+    logger.error({ err }, "Tort classification error");
+    tortValidation = { valid: false, tort_id: null, errors: ["TORT_CLASSIFICATION_ERROR"], diagnosis_match: false, category: null };
+  }
+  pipeline.push(step6);
+
+  // STEP 7: NPI Lookup + Taxonomy matching
+  const step7: PipelineStep = { name: "NPI_TAXONOMY_MATCH", status: "passed", errors: [], data: {} };
+  let npiResult = { npi_found: false, npi_number: null as string | null, specialty: null as string | null, taxonomy_match: null as any, error: null as string | null };
+  try {
+    if (data.physician_first_name && data.physician_last_name) {
+      npiResult = await lookupNpiAndMatch(
+        data.physician_first_name,
+        data.physician_last_name,
+        data.diagnosis
+      );
+      step7.data = {
+        npi_found: npiResult.npi_found,
+        npi_number: npiResult.npi_number,
+        specialty: npiResult.specialty,
+        taxonomy_matched: npiResult.taxonomy_match?.matched ?? false,
+        fraud_indicators: npiResult.taxonomy_match?.fraud_indicators ?? [],
+      };
+
+      if (npiResult.error === "NPI_NOT_FOUND") {
+        step7.errors.push("PHYSICIAN_NPI_NOT_FOUND");
+        step7.status = "passed";
+      } else if (npiResult.error) {
+        step7.errors.push(npiResult.error);
+        step7.status = "error";
+      }
+    } else {
+      step7.status = "skipped";
+    }
+  } catch (err) {
+    step7.status = "error";
+    step7.errors.push("NPI_LOOKUP_ERROR");
+    logger.error({ err }, "NPI lookup error");
+  }
+  pipeline.push(step7);
+
+  // STEP 8: Fraud detection engine
+  const step8: PipelineStep = { name: "FRAUD_DETECTION", status: "passed", errors: [], data: {} };
+  let fraudResult;
+  try {
+    fraudResult = runFraudDetection({
+      lead_data: data,
+      tort_validation: tortValidation!,
+      taxonomy_match: npiResult.taxonomy_match,
+      npi_found: npiResult.npi_found,
+    });
+    step8.data = { fraud_score: fraudResult.fraud_score, fraud_status: fraudResult.status, indicators: fraudResult.indicators.length };
+
+    if (fraudResult.status === "REJECTED") {
+      step8.status = "failed";
+      step8.errors = fraudResult.indicators.map(i => `FRAUD:${i.type}`);
+      pipeline.push(step8);
+
+      await auditLog("lead", "rejected", "fraud_detection", {
+        fraud_score: fraudResult.fraud_score,
+        indicators: fraudResult.indicators,
+      });
+
+      res.status(422).json({
+        status: "REJECTED",
+        errors: step8.errors,
+        action: "REJECTED",
+        pipeline,
+        failed_step: "FRAUD_DETECTION",
+        fraud_score: fraudResult.fraud_score,
+        fraud_summary: fraudResult.summary,
+      });
+      return;
+    }
+  } catch (err) {
+    step8.status = "error";
+    step8.errors.push("FRAUD_DETECTION_ERROR");
+    logger.error({ err }, "Fraud detection error");
+    fraudResult = { status: "TO_BE_REVIEWED" as const, fraud_score: 0, indicators: [], summary: "Fraud check error — routed to review" };
+  }
+  pipeline.push(step8);
+
+  // STEP 9: Conflict detection
+  const step9: PipelineStep = { name: "CONFLICT_DETECTION", status: "passed", errors: [], data: {} };
+  const fullName = `${data.first_name} ${data.last_name}`.trim();
+  let conflictCheck;
+  try {
+    conflictCheck = await runFullConflictCheck({
+      entity_type: "lead",
+      entity_id: "pending",
+      source_module: "form_engine",
+      lead_data: { ...data, name: fullName },
+    });
+    step9.data = { has_conflict: conflictCheck.has_conflict, output_state: conflictCheck.output_state };
+
+    if (conflictCheck.has_conflict && conflictCheck.output_state === "REJECT") {
+      step9.status = "failed";
+      step9.errors = conflictCheck.details;
+      pipeline.push(step9);
+
+      await auditLog("lead", "rejected", "form_engine_conflict", {
+        conflict_type: conflictCheck.conflict_type,
+        details: conflictCheck.details,
+      });
+
+      res.status(422).json({
+        status: "REJECTED",
+        errors: [`CONFLICT:${conflictCheck.conflict_type}`],
+        details: conflictCheck.details,
+        action: "REJECTED",
+        pipeline,
+        failed_step: "CONFLICT_DETECTION",
+      });
+      return;
+    }
+  } catch (err) {
+    step9.status = "error";
+    step9.errors.push("CONFLICT_CHECK_ERROR");
+    logger.error({ err }, "Conflict check error");
+    conflictCheck = { has_conflict: false, output_state: "ACCEPT" as const, conflict_type: null, severity: "low" as const, details: [], failsafe_mode: "REVIEW_FAIL" as const };
+  }
+  pipeline.push(step9);
+
+  // STEP 10: Determine final status + insert
   let status = "new";
-  if (conflictCheck.has_conflict && conflictCheck.output_state === "REVIEW_REQUIRED") {
+  if (fraudResult!.status === "TO_BE_REVIEWED") {
     status = "review_required";
   }
-  if (!data.diagnosis_confirmed || !data.was_at_location) {
+  if (conflictCheck!.has_conflict && conflictCheck!.output_state === "REVIEW_REQUIRED") {
+    status = "review_required";
+  }
+  if (!tortValidation!.valid) {
+    status = "review_required";
+  }
+  if (!data.diagnosis_confirmed) {
+    status = "rejected";
+  }
+  const tort = tortValidation!.tort_id ? TORT_REGISTRY[tortValidation!.tort_id] : null;
+  if (tort?.required_exposure && !data.was_at_location && !data.exposure_start) {
     status = "rejected";
   }
 
+  const step10: PipelineStep = { name: "CRM_STORAGE", status: "passed", errors: [], data: {} };
   try {
     const [lead] = await db
       .insert(leadsTable)
@@ -235,6 +403,7 @@ router.post("/submit", async (req, res) => {
         hospital_name: data.hospital_name,
         hospital_fax: data.hospital_fax,
         hospital_contact_info: data.hospital_contact_info,
+        medications: data.medications ?? null,
         tcpa_consent: true,
         trustedform_cert_url: data.trustedform_cert_url,
         trustedform_ip: data.trustedform_ip ?? null,
@@ -242,6 +411,12 @@ router.post("/submit", async (req, res) => {
         trustedform_timestamp: data.trustedform_timestamp ? new Date(data.trustedform_timestamp) : new Date(),
         email_validation_status: "valid",
         address_validation_status: "valid",
+        npi_verified: npiResult.npi_found,
+        npi_number: npiResult.npi_number,
+        physician_taxonomy: npiResult.specialty,
+        fraud_score: fraudResult!.fraud_score,
+        fraud_status: fraudResult!.status,
+        fraud_indicators: fraudResult!.indicators.length > 0 ? JSON.stringify(fraudResult!.indicators) : null,
         exposure_start: data.exposure_start ?? null,
         exposure_end: data.exposure_end ?? null,
         diagnosis_type: data.diagnosis_type ?? null,
@@ -251,6 +426,8 @@ router.post("/submit", async (req, res) => {
         status,
       })
       .returning();
+
+    step10.data = { lead_id: lead.id, status };
 
     if (status === "review_required") {
       try {
@@ -272,9 +449,13 @@ router.post("/submit", async (req, res) => {
     await auditLog("lead", String(lead.id), "form_submission", {
       source: "form_engine",
       status,
+      tort_id: tortValidation!.tort_id,
+      fraud_score: fraudResult!.fraud_score,
+      npi_verified: npiResult.npi_found,
       trustedform_cert_url: data.trustedform_cert_url,
     });
 
+    // Post-insert background check (non-blocking)
     let bgCheck = null;
     try {
       bgCheck = await runBackgroundCheck({
@@ -296,16 +477,32 @@ router.post("/submit", async (req, res) => {
       logger.warn({ err: bgErr, leadId: lead.id }, "Background check failed post-insert");
     }
 
+    pipeline.push(step10);
+
     res.status(201).json({
       status: "ACCEPTED",
       lead_id: lead.id,
       lead_status: status,
+      tort_id: tortValidation!.tort_id,
+      fraud_score: fraudResult!.fraud_score,
+      fraud_status: fraudResult!.status,
+      npi_verified: npiResult.npi_found,
       background_check: bgCheck ? { status: bgCheck.status, summary: bgCheck.summary } : null,
       output_state: status === "review_required" ? "REVIEW_REQUIRED" : status === "rejected" ? "REJECT" : "ACCEPT",
+      pipeline,
     });
   } catch (err) {
+    step10.status = "error";
+    step10.errors.push("DATABASE_INSERT_ERROR");
+    pipeline.push(step10);
     logger.error({ err }, "Form submission insert failed");
-    res.status(500).json({ status: "ERROR", errors: ["INTERNAL_ERROR"], action: "RETRY" });
+    res.status(500).json({
+      status: "ERROR",
+      errors: ["INTERNAL_ERROR"],
+      action: "RETRY",
+      pipeline,
+      failed_step: "CRM_STORAGE",
+    });
   }
 });
 
@@ -316,8 +513,13 @@ router.post("/background-check", async (req, res) => {
     return;
   }
 
-  const result = await runBackgroundCheck({ first_name, last_name, state, date_of_birth });
-  res.json(result);
+  try {
+    const result = await runBackgroundCheck({ first_name, last_name, state, date_of_birth });
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "Background check failed");
+    res.status(500).json({ error: "Background check failed", status: "error" });
+  }
 });
 
 router.post("/background-check/lead/:id", async (req, res) => {
@@ -327,49 +529,155 @@ router.post("/background-check/lead/:id", async (req, res) => {
     return;
   }
 
-  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
-  if (!lead) {
-    res.status(404).json({ error: "Lead not found" });
-    return;
+  try {
+    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+
+    if (!lead.first_name || !lead.last_name) {
+      res.status(422).json({ error: "Lead missing first_name or last_name" });
+      return;
+    }
+
+    const result = await runBackgroundCheck({
+      first_name: lead.first_name,
+      last_name: lead.last_name,
+      state: lead.state ?? undefined,
+      date_of_birth: lead.date_of_birth ?? undefined,
+    });
+
+    await db
+      .update(leadsTable)
+      .set({
+        background_check_status: result.status,
+        background_check_data: JSON.stringify(result),
+        updated_at: new Date(),
+      })
+      .where(eq(leadsTable.id, leadId));
+
+    await auditLog("lead", String(leadId), "background_check", {
+      status: result.status,
+      records_found: result.records.length,
+    });
+
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "Lead background check failed");
+    res.status(500).json({ error: "Background check failed", status: "error" });
   }
-
-  if (!lead.first_name || !lead.last_name) {
-    res.status(422).json({ error: "Lead missing first_name or last_name" });
-    return;
-  }
-
-  const result = await runBackgroundCheck({
-    first_name: lead.first_name,
-    last_name: lead.last_name,
-    state: lead.state ?? undefined,
-    date_of_birth: lead.date_of_birth ?? undefined,
-  });
-
-  await db
-    .update(leadsTable)
-    .set({
-      background_check_status: result.status,
-      background_check_data: JSON.stringify(result),
-      updated_at: new Date(),
-    })
-    .where(eq(leadsTable.id, leadId));
-
-  await auditLog("lead", String(leadId), "background_check", {
-    status: result.status,
-    records_found: result.records.length,
-  });
-
-  res.json(result);
 });
 
-function generateEmbedScript(tortId: string, config: { label: string; fields: string[]; rules: string[] }, baseUrl: string): string {
+router.post("/npi-verify", async (req, res) => {
+  const { physician_first_name, physician_last_name, diagnosis } = req.body;
+  if (!physician_first_name || !physician_last_name || !diagnosis) {
+    res.status(400).json({ error: "physician_first_name, physician_last_name, and diagnosis are required" });
+    return;
+  }
+
+  try {
+    const result = await lookupNpiAndMatch(physician_first_name, physician_last_name, diagnosis);
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "NPI verify failed");
+    res.status(500).json({ error: "NPI verification failed" });
+  }
+});
+
+router.post("/fraud-check", async (req, res) => {
+  const { lead_data, tort_type, diagnosis, physician_first_name, physician_last_name } = req.body;
+  if (!diagnosis || !tort_type) {
+    res.status(400).json({ error: "tort_type and diagnosis are required" });
+    return;
+  }
+
+  try {
+    const tortValidation = validateTortClaim({
+      tort_type,
+      diagnosis,
+      exposure_start: lead_data?.exposure_start,
+      location_name: lead_data?.location_name,
+      was_at_location: lead_data?.was_at_location,
+    });
+
+    let npiResult = { npi_found: false, taxonomy_match: null as any };
+    if (physician_first_name && physician_last_name) {
+      const npi = await lookupNpiAndMatch(physician_first_name, physician_last_name, diagnosis);
+      npiResult = { npi_found: npi.npi_found, taxonomy_match: npi.taxonomy_match };
+    }
+
+    const fraudResult = runFraudDetection({
+      lead_data: lead_data || { diagnosis, tort_type },
+      tort_validation: tortValidation,
+      taxonomy_match: npiResult.taxonomy_match,
+      npi_found: npiResult.npi_found,
+    });
+
+    res.json({ tort_validation: tortValidation, fraud_result: fraudResult });
+  } catch (err) {
+    logger.error({ err }, "Fraud check failed");
+    res.status(500).json({ error: "Fraud check failed" });
+  }
+});
+
+router.post("/escalate/fbi", async (req, res) => {
+  const { lead_id, reason, fraud_indicators } = req.body;
+  if (!lead_id || !reason) {
+    res.status(400).json({ error: "lead_id and reason are required" });
+    return;
+  }
+
+  try {
+    await auditLog("lead", String(lead_id), "fbi_escalation", {
+      reason,
+      fraud_indicators: fraud_indicators || [],
+      fbi_tip_url: "https://tips.fbi.gov/",
+      escalated_at: new Date().toISOString(),
+    });
+
+    if (lead_id !== "manual") {
+      const leadId = Number(lead_id);
+      if (isNaN(leadId)) {
+        res.status(400).json({ error: "Invalid lead_id — must be a number or 'manual'" });
+        return;
+      }
+      const [existing] = await db.select({ id: leadsTable.id }).from(leadsTable).where(eq(leadsTable.id, leadId));
+      if (!existing) {
+        res.status(404).json({ error: "Lead not found" });
+        return;
+      }
+      await db
+        .update(leadsTable)
+        .set({
+          status: "rejected",
+          rejection_reason: `FBI ESCALATION: ${reason}`,
+          fraud_status: "escalated",
+          updated_at: new Date(),
+        })
+        .where(eq(leadsTable.id, leadId));
+    }
+
+    res.json({
+      status: "ESCALATED",
+      fbi_tip_url: "https://tips.fbi.gov/",
+      message: "Case logged and escalated. Submit tip at tips.fbi.gov.",
+    });
+  } catch (err) {
+    logger.error({ err }, "FBI escalation logging failed");
+    res.status(500).json({ error: "Escalation logging failed" });
+  }
+});
+
+function generateEmbedScript(tortId: string, config: typeof TORT_REGISTRY[string], baseUrl: string): string {
   const allStates = '["AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"]';
+  const extraFields = [...config.extra_fields, ...config.exposure_fields];
 
   return `(function(){
 var API="${baseUrl}/api/forms";
 var TORT_ID="${tortId}";
 var TORT_LABEL="${config.label}";
-var EXTRA_FIELDS=${JSON.stringify(config.fields)};
+var EXTRA_FIELDS=${JSON.stringify(extraFields)};
 
 function el(tag,attrs,children){
   var e=document.createElement(tag);
@@ -473,12 +781,19 @@ form.appendChild(section("Personal Information",[
 form.appendChild(section("Medical Information",[
   input("diagnosis","Diagnosis","text",{placeholder:"e.g. Non-Hodgkin Lymphoma"}),
   input("diagnosis_date","Diagnosis Date","date"),
+  input("medications","Medications","text",{placeholder:"Current medications (optional)",optional:true}),
   input("diagnosis_confirmed","Diagnosis Confirmed","checkbox",{checkLabel:"Medical diagnosis confirmed by a physician"}),
   input("was_at_location","Location Exposure","checkbox",{checkLabel:"Client was at the qualifying location for the required duration"}),
 ]));
 
 if(EXTRA_FIELDS.indexOf("location_name")>=0){
-  form.appendChild(input("location_name","Location Name","text",{placeholder:"e.g. MCB Camp Lejeune",optional:true}));
+  form.appendChild(input("location_name","Location Name","text",{placeholder:"e.g. MCB Camp Lejeune"}));
+}
+if(EXTRA_FIELDS.indexOf("exposure_start")>=0){
+  form.appendChild(input("exposure_start","Exposure Start Date","date"));
+}
+if(EXTRA_FIELDS.indexOf("exposure_end")>=0){
+  form.appendChild(input("exposure_end","Exposure End Date","date",{optional:true}));
 }
 
 form.appendChild(section("Physician Information",[
@@ -540,7 +855,8 @@ form.addEventListener("submit",function(e){
         msgDiv.style.display="block";
         msgDiv.style.background="#fef2f2";
         msgDiv.style.color="#991b1b";
-        msgDiv.textContent="Submission failed: "+(r.data.errors||[]).join(", ");
+        var failStep=r.data.failed_step?" [Step: "+r.data.failed_step+"]":"";
+        msgDiv.textContent="Submission failed"+failStep+": "+(r.data.errors||[]).join(", ");
       }
       submitBtn.disabled=false;
       submitBtn.textContent="Submit Claim";

@@ -60,6 +60,14 @@ export const leadsTable = pgTable("leads", {
   trustedform_user_agent: text("trustedform_user_agent"),
   trustedform_timestamp: timestamp("trustedform_timestamp"),
 
+  medications: text("medications"),
+  npi_verified: boolean("npi_verified"),
+  npi_number: varchar("npi_number", { length: 10 }),
+  physician_taxonomy: varchar("physician_taxonomy", { length: 255 }),
+  fraud_score: integer("fraud_score"),
+  fraud_status: varchar("fraud_status", { length: 20 }),
+  fraud_indicators: text("fraud_indicators"),
+
   email_validation_status: varchar("email_validation_status", { length: 20 }),
   address_validation_status: varchar("address_validation_status", { length: 20 }),
   background_check_status: varchar("background_check_status", { length: 20 }),

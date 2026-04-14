@@ -6,11 +6,17 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { FormSubmissionResultBackgroundCheck } from "./formSubmissionResultBackgroundCheck";
+import type { FormSubmissionResultPipelineItem } from "./formSubmissionResultPipelineItem";
 
 export interface FormSubmissionResult {
   status: string;
   lead_id: number;
   lead_status: string;
+  tort_id?: string | null;
+  fraud_score?: number;
+  fraud_status?: string;
+  npi_verified?: boolean;
   background_check?: FormSubmissionResultBackgroundCheck;
   output_state: string;
+  pipeline?: FormSubmissionResultPipelineItem[];
 }

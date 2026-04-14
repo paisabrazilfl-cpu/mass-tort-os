@@ -5,10 +5,15 @@
  * Mass Tort Operating System API
  * OpenAPI spec version: 0.1.0
  */
+import type { FormRejectionPipelineItem } from "./formRejectionPipelineItem";
 
 export interface FormRejection {
   status: string;
   errors: string[];
   action: string;
   details?: string[] | null;
+  pipeline?: FormRejectionPipelineItem[] | null;
+  failed_step?: string | null;
+  fraud_score?: number | null;
+  fraud_summary?: string | null;
 }

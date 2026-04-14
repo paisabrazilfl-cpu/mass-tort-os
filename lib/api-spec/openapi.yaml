@@ -744,6 +744,130 @@ paths:
               schema:
                 $ref: "#/components/schemas/BackgroundCheckResult"
 
+  /forms/categories:
+    get:
+      operationId: getTortCategories
+      tags: [forms]
+      summary: Get all tort categories with grouped torts
+      responses:
+        "200":
+          description: Tort categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    category:
+                      type: string
+                    torts:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                          label:
+                            type: string
+                        required: [id, label]
+                  required: [category, torts]
+
+  /forms/npi-verify:
+    post:
+      operationId: verifyNpi
+      tags: [forms]
+      summary: Verify physician NPI and match taxonomy to diagnosis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                physician_first_name:
+                  type: string
+                physician_last_name:
+                  type: string
+                diagnosis:
+                  type: string
+              required: [physician_first_name, physician_last_name, diagnosis]
+      responses:
+        "200":
+          description: NPI verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NpiVerifyResult"
+
+  /forms/fraud-check:
+    post:
+      operationId: runFraudCheck
+      tags: [forms]
+      summary: Run fraud detection on claim data
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tort_type:
+                  type: string
+                diagnosis:
+                  type: string
+                physician_first_name:
+                  type: string
+                physician_last_name:
+                  type: string
+                lead_data:
+                  type: object
+              required: [tort_type, diagnosis]
+      responses:
+        "200":
+          description: Fraud check result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FraudCheckResult"
+
+  /forms/escalate/fbi:
+    post:
+      operationId: escalateToFbi
+      tags: [forms]
+      summary: Escalate case to FBI tip line and log event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lead_id:
+                  type: string
+                reason:
+                  type: string
+                fraud_indicators:
+                  type: array
+                  items:
+                    type: object
+              required: [lead_id, reason]
+      responses:
+        "200":
+          description: Escalation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  fbi_tip_url:
+                    type: string
+                  message:
+                    type: string
+                required: [status, fbi_tip_url, message]
+
   /paralegals:
     get:
       operationId: listParalegals
@@ -2100,6 +2224,8 @@ components:
           type: string
         label:
           type: string
+        category:
+          type: string
         fields:
           type: array
           items:
@@ -2108,7 +2234,90 @@ components:
           type: array
           items:
             type: string
+        valid_diagnoses:
+          type: array
+          items:
+            type: string
       required: [id, label, fields, rules]
+
+    NpiVerifyResult:
+      type: object
+      properties:
+        npi_found:
+          type: boolean
+        npi_number:
+          type: string
+          nullable: true
+        specialty:
+          type: string
+          nullable: true
+        taxonomy_match:
+          type: object
+          nullable: true
+          properties:
+            matched:
+              type: boolean
+            physician_specialty:
+              type: string
+            expected_specialties:
+              type: array
+              items:
+                type: string
+            diagnosis_category:
+              type: string
+              nullable: true
+            fraud_indicators:
+              type: array
+              items:
+                type: string
+            confidence:
+              type: string
+        error:
+          type: string
+          nullable: true
+      required: [npi_found]
+
+    FraudCheckResult:
+      type: object
+      properties:
+        tort_validation:
+          type: object
+          properties:
+            valid:
+              type: boolean
+            tort_id:
+              type: string
+              nullable: true
+            errors:
+              type: array
+              items:
+                type: string
+            diagnosis_match:
+              type: boolean
+            category:
+              type: string
+              nullable: true
+        fraud_result:
+          type: object
+          properties:
+            status:
+              type: string
+            fraud_score:
+              type: integer
+            indicators:
+              type: array
+              items:
+                type: object
+                properties:
+                  type:
+                    type: string
+                  description:
+                    type: string
+                  severity:
+                    type: string
+            summary:
+              type: string
+      required: [tort_validation, fraud_result]
 
     FormConfigList:
       type: object
@@ -2252,6 +2461,15 @@ components:
           type: integer
         lead_status:
           type: string
+        tort_id:
+          type: string
+          nullable: true
+        fraud_score:
+          type: integer
+        fraud_status:
+          type: string
+        npi_verified:
+          type: boolean
         background_check:
           type: object
           nullable: true
@@ -2262,6 +2480,19 @@ components:
               type: string
         output_state:
           type: string
+        pipeline:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              status:
+                type: string
+              errors:
+                type: array
+                items:
+                  type: string
       required: [status, lead_id, lead_status, output_state]
 
     FormRejection:
@@ -2279,6 +2510,20 @@ components:
           type: array
           items:
             type: string
+          nullable: true
+        pipeline:
+          type: array
+          items:
+            type: object
+          nullable: true
+        failed_step:
+          type: string
+          nullable: true
+        fraud_score:
+          type: integer
+          nullable: true
+        fraud_summary:
+          type: string
           nullable: true
       required: [status, errors, action]
 

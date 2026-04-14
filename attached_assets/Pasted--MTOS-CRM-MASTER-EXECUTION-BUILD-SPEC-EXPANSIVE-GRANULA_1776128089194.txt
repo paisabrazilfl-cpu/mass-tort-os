@@ -1,0 +1,458 @@
+⚙️ MTOS CRM — MASTER EXECUTION BUILD SPEC (EXPANSIVE • GRANULAR • NON-AMBIGUOUS)
+
+This is the complete system definition for implementation in Replit. It defines every module, rule, schema, and execution path required to build a production-grade Mass Tort CRM with automated intake, compliance enforcement, fraud detection, and tort-specific intelligence.
+
+
+---
+
+0. SYSTEM PRINCIPLES (HARD RULES)
+
+1. NO PARTIAL LEADS MAY BE STORED
+2. ALL VALIDATION IS SERVER-SIDE AUTHORITATIVE
+3. ALL FORMS MUST BE DYNAMICALLY GENERATED PER TORT
+4. TCPA + TRUSTEDFORM ARE MANDATORY GATING CONDITIONS
+5. NPI + TAXONOMY MUST BE VERIFIED WHEN PHYSICIAN EXISTS
+6. FRAUD DETECTION MUST ROUTE — NEVER SILENTLY IGNORE
+7. SYSTEM MUST BE FULLY AUTOMATED (NO HUMAN TRIGGER REQUIRED)
+
+
+---
+
+1. SYSTEM ARCHITECTURE (FULL STACK)
+
+CLIENT LAYER
+├── Dynamic HTML Form Renderer
+├── Embedded JS Widget
+├── Live Validation Engine (email + address)
+
+API LAYER
+├── Form Submission API
+├── Authentication (JWT / Session)
+├── Rate Limiting Layer
+
+CORE PROCESSING LAYER
+├── Schema Engine
+├── Tort Engine
+├── Validation Engine
+├── Compliance Engine (TCPA + TrustedForm)
+
+INTELLIGENCE LAYER
+├── NPI Lookup Engine (NPPES API)
+├── Taxonomy Matching Engine
+├── Fraud Detection Engine
+
+DATA LAYER
+├── PostgreSQL (or equivalent)
+├── Document Storage (S3-compatible)
+├── Audit Logs
+
+ROUTING LAYER
+├── ACCEPTED_QUEUE
+├── REJECTED_QUEUE
+├── REVIEW_QUEUE
+
+
+---
+
+2. UNIVERSAL LEAD SCHEMA (HARD REQUIRED STRUCTURE)
+
+2.1 PERSONAL DATA
+
+first_name (required)
+last_name (required)
+date_of_birth (required)
+street_address (required)
+city (required)
+state (required)
+zip (required)
+phone_primary (required)
+email (required)
+last_4_ssn (required)
+
+
+---
+
+2.2 MEDICAL DATA
+
+diagnosis (required)
+diagnosis_date (required)
+medications (optional)
+
+
+---
+
+2.3 PHYSICIAN DATA (NPI REQUIRED TRIGGER)
+
+physician_first_name (required if physician exists)
+physician_last_name (required if physician exists)
+physician_full_address (required if physician exists)
+physician_contact_info (required if physician exists)
+
+
+---
+
+2.4 HOSPITAL DATA (MANDATORY ALWAYS)
+
+hospital_name (required)
+hospital_fax (required)
+hospital_contact_info (required)
+
+
+---
+
+2.5 COMPLIANCE FIELDS
+
+tcpa_consent (required, boolean TRUE only)
+trustedform_cert_url (required)
+
+
+---
+
+3. FORM ENGINE (DETAILED IMPLEMENTATION)
+
+3.1 FORM FACTORY PIPELINE
+
+INPUT:
+- tort_id
+- tort_schema
+- buyer criteria
+
+PROCESS:
+1. Load tort template
+2. Merge global schema
+3. Inject tort-specific fields
+4. Inject compliance fields
+5. Attach validation rules
+6. Generate HTML + JS bundle
+7. Store versioned form
+8. Generate embed script
+
+
+---
+
+3.2 EMBED OUTPUT
+
+<script src="https://crm.com/embed.js?tort_id=XXX"></script>
+<div id="mtos-form"></div>
+
+
+---
+
+3.3 CLIENT-SIDE VALIDATION (NON-TRUSTED)
+
+EMAIL VALIDATION
+
+RULES:
+- RFC 5322 format validation
+- block typo domains:
+  gnail, gmial, hotmial, yaho, outlookk
+- block invalid TLD:
+  .vom, .con, .cmo
+
+FAIL:
+→ block submission
+→ show inline correction message
+
+
+---
+
+ADDRESS VALIDATION
+
+RULES:
+- all required fields present
+- ZIP = 5-digit or ZIP+4
+- valid US state code
+
+OPTIONAL:
+- USPS API verification hook
+
+FAIL:
+→ block submission
+
+
+---
+
+4. SUBMISSION PIPELINE (SERVER AUTHORITATIVE)
+
+ON FORM SUBMIT:
+
+1. Validate schema completeness
+2. Validate email (strict)
+3. Validate address
+4. Validate TCPA consent
+5. Validate TrustedForm certificate
+6. Route to Tort Engine
+
+
+---
+
+5. TORT ENGINE (FULL REGISTRY — FINAL STRUCTURE)
+
+5.1 PHARMACEUTICAL TORTS
+
+Roundup → Non-Hodgkin Lymphoma
+Paraquat → Parkinson’s Disease
+Zantac → Bladder/Stomach Cancer (NDMA)
+Depo-Provera → Meningioma / Brain Tumor
+GLP-1 Drugs → GI injury / gastroparesis
+
+
+---
+
+5.2 PRODUCT LIABILITY TORTS
+
+Talcum Powder → Ovarian Cancer
+Hair Relaxer → Uterine Cancer
+Asbestos → Mesothelioma / Lung Cancer
+Benzene → Leukemia
+
+
+---
+
+5.3 MEDICAL DEVICE TORTS
+
+Hernia Mesh → Chronic pain / organ damage
+Hip Implants → Metallosis / revision surgery
+IVC Filters → Migration / fracture
+CPAP Devices → Respiratory injury claims
+
+
+---
+
+5.4 ENVIRONMENTAL TORTS
+
+Camp Lejeune → kidney cancer / leukemia / Parkinson’s (1953–1987 exposure)
+AFFF / PFAS → kidney/testicular cancer
+Industrial Water Contamination → multi-cancer exposure claims
+
+
+---
+
+5.5 TRANSPORTATION TORTS
+
+Uber/Lyft Assault → sexual assault / physical injury
+Delivery Platform Injury → workplace injury / assault
+Autonomous Vehicles → collision injury / wrongful death
+
+
+---
+
+5.6 DIGITAL / PLATFORM TORTS
+
+Roblox Injury Cases → psychological harm / exploitation claims
+Social Media Harm → addiction / mental health claims (emerging)
+Online Gaming Exposure → behavioral harm claims
+
+
+---
+
+6. TORT RULE ENGINE (DETERMINISTIC LOGIC)
+
+For each tort:
+
+DEFINE:
+- required exposure condition
+- valid diagnosis list
+- required fields override
+- rejection conditions
+
+
+---
+
+EXECUTION RULE
+
+IF exposure missing → REJECT
+IF diagnosis mismatch → REJECT
+IF partial evidence → REVIEW
+
+
+---
+
+7. NPI + TAXONOMY ENGINE (MEDICAL VALIDATION CORE)
+
+PROCESS FLOW
+
+1. Extract physician info
+2. Query NPPES API
+3. Retrieve:
+   - NPI number
+   - taxonomy code
+   - specialty classification
+4. Match taxonomy vs diagnosis
+
+
+---
+
+FRAUD RULE
+
+IF diagnosis = cancer
+AND physician taxonomy NOT IN:
+  oncology
+  hematology
+  internal medicine (oncology-related)
+
+→ FLAG FRAUD
+→ ROUTE TO REVIEW
+
+
+---
+
+EXAMPLE
+
+Pediatrician + Adult Cancer Claim
+→ INVALID
+→ TO_BE_REVIEWED
+
+
+---
+
+8. FRAUD DETECTION ENGINE
+
+TRIGGERS
+
+- taxonomy mismatch
+- missing NPI
+- inconsistent exposure logic
+- invalid tort mapping
+- impossible medical timeline
+
+
+---
+
+OUTPUT STATES
+
+ACCEPTED
+REJECTED
+TO_BE_REVIEWED
+
+
+---
+
+9. ROUTING SYSTEM
+
+ACCEPTED → clients table
+REJECTED → rejected_leads table
+TO_BE_REVIEWED → review_queue table
+
+
+---
+
+10. REVIEW QUEUE STRUCTURE
+
+review_queue:
+- lead_id
+- tort_id
+- fraud_reason
+- npi_data
+- taxonomy_result
+- timestamp
+
+
+---
+
+11. COMPLIANCE MODULE
+
+TCPA
+
+- checkbox mandatory
+- cannot be pre-checked
+- must include consent language
+
+
+---
+
+TRUSTEDFORM
+
+- cert_url required
+- invalid → REJECT
+
+
+---
+
+12. ESCALATION MODULE
+
+UI
+
+[ SEND TO FBI ]
+
+ACTION
+
+redirect → https://tips.fbi.gov/
+log event in audit_logs
+
+
+---
+
+13. SYSTEM GUARANTEES
+
+- No invalid email stored
+- No invalid address stored
+- No missing consent stored
+- No missing TrustedForm stored
+- No uncategorized leads stored
+- Fraud always routed
+- Every lead traceable end-to-end
+
+
+---
+
+14. END-TO-END EXECUTION PIPELINE
+
+FORM LOAD
+↓
+CLIENT VALIDATION
+↓
+SUBMISSION API
+↓
+SERVER VALIDATION
+↓
+COMPLIANCE CHECK (TCPA + TRUSTEDFORM)
+↓
+TORT CLASSIFICATION ENGINE
+↓
+NPI LOOKUP ENGINE
+↓
+TAXONOMY MATCH ENGINE
+↓
+FRAUD DETECTION ENGINE
+↓
+ROUTING ENGINE
+↓
+CRM STORAGE
+
+
+---
+
+🌳 FINAL SYSTEM TREE (COMPLETE)
+
+MTOS CRM MASTER SYSTEM
+├── FORM ENGINE
+│   ├── Form Factory
+│   ├── Embed Generator
+│   ├── Email Validator
+│   ├── Address Validator
+│   ├── TCPA Module
+│   └── TrustedForm Module
+├── TORT ENGINE
+│   ├── Pharmaceutical Torts
+│   ├── Product Liability Torts
+│   ├── Medical Device Torts
+│   ├── Environmental Torts
+│   ├── Transportation Torts
+│   └── Digital / Platform Torts
+├── INTELLIGENCE ENGINE
+│   ├── NPI Lookup Engine
+│   ├── Taxonomy Matching Engine
+│   └── Fraud Detection Engine
+├── ROUTING ENGINE
+│   ├── Accepted Queue
+│   ├── Rejected Queue
+│   └── Review Queue
+└── ESCALATION LAYER
+    ├── Human Review Interface
+    └── FBI Link Trigger
+
+
+---
+
+If you want next step, I can convert this into a Replit-ready implementation blueprint (folder structure + APIs + DB schema + working Node/Express scaffold).

@@ -601,8 +601,53 @@ export interface AuditSummary {
 export interface FormConfig {
   id: string;
   label: string;
+  category?: string;
   fields: string[];
   rules: string[];
+  valid_diagnoses?: string[];
+}
+
+export type NpiVerifyResultTaxonomyMatch = {
+  matched?: boolean;
+  physician_specialty?: string;
+  expected_specialties?: string[];
+  diagnosis_category?: string | null;
+  fraud_indicators?: string[];
+  confidence?: string;
+} | null;
+
+export interface NpiVerifyResult {
+  npi_found: boolean;
+  npi_number?: string | null;
+  specialty?: string | null;
+  taxonomy_match?: NpiVerifyResultTaxonomyMatch;
+  error?: string | null;
+}
+
+export type FraudCheckResultTortValidation = {
+  valid?: boolean;
+  tort_id?: string | null;
+  errors?: string[];
+  diagnosis_match?: boolean;
+  category?: string | null;
+};
+
+export type FraudCheckResultFraudResultIndicatorsItem = {
+  type?: string;
+  description?: string;
+  severity?: string;
+};
+
+export type FraudCheckResultFraudResult = {
+  status?: string;
+  fraud_score?: number;
+  indicators?: FraudCheckResultFraudResultIndicatorsItem[];
+  summary?: string;
+};
+
+export interface FraudCheckResult {
+  tort_validation: FraudCheckResultTortValidation;
+  fraud_result: FraudCheckResultFraudResult;
 }
 
 export interface FormConfigList {
@@ -660,19 +705,36 @@ export type FormSubmissionResultBackgroundCheck = {
   summary?: string;
 } | null;
 
+export type FormSubmissionResultPipelineItem = {
+  name?: string;
+  status?: string;
+  errors?: string[];
+};
+
 export interface FormSubmissionResult {
   status: string;
   lead_id: number;
   lead_status: string;
+  tort_id?: string | null;
+  fraud_score?: number;
+  fraud_status?: string;
+  npi_verified?: boolean;
   background_check?: FormSubmissionResultBackgroundCheck;
   output_state: string;
+  pipeline?: FormSubmissionResultPipelineItem[];
 }
+
+export type FormRejectionPipelineItem = { [key: string]: unknown };
 
 export interface FormRejection {
   status: string;
   errors: string[];
   action: string;
   details?: string[] | null;
+  pipeline?: FormRejectionPipelineItem[] | null;
+  failed_step?: string | null;
+  fraud_score?: number | null;
+  fraud_summary?: string | null;
 }
 
 export type BackgroundCheckResultStatus =
@@ -766,6 +828,46 @@ export type RunBackgroundCheckBody = {
   last_name: string;
   state?: string;
   date_of_birth?: string;
+};
+
+export type GetTortCategories200ItemTortsItem = {
+  id: string;
+  label: string;
+};
+
+export type GetTortCategories200Item = {
+  category: string;
+  torts: GetTortCategories200ItemTortsItem[];
+};
+
+export type VerifyNpiBody = {
+  physician_first_name: string;
+  physician_last_name: string;
+  diagnosis: string;
+};
+
+export type RunFraudCheckBodyLeadData = { [key: string]: unknown };
+
+export type RunFraudCheckBody = {
+  tort_type: string;
+  diagnosis: string;
+  physician_first_name?: string;
+  physician_last_name?: string;
+  lead_data?: RunFraudCheckBodyLeadData;
+};
+
+export type EscalateToFbiBodyFraudIndicatorsItem = { [key: string]: unknown };
+
+export type EscalateToFbiBody = {
+  lead_id: string;
+  reason: string;
+  fraud_indicators?: EscalateToFbiBodyFraudIndicatorsItem[];
+};
+
+export type EscalateToFbi200 = {
+  status: string;
+  fbi_tip_url: string;
+  message: string;
 };
 
 export type GetAuditTrailParams = {

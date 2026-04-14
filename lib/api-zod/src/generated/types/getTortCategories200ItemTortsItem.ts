@@ -6,11 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface FormConfig {
+export type GetTortCategories200ItemTortsItem = {
   id: string;
   label: string;
-  category?: string;
-  fields: string[];
-  rules: string[];
-  valid_diagnoses?: string[];
-}
+};

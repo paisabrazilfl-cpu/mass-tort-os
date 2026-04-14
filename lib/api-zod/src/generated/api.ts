@@ -715,8 +715,10 @@ export const GetFormConfigsResponse = zod.object({
     zod.object({
       id: zod.string(),
       label: zod.string(),
+      category: zod.string().optional(),
       fields: zod.array(zod.string()),
       rules: zod.array(zod.string()),
+      valid_diagnoses: zod.array(zod.string()).optional(),
     }),
   ),
 });
@@ -731,8 +733,10 @@ export const GetFormConfigParams = zod.object({
 export const GetFormConfigResponse = zod.object({
   id: zod.string(),
   label: zod.string(),
+  category: zod.string().optional(),
   fields: zod.array(zod.string()),
   rules: zod.array(zod.string()),
+  valid_diagnoses: zod.array(zod.string()).optional(),
 });
 
 /**
@@ -855,6 +859,98 @@ export const RunLeadBackgroundCheckResponse = zod.object({
     }),
   ),
   summary: zod.string(),
+});
+
+/**
+ * @summary Get all tort categories with grouped torts
+ */
+export const GetTortCategoriesResponseItem = zod.object({
+  category: zod.string(),
+  torts: zod.array(
+    zod.object({
+      id: zod.string(),
+      label: zod.string(),
+    }),
+  ),
+});
+export const GetTortCategoriesResponse = zod.array(
+  GetTortCategoriesResponseItem,
+);
+
+/**
+ * @summary Verify physician NPI and match taxonomy to diagnosis
+ */
+export const VerifyNpiBody = zod.object({
+  physician_first_name: zod.string(),
+  physician_last_name: zod.string(),
+  diagnosis: zod.string(),
+});
+
+export const VerifyNpiResponse = zod.object({
+  npi_found: zod.boolean(),
+  npi_number: zod.string().nullish(),
+  specialty: zod.string().nullish(),
+  taxonomy_match: zod
+    .object({
+      matched: zod.boolean().optional(),
+      physician_specialty: zod.string().optional(),
+      expected_specialties: zod.array(zod.string()).optional(),
+      diagnosis_category: zod.string().nullish(),
+      fraud_indicators: zod.array(zod.string()).optional(),
+      confidence: zod.string().optional(),
+    })
+    .nullish(),
+  error: zod.string().nullish(),
+});
+
+/**
+ * @summary Run fraud detection on claim data
+ */
+export const RunFraudCheckBody = zod.object({
+  tort_type: zod.string(),
+  diagnosis: zod.string(),
+  physician_first_name: zod.string().optional(),
+  physician_last_name: zod.string().optional(),
+  lead_data: zod.object({}).passthrough().optional(),
+});
+
+export const RunFraudCheckResponse = zod.object({
+  tort_validation: zod.object({
+    valid: zod.boolean().optional(),
+    tort_id: zod.string().nullish(),
+    errors: zod.array(zod.string()).optional(),
+    diagnosis_match: zod.boolean().optional(),
+    category: zod.string().nullish(),
+  }),
+  fraud_result: zod.object({
+    status: zod.string().optional(),
+    fraud_score: zod.number().optional(),
+    indicators: zod
+      .array(
+        zod.object({
+          type: zod.string().optional(),
+          description: zod.string().optional(),
+          severity: zod.string().optional(),
+        }),
+      )
+      .optional(),
+    summary: zod.string().optional(),
+  }),
+});
+
+/**
+ * @summary Escalate case to FBI tip line and log event
+ */
+export const EscalateToFbiBody = zod.object({
+  lead_id: zod.string(),
+  reason: zod.string(),
+  fraud_indicators: zod.array(zod.object({}).passthrough()).optional(),
+});
+
+export const EscalateToFbiResponse = zod.object({
+  status: zod.string(),
+  fbi_tip_url: zod.string(),
+  message: zod.string(),
 });
 
 /**

@@ -34,14 +34,18 @@ import type {
   Document,
   EmailValidationResult,
   ErrorResponse,
+  EscalateToFbi200,
+  EscalateToFbiBody,
   FaxResult,
   FormConfig,
   FormConfigList,
   FormRejection,
   FormSubmission,
   FormSubmissionResult,
+  FraudCheckResult,
   FunnelStage,
   GetAuditTrailParams,
+  GetTortCategories200Item,
   HealthStatus,
   Lead,
   ListDocumentsParams,
@@ -49,6 +53,7 @@ import type {
   ListReviewQueueParams,
   NpiProvider,
   NpiSearchResponse,
+  NpiVerifyResult,
   Paralegal,
   ParalegalDetail,
   ParalegalLeaderboardRow,
@@ -61,6 +66,7 @@ import type {
   ReviewQueueItem,
   ReviewQueueStats,
   RunBackgroundCheckBody,
+  RunFraudCheckBody,
   SearchNpiParams,
   TortBreakdownRow,
   UpdateDocumentBody,
@@ -70,6 +76,7 @@ import type {
   UploadFaxResponse,
   ValidateAddressBody,
   ValidateEmailBody,
+  VerifyNpiBody,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -2828,6 +2835,339 @@ export const useRunLeadBackgroundCheck = <
   TContext
 > => {
   return useMutation(getRunLeadBackgroundCheckMutationOptions(options));
+};
+
+/**
+ * @summary Get all tort categories with grouped torts
+ */
+export const getGetTortCategoriesUrl = () => {
+  return `/api/forms/categories`;
+};
+
+export const getTortCategories = async (
+  options?: RequestInit,
+): Promise<GetTortCategories200Item[]> => {
+  return customFetch<GetTortCategories200Item[]>(getGetTortCategoriesUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetTortCategoriesQueryKey = () => {
+  return [`/api/forms/categories`] as const;
+};
+
+export const getGetTortCategoriesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTortCategories>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getTortCategories>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetTortCategoriesQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getTortCategories>>
+  > = ({ signal }) => getTortCategories({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTortCategories>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetTortCategoriesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTortCategories>>
+>;
+export type GetTortCategoriesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get all tort categories with grouped torts
+ */
+
+export function useGetTortCategories<
+  TData = Awaited<ReturnType<typeof getTortCategories>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getTortCategories>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetTortCategoriesQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Verify physician NPI and match taxonomy to diagnosis
+ */
+export const getVerifyNpiUrl = () => {
+  return `/api/forms/npi-verify`;
+};
+
+export const verifyNpi = async (
+  verifyNpiBody: VerifyNpiBody,
+  options?: RequestInit,
+): Promise<NpiVerifyResult> => {
+  return customFetch<NpiVerifyResult>(getVerifyNpiUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(verifyNpiBody),
+  });
+};
+
+export const getVerifyNpiMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof verifyNpi>>,
+    TError,
+    { data: BodyType<VerifyNpiBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof verifyNpi>>,
+  TError,
+  { data: BodyType<VerifyNpiBody> },
+  TContext
+> => {
+  const mutationKey = ["verifyNpi"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof verifyNpi>>,
+    { data: BodyType<VerifyNpiBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return verifyNpi(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type VerifyNpiMutationResult = NonNullable<
+  Awaited<ReturnType<typeof verifyNpi>>
+>;
+export type VerifyNpiMutationBody = BodyType<VerifyNpiBody>;
+export type VerifyNpiMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Verify physician NPI and match taxonomy to diagnosis
+ */
+export const useVerifyNpi = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof verifyNpi>>,
+    TError,
+    { data: BodyType<VerifyNpiBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof verifyNpi>>,
+  TError,
+  { data: BodyType<VerifyNpiBody> },
+  TContext
+> => {
+  return useMutation(getVerifyNpiMutationOptions(options));
+};
+
+/**
+ * @summary Run fraud detection on claim data
+ */
+export const getRunFraudCheckUrl = () => {
+  return `/api/forms/fraud-check`;
+};
+
+export const runFraudCheck = async (
+  runFraudCheckBody: RunFraudCheckBody,
+  options?: RequestInit,
+): Promise<FraudCheckResult> => {
+  return customFetch<FraudCheckResult>(getRunFraudCheckUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(runFraudCheckBody),
+  });
+};
+
+export const getRunFraudCheckMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runFraudCheck>>,
+    TError,
+    { data: BodyType<RunFraudCheckBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof runFraudCheck>>,
+  TError,
+  { data: BodyType<RunFraudCheckBody> },
+  TContext
+> => {
+  const mutationKey = ["runFraudCheck"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof runFraudCheck>>,
+    { data: BodyType<RunFraudCheckBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return runFraudCheck(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RunFraudCheckMutationResult = NonNullable<
+  Awaited<ReturnType<typeof runFraudCheck>>
+>;
+export type RunFraudCheckMutationBody = BodyType<RunFraudCheckBody>;
+export type RunFraudCheckMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Run fraud detection on claim data
+ */
+export const useRunFraudCheck = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runFraudCheck>>,
+    TError,
+    { data: BodyType<RunFraudCheckBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof runFraudCheck>>,
+  TError,
+  { data: BodyType<RunFraudCheckBody> },
+  TContext
+> => {
+  return useMutation(getRunFraudCheckMutationOptions(options));
+};
+
+/**
+ * @summary Escalate case to FBI tip line and log event
+ */
+export const getEscalateToFbiUrl = () => {
+  return `/api/forms/escalate/fbi`;
+};
+
+export const escalateToFbi = async (
+  escalateToFbiBody: EscalateToFbiBody,
+  options?: RequestInit,
+): Promise<EscalateToFbi200> => {
+  return customFetch<EscalateToFbi200>(getEscalateToFbiUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(escalateToFbiBody),
+  });
+};
+
+export const getEscalateToFbiMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof escalateToFbi>>,
+    TError,
+    { data: BodyType<EscalateToFbiBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof escalateToFbi>>,
+  TError,
+  { data: BodyType<EscalateToFbiBody> },
+  TContext
+> => {
+  const mutationKey = ["escalateToFbi"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof escalateToFbi>>,
+    { data: BodyType<EscalateToFbiBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return escalateToFbi(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type EscalateToFbiMutationResult = NonNullable<
+  Awaited<ReturnType<typeof escalateToFbi>>
+>;
+export type EscalateToFbiMutationBody = BodyType<EscalateToFbiBody>;
+export type EscalateToFbiMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Escalate case to FBI tip line and log event
+ */
+export const useEscalateToFbi = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof escalateToFbi>>,
+    TError,
+    { data: BodyType<EscalateToFbiBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof escalateToFbi>>,
+  TError,
+  { data: BodyType<EscalateToFbiBody> },
+  TContext
+> => {
+  return useMutation(getEscalateToFbiMutationOptions(options));
 };
 
 /**
