@@ -55,6 +55,7 @@ export default function Leads() {
             <SelectItem value="new">New</SelectItem>
             <SelectItem value="qualified">Qualified</SelectItem>
             <SelectItem value="signed">Signed</SelectItem>
+            <SelectItem value="review_required">Review Required</SelectItem>
             <SelectItem value="rejected">Rejected</SelectItem>
           </SelectContent>
         </Select>
@@ -100,9 +101,10 @@ export default function Leads() {
                     <Badge variant={
                       lead.status === "signed" ? "default" :
                       lead.status === "qualified" ? "secondary" :
-                      lead.status === "rejected" ? "destructive" : "outline"
-                    }>
-                      {lead.status.toUpperCase()}
+                      lead.status === "rejected" ? "destructive" :
+                      lead.status === "review_required" ? "secondary" : "outline"
+                    } className={lead.status === "review_required" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : ""}>
+                      {lead.status === "review_required" ? "REVIEW" : lead.status.toUpperCase()}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm font-mono">

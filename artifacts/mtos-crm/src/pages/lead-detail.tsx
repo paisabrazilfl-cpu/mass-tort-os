@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
-import { ArrowLeft, Trash2, FileText, CheckCircle, XCircle, FileSignature } from "lucide-react";
+import { ArrowLeft, Trash2, FileText, CheckCircle, XCircle, FileSignature, AlertTriangle } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
 export default function LeadDetail() {
@@ -92,9 +92,10 @@ export default function LeadDetail() {
           <Badge variant={
             lead.status === "signed" ? "default" :
             lead.status === "qualified" ? "secondary" :
-            lead.status === "rejected" ? "destructive" : "outline"
-          } className="text-sm px-3 py-1">
-            {lead.status.toUpperCase()}
+            lead.status === "rejected" ? "destructive" :
+            lead.status === "review_required" ? "secondary" : "outline"
+          } className={`text-sm px-3 py-1 ${lead.status === "review_required" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : ""}`}>
+            {lead.status === "review_required" ? "REVIEW REQUIRED" : lead.status.toUpperCase()}
           </Badge>
         </div>
       </div>
@@ -147,6 +148,66 @@ export default function LeadDetail() {
               {lead.rejection_reason && (
                 <div className="bg-destructive/10 text-destructive p-3 rounded-md text-sm border border-destructive/20 mt-4">
                   <span className="font-bold">Rejection Reason:</span> {lead.rejection_reason}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Compliance & Verification</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4 md:grid-cols-2">
+              <div className="flex items-center gap-3 border p-3 rounded-md">
+                {lead.npi_verified ? <CheckCircle className="text-green-500 h-5 w-5 shrink-0" /> : <XCircle className="text-red-500 h-5 w-5 shrink-0" />}
+                <div>
+                  <div className="font-medium">NPI Verification</div>
+                  <div className="text-sm text-muted-foreground">
+                    {lead.npi_verified ? `Verified (${lead.npi_number || "N/A"})` : "Not verified"}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 border p-3 rounded-md">
+                {lead.tcpa_consent ? <CheckCircle className="text-green-500 h-5 w-5 shrink-0" /> : <XCircle className="text-red-500 h-5 w-5 shrink-0" />}
+                <div>
+                  <div className="font-medium">TCPA Consent</div>
+                  <div className="text-sm text-muted-foreground">{lead.tcpa_consent ? "Granted" : "Missing"}</div>
+                </div>
+              </div>
+              {lead.physician_taxonomy && (
+                <div className="border p-3 rounded-md">
+                  <div className="font-medium">Physician Taxonomy</div>
+                  <div className="text-sm text-muted-foreground">{lead.physician_taxonomy}</div>
+                </div>
+              )}
+              {lead.fraud_status && (
+                <div className="border p-3 rounded-md">
+                  <div className="font-medium">Arbiter Decision</div>
+                  <div className="text-sm">
+                    <Badge variant={
+                      lead.fraud_status === "ACCEPTED" ? "default" :
+                      lead.fraud_status === "REJECTED" ? "destructive" : "secondary"
+                    } className={lead.fraud_status === "ACCEPTED" ? "bg-green-500/10 text-green-600 border-green-500/20" : lead.fraud_status === "TO_BE_REVIEWED" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : ""}>
+                      {lead.fraud_status}
+                    </Badge>
+                  </div>
+                </div>
+              )}
+              {typeof lead.fraud_score === "number" && lead.fraud_score > 0 && (
+                <div className="border p-3 rounded-md">
+                  <div className="font-medium">Fraud Score</div>
+                  <div className={`text-sm font-mono ${lead.fraud_score >= 60 ? "text-red-500" : lead.fraud_score >= 20 ? "text-amber-500" : "text-green-500"}`}>
+                    {lead.fraud_score}/100
+                  </div>
+                </div>
+              )}
+              {lead.background_check_status && (
+                <div className="flex items-center gap-3 border p-3 rounded-md">
+                  {lead.background_check_status === "clean" ? <CheckCircle className="text-green-500 h-5 w-5 shrink-0" /> : <AlertTriangle className="text-amber-500 h-5 w-5 shrink-0" />}
+                  <div>
+                    <div className="font-medium">Background Check</div>
+                    <div className="text-sm text-muted-foreground">{lead.background_check_status.charAt(0).toUpperCase() + lead.background_check_status.slice(1)}</div>
+                  </div>
                 </div>
               )}
             </CardContent>
