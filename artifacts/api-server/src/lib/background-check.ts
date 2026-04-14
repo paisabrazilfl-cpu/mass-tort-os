@@ -128,6 +128,34 @@ interface CourtResult {
   }>;
 }
 
+function lastNameIsDefendant(
+  result: CourtResult,
+  lastName: string,
+): boolean {
+  const ln = lastName.toLowerCase();
+  const cn = (result.caseName || "").toLowerCase();
+
+  const defPattern = /\s+v\.?\s+(.+)/i;
+  const defMatch = cn.match(defPattern);
+  if (defMatch) {
+    const defSide = defMatch[1].trim();
+    if (defSide === ln || defSide.startsWith(`${ln},`) || defSide.startsWith(`${ln} `)) {
+      return true;
+    }
+  }
+
+  if (result.party && Array.isArray(result.party)) {
+    for (const p of result.party) {
+      const pl = p.toLowerCase().trim();
+      if (pl === ln || pl === ln.toUpperCase().toLowerCase()) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function nameMatchesResult(
   result: CourtResult,
   firstName: string,
@@ -149,6 +177,10 @@ function nameMatchesResult(
       const pm = textContainsName(p, firstName, lastName);
       if (pm) return { match: true, confidence: pm === "exact" ? "exact" : "strong", role: "party" };
     }
+  }
+
+  if (lastNameIsDefendant(result, lastName)) {
+    return { match: true, confidence: "strong", role: "party" };
   }
 
   if (result.recap_documents && Array.isArray(result.recap_documents)) {
@@ -198,6 +230,7 @@ async function searchCourtRecords(person: {
     `"${firstName} ${lastName}"`,
     `"${lastName}, ${firstName}"`,
   ];
+  const defendantSearch = `"v. ${lastName}"`;
   const broadSearch = `${lastName} AND ${firstName}`;
 
   const seen = new Set<string>();
@@ -209,8 +242,13 @@ async function searchCourtRecords(person: {
     let description: string;
 
     if (role === "party") {
-      severity = confidence === "exact" ? "high" : "medium";
-      description = caseName;
+      if (confidence === "exact") {
+        severity = "high";
+        description = caseName;
+      } else {
+        severity = "medium";
+        description = `${caseName} (last name match — verify identity)`;
+      }
     } else {
       severity = "low";
       description = `${caseName} (named in documents, not a listed party)`;
@@ -240,6 +278,39 @@ async function searchCourtRecords(person: {
 
         const { confidence, role } = nameMatchesResult(result, firstName, lastName);
         records.push(buildRecord(result, role, confidence));
+      }
+    }
+
+    const defResults = await fetchCourtListenerResults(defendantSearch, stateParam);
+    for (const result of defResults) {
+      const docketNum = result.docketNumber || "";
+      const caseName = result.caseName || "";
+      const key = `${docketNum}|${caseName}|${result.dateFiled || ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      if (!lastNameIsDefendant(result, lastName)) continue;
+
+      const hasFirstNameAnywhere = textContainsName(
+        `${caseName} ${(result.party || []).join(" ")} ${(result.recap_documents || []).map(d => `${d.description || ""} ${d.snippet || ""}`).join(" ")}`,
+        firstName,
+        lastName,
+      );
+
+      const otherFirstNames = (result.party || []).some(p => {
+        const pl = p.toLowerCase().trim();
+        return pl !== lastName.toLowerCase() &&
+          pl !== "united states" && pl !== "usa" &&
+          pl.includes(lastName.toLowerCase()) &&
+          !pl.includes(firstName.toLowerCase());
+      });
+
+      if (otherFirstNames) continue;
+
+      if (hasFirstNameAnywhere) {
+        records.push(buildRecord(result, "party", "exact"));
+      } else {
+        records.push(buildRecord(result, "party", "strong"));
       }
     }
 
