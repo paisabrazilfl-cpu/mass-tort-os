@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/integrations-anthropic-ai": "workspace:*",
@@ -18,6 +19,8 @@
     "cors": "^2",
     "drizzle-orm": "catalog:",
     "express": "^5",
+    "express-rate-limit": "^8.3.2",
+    "helmet": "^8.1.0",
     "pino": "^9",
     "pino-http": "^10",
     "sharp": "^0.34.5"

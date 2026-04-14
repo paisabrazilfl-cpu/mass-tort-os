@@ -15,6 +15,7 @@ import { runFullConflictCheck, checkAIClassificationConflict, routeToReview } fr
 import { withErrorFallback } from "../lib/error-fallback";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
+import { encryptLeadFields, decryptLeadFields, decryptLeadArray } from "../lib/encryption";
 
 function buildLeadFilters(data: {
   status?: string;
@@ -70,6 +71,7 @@ router.get("/export", async (req, res) => {
     return;
   }
 
+  const decryptedLeads = decryptLeadArray(leads);
   const requestedFields = parsed.data.fields?.split(",").map((f: string) => f.trim()).filter(Boolean);
   const allKeys = Object.keys(leads[0]);
   const fields = requestedFields && requestedFields.length > 0
@@ -86,7 +88,7 @@ router.get("/export", async (req, res) => {
   };
 
   const header = fields.join(",");
-  const rows = leads.map((lead: Record<string, unknown>) =>
+  const rows = decryptedLeads.map((lead: Record<string, unknown>) =>
     fields.map((f: string) => escapeCSV(lead[f])).join(",")
   );
 
@@ -109,7 +111,7 @@ router.get("/", async (req, res) => {
       ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(sql`${leadsTable.created_at} DESC`)
       : await db.select().from(leadsTable).orderBy(sql`${leadsTable.created_at} DESC`);
 
-  res.json(leads);
+  res.json(decryptLeadArray(leads));
 });
 
 router.post("/", async (req, res) => {
@@ -200,7 +202,7 @@ router.post("/", async (req, res) => {
     if (conflictCheck.output_state === "REVIEW_REQUIRED") {
       const [lead] = await db
         .insert(leadsTable)
-        .values({
+        .values(encryptLeadFields({
           ...data,
           name: fullName,
           status: "review_required",
@@ -212,7 +214,7 @@ router.post("/", async (req, res) => {
           notes: data.notes ?? null,
           ad_spend: data.ad_spend ? String(data.ad_spend) : null,
           source: data.source ?? null,
-        })
+        }))
         .returning();
 
       try {
@@ -231,7 +233,7 @@ router.post("/", async (req, res) => {
       } catch (_) {}
 
       res.status(201).json({
-        ...lead,
+        ...decryptLeadFields(lead),
         _conflict: {
           output_state: "REVIEW_REQUIRED",
           conflict_type: conflictCheck.conflict_type,
@@ -249,7 +251,7 @@ router.post("/", async (req, res) => {
 
   const [lead] = await db
     .insert(leadsTable)
-    .values({
+    .values(encryptLeadFields({
       ...data,
       name: fullName,
       status,
@@ -260,12 +262,12 @@ router.post("/", async (req, res) => {
       notes: data.notes ?? null,
       ad_spend: data.ad_spend ? String(data.ad_spend) : null,
       source: data.source ?? null,
-    })
+    }))
     .returning();
 
   await auditLog("lead", String(lead.id), "created", { output_state: "ACCEPT", status });
 
-  res.status(201).json(lead);
+  res.status(201).json(decryptLeadFields(lead));
 });
 
 router.get("/:id", async (req, res) => {
@@ -285,7 +287,7 @@ router.get("/:id", async (req, res) => {
     return;
   }
 
-  res.json(lead);
+  res.json(decryptLeadFields(lead));
 });
 
 router.patch("/:id", async (req, res) => {
@@ -350,9 +352,11 @@ router.patch("/:id", async (req, res) => {
     }
   }
 
+  const encryptedUpdate = encryptLeadFields(updateData);
+
   const [lead] = await db
     .update(leadsTable)
-    .set(updateData)
+    .set(encryptedUpdate)
     .where(eq(leadsTable.id, paramsParsed.data.id))
     .returning();
 
@@ -361,7 +365,7 @@ router.patch("/:id", async (req, res) => {
     return;
   }
 
-  res.json(lead);
+  res.json(decryptLeadFields(lead));
 });
 
 router.delete("/:id", async (req, res) => {

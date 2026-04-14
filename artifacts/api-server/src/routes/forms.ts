@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, leadsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { encryptLeadFields } from "../lib/encryption";
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
 import { runBackgroundCheck } from "../lib/background-check";
@@ -369,7 +370,7 @@ router.post("/submit", async (req, res) => {
   try {
     const [lead] = await db
       .insert(leadsTable)
-      .values({
+      .values(encryptLeadFields({
         name: fullName,
         email: data.email,
         phone: data.phone_primary,
@@ -416,7 +417,7 @@ router.post("/submit", async (req, res) => {
         ad_spend: data.ad_spend ? String(data.ad_spend) : null,
         source: data.source ?? "form_embed",
         status,
-      })
+      }))
       .returning();
 
     step10.data = { lead_id: lead.id, status };

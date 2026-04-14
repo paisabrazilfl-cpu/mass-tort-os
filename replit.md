@@ -35,6 +35,12 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **Review Queue**: Manages conflict resolution and error fallback items, with UI for manual review and FBI escalation.
 *   **OCR Engine**: Processes fax images using Sharp for preprocessing and Claude Vision for OCR, extracting structured data into a `fax_results` table.
 *   **Vendor Management**: Full CRUD for vendors (lead gen, law firm, marketing, referral types) with status tracking. Leads can be associated with vendors via `vendor_id`, `law_firm`, and `client_id` fields.
+*   **Security Infrastructure**: Comprehensive security layer protecting ePHI/PII data:
+    *   **Field-level Encryption**: AES-256-GCM encryption for sensitive fields (last_4_ssn, date_of_birth, diagnosis, diagnosis_date, street_address, phone_primary, medications) using `ENCRYPTION_KEY` env var. Encrypted values prefixed with `enc:` for backward compatibility. Encrypt on write, decrypt on read across all lead CRUD operations and exports.
+    *   **Security Headers & Rate Limiting**: Helmet.js (CSP, HSTS, X-Content-Type, referrer policy), express-rate-limit (500 req/15min), 1MB request body limit.
+    *   **Intrusion Detection System (IDS)**: Middleware scanning for SQL injection, XSS, path traversal, command injection, brute force (100 req/60s). Auto-blocks critical threat IPs for 24h via `blocked_ips` table. All threats logged to `security_alerts` table.
+    *   **AI Threat Analysis**: Claude Haiku classifies attack patterns, suggests countermeasures, updates alert records.
+    *   **Security Dashboard**: CRM page at `/security` showing threat level, stats (24h alerts, critical count, blocked IPs), attack type/severity breakdowns, blocked IP management, alert table with dismiss, manual IP blocking, and AI analysis trigger.
 
 # External Dependencies
 
@@ -46,3 +52,4 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **API Codegen**: Orval
 *   **Background Checks**: CourtListener (free court records API), OFAC sanctions list
 *   **NPI Lookup**: NPPES API (CMS NPI Registry)
+*   **Security**: Helmet.js (security headers), express-rate-limit (rate limiting)

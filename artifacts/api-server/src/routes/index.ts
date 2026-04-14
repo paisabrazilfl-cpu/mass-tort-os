@@ -12,6 +12,7 @@ import npiRouter from "./npi";
 import reviewQueueRouter from "./review-queue";
 import formsRouter from "./forms";
 import vendorsRouter from "./vendors";
+import securityRouter from "./security";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use("/npi", npiRouter);
 router.use("/review-queue", reviewQueueRouter);
 router.use("/forms", formsRouter);
 router.use("/vendors", vendorsRouter);
+router.use("/security", securityRouter);
 
 export default router;

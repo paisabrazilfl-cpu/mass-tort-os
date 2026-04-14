@@ -9,3 +9,4 @@ export * from "./fax_results";
 export * from "./paralegals";
 export * from "./review_queue";
 export * from "./vendors";
+export * from "./security_alerts";
