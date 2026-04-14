@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Users, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck, BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, Users, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck, BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch, Clock, Sparkles, Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -17,6 +17,10 @@ const navigation = [
   { name: "Form Engine", href: "/form-engine", icon: AppWindow },
   { name: "Vendors", href: "/vendors", icon: Building2 },
   { name: "Security", href: "/security", icon: ShieldCheck },
+  { name: "Doc Review", href: "/doc-review", icon: FileSearch },
+  { name: "Timeline", href: "/timeline", icon: Clock },
+  { name: "Drafting AI", href: "/drafting", icon: Sparkles },
+  { name: "Lens AI", href: "/predictive", icon: Brain },
   { name: "New Intake", href: "/leads/new", icon: PlusCircle },
 ];
 

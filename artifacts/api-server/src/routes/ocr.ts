@@ -8,6 +8,7 @@ import { eq, desc } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import { saveFile } from "../lib/vault";
 import { auditLog } from "../lib/audit";
+import { extractMedicalFields, analyzeDocumentText } from "../lib/ai-fields";
 
 const router = Router();
 
@@ -123,6 +124,46 @@ router.get("/queue-stats", async (_req, res) => {
     stats[r.status] = (stats[r.status] ?? 0) + 1;
   }
   res.json(stats);
+});
+
+router.post("/ai-fields", async (req, res) => {
+  const { image_base64, mime_type, text } = req.body;
+
+  if (!image_base64 && !text) {
+    res.status(400).json({ error: "image_base64 or text is required" });
+    return;
+  }
+
+  try {
+    let result;
+    if (image_base64) {
+      result = await extractMedicalFields(image_base64, mime_type || "image/png");
+    } else {
+      result = await analyzeDocumentText(text);
+    }
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "AIFields extraction failed");
+    res.status(500).json({ error: "AIFields extraction failed" });
+  }
+});
+
+router.post("/ai-fields/result/:id", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
+
+  const [faxResult] = await db.select().from(faxResultsTable).where(eq(faxResultsTable.id, id));
+  if (!faxResult) { res.status(404).json({ error: "Fax result not found" }); return; }
+
+  if (!faxResult.raw_text) { res.status(400).json({ error: "No text available for analysis" }); return; }
+
+  try {
+    const fields = await analyzeDocumentText(faxResult.raw_text);
+    res.json({ fax_result_id: id, ...fields });
+  } catch (err) {
+    logger.error({ err }, "AIFields analysis of fax result failed");
+    res.status(500).json({ error: "Analysis failed" });
+  }
 });
 
 export default router;

@@ -13,8 +13,15 @@ import reviewQueueRouter from "./review-queue";
 import formsRouter from "./forms";
 import vendorsRouter from "./vendors";
 import securityRouter from "./security";
+import timelineRouter from "./timeline";
+import draftingRouter from "./drafting";
+import authRouter from "./auth";
+import { authMiddleware } from "../lib/rbac";
 
 const router: IRouter = Router();
+
+router.use("/auth", authRouter);
+router.use(authMiddleware);
 
 router.use(healthRouter);
 router.use("/leads", leadsRouter);
@@ -30,5 +37,7 @@ router.use("/review-queue", reviewQueueRouter);
 router.use("/forms", formsRouter);
 router.use("/vendors", vendorsRouter);
 router.use("/security", securityRouter);
+router.use("/timeline", timelineRouter);
+router.use("/drafting", draftingRouter);
 
 export default router;

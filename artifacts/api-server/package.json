@@ -21,6 +21,8 @@
     "express": "^5",
     "express-rate-limit": "^8.3.2",
     "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "pdf-lib": "^1.17.1",
     "pino": "^9",
     "pino-http": "^10",
     "sharp": "^0.34.5"
@@ -29,6 +31,7 @@
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "catalog:",
     "@types/sharp": "^0.32.0",
     "esbuild": "^0.27.3",

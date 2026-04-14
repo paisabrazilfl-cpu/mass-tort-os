@@ -23,6 +23,10 @@ import Compliance from "@/pages/compliance";
 import FormEngine from "@/pages/form-engine";
 import Vendors from "@/pages/vendors";
 import Security from "@/pages/security";
+import DocReview from "@/pages/doc-review";
+import Timeline from "@/pages/timeline";
+import Drafting from "@/pages/drafting";
+import Predictive from "@/pages/predictive";
 
 const queryClient = new QueryClient();
 
@@ -48,6 +52,10 @@ function Router() {
         <Route path="/form-engine" component={FormEngine} />
         <Route path="/vendors" component={Vendors} />
         <Route path="/security" component={Security} />
+        <Route path="/doc-review" component={DocReview} />
+        <Route path="/timeline" component={Timeline} />
+        <Route path="/drafting" component={Drafting} />
+        <Route path="/predictive" component={Predictive} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

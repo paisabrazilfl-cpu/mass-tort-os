@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, leadsTable, casesTable, analysisTable, faxResultsTable, paralegalsTable } from "@workspace/db";
 import { sql, eq, gte, and, desc } from "drizzle-orm";
+import { scoreLeadPredictive, getModelStats, getBatchPredictions, getTortPredictions } from "../lib/predictive-scoring";
 
 const router = Router();
 
@@ -150,6 +151,33 @@ router.get("/paralegal-leaderboard", async (_req, res) => {
   }));
 
   res.json(leaderboard);
+});
+
+router.get("/predictive/lead/:id", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
+  try {
+    const score = await scoreLeadPredictive(id);
+    res.json(score);
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+router.get("/predictive/batch", async (req, res) => {
+  const limit = parseInt(req.query.limit as string) || 50;
+  const predictions = await getBatchPredictions(limit);
+  res.json(predictions);
+});
+
+router.get("/predictive/by-tort", async (_req, res) => {
+  const predictions = await getTortPredictions();
+  res.json(predictions);
+});
+
+router.get("/predictive/model", async (_req, res) => {
+  const stats = await getModelStats();
+  res.json(stats);
 });
 
 export default router;

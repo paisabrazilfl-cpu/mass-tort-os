@@ -8,6 +8,7 @@ import {
   UpdateDocumentParams,
   DeleteDocumentParams,
 } from "@workspace/api-zod";
+import { redactPdf, highlightPdfRegions, getPdfPageCount } from "../lib/pdf-redaction";
 
 const router = Router();
 
@@ -97,6 +98,32 @@ router.delete("/:id", async (req, res) => {
 
   await db.delete(documentsTable).where(eq(documentsTable.id, parsed.data.id));
   res.status(204).send();
+});
+
+router.post("/redact", async (req, res) => {
+  const { pdf_base64, rules } = req.body;
+  if (!pdf_base64) { res.status(400).json({ error: "pdf_base64 is required" }); return; }
+
+  try {
+    const pdfBytes = Buffer.from(pdf_base64, "base64");
+    const redacted = await redactPdf(pdfBytes, rules || []);
+    res.json({ pdf_base64: Buffer.from(redacted).toString("base64"), pages: await getPdfPageCount(redacted) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/highlight", async (req, res) => {
+  const { pdf_base64, highlights } = req.body;
+  if (!pdf_base64) { res.status(400).json({ error: "pdf_base64 is required" }); return; }
+
+  try {
+    const pdfBytes = Buffer.from(pdf_base64, "base64");
+    const highlighted = await highlightPdfRegions(pdfBytes, highlights || []);
+    res.json({ pdf_base64: Buffer.from(highlighted).toString("base64"), pages: await getPdfPageCount(highlighted) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;
