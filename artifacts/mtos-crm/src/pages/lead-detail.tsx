@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useParams, Link } from "wouter";
 import { useGetLead, getGetLeadQueryKey, useUpdateLead, useDeleteLead, useListDocuments, getListDocumentsQueryKey, useQualifyLead, UpdateLeadBodyStatus } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
@@ -33,6 +33,13 @@ interface IntelligenceScore {
   scored_at: string;
 }
 
+interface LensScore {
+  conversion_probability: number;
+  risk_score: number;
+  quality_tier: string;
+  factors: Record<string, number>;
+}
+
 function FieldRow({ label, value, sensitive }: { label: string; value: any; sensitive?: boolean }) {
   const displayVal = value === null || value === undefined || value === "" ? null : String(value);
   return (
@@ -41,6 +48,24 @@ function FieldRow({ label, value, sensitive }: { label: string; value: any; sens
       <span className={`text-sm mt-0.5 ${displayVal ? "text-foreground" : "text-muted-foreground italic"} ${sensitive ? "font-mono" : ""}`}>
         {displayVal || "Not provided"}
       </span>
+    </div>
+  );
+}
+
+function ScoreBadge({ score, label, grade }: { score: number; label: string; grade: string }) {
+  const color = score >= 75 ? "text-emerald-600" : score >= 50 ? "text-amber-600" : "text-red-600";
+  const bg = score >= 75 ? "bg-emerald-50 border-emerald-200" : score >= 50 ? "bg-amber-50 border-amber-200" : "bg-red-50 border-red-200";
+  const barColor = score >= 75 ? "bg-emerald-500" : score >= 50 ? "bg-amber-500" : "bg-red-500";
+  return (
+    <div className={`rounded-lg border p-3 ${bg}`}>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs font-medium text-gray-600">{label}</span>
+        <span className={`text-lg font-bold ${color}`}>{score}</span>
+      </div>
+      <div className="w-full bg-gray-200 rounded-full h-1.5">
+        <div className={`h-1.5 rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${score}%` }} />
+      </div>
+      <span className={`text-[10px] font-medium ${color}`}>{grade}</span>
     </div>
   );
 }
@@ -76,6 +101,9 @@ export default function LeadDetail() {
   const [intelligence, setIntelligence] = useState<IntelligenceScore | null>(null);
   const [scoringInProgress, setScoringInProgress] = useState(false);
   const [scoringError, setScoringError] = useState<string | null>(null);
+  const [lensScore, setLensScore] = useState<LensScore | null>(null);
+  const [lensLoading, setLensLoading] = useState(false);
+  const autoTriggered = useRef(false);
 
   const { data: lead, isLoading } = useGetLead(leadId, {
     query: { enabled: !!leadId, queryKey: getGetLeadQueryKey(leadId) }
@@ -165,6 +193,27 @@ export default function LeadDetail() {
     }
   }, [leadId]);
 
+  const fetchLensScore = useCallback(async () => {
+    setLensLoading(true);
+    try {
+      const res = await fetch(`/api/analytics/predictive/lead/${leadId}`);
+      if (res.ok) {
+        setLensScore(await res.json());
+      }
+    } catch {
+    } finally {
+      setLensLoading(false);
+    }
+  }, [leadId]);
+
+  useEffect(() => {
+    if (lead && !autoTriggered.current) {
+      autoTriggered.current = true;
+      handleRunIntelligence();
+      fetchLensScore();
+    }
+  }, [lead, handleRunIntelligence, fetchLensScore]);
+
   if (isLoading || !lead) {
     return (
       <div className="space-y-6">
@@ -226,6 +275,73 @@ export default function LeadDetail() {
           <div>
             <span className="font-semibold">Disposition Note:</span> {lead.rejection_reason}
           </div>
+        </div>
+      )}
+
+      <div className="grid gap-3 md:grid-cols-5">
+        {scoringInProgress ? (
+          <>
+            {[1,2,3].map(i => <Skeleton key={i} className="h-[72px] rounded-lg" />)}
+            <Skeleton className="h-[72px] rounded-lg" />
+            <Skeleton className="h-[72px] rounded-lg" />
+          </>
+        ) : intelligence ? (
+          <>
+            <ScoreBadge label="Completion" score={intelligence.completion_score} grade={intelligence.completion_grade} />
+            <ScoreBadge label="Reliability" score={intelligence.reliability_score} grade={intelligence.reliability_grade} />
+            <ScoreBadge label="Truthfulness" score={intelligence.truthfulness_score} grade={intelligence.truthfulness_grade} />
+          </>
+        ) : scoringError ? (
+          <div className="md:col-span-3 flex items-center gap-2 text-sm text-muted-foreground bg-gray-50 rounded-lg border p-3">
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            <span>Intelligence scoring unavailable</span>
+            <Button variant="ghost" size="sm" onClick={handleRunIntelligence} className="ml-auto text-xs">Retry</Button>
+          </div>
+        ) : (
+          <div className="md:col-span-3" />
+        )}
+        {lensLoading ? (
+          <>
+            <Skeleton className="h-[72px] rounded-lg" />
+            <Skeleton className="h-[72px] rounded-lg" />
+          </>
+        ) : lensScore ? (
+          <>
+            <div className="rounded-lg border bg-slate-50 p-3 flex flex-col justify-center">
+              <span className="text-xs text-muted-foreground font-medium">Conversion</span>
+              <span className="text-xl font-bold text-slate-800">{Math.round(lensScore.conversion_probability)}%</span>
+            </div>
+            <div className={`rounded-lg border p-3 flex flex-col justify-center ${
+              lensScore.quality_tier === "platinum" ? "bg-violet-50 border-violet-200" :
+              lensScore.quality_tier === "gold" ? "bg-amber-50 border-amber-200" :
+              lensScore.quality_tier === "silver" ? "bg-gray-50 border-gray-300" :
+              "bg-orange-50 border-orange-200"
+            }`}>
+              <span className="text-xs text-muted-foreground font-medium">Quality Tier</span>
+              <span className={`text-xl font-bold capitalize ${
+                lensScore.quality_tier === "platinum" ? "text-violet-700" :
+                lensScore.quality_tier === "gold" ? "text-amber-700" :
+                lensScore.quality_tier === "silver" ? "text-gray-600" :
+                "text-orange-700"
+              }`}>{lensScore.quality_tier}</span>
+            </div>
+          </>
+        ) : (
+          <div className="md:col-span-2" />
+        )}
+      </div>
+
+      {intelligence?.overall_assessment && (
+        <div className="bg-slate-50 border rounded-lg p-4 flex items-start gap-3">
+          <Brain className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="text-sm leading-relaxed">{intelligence.overall_assessment}</p>
+            <p className="text-xs text-muted-foreground"><span className="font-medium">Recommended:</span> {intelligence.recommended_action}</p>
+          </div>
+          <Button variant="ghost" size="sm" onClick={handleRunIntelligence} className="shrink-0 ml-auto text-xs" disabled={scoringInProgress}>
+            <RefreshCw className={`h-3 w-3 mr-1 ${scoringInProgress ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
         </div>
       )}
 
@@ -586,17 +702,16 @@ export default function LeadDetail() {
                 <CardTitle className="flex items-center gap-2"><Brain className="h-5 w-5" />Lead Intelligence Assessment</CardTitle>
                 <CardDescription>AI-powered analysis evaluating file completeness, data reliability, and claim veracity</CardDescription>
               </div>
-              <Button onClick={handleRunIntelligence} disabled={scoringInProgress} className="flex items-center gap-2">
-                {scoringInProgress ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
-                {scoringInProgress ? "Analyzing..." : intelligence ? "Re-Evaluate" : "Run Assessment"}
+              <Button onClick={handleRunIntelligence} disabled={scoringInProgress} variant="outline" size="sm" className="flex items-center gap-2">
+                {scoringInProgress ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                {scoringInProgress ? "Re-analyzing..." : "Refresh Scores"}
               </Button>
             </CardHeader>
             <CardContent>
               {!intelligence && !scoringInProgress && !scoringError && (
                 <div className="text-center py-12 text-muted-foreground">
                   <Brain className="h-10 w-10 mx-auto mb-3 opacity-40" />
-                  <p className="text-sm">Initiate the AI Intelligence Assessment to evaluate this claimant's file across three critical dimensions.</p>
-                  <p className="text-xs mt-2">Completion · Reliability · Truthfulness</p>
+                  <p className="text-sm">Intelligence assessment is initializing...</p>
                 </div>
               )}
 
