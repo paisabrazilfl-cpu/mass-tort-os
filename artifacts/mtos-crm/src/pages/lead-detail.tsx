@@ -212,6 +212,75 @@ export default function LeadDetail() {
               )}
             </CardContent>
           </Card>
+
+          {lead.background_check_data && (() => {
+            try {
+              const bgData = JSON.parse(lead.background_check_data as string) as {
+                summary?: string;
+                checked_at?: string;
+                records?: Array<{
+                  type: string;
+                  description: string;
+                  date?: string;
+                  jurisdiction?: string;
+                  severity: string;
+                  role?: string;
+                }>;
+              };
+              if (!bgData.records || bgData.records.length === 0) return null;
+              const partyRecords = bgData.records.filter(r => r.role === "party");
+              const mentionRecords = bgData.records.filter(r => r.role === "mentioned");
+              return (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Court Records</CardTitle>
+                    <CardDescription>
+                      {bgData.summary}
+                      {bgData.checked_at && ` — checked ${format(new Date(bgData.checked_at), "MMM d, yyyy")}`}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {partyRecords.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-sm font-semibold text-red-600">Cases as Party ({partyRecords.length})</div>
+                        {partyRecords.map((rec, i) => (
+                          <div key={`party-${i}`} className="border border-red-200 bg-red-50 rounded-md p-3 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-sm">{rec.description}</span>
+                              <Badge variant="destructive" className="text-xs">
+                                {rec.severity === "high" ? "High" : "Medium"}
+                              </Badge>
+                            </div>
+                            <div className="flex gap-4 text-xs text-muted-foreground">
+                              {rec.date && <span>Filed: {format(new Date(rec.date), "MMM d, yyyy")}</span>}
+                              {rec.jurisdiction && <span>{rec.jurisdiction}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {mentionRecords.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-sm font-semibold text-muted-foreground">Mentions in Other Cases ({mentionRecords.length})</div>
+                        {mentionRecords.map((rec, i) => (
+                          <div key={`mention-${i}`} className="border rounded-md p-3 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm">{rec.description}</span>
+                              <Badge variant="outline" className="text-xs">Low</Badge>
+                            </div>
+                            <div className="flex gap-4 text-xs text-muted-foreground">
+                              {rec.date && <span>Filed: {format(new Date(rec.date), "MMM d, yyyy")}</span>}
+                              {rec.jurisdiction && <span>{rec.jurisdiction}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            } catch { return null; }
+          })()}
         </div>
 
         <div className="space-y-6">
