@@ -18,6 +18,8 @@ import draftingRouter from "./drafting";
 import authRouter from "./auth";
 import integrationsRouter from "./integrations";
 import newsRouter from "./news";
+import imageObjectsRouter from "./image-objects";
+import leadImportRouter from "./lead-import";
 import { authMiddleware } from "../lib/rbac";
 
 const router: IRouter = Router();
@@ -42,5 +44,7 @@ router.use("/timeline", timelineRouter);
 router.use("/drafting", draftingRouter);
 router.use("/integrations", integrationsRouter);
 router.use("/news", newsRouter);
+router.use("/image-objects", imageObjectsRouter);
+router.use("/lead-import", leadImportRouter);
 
 export default router;

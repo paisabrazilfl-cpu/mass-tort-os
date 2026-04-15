@@ -30,6 +30,7 @@ import Predictive from "@/pages/predictive";
 import IntegrationsPage from "@/pages/integrations";
 import News from "@/pages/news";
 import FinancialNews from "@/pages/financial-news";
+import LeadImport from "@/pages/lead-import";
 
 const queryClient = new QueryClient();
 
@@ -62,6 +63,7 @@ function Router() {
         <Route path="/integrations" component={IntegrationsPage} />
         <Route path="/news" component={News} />
         <Route path="/financial-news" component={FinancialNews} />
+        <Route path="/lead-import" component={LeadImport} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

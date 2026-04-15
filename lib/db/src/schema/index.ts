@@ -14,3 +14,5 @@ export * from "./conversations";
 export * from "./messages";
 export * from "./users";
 export * from "./integrations";
+export * from "./image_objects";
+export * from "./import_batches";

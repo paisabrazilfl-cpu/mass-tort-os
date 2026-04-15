@@ -74,8 +74,8 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
   maxAge: 86400,
 }));
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+app.use(express.json({ limit: "55mb" }));
+app.use(express.urlencoded({ extended: true, limit: "55mb" }));
 
 app.use(idsMiddleware());
 
