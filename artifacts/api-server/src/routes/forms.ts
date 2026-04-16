@@ -500,7 +500,7 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
   }
 });
 
-router.post("/background-check", async (req, res) => {
+router.post("/background-check", requireRole("paralegal"), async (req, res) => {
   const { first_name, last_name, state, date_of_birth } = req.body;
   if (!first_name || !last_name) {
     res.status(400).json({ error: "first_name and last_name are required" });
@@ -516,7 +516,7 @@ router.post("/background-check", async (req, res) => {
   }
 });
 
-router.post("/background-check/lead/:id", async (req, res) => {
+router.post("/background-check/lead/:id", requireRole("paralegal"), async (req, res) => {
   const leadId = Number(req.params.id);
   if (isNaN(leadId)) {
     res.status(400).json({ error: "Invalid lead ID" });
@@ -563,7 +563,7 @@ router.post("/background-check/lead/:id", async (req, res) => {
   }
 });
 
-router.post("/npi-verify", async (req, res) => {
+router.post("/npi-verify", requireRole("paralegal"), async (req, res) => {
   const { physician_first_name, physician_last_name, diagnosis } = req.body;
   if (!physician_first_name || !physician_last_name || !diagnosis) {
     res.status(400).json({ error: "physician_first_name, physician_last_name, and diagnosis are required" });
@@ -579,7 +579,7 @@ router.post("/npi-verify", async (req, res) => {
   }
 });
 
-router.post("/fraud-check", async (req, res) => {
+router.post("/fraud-check", requireRole("paralegal"), async (req, res) => {
   const { lead_data, tort_type, diagnosis, physician_first_name, physician_last_name } = req.body;
   if (!diagnosis || !tort_type) {
     res.status(400).json({ error: "tort_type and diagnosis are required" });

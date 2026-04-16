@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { db, auditLogTable } from "@workspace/db";
 import { desc, eq, sql, and, gte } from "drizzle-orm";
+import { requireRole } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/audit-trail", async (req, res) => {
+router.get("/audit-trail", requireRole("admin"), async (req, res) => {
   const limit = parseInt(req.query.limit as string) || 100;
   const entityType = req.query.entity_type as string | undefined;
   const action = req.query.action as string | undefined;
@@ -28,7 +29,7 @@ router.get("/audit-trail", async (req, res) => {
   res.json(filtered);
 });
 
-router.get("/audit-summary", async (_req, res) => {
+router.get("/audit-summary", requireRole("admin"), async (_req, res) => {
   const byEntity = await db
     .select({
       entity_type: auditLogTable.entity_type,

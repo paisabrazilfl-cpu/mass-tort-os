@@ -3,10 +3,11 @@ import { db, reviewQueueTable } from "@workspace/db";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
+import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/", async (req, res) => {
+router.get("/", requireRole("paralegal"), async (req, res) => {
   const { resolution, conflict_type, severity, entity_type, limit } = req.query as Record<string, string | undefined>;
 
   const conditions = [];
@@ -31,7 +32,7 @@ router.get("/", async (req, res) => {
   res.json(sanitized);
 });
 
-router.get("/stats", async (req, res) => {
+router.get("/stats", requireRole("paralegal"), async (req, res) => {
   const byResolution = await db
     .select({
       resolution: reviewQueueTable.resolution,
@@ -75,18 +76,18 @@ router.get("/stats", async (req, res) => {
   });
 });
 
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", requireRole("attorney"), auditAction("resolve_review_item"), async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id)) {
     res.status(400).json({ error: "Invalid ID" });
     return;
   }
 
-  const { resolution, resolution_notes, resolved_by } = req.body as {
+  const { resolution, resolution_notes } = req.body as {
     resolution?: string;
     resolution_notes?: string;
-    resolved_by?: string;
   };
+  const resolved_by = req.user?.email || "unknown";
 
   if (!resolution || !["accepted", "rejected", "escalated"].includes(resolution)) {
     res.status(400).json({ error: "resolution must be one of: accepted, rejected, escalated" });
@@ -104,7 +105,7 @@ router.patch("/:id", async (req, res) => {
     .set({
       resolution,
       resolution_notes: resolution_notes || null,
-      resolved_by: resolved_by || "admin",
+      resolved_by,
       resolved_at: new Date(),
     })
     .where(eq(reviewQueueTable.id, id))

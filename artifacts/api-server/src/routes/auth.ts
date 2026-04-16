@@ -61,8 +61,7 @@ router.post("/register", authRateLimit, async (req, res) => {
 
   if (password.length < 8) { res.status(400).json({ error: "Password must be at least 8 characters" }); return; }
 
-  const allowedSelfRoles = ["viewer", "paralegal"];
-  const assignedRole = (role && allowedSelfRoles.includes(role)) ? role : "viewer";
+  const assignedRole = "viewer";
 
   const existing = await getUserByEmail(email);
   if (existing) { res.status(409).json({ error: "Email already registered" }); return; }

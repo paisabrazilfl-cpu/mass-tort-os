@@ -448,7 +448,7 @@ async function processImportBatch(
   );
 }
 
-router.get("/batches", async (_req, res) => {
+router.get("/batches", requireRole("paralegal"), async (_req, res) => {
   try {
     const batches = await db
       .select()
@@ -462,7 +462,7 @@ router.get("/batches", async (_req, res) => {
   }
 });
 
-router.get("/batches/:id", async (req, res) => {
+router.get("/batches/:id", requireRole("paralegal"), async (req, res) => {
   try {
     const [batch] = await db
       .select()
@@ -484,7 +484,7 @@ router.get("/batches/:id", async (req, res) => {
   }
 });
 
-router.get("/batches/:id/errors", async (req, res) => {
+router.get("/batches/:id/errors", requireRole("paralegal"), async (req, res) => {
   try {
     const rows = await db
       .select()
@@ -507,7 +507,7 @@ router.get("/batches/:id/errors", async (req, res) => {
   }
 });
 
-router.get("/batches/:id/duplicates", async (req, res) => {
+router.get("/batches/:id/duplicates", requireRole("paralegal"), async (req, res) => {
   try {
     const rows = await db
       .select()

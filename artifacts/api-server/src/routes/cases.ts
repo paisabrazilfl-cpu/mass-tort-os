@@ -6,6 +6,12 @@ import { auditLog } from "../lib/audit";
 import crypto from "crypto";
 import { requireRole, auditAction } from "../lib/rbac";
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function validateCaseId(id: string): boolean {
+  return UUID_REGEX.test(id);
+}
+
 const router = Router();
 
 router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("create_case"), async (req, res) => {
@@ -24,6 +30,10 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
 
 router.post("/:id/upload", requireRole("paralegal", "attorney", "admin"), auditAction("upload_case_file"), async (req, res) => {
   const case_id = req.params.id;
+  if (!validateCaseId(case_id)) {
+    res.status(400).json({ error: "Invalid case ID format" });
+    return;
+  }
 
   const { file_name, content, content_type } = req.body as {
     file_name: string;
@@ -51,8 +61,12 @@ router.post("/:id/upload", requireRole("paralegal", "attorney", "admin"), auditA
   res.json({ case_id, status: "queued", job_id, file_name });
 });
 
-router.post("/:id/analyze", async (req, res) => {
+router.post("/:id/analyze", requireRole("paralegal"), async (req, res) => {
   const case_id = req.params.id;
+  if (!validateCaseId(case_id)) {
+    res.status(400).json({ error: "Invalid case ID format" });
+    return;
+  }
 
   const job_id = await enqueueJob("analyze_case", { case_id });
 
@@ -64,7 +78,7 @@ router.post("/:id/analyze", async (req, res) => {
   res.json({ case_id, status: "queued", job_id });
 });
 
-router.get("/", async (req, res) => {
+router.get("/", requireRole("viewer"), async (req, res) => {
   const cases = await db
     .select()
     .from(casesTable)
@@ -73,7 +87,7 @@ router.get("/", async (req, res) => {
   res.json(cases);
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireRole("viewer"), async (req, res) => {
   const case_id = req.params.id;
 
   const [caseRow] = await db
@@ -112,7 +126,7 @@ router.get("/:id", async (req, res) => {
   });
 });
 
-router.get("/worker/queue-stats", async (req, res) => {
+router.get("/worker/queue-stats", requireRole("admin"), async (req, res) => {
   const stats = await getQueueStats();
   res.json(stats);
 });

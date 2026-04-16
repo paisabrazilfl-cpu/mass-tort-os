@@ -26,17 +26,17 @@ const PRESET_INTEGRATIONS = [
   { provider: "lexisnexis", name: "LexisNexis", type: "service", description: "Legal research, identity verification, and risk assessment", category: "Legal Service", docs_url: "https://developer.lexisnexis.com", fields: ["api_key", "api_url"] },
 ];
 
-router.get("/presets", (_req, res) => {
+router.get("/presets", requireRole("admin"), (_req, res) => {
   res.json(PRESET_INTEGRATIONS);
 });
 
-router.get("/", async (_req, res) => {
+router.get("/", requireRole("admin"), async (_req, res) => {
   const integrations = await db.select().from(integrationsTable).orderBy(desc(integrationsTable.created_at));
   const safe = integrations.map(i => ({ ...i, api_key_hash: i.api_key_hash ? "****" : null }));
   res.json(safe);
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireRole("admin"), async (req, res) => {
   const id = parseInt(req.params.id);
   const [integration] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!integration) { res.status(404).json({ error: "Integration not found" }); return; }

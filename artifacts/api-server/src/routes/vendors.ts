@@ -13,7 +13,7 @@ import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/", async (_req, res) => {
+router.get("/", requireRole("paralegal"), async (_req, res) => {
   const vendors = await db
     .select()
     .from(vendorsTable)
@@ -45,7 +45,7 @@ router.post("/", requireRole("attorney", "admin"), auditAction("create_vendor"),
   res.status(201).json(vendor);
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireRole("paralegal"), async (req, res) => {
   const parsed = GetVendorParams.safeParse(req.params);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });

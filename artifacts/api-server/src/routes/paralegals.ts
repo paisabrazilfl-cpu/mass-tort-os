@@ -6,7 +6,7 @@ import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/", async (_req, res) => {
+router.get("/", requireRole("attorney"), async (_req, res) => {
   const paralegals = await db
     .select()
     .from(paralegalsTable)
@@ -24,7 +24,7 @@ router.post("/", requireRole("admin"), auditAction("create_paralegal"), async (r
   res.status(201).json(p);
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireRole("attorney"), async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
   if (!p) { res.status(404).json({ error: "Not found" }); return; }
@@ -50,7 +50,7 @@ router.get("/:id", async (req, res) => {
   });
 });
 
-router.get("/:id/performance", async (req, res) => {
+router.get("/:id/performance", requireRole("attorney"), async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
   if (!p) { res.status(404).json({ error: "Not found" }); return; }

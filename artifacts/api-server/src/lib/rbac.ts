@@ -5,7 +5,14 @@ import { sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
 
-const JWT_SECRET = process.env.SESSION_SECRET || "mtos-dev-secret";
+const JWT_SECRET = (() => {
+  const secret = process.env.SESSION_SECRET;
+  const env = process.env.NODE_ENV;
+  if ((env === "production" || env === "staging") && !secret) {
+    throw new Error("FATAL: SESSION_SECRET environment variable is required in production/staging");
+  }
+  return secret || "mtos-dev-secret";
+})();
 const TOKEN_EXPIRY = "8h";
 
 export type UserRole = "admin" | "attorney" | "paralegal" | "viewer";
@@ -47,12 +54,13 @@ export function verifyToken(token: string): AuthUser | null {
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
-    if (process.env.NODE_ENV !== "production") {
+    if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "staging") {
+      logger.warn("Dev-mode auth bypass active — DO NOT use in production");
       req.user = { id: 0, email: "dev@mtos.local", name: "Dev Admin", role: "admin" };
       next();
       return;
     }
-    res.status(401).json({ error: "Authentication required. Provide a Bearer token." });
+    res.status(401).json({ error: "Authentication required" });
     return;
   }
 
@@ -117,12 +125,13 @@ export function auditAction(action: string) {
 }
 
 export async function createUser(email: string, name: string, role: UserRole, passwordHash: string): Promise<AuthUser> {
-  const [user] = await db.execute(sql`
+  const result = await db.execute(sql`
     INSERT INTO mtos_users (email, name, role, password_hash)
     VALUES (${email}, ${name}, ${role}, ${passwordHash})
     RETURNING id, email, name, role
   `);
-  return user as unknown as AuthUser;
+  const rows = Array.isArray(result) ? result : (result as any).rows ?? [result];
+  return rows[0] as unknown as AuthUser;
 }
 
 export async function getUserByEmail(email: string): Promise<(AuthUser & { password_hash: string }) | null> {

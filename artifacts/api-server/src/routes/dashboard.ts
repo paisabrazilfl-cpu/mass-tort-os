@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { db, leadsTable, documentsTable } from "@workspace/db";
 import { eq, sql, and, gte } from "drizzle-orm";
+import { requireRole } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/stats", async (req, res) => {
+router.get("/stats", requireRole("viewer"), async (req, res) => {
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfWeek = new Date(startOfToday);
@@ -49,7 +50,7 @@ router.get("/stats", async (req, res) => {
   });
 });
 
-router.get("/pipeline", async (req, res) => {
+router.get("/pipeline", requireRole("viewer"), async (req, res) => {
   const byStatus = await db
     .select({
       status: leadsTable.status,
@@ -75,7 +76,7 @@ router.get("/pipeline", async (req, res) => {
   });
 });
 
-router.get("/recent-activity", async (req, res) => {
+router.get("/recent-activity", requireRole("viewer"), async (req, res) => {
   const recentLeads = await db
     .select({
       id: leadsTable.id,

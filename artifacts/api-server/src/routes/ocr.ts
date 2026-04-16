@@ -81,7 +81,7 @@ router.post("/upload", requireRole("paralegal", "attorney", "admin"), auditActio
  * GET /api/ocr/results
  * List all Legora Grid results
  */
-router.get("/results", async (_req, res) => {
+router.get("/results", requireRole("paralegal"), async (_req, res) => {
   const results = await db
     .select()
     .from(faxResultsTable)
@@ -94,7 +94,7 @@ router.get("/results", async (_req, res) => {
  * GET /api/ocr/results/:id
  * Get a single Legora Grid result
  */
-router.get("/results/:id", async (req, res) => {
+router.get("/results/:id", requireRole("paralegal"), async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) {
     res.status(400).json({ error: "Invalid ID" });
@@ -118,7 +118,7 @@ router.get("/results/:id", async (req, res) => {
  * GET /api/ocr/queue-stats
  * OCR queue stats
  */
-router.get("/queue-stats", async (_req, res) => {
+router.get("/queue-stats", requireRole("admin"), async (_req, res) => {
   const results = await db.select().from(faxResultsTable);
   const stats: Record<string, number> = {};
   for (const r of results) {

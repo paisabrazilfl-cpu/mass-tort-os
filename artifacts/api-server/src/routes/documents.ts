@@ -13,7 +13,7 @@ import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/", async (req, res) => {
+router.get("/", requireRole("viewer"), async (req, res) => {
   const parsed = ListDocumentsQueryParams.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -110,7 +110,7 @@ router.post("/redact", requireRole("paralegal", "attorney", "admin"), auditActio
     const redacted = await redactPdf(pdfBytes, rules || []);
     res.json({ pdf_base64: Buffer.from(redacted).toString("base64"), pages: await getPdfPageCount(redacted) });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "PDF redaction failed" });
   }
 });
 
@@ -123,7 +123,7 @@ router.post("/highlight", requireRole("paralegal", "attorney", "admin"), async (
     const highlighted = await highlightPdfRegions(pdfBytes, highlights || []);
     res.json({ pdf_base64: Buffer.from(highlighted).toString("base64"), pages: await getPdfPageCount(highlighted) });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "PDF highlighting failed" });
   }
 });
 

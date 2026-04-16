@@ -43,23 +43,30 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **ImageObject Metadata System**: First-class image records with full metadata tracking (dimensions, MIME type, file size, SHA-256 checksums for integrity verification, source type classification). Supports deduplication via checksum, security classification (confidential/internal/public), retention policies, and links to leads/documents/cases/fax results. Integrity verification endpoint validates vault file checksums. Routes: `/api/image-objects` (CRUD), `/api/image-objects/:id/integrity`. RBAC: create/update require `paralegal+`, delete requires `admin`.
 *   **CSV Lead Import**: Bulk lead ingestion from CSV files with full pipeline validation per row. Features: auto-column mapping (40+ column aliases), preview before import, deduplication against existing CRM leads (email + phone matching), conflict detection, encryption of sensitive fields, error fallback with per-row error tracking, 5,000 row limit per batch. Import batches tracked with detailed row-level status (success/duplicate/error/rejected/conflict). Routes: `/api/lead-import/preview`, `/api/lead-import/execute`, `/api/lead-import/batches`, `/api/lead-import/batches/:id/errors`, `/api/lead-import/batches/:id/duplicates`. Page: `/lead-import`. RBAC: preview requires `paralegal+`, execute requires `attorney+`.
 *   **Praxis AI Predictive Analytics**: Weighted regression scoring engine computing conversion probability, risk score, and quality tier (platinum/gold/silver/bronze/unqualified). Routes: `/api/analytics/predictive/lead/:id`, `/api/analytics/predictive/batch`, `/api/analytics/predictive/by-tort`, `/api/analytics/predictive/model`. Page: `/predictive`.
-*   **Role-Based Access Control (RBAC)**: JWT (HS256) authentication with role hierarchy (admin > attorney > paralegal > viewer). Auth routes: `/api/auth/login`, `/api/auth/register`, `/api/auth/me`. `mtos_users` DB table. Registration restricted to viewer/paralegal self-assignment; admin/attorney roles require admin promotion. Auth endpoints have dedicated rate limiting (20 req/15min). Async password hashing with `crypto.scrypt` + timing-safe comparison. Dev mode auto-authenticates; production requires Bearer tokens.
+*   **Role-Based Access Control (RBAC)**: JWT (HS256) authentication with role hierarchy (admin > attorney > paralegal > viewer). Auth routes: `/api/auth/login`, `/api/auth/register`, `/api/auth/me`. `mtos_users` DB table. Registration locked to `viewer` only — admin must promote users. Auth endpoints have dedicated rate limiting (20 req/15min). Async password hashing with `crypto.scrypt` + timing-safe comparison. Dev mode auto-authenticates (with warning log); production requires Bearer tokens. `SESSION_SECRET` enforced in production (crashes on missing).
 *   **Security Infrastructure**: Comprehensive security layer protecting ePHI/PII data:
-    *   **Field-level Encryption**: AES-256-GCM encryption for sensitive fields (last_4_ssn, date_of_birth, diagnosis, diagnosis_date, street_address, phone_primary, phone, medications, notes, physician_full_address, physician_contact_info, hospital_contact_info, background_check_data) using `ENCRYPTION_KEY` env var. Encrypted values prefixed with `enc:`. Decryption errors return `[DECRYPTION_ERROR]` instead of raw ciphertext. Note: `name`, `email`, `first_name`, `last_name` remain unencrypted for search/filter functionality.
+    *   **Field-level Encryption**: AES-256-GCM encryption for sensitive fields (last_4_ssn, date_of_birth, diagnosis, diagnosis_date, street_address, phone_primary, phone, medications, notes, physician_full_address, physician_contact_info, hospital_contact_info, background_check_data) using `ENCRYPTION_KEY` env var (validated: must be exactly 64 hex chars / 32 bytes). Encrypted values prefixed with `enc:`. Decryption errors return `[DECRYPTION_ERROR]` without leaking error objects. Note: `name`, `email`, `first_name`, `last_name` remain unencrypted for search/filter functionality.
     *   **Security Headers & Rate Limiting**: Helmet.js (CSP, HSTS, X-Content-Type, referrer policy), express-rate-limit (500 req/15min global, 20 req/15min auth), 1MB request body limit. CORS restricted to app domain in production.
-    *   **Route-level Access Control**: RBAC enforced on all write operations across all route files:
-        - **Leads**: Create/update/qualify require `paralegal+`, delete/export require `attorney+`
-        - **Documents**: Create/update/redact/highlight require `paralegal+`, delete requires `attorney+`
-        - **Cases**: Create/upload require `paralegal+`
-        - **Vendors**: Create/update require `attorney+`, delete requires `admin`
-        - **OCR**: Upload/AI-fields require `paralegal+`
-        - **Forms**: Submit require `paralegal+`, FBI escalation requires `attorney+`
-        - **Drafting**: Generate/PDF require `paralegal+`
-        - **Paralegals**: Create requires `admin`
+    *   **Route-level Access Control**: RBAC enforced on ALL routes (read AND write) after red team hardening:
+        - **Leads**: List/detail require `viewer+`, create/update/qualify require `paralegal+`, delete/export require `attorney+`
+        - **Documents**: List requires `viewer+`, create/update/redact/highlight require `paralegal+`, delete requires `attorney+`
+        - **Cases**: List/detail require `viewer+`, create/upload require `paralegal+`, analyze requires `paralegal+`, queue-stats requires `admin`
+        - **Vendors**: List/detail require `paralegal+`, create/update require `attorney+`, delete requires `admin`
+        - **OCR**: Results require `paralegal+`, upload/AI-fields require `paralegal+`, queue-stats requires `admin`
+        - **Forms**: Background-check/NPI-verify/fraud-check require `paralegal+`, submit requires `paralegal+`, FBI escalation requires `attorney+`
+        - **Dashboard**: All stats/pipeline/activity require `viewer+`
+        - **Analytics**: All routes require `attorney+`, predictive scoring per-lead requires `paralegal+`
+        - **Compliance**: Audit trail/summary require `admin`
+        - **Review Queue**: List/stats require `paralegal+`, resolve requires `attorney+`
+        - **Timeline**: Requires `paralegal+`
+        - **News/NPI**: Require `viewer+`/`paralegal+` respectively
         - **Security**: All routes require `admin`
-        - **Integrations**: Write routes require `admin`
+        - **Lead Import**: Preview requires `paralegal+`, execute requires `attorney+`, batch queries require `paralegal+`
         - Health check endpoint exempt from auth for monitoring probes.
         - All write operations include audit logging via `auditAction` middleware.
+    *   **Path Traversal Protection**: Vault operations sanitize all case IDs (whitelist: alphanumeric, underscore, hyphen only), validate resolved paths stay within vault directory, and reject symlinks. Case upload/analyze routes enforce UUID format validation.
+    *   **Information Disclosure Prevention**: Error responses never leak internal error messages (generic messages only). Logger redacts PII fields (password, SSN, DOB, phone, diagnosis, medications, etc.). Decryption errors logged without error objects.
+    *   **Business Logic Hardening**: `resolved_by` on review queue items derived from authenticated user (not request body). Self-registration locked to `viewer` role only. Lead updates trigger conflict engine re-check for diagnosis/tort changes.
     *   **Intrusion Detection System (IDS)**: Middleware scanning for SQL injection, XSS, path traversal, command injection, brute force (100 req/60s). Auto-blocks critical threat IPs for 24h via `blocked_ips` table. All threats logged to `security_alerts` table.
     *   **AI Threat Analysis**: Claude Haiku classifies attack patterns, suggests countermeasures, updates alert records.
     *   **Security Dashboard**: CRM page at `/security` showing threat level, stats (24h alerts, critical count, blocked IPs), attack type/severity breakdowns, blocked IP management, alert table with dismiss, manual IP blocking, and AI analysis trigger.

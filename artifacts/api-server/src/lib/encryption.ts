@@ -11,6 +11,9 @@ function getKey(): Buffer {
   if (!key) {
     throw new Error("ENCRYPTION_KEY environment variable is required");
   }
+  if (!/^[0-9a-fA-F]{64}$/.test(key)) {
+    throw new Error("ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes for AES-256)");
+  }
   return Buffer.from(key, "hex");
 }
 
@@ -38,8 +41,8 @@ export function decrypt(ciphertext: string): string {
     decipher.setAuthTag(authTag);
     const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
     return decrypted.toString("utf8");
-  } catch (err) {
-    logger.error({ err }, "Decryption failed — data may be corrupted or key mismatch");
+  } catch {
+    logger.error("Decryption failed — data may be corrupted or key mismatch");
     return "[DECRYPTION_ERROR]";
   }
 }

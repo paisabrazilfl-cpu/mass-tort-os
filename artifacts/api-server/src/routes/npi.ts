@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { logger } from "../lib/logger";
+import { requireRole } from "../lib/rbac";
 
 const router = Router();
 
@@ -64,7 +65,7 @@ function parseNpiResponse(data: any): NpiResult[] {
   });
 }
 
-router.get("/search", async (req, res) => {
+router.get("/search", requireRole("paralegal"), async (req, res) => {
   const {
     npi_number,
     first_name,
@@ -111,7 +112,7 @@ router.get("/search", async (req, res) => {
   }
 });
 
-router.get("/lookup/:npi", async (req, res) => {
+router.get("/lookup/:npi", requireRole("paralegal"), async (req, res) => {
   const { npi } = req.params;
 
   if (!/^\d{10}$/.test(npi)) {

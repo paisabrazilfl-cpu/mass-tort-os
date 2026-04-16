@@ -100,7 +100,7 @@ router.get("/export", requireRole("attorney", "admin"), auditAction("export_lead
   res.send(csv);
 });
 
-router.get("/", async (req, res) => {
+router.get("/", requireRole("viewer"), async (req, res) => {
   const parsed = ListLeadsQueryParams.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -272,7 +272,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
   res.status(201).json(decryptLeadFields(lead));
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireRole("viewer"), async (req, res) => {
   const parsed = GetLeadParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -365,6 +365,26 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
   if (!lead) {
     res.status(404).json({ error: "Lead not found" });
     return;
+  }
+
+  const conflictFields = ["diagnosis", "tort_type", "diagnosis_confirmed", "was_at_location", "location_name", "exposure_start"];
+  const hasConflictRelevantChange = conflictFields.some(f => (body as Record<string, unknown>)[f] !== undefined);
+  if (hasConflictRelevantChange) {
+    try {
+      const decrypted = decryptLeadFields(lead);
+      const ctx = {
+        entity_type: "lead",
+        entity_id: String(lead.id),
+        source_module: "lead_update",
+        lead_data: decrypted,
+      };
+      const conflictResult = await runFullConflictCheck(ctx);
+      if (conflictResult.output_state === "REJECT" || conflictResult.output_state === "REVIEW_REQUIRED") {
+        await routeToReview(conflictResult, ctx);
+      }
+    } catch (conflictErr) {
+      logger.warn({ leadId: lead.id }, "Post-update conflict check failed (non-blocking)");
+    }
   }
 
   res.json(decryptLeadFields(lead));

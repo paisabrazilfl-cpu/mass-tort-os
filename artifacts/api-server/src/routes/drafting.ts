@@ -8,7 +8,7 @@ import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/templates", async (_req, res) => {
+router.get("/templates", requireRole("paralegal"), async (_req, res) => {
   res.json(getAvailableTemplates());
 });
 
