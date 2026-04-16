@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
+import { dispatchCriticalAlert } from "./security-alerts";
 
 const SQL_INJECTION_PATTERNS = [
   /(\b(union|select|insert|update|delete|drop|alter|create|exec|execute)\b.*\b(from|into|table|database|where)\b)/i,
@@ -178,6 +179,11 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
           },
         });
       logger.warn({ ip, type: threat.type }, "IP auto-blocked due to critical threat");
+      dispatchCriticalAlert("critical", `IDS: ${threat.type} attack detected`, `Source: ${ip} | Path: ${req.originalUrl} | ${threat.details}`).catch(() => {});
+    }
+
+    if (threat.severity === "high") {
+      dispatchCriticalAlert("high", `IDS: ${threat.type} attempt`, `Source: ${ip} | Path: ${req.originalUrl} | ${threat.details}`).catch(() => {});
     }
   } catch (err) {
     logger.error({ err }, "Failed to record security alert");

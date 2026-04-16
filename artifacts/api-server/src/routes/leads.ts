@@ -108,6 +108,16 @@ router.get("/", requireRole("viewer"), async (req, res) => {
   }
 
   const conditions = buildLeadFilters(parsed.data);
+  const user = req.user!;
+  if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+    conditions.push(
+      or(
+        eq(leadsTable.created_by_user_id, user.id),
+        eq(leadsTable.assigned_to, user.id),
+      )!
+    );
+  }
+
   const leads =
     conditions.length > 0
       ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(sql`${leadsTable.created_at} DESC`)
@@ -213,6 +223,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
           exposure_end: data.exposure_end ?? null,
           diagnosis_type: data.diagnosis_type ?? null,
           location_name: data.location_name ?? null,
+          created_by_user_id: req.user?.id ?? null,
           notes: data.notes ?? null,
           ad_spend: data.ad_spend ? String(data.ad_spend) : null,
           source: data.source ?? null,
@@ -264,6 +275,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
       notes: data.notes ?? null,
       ad_spend: data.ad_spend ? String(data.ad_spend) : null,
       source: data.source ?? null,
+      created_by_user_id: req.user?.id ?? null,
     }))
     .returning();
 
@@ -289,6 +301,14 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
     return;
   }
 
+  const user = req.user!;
+  if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+    if (lead.created_by_user_id !== user.id && lead.assigned_to !== user.id) {
+      res.status(403).json({ error: "Insufficient permissions" });
+      return;
+    }
+  }
+
   res.json(decryptLeadFields(lead));
 });
 
@@ -297,6 +317,15 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
   if (!paramsParsed.success) {
     res.status(400).json({ error: paramsParsed.error.message });
     return;
+  }
+
+  const user = req.user!;
+  if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+    const [check] = await db.select({ created_by_user_id: leadsTable.created_by_user_id, assigned_to: leadsTable.assigned_to }).from(leadsTable).where(eq(leadsTable.id, paramsParsed.data.id));
+    if (check && check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
+      res.status(403).json({ error: "Insufficient permissions" });
+      return;
+    }
   }
 
   const bodyParsed = UpdateLeadBody.safeParse(req.body);
@@ -418,6 +447,14 @@ router.post("/:id/qualify", requireRole("paralegal", "attorney", "admin"), audit
     return;
   }
 
+  const user = req.user!;
+  if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+    if (lead.created_by_user_id !== user.id && lead.assigned_to !== user.id) {
+      res.status(403).json({ error: "Insufficient permissions" });
+      return;
+    }
+  }
+
   if (lead.status === "review_required") {
     res.status(409).json({
       error: "Lead is pending manual review and cannot be auto-qualified",
@@ -515,6 +552,15 @@ router.patch("/:id/notes", requireRole("paralegal", "attorney", "admin"), auditA
     if (isNaN(leadId)) {
       res.status(400).json({ error: "Invalid lead identifier" });
       return;
+    }
+
+    const user = req.user!;
+    if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+      const [check] = await db.select({ created_by_user_id: leadsTable.created_by_user_id, assigned_to: leadsTable.assigned_to }).from(leadsTable).where(eq(leadsTable.id, leadId));
+      if (check && check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
+        res.status(403).json({ error: "Insufficient permissions" });
+        return;
+      }
     }
 
     const { notes } = req.body;

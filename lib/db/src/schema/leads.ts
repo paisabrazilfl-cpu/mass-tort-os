@@ -76,6 +76,7 @@ export const leadsTable = pgTable("leads", {
   vendor_id: integer("vendor_id"),
   law_firm: varchar("law_firm", { length: 255 }),
   client_id: varchar("client_id", { length: 100 }),
+  created_by_user_id: integer("created_by_user_id"),
 
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),

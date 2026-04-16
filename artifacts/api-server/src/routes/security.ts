@@ -4,6 +4,7 @@ import { eq, desc, sql, gte, and, count } from "drizzle-orm";
 import { analyzeThreats } from "../lib/threat-analyzer";
 import { logger } from "../lib/logger";
 import { requireRole } from "../lib/rbac";
+import { getUnacknowledgedNotifications, acknowledgeNotification, dispatchCriticalAlert } from "../lib/security-alerts";
 
 const router = Router();
 
@@ -187,6 +188,45 @@ router.patch("/alerts/:id/dismiss", async (req, res) => {
   }
 
   res.json(alert);
+});
+
+router.get("/notifications", async (_req, res) => {
+  const limit = parseInt(_req.query.limit as string) || 50;
+  const notifications = await getUnacknowledgedNotifications(limit);
+  res.json(notifications);
+});
+
+router.patch("/notifications/:id/acknowledge", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const user = req.user;
+  const updated = await acknowledgeNotification(id, user?.email || "admin");
+  if (!updated) {
+    res.status(404).json({ error: "Notification not found or already acknowledged" });
+    return;
+  }
+  res.json(updated);
+});
+
+router.post("/test-alert", async (req, res) => {
+  const { severity, title, message } = req.body;
+  await dispatchCriticalAlert(
+    severity || "medium",
+    title || "Test Alert",
+    message || "This is a test security alert.",
+  );
+  res.json({ message: "Test alert dispatched" });
+});
+
+router.post("/webhook-config", async (req, res) => {
+  const { webhook_url } = req.body;
+  if (!webhook_url) {
+    res.status(400).json({ error: "webhook_url is required" });
+    return;
+  }
+  res.json({
+    message: "Webhook URL configured. Set SECURITY_WEBHOOK_URL environment variable for persistent configuration.",
+    webhook_url,
+  });
 });
 
 export default router;

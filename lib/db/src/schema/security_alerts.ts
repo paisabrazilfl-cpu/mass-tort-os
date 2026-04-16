@@ -55,3 +55,17 @@ export type SecurityAlert = typeof securityAlertsTable.$inferSelect;
 export type InsertSecurityAlert = z.infer<typeof insertSecurityAlertSchema>;
 export type BlockedIp = typeof blockedIpsTable.$inferSelect;
 export type InsertBlockedIp = z.infer<typeof insertBlockedIpSchema>;
+
+export const securityNotificationsTable = pgTable("security_notifications", {
+  id: serial("id").primaryKey(),
+  alert_id: integer("alert_id"),
+  severity: varchar("severity", { length: 20 }).notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  message: text("message").notNull(),
+  channel: varchar("channel", { length: 20 }).notNull().default("in_app"),
+  webhook_url: text("webhook_url"),
+  delivered: boolean("delivered").notNull().default(false),
+  acknowledged: boolean("acknowledged").notNull().default(false),
+  acknowledged_by: varchar("acknowledged_by", { length: 255 }),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});

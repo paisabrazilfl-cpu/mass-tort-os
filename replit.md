@@ -1,6 +1,6 @@
 # Overview
 
-This project is a full-stack Mass Tort Operating System (MTOS), a distributed case processing CRM designed for mass tort law firms. It aims to streamline the entire legal process from lead intake and document management to case analysis, compliance, and distributed processing. The system incorporates AI for medical document extraction, advanced validation engines (TCPA, TrustedForm, email, address), and a robust conflict resolution and error fallback system. It features a sophisticated form engine for compliant lead generation across 24 tort campaigns and a comprehensive analytics suite. The core business vision is to provide a scalable, efficient, and compliant solution to manage complex mass tort litigation, significantly improving operational efficiency and compliance for law firms.
+This project is a full-stack Mass Tort Operating System (MTOS), a distributed case processing CRM designed for mass tort law firms. It aims to streamline the entire legal process from lead intake and document management to case analysis, compliance, and distributed processing. The system incorporates AI for medical document extraction, advanced validation engines, and robust conflict resolution. It features a sophisticated form engine for compliant lead generation across 24 tort campaigns and a comprehensive analytics suite. The core business vision is to provide a scalable, efficient, and compliant solution to manage complex mass tort litigation, significantly improving operational efficiency and compliance for law firms.
 
 # User Preferences
 
@@ -17,84 +17,33 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **Deterministic Scoring Engine**: A rule-based scoring system provides transparent and auditable case qualification.
 *   **File Vault**: Secure storage for case-related documents with SHA-256 hashing for integrity verification.
 *   **AI Integration**: Utilizes Anthropic Claude for medical document extraction and OCR, enhancing automated data processing.
-*   **Conflict Resolution & Error Fallback**: A robust system detects data integrity, logical, AI classification, and rule override conflicts. It provides fail-safe modes (safe fail, review fail, hard block) and an error fallback mechanism with retry logic and loop guards, ensuring system stability and data quality. All failures are logged to an audit trail and a review queue.
-*   **Form Engine**: A comprehensive engine for TCPA and TrustedForm compliant lead generation, featuring a tort-based form builder, embeddable JS script, live validation (email, address), background checks (CourtListener, OFAC), and a 10-step submission pipeline with a "Final Arbiter" for ultimate decision-making.
-*   **Taxonomy Engine**: Matches NPI provider taxonomies with medical diagnoses to identify potential mismatches or scope issues.
-*   **Fraud Engine**: Flags potential fraud indicators without making final decisions, deferring to the Final Arbiter for resolution.
-*   **Compliance & Auditability**: Extensive logging of all actions and conflicts to an `audit_log` table, along with compliance-specific fields in lead records (e.g., `tcpa_consent`, `trustedform_cert_url`).
+*   **Conflict Resolution & Error Fallback**: A robust system detects conflicts, provides fail-safe modes, and an error fallback mechanism with retry logic, ensuring system stability and data quality. All failures are logged to an audit trail and a review queue.
+*   **Form Engine**: A comprehensive engine for TCPA and TrustedForm compliant lead generation, featuring a tort-based form builder, embeddable JS script, live validation, background checks, and a 10-step submission pipeline with a "Final Arbiter."
+*   **Taxonomy Engine**: Matches NPI provider taxonomies with medical diagnoses to identify potential mismatches.
+*   **Fraud Engine**: Flags potential fraud indicators, deferring to the Final Arbiter for resolution.
+*   **Compliance & Auditability**: Extensive logging of all actions and conflicts to an `audit_log` table, along with compliance-specific fields in lead records.
 
 **Key Features & Implementations:**
 
-*   **Dashboard**: Overview of pipeline stats, CPSR, pipeline chart, and activity feed.
-*   **Lead Management**: Features lead listing, intake forms with Boolean Gatekeeper qualification, detailed lead views with documents, CSV export (single lead + bulk with filters: status, tort type, date range, law firm, client ID, vendor, custom field selection).
-*   **Case Management**: Distributed case pipeline, case submission, detailed case views with AI analysis and audit trails.
-*   **Document Management**: Centralized document view and OCR inbox with Legora Grid for fax processing.
+*   **Dashboards**: Overview of pipeline stats, CPSR, pipeline charts, and activity feeds.
+*   **Lead & Case Management**: Comprehensive features for lead intake, qualification, detailed views, document association, and distributed case processing with AI analysis and audit trails.
+*   **Document Management**: Centralized document view, OCR inbox, AI document analysis for structured data extraction, PDF redaction/highlighting, side-by-side document review, medical timeline builder, and AI document drafting.
 *   **Paralegal Management**: Tools for managing paralegal teams, performance tracking, and leaderboards.
-*   **Analytics**: KPIs, conversion funnels, trend charts, and tort breakdown analysis.
-*   **NPI Lookup**: Integration with the CMS NPI Registry.
-*   **Review Queue**: Manages conflict resolution and error fallback items, with UI for manual review and FBI escalation.
-*   **OCR Engine**: Processes fax images using Sharp for preprocessing and Claude Vision for OCR, extracting structured data into a `fax_results` table.
-*   **Vendor Management**: Full CRUD for vendors (lead gen, law firm, marketing, referral types) with status tracking. Leads can be associated with vendors via `vendor_id`, `law_firm`, and `client_id` fields.
-*   **AI Document Analysis (AIFields)**: Claude Haiku structured extraction of Rx numbers, providers, diagnoses, timelines from medical documents. Routes: `/api/ocr/ai-fields`, `/api/ocr/ai-fields/result/:id`.
-*   **PDF Redaction/Highlighting**: pdf-lib based programmatic redaction and highlighting for HIPAA-compliant document sharing. Routes: `/api/documents/redact`, `/api/documents/highlight`.
-*   **Side-by-Side Doc Review**: React page (`/doc-review`) comparing intake form data vs OCR/AI-extracted document data with field-by-field matching and fraud risk indicator.
-*   **Medical Timeline Builder**: Generates chronological exposure/medical timelines from lead data, OCR results, and NPI records. Route: `/api/timeline/lead/:id`, page: `/timeline`.
-*   **AI Document Drafting**: Claude-powered generation of HIPAA authorizations, retainer agreements, medical records requests, demand letters, and intake summaries. Routes: `/api/drafting/templates`, `/api/drafting/generate`, `/api/drafting/generate-pdf`. Page: `/drafting`.
-*   **ImageObject Metadata System**: First-class image records with full metadata tracking (dimensions, MIME type, file size, SHA-256 checksums for integrity verification, source type classification). Supports deduplication via checksum, security classification (confidential/internal/public), retention policies, and links to leads/documents/cases/fax results. Integrity verification endpoint validates vault file checksums. Routes: `/api/image-objects` (CRUD), `/api/image-objects/:id/integrity`. RBAC: create/update require `paralegal+`, delete requires `admin`.
-*   **CSV Lead Import**: Bulk lead ingestion from CSV files with full pipeline validation per row. Features: auto-column mapping (40+ column aliases), preview before import, deduplication against existing CRM leads (email + phone matching), conflict detection, encryption of sensitive fields, error fallback with per-row error tracking, 5,000 row limit per batch. Import batches tracked with detailed row-level status (success/duplicate/error/rejected/conflict). Routes: `/api/lead-import/preview`, `/api/lead-import/execute`, `/api/lead-import/batches`, `/api/lead-import/batches/:id/errors`, `/api/lead-import/batches/:id/duplicates`. Page: `/lead-import`. RBAC: preview requires `paralegal+`, execute requires `attorney+`.
-*   **Praxis AI Predictive Analytics**: Weighted regression scoring engine computing conversion probability, risk score, and quality tier (platinum/gold/silver/bronze/unqualified). Routes: `/api/analytics/predictive/lead/:id`, `/api/analytics/predictive/batch`, `/api/analytics/predictive/by-tort`, `/api/analytics/predictive/model`. Page: `/predictive`.
-*   **Role-Based Access Control (RBAC)**: JWT (HS256) authentication with role hierarchy (admin > attorney > paralegal > viewer). Auth routes: `/api/auth/login`, `/api/auth/register`, `/api/auth/me`. `mtos_users` DB table. Registration locked to `viewer` only — admin must promote users. Auth endpoints have dedicated rate limiting (20 req/15min). Async password hashing with `crypto.scrypt` + timing-safe comparison. Dev mode auto-authenticates (with warning log); production requires Bearer tokens. `SESSION_SECRET` enforced in production (crashes on missing).
-*   **Security Infrastructure**: Comprehensive security layer protecting ePHI/PII data:
-    *   **Field-level Encryption**: AES-256-GCM encryption for sensitive fields (last_4_ssn, date_of_birth, diagnosis, diagnosis_date, street_address, phone_primary, phone, medications, notes, physician_full_address, physician_contact_info, hospital_contact_info, background_check_data) using `ENCRYPTION_KEY` env var (validated: must be exactly 64 hex chars / 32 bytes). Encrypted values prefixed with `enc:`. Decryption errors return `[DECRYPTION_ERROR]` without leaking error objects. Note: `name`, `email`, `first_name`, `last_name` remain unencrypted for search/filter functionality.
-    *   **Security Headers & Rate Limiting**: Helmet.js (CSP, HSTS, X-Content-Type, referrer policy), express-rate-limit (500 req/15min global, 20 req/15min auth), 1MB request body limit. CORS restricted to app domain in production.
-    *   **Route-level Access Control**: RBAC enforced on ALL routes (read AND write) after red team hardening:
-        - **Leads**: List/detail require `viewer+`, create/update/qualify require `paralegal+`, delete/export require `attorney+`
-        - **Documents**: List requires `viewer+`, create/update/redact/highlight require `paralegal+`, delete requires `attorney+`
-        - **Cases**: List/detail require `viewer+`, create/upload require `paralegal+`, analyze requires `paralegal+`, queue-stats requires `admin`
-        - **Vendors**: List/detail require `paralegal+`, create/update require `attorney+`, delete requires `admin`
-        - **OCR**: Results require `paralegal+`, upload/AI-fields require `paralegal+`, queue-stats requires `admin`
-        - **Forms**: Background-check/NPI-verify/fraud-check require `paralegal+`, submit requires `paralegal+`, FBI escalation requires `attorney+`
-        - **Dashboard**: All stats/pipeline/activity require `viewer+`
-        - **Analytics**: All routes require `attorney+`, predictive scoring per-lead requires `paralegal+`
-        - **Compliance**: Audit trail/summary require `admin`
-        - **Review Queue**: List/stats require `paralegal+`, resolve requires `attorney+`
-        - **Timeline**: Requires `paralegal+`
-        - **News/NPI**: Require `viewer+`/`paralegal+` respectively
-        - **Security**: All routes require `admin`
-        - **Lead Import**: Preview requires `paralegal+`, execute requires `attorney+`, batch queries require `paralegal+`
-        - Health check endpoint exempt from auth for monitoring probes.
-        - All write operations include audit logging via `auditAction` middleware.
-    *   **Path Traversal Protection**: Vault operations sanitize all case IDs (whitelist: alphanumeric, underscore, hyphen only), validate resolved paths stay within vault directory, and reject symlinks. Case upload/analyze routes enforce UUID format validation.
-    *   **Information Disclosure Prevention**: Error responses never leak internal error messages (generic messages only). Logger redacts PII fields (password, SSN, DOB, phone, diagnosis, medications, etc.). Decryption errors logged without error objects.
-    *   **Business Logic Hardening**: `resolved_by` on review queue items derived from authenticated user (not request body). Self-registration locked to `viewer` role only. Lead updates trigger conflict engine re-check for diagnosis/tort changes.
-    *   **Intrusion Detection System (IDS)**: Middleware scanning for SQL injection, XSS, path traversal, command injection, brute force (100 req/60s). Auto-blocks critical threat IPs for 24h via `blocked_ips` table. All threats logged to `security_alerts` table.
-    *   **AI Threat Analysis**: Claude Haiku classifies attack patterns, suggests countermeasures, updates alert records.
-    *   **Security Dashboard**: CRM page at `/security` showing threat level, stats (24h alerts, critical count, blocked IPs), attack type/severity breakdowns, blocked IP management, alert table with dismiss, manual IP blocking, and AI analysis trigger.
+*   **Analytics**: KPIs, conversion funnels, trend charts, and tort breakdown analysis, including Praxis AI Predictive Analytics for scoring.
+*   **Vendor Management**: Full CRUD for vendors (lead gen, law firm, marketing, referral types) with status tracking.
+*   **CSV Lead Import**: Bulk lead ingestion with auto-column mapping, preview, deduplication, conflict detection, encryption of sensitive fields, and detailed error tracking.
+*   **Role-Based Access Control (RBAC)**: JWT (HS256) authentication with role hierarchy (admin > attorney > paralegal > viewer) and granular route-level access control.
+*   **Security Infrastructure**: Comprehensive security layer protecting ePHI/PII data, including token revocation, refresh tokens, MFA/TOTP, password complexity, account lockout, row-level isolation, field-level encryption with key rotation and AAD, security headers, rate limiting, security event alerting, path traversal protection, information disclosure prevention, business logic hardening, Intrusion Detection System (IDS), and AI threat analysis.
 
 # External Dependencies
 
 *   **Database**: PostgreSQL
 *   **ORM**: Drizzle ORM
-*   **AI**: Anthropic Claude (via Replit AI Integrations)
-*   **Image Processing**: Sharp (for OCR preprocessing)
+*   **AI**: Anthropic Claude
+*   **Image Processing**: Sharp
 *   **Validation**: Zod
 *   **API Codegen**: Orval
-*   **Background Checks**: CourtListener (free court records API), OFAC sanctions list
+*   **Background Checks**: CourtListener, OFAC sanctions list
 *   **NPI Lookup**: NPPES API (CMS NPI Registry)
-*   **Security**: Helmet.js (security headers), express-rate-limit (rate limiting)
-*   **News Feeds**: Google News RSS, Yahoo Finance RSS, MarketWatch RSS, CNBC RSS (real-time, 10min cache)
-
-# Integrations Hub
-
-Supports 16 pre-built connectors and custom API/vendor/webpage connections:
-
-**CRMs**: Zapier, HubSpot, Clio Manage, Law Ruler, Salesforce, Litify, Filevine, Smokeball, MyCase, Pipedrive, Lead Docket
-**Services**: Blacklist Alliance, TCPA Litigator List, TrustedForm, Jornaya, LexisNexis
-**Custom**: Custom API, Vendor API, Web Page connections with configurable sync direction
-
-Routes: `/api/integrations` (CRUD), `/api/integrations/presets` (list connectors), `/api/integrations/:id/test` (connection test), `/api/integrations/:id/sync` (data sync). DB table: `integrations`. Page: `/integrations`.
-
-# News Feeds
-
-*   **Mass Tort News** (`/news`): Real-time RSS from 5 Google News queries (mass tort, pharmaceutical class action, MDL, product liability, toxic tort). Filterable by category with search. Route: `/api/news/mass-tort`.
-*   **Financial News** (`/financial-news`): RSS from Yahoo Finance, MarketWatch, CNBC, plus pharma/FDA and legal-impact focused feeds. Source breakdown dashboard. Route: `/api/news/financial`.
+*   **Security**: Helmet.js, express-rate-limit
+*   **News Feeds**: Google News RSS, Yahoo Finance RSS, MarketWatch RSS, CNBC RSS
