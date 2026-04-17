@@ -57,6 +57,8 @@ export const leadsTable = pgTable("leads", {
 
   tcpa_consent: boolean("tcpa_consent").default(false),
   trustedform_cert_url: text("trustedform_cert_url"),
+  trustedform_ping_url: text("trustedform_ping_url"),
+  trustedform_cert_token: text("trustedform_cert_token"),
   trustedform_ip: varchar("trustedform_ip", { length: 45 }),
   trustedform_user_agent: text("trustedform_user_agent"),
   trustedform_timestamp: timestamp("trustedform_timestamp"),

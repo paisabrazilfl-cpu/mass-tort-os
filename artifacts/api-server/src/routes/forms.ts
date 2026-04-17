@@ -537,6 +537,8 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
         medications: data.medications ?? null,
         tcpa_consent: true,
         trustedform_cert_url: data.trustedform_cert_url,
+        trustedform_ping_url: data.trustedform_ping_url ?? null,
+        trustedform_cert_token: data.trustedform_cert_token ?? null,
         trustedform_ip: data.trustedform_ip ?? null,
         trustedform_user_agent: data.trustedform_user_agent ?? null,
         trustedform_timestamp: data.trustedform_timestamp ? new Date(data.trustedform_timestamp) : new Date(),
@@ -906,8 +908,28 @@ function section(title,children,opts){
   return s;
 }
 
+// TrustedForm: inject early per ActiveProspect installation guide so the
+// certificate captures the full session, not just post-render activity.
+(function installTrustedForm(){
+  if(document.getElementById("mtos-trustedform-loader"))return;
+  var tf=document.createElement("script");
+  tf.id="mtos-trustedform-loader";
+  tf.type="text/javascript";
+  tf.async=true;
+  // TrustedForm only serves via HTTPS; force https regardless of host protocol.
+  tf.src="https://api.trustedform.com/trustedform.js?field=xxTrustedFormCertUrl&ping_field=xxTrustedFormPingUrl&l="+(new Date().getTime())+Math.random();
+  var first=document.getElementsByTagName("script")[0];
+  if(first&&first.parentNode){first.parentNode.insertBefore(tf,first);}
+  else{(document.head||document.body||document.documentElement).appendChild(tf);}
+})();
+
 var container=document.getElementById("mtos-form");
 if(!container){console.error("MTOS: #mtos-form not found");return;}
+
+// noscript fallback beacon (so the lead is still tracked even if scripts are partially blocked)
+var ns=document.createElement("noscript");
+ns.innerHTML='<img src="https://api.trustedform.com/ns.gif" alt="" style="display:none" />';
+container.appendChild(ns);
 
 var states=${allStates};
 var stateOpts=states.map(function(s){return{value:s,label:s};});
@@ -981,7 +1003,9 @@ form.appendChild(section("Hospital Information",[
 var compSection=section("Compliance",[
   input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:"I consent to being contacted via phone, SMS, and email regarding my legal claim. I understand that this is not a condition of service."}),
 ],{accent:"#2563eb"});
-compSection.appendChild(el("input",{type:"hidden",name:"trustedform_cert_url",id:"xxTrustedFormCertUrl_0",value:""}));
+compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormCertUrl",id:"xxTrustedFormCertUrl_0",value:""}));
+compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormPingUrl",id:"xxTrustedFormPingUrl_0",value:""}));
+compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormCertToken",id:"xxTrustedFormCertToken_0",value:""}));
 form.appendChild(compSection);
 
 form.appendChild(el("input",{type:"hidden",name:"tort_type",value:TORT_LABEL}));
@@ -1008,8 +1032,12 @@ form.addEventListener("submit",function(e){
   payload.diagnosis_confirmed=!!form.querySelector('[name=diagnosis_confirmed]').checked;
   payload.was_at_location=!!form.querySelector('[name=was_at_location]').checked;
 
-  var tf=document.getElementById("xxTrustedFormCertUrl_0");
-  if(tf&&tf.value)payload.trustedform_cert_url=tf.value;
+  var tfCert=document.getElementById("xxTrustedFormCertUrl_0");
+  if(tfCert&&tfCert.value)payload.trustedform_cert_url=tfCert.value;
+  var tfPing=document.getElementById("xxTrustedFormPingUrl_0");
+  if(tfPing&&tfPing.value)payload.trustedform_ping_url=tfPing.value;
+  var tfTok=document.getElementById("xxTrustedFormCertToken_0");
+  if(tfTok&&tfTok.value)payload.trustedform_cert_token=tfTok.value;
 
   fetch(API+"/submit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})
     .then(function(r){return r.json().then(function(d){return{ok:r.ok,data:d};});})
