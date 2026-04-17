@@ -10,10 +10,17 @@
   },
   "private": true,
   "pnpm": {
-    "onlyBuiltDependencies": ["sharp", "esbuild", "@img/sharp-libvips-linux-x64"]
+    "onlyBuiltDependencies": [
+      "sharp",
+      "esbuild",
+      "@img/sharp-libvips-linux-x64"
+    ]
   },
   "devDependencies": {
-    "typescript": "~5.9.2",
-    "prettier": "^3.8.1"
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.2"
+  },
+  "dependencies": {
+    "pdfkit": "^0.18.0"
   }
 }
