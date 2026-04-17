@@ -6,21 +6,14 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { CustomField } from "./customField";
-import type { FormConfigRejectionConditionsItem } from "./formConfigRejectionConditionsItem";
 
-export interface FormConfig {
-  id: string;
-  label: string;
+export interface FormConfigUpdate {
+  label?: string;
   category?: string;
   active?: boolean;
   intro_text?: string | null;
-  fields: string[];
+  valid_diagnoses?: string[];
   extra_fields?: string[];
   exposure_fields?: string[];
-  rules: string[];
-  valid_diagnoses?: string[];
   custom_fields?: CustomField[];
-  rejection_conditions?: FormConfigRejectionConditionsItem[];
-  updated_at?: string | null;
-  updated_by?: string | null;
 }

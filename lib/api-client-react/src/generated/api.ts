@@ -31,6 +31,7 @@ import type {
   CreateLeadBody,
   CreateParalegalBody,
   CreateVendorBody,
+  CustomField,
   DashboardStats,
   Document,
   EmailValidationResult,
@@ -41,6 +42,7 @@ import type {
   FaxResult,
   FormConfig,
   FormConfigList,
+  FormConfigUpdate,
   FormRejection,
   FormSubmission,
   FormSubmissionResult,
@@ -2834,6 +2836,265 @@ export function useGetFormConfig<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Update a tort form configuration (admin only)
+ */
+export const getUpdateFormConfigUrl = (tortId: string) => {
+  return `/api/forms/config/${tortId}`;
+};
+
+export const updateFormConfig = async (
+  tortId: string,
+  formConfigUpdate: FormConfigUpdate,
+  options?: RequestInit,
+): Promise<FormConfig> => {
+  return customFetch<FormConfig>(getUpdateFormConfigUrl(tortId), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(formConfigUpdate),
+  });
+};
+
+export const getUpdateFormConfigMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateFormConfig>>,
+    TError,
+    { tortId: string; data: BodyType<FormConfigUpdate> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateFormConfig>>,
+  TError,
+  { tortId: string; data: BodyType<FormConfigUpdate> },
+  TContext
+> => {
+  const mutationKey = ["updateFormConfig"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateFormConfig>>,
+    { tortId: string; data: BodyType<FormConfigUpdate> }
+  > = (props) => {
+    const { tortId, data } = props ?? {};
+
+    return updateFormConfig(tortId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateFormConfigMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateFormConfig>>
+>;
+export type UpdateFormConfigMutationBody = BodyType<FormConfigUpdate>;
+export type UpdateFormConfigMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update a tort form configuration (admin only)
+ */
+export const useUpdateFormConfig = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateFormConfig>>,
+    TError,
+    { tortId: string; data: BodyType<FormConfigUpdate> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateFormConfig>>,
+  TError,
+  { tortId: string; data: BodyType<FormConfigUpdate> },
+  TContext
+> => {
+  return useMutation(getUpdateFormConfigMutationOptions(options));
+};
+
+/**
+ * @summary Add a custom field to a tort form (admin only)
+ */
+export const getAddCustomFieldUrl = (tortId: string) => {
+  return `/api/forms/config/${tortId}/fields`;
+};
+
+export const addCustomField = async (
+  tortId: string,
+  customField: CustomField,
+  options?: RequestInit,
+): Promise<FormConfig> => {
+  return customFetch<FormConfig>(getAddCustomFieldUrl(tortId), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(customField),
+  });
+};
+
+export const getAddCustomFieldMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addCustomField>>,
+    TError,
+    { tortId: string; data: BodyType<CustomField> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof addCustomField>>,
+  TError,
+  { tortId: string; data: BodyType<CustomField> },
+  TContext
+> => {
+  const mutationKey = ["addCustomField"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof addCustomField>>,
+    { tortId: string; data: BodyType<CustomField> }
+  > = (props) => {
+    const { tortId, data } = props ?? {};
+
+    return addCustomField(tortId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AddCustomFieldMutationResult = NonNullable<
+  Awaited<ReturnType<typeof addCustomField>>
+>;
+export type AddCustomFieldMutationBody = BodyType<CustomField>;
+export type AddCustomFieldMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Add a custom field to a tort form (admin only)
+ */
+export const useAddCustomField = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addCustomField>>,
+    TError,
+    { tortId: string; data: BodyType<CustomField> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof addCustomField>>,
+  TError,
+  { tortId: string; data: BodyType<CustomField> },
+  TContext
+> => {
+  return useMutation(getAddCustomFieldMutationOptions(options));
+};
+
+/**
+ * @summary Remove a custom field from a tort form (admin only)
+ */
+export const getRemoveCustomFieldUrl = (tortId: string, key: string) => {
+  return `/api/forms/config/${tortId}/fields/${key}`;
+};
+
+export const removeCustomField = async (
+  tortId: string,
+  key: string,
+  options?: RequestInit,
+): Promise<FormConfig> => {
+  return customFetch<FormConfig>(getRemoveCustomFieldUrl(tortId, key), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getRemoveCustomFieldMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof removeCustomField>>,
+    TError,
+    { tortId: string; key: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof removeCustomField>>,
+  TError,
+  { tortId: string; key: string },
+  TContext
+> => {
+  const mutationKey = ["removeCustomField"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof removeCustomField>>,
+    { tortId: string; key: string }
+  > = (props) => {
+    const { tortId, key } = props ?? {};
+
+    return removeCustomField(tortId, key, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RemoveCustomFieldMutationResult = NonNullable<
+  Awaited<ReturnType<typeof removeCustomField>>
+>;
+
+export type RemoveCustomFieldMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Remove a custom field from a tort form (admin only)
+ */
+export const useRemoveCustomField = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof removeCustomField>>,
+    TError,
+    { tortId: string; key: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof removeCustomField>>,
+  TError,
+  { tortId: string; key: string },
+  TContext
+> => {
+  return useMutation(getRemoveCustomFieldMutationOptions(options));
+};
 
 /**
  * @summary Validate email (RFC + typo detection)

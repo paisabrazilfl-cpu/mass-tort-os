@@ -841,9 +841,39 @@ export const GetFormConfigsResponse = zod.object({
       id: zod.string(),
       label: zod.string(),
       category: zod.string().optional(),
+      active: zod.boolean().optional(),
+      intro_text: zod.string().nullish(),
       fields: zod.array(zod.string()),
+      extra_fields: zod.array(zod.string()).optional(),
+      exposure_fields: zod.array(zod.string()).optional(),
       rules: zod.array(zod.string()),
       valid_diagnoses: zod.array(zod.string()).optional(),
+      custom_fields: zod
+        .array(
+          zod.object({
+            key: zod.string(),
+            label: zod.string(),
+            type: zod.enum([
+              "text",
+              "email",
+              "tel",
+              "date",
+              "number",
+              "select",
+              "textarea",
+              "checkbox",
+            ]),
+            required: zod.boolean(),
+            placeholder: zod.string().nullish(),
+            helper_text: zod.string().nullish(),
+            options: zod.array(zod.string()).nullish(),
+            max_length: zod.number().nullish(),
+          }),
+        )
+        .optional(),
+      rejection_conditions: zod.array(zod.object({}).passthrough()).optional(),
+      updated_at: zod.string().nullish(),
+      updated_by: zod.string().nullish(),
     }),
   ),
 });
@@ -859,9 +889,231 @@ export const GetFormConfigResponse = zod.object({
   id: zod.string(),
   label: zod.string(),
   category: zod.string().optional(),
+  active: zod.boolean().optional(),
+  intro_text: zod.string().nullish(),
   fields: zod.array(zod.string()),
+  extra_fields: zod.array(zod.string()).optional(),
+  exposure_fields: zod.array(zod.string()).optional(),
   rules: zod.array(zod.string()),
   valid_diagnoses: zod.array(zod.string()).optional(),
+  custom_fields: zod
+    .array(
+      zod.object({
+        key: zod.string(),
+        label: zod.string(),
+        type: zod.enum([
+          "text",
+          "email",
+          "tel",
+          "date",
+          "number",
+          "select",
+          "textarea",
+          "checkbox",
+        ]),
+        required: zod.boolean(),
+        placeholder: zod.string().nullish(),
+        helper_text: zod.string().nullish(),
+        options: zod.array(zod.string()).nullish(),
+        max_length: zod.number().nullish(),
+      }),
+    )
+    .optional(),
+  rejection_conditions: zod.array(zod.object({}).passthrough()).optional(),
+  updated_at: zod.string().nullish(),
+  updated_by: zod.string().nullish(),
+});
+
+/**
+ * @summary Update a tort form configuration (admin only)
+ */
+export const UpdateFormConfigParams = zod.object({
+  tortId: zod.coerce.string(),
+});
+
+export const UpdateFormConfigBody = zod.object({
+  label: zod.string().optional(),
+  category: zod.string().optional(),
+  active: zod.boolean().optional(),
+  intro_text: zod.string().nullish(),
+  valid_diagnoses: zod.array(zod.string()).optional(),
+  extra_fields: zod.array(zod.string()).optional(),
+  exposure_fields: zod.array(zod.string()).optional(),
+  custom_fields: zod
+    .array(
+      zod.object({
+        key: zod.string(),
+        label: zod.string(),
+        type: zod.enum([
+          "text",
+          "email",
+          "tel",
+          "date",
+          "number",
+          "select",
+          "textarea",
+          "checkbox",
+        ]),
+        required: zod.boolean(),
+        placeholder: zod.string().nullish(),
+        helper_text: zod.string().nullish(),
+        options: zod.array(zod.string()).nullish(),
+        max_length: zod.number().nullish(),
+      }),
+    )
+    .optional(),
+});
+
+export const UpdateFormConfigResponse = zod.object({
+  id: zod.string(),
+  label: zod.string(),
+  category: zod.string().optional(),
+  active: zod.boolean().optional(),
+  intro_text: zod.string().nullish(),
+  fields: zod.array(zod.string()),
+  extra_fields: zod.array(zod.string()).optional(),
+  exposure_fields: zod.array(zod.string()).optional(),
+  rules: zod.array(zod.string()),
+  valid_diagnoses: zod.array(zod.string()).optional(),
+  custom_fields: zod
+    .array(
+      zod.object({
+        key: zod.string(),
+        label: zod.string(),
+        type: zod.enum([
+          "text",
+          "email",
+          "tel",
+          "date",
+          "number",
+          "select",
+          "textarea",
+          "checkbox",
+        ]),
+        required: zod.boolean(),
+        placeholder: zod.string().nullish(),
+        helper_text: zod.string().nullish(),
+        options: zod.array(zod.string()).nullish(),
+        max_length: zod.number().nullish(),
+      }),
+    )
+    .optional(),
+  rejection_conditions: zod.array(zod.object({}).passthrough()).optional(),
+  updated_at: zod.string().nullish(),
+  updated_by: zod.string().nullish(),
+});
+
+/**
+ * @summary Add a custom field to a tort form (admin only)
+ */
+export const AddCustomFieldParams = zod.object({
+  tortId: zod.coerce.string(),
+});
+
+export const AddCustomFieldBody = zod.object({
+  key: zod.string(),
+  label: zod.string(),
+  type: zod.enum([
+    "text",
+    "email",
+    "tel",
+    "date",
+    "number",
+    "select",
+    "textarea",
+    "checkbox",
+  ]),
+  required: zod.boolean(),
+  placeholder: zod.string().nullish(),
+  helper_text: zod.string().nullish(),
+  options: zod.array(zod.string()).nullish(),
+  max_length: zod.number().nullish(),
+});
+
+export const AddCustomFieldResponse = zod.object({
+  id: zod.string(),
+  label: zod.string(),
+  category: zod.string().optional(),
+  active: zod.boolean().optional(),
+  intro_text: zod.string().nullish(),
+  fields: zod.array(zod.string()),
+  extra_fields: zod.array(zod.string()).optional(),
+  exposure_fields: zod.array(zod.string()).optional(),
+  rules: zod.array(zod.string()),
+  valid_diagnoses: zod.array(zod.string()).optional(),
+  custom_fields: zod
+    .array(
+      zod.object({
+        key: zod.string(),
+        label: zod.string(),
+        type: zod.enum([
+          "text",
+          "email",
+          "tel",
+          "date",
+          "number",
+          "select",
+          "textarea",
+          "checkbox",
+        ]),
+        required: zod.boolean(),
+        placeholder: zod.string().nullish(),
+        helper_text: zod.string().nullish(),
+        options: zod.array(zod.string()).nullish(),
+        max_length: zod.number().nullish(),
+      }),
+    )
+    .optional(),
+  rejection_conditions: zod.array(zod.object({}).passthrough()).optional(),
+  updated_at: zod.string().nullish(),
+  updated_by: zod.string().nullish(),
+});
+
+/**
+ * @summary Remove a custom field from a tort form (admin only)
+ */
+export const RemoveCustomFieldParams = zod.object({
+  tortId: zod.coerce.string(),
+  key: zod.coerce.string(),
+});
+
+export const RemoveCustomFieldResponse = zod.object({
+  id: zod.string(),
+  label: zod.string(),
+  category: zod.string().optional(),
+  active: zod.boolean().optional(),
+  intro_text: zod.string().nullish(),
+  fields: zod.array(zod.string()),
+  extra_fields: zod.array(zod.string()).optional(),
+  exposure_fields: zod.array(zod.string()).optional(),
+  rules: zod.array(zod.string()),
+  valid_diagnoses: zod.array(zod.string()).optional(),
+  custom_fields: zod
+    .array(
+      zod.object({
+        key: zod.string(),
+        label: zod.string(),
+        type: zod.enum([
+          "text",
+          "email",
+          "tel",
+          "date",
+          "number",
+          "select",
+          "textarea",
+          "checkbox",
+        ]),
+        required: zod.boolean(),
+        placeholder: zod.string().nullish(),
+        helper_text: zod.string().nullish(),
+        options: zod.array(zod.string()).nullish(),
+        max_length: zod.number().nullish(),
+      }),
+    )
+    .optional(),
+  rejection_conditions: zod.array(zod.object({}).passthrough()).optional(),
+  updated_at: zod.string().nullish(),
+  updated_by: zod.string().nullish(),
 });
 
 /**

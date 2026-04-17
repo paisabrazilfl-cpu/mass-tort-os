@@ -1,14 +1,22 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { 
   useGetFormConfigs,
   useValidateEmail,
   useValidateAddress,
   useRunBackgroundCheck,
   useRunLeadBackgroundCheck,
-  FormConfig
+  useUpdateFormConfig,
+  useAddCustomField,
+  useRemoveCustomField,
+  getGetFormConfigsQueryKey,
+  FormConfig,
+  CustomField
 } from "@workspace/api-client-react";
-import { Copy, Shield, Mail, MapPin, Search, CheckCircle2, XCircle, AlertTriangle, Info, Play } from "lucide-react";
+import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -208,43 +216,26 @@ export default function FormEngine() {
                       </div>
                     )}
                   </CardContent>
-                  <CardFooter className="bg-muted/20 border-t p-4 flex gap-2">
-                    <Dialog>
-                      <DialogTrigger asChild>
-                        <Button variant="outline" className="flex-1" size="sm">
-                          <Play className="h-4 w-4 mr-2" /> Preview
-                        </Button>
-                      </DialogTrigger>
-                      <DialogContent className="sm:max-w-[600px] h-[80vh] flex flex-col p-0">
-                        <DialogHeader className="p-6 pb-2 shrink-0">
-                          <DialogTitle>Preview: {config.label}</DialogTitle>
-                        </DialogHeader>
-                        <div className="flex-1 p-6 pt-0 min-h-0">
-                          <div className="w-full h-full border rounded-md bg-white overflow-hidden relative">
-                            {/* In a real app, this would be an iframe pointing to the form URL. 
-                                Using a placeholder representation for this mockup. */}
-                            <div className="absolute inset-0 flex items-center justify-center bg-slate-50 text-slate-400 flex-col gap-4 p-8 text-center">
-                              <div className="p-4 bg-white rounded-xl shadow-sm border border-slate-100 max-w-sm w-full space-y-4">
-                                <div className="h-6 w-3/4 bg-slate-100 rounded mx-auto"></div>
-                                <div className="space-y-2">
-                                  <div className="h-10 w-full bg-slate-50 border rounded-md"></div>
-                                  <div className="h-10 w-full bg-slate-50 border rounded-md"></div>
-                                  <div className="h-10 w-full bg-slate-50 border rounded-md"></div>
-                                </div>
-                                <div className="h-10 w-full bg-slate-200 rounded-md"></div>
-                              </div>
-                              <p className="text-sm font-medium">Form Preview Sandbox</p>
-                              <p className="text-xs max-w-[250px] mx-auto">
-                                The form renders an isolated iframe in production pointing to <code className="bg-slate-200 px-1 rounded text-slate-600">/api/forms/embed/{config.id}</code>
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      </DialogContent>
-                    </Dialog>
-                    <Button variant="default" className="flex-1" size="sm" onClick={() => handleCopyEmbed(config.id)}>
-                      <Copy className="h-4 w-4 mr-2" /> Embed Code
-                    </Button>
+                  {config.custom_fields && config.custom_fields.length > 0 && (
+                    <div className="px-6 pb-2">
+                      <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Custom Fields</Label>
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {config.custom_fields.map(cf => (
+                          <Badge key={cf.key} variant="outline" className="bg-blue-500/5 text-blue-600 border-blue-500/30 text-xs font-normal">
+                            {cf.label}{cf.required ? "*" : ""}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <CardFooter className="bg-muted/20 border-t p-4 flex flex-col gap-2">
+                    <div className="flex gap-2 w-full">
+                      <FormPreviewDialog config={config} />
+                      <Button variant="default" className="flex-1" size="sm" onClick={() => handleCopyEmbed(config.id)}>
+                        <Copy className="h-4 w-4 mr-2" /> Embed
+                      </Button>
+                    </div>
+                    <FormEditDialog config={config} />
                   </CardFooter>
                 </Card>
               ))
@@ -567,5 +558,247 @@ export default function FormEngine() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function FormPreviewDialog({ config }: { config: FormConfig }) {
+  const [open, setOpen] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const apiBase = (import.meta.env.VITE_API_URL as string | undefined) || `${window.location.origin}/api`;
+  const previewSrc = `${apiBase.replace(/\/$/, "")}/forms/preview/${config.id}?k=${reloadKey}`;
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" className="flex-1" size="sm">
+          <Play className="h-4 w-4 mr-2" /> Preview
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-[680px] h-[85vh] flex flex-col p-0">
+        <DialogHeader className="p-6 pb-2 shrink-0 flex-row items-center justify-between space-y-0">
+          <DialogTitle>Live Preview: {config.label}</DialogTitle>
+          <Button size="sm" variant="ghost" onClick={() => setReloadKey(k => k + 1)}>
+            <RefreshCw className="h-4 w-4 mr-1" /> Reload
+          </Button>
+        </DialogHeader>
+        <div className="flex-1 p-6 pt-0 min-h-0">
+          {open && (
+            <iframe
+              key={reloadKey}
+              src={previewSrc}
+              title={`Preview of ${config.label} intake form`}
+              className="w-full h-full border rounded-md bg-white"
+              sandbox="allow-forms allow-scripts"
+              referrerPolicy="no-referrer"
+              data-testid={`iframe-preview-${config.id}`}
+            />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const FIELD_TYPES: CustomField["type"][] = ["text", "email", "tel", "date", "number", "select", "textarea", "checkbox"];
+
+function FormEditDialog({ config }: { config: FormConfig }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [diagnoses, setDiagnoses] = useState<string[]>(config.valid_diagnoses || []);
+  const [diagInput, setDiagInput] = useState("");
+  const [introText, setIntroText] = useState(config.intro_text || "");
+  const [active, setActive] = useState(config.active !== false);
+  const [customFields, setCustomFields] = useState<CustomField[]>(config.custom_fields || []);
+  const [newField, setNewField] = useState<CustomField>({ key: "", label: "", type: "text", required: false });
+
+  const updateConfig = useUpdateFormConfig();
+  const addField = useAddCustomField();
+  const removeField = useRemoveCustomField();
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: getGetFormConfigsQueryKey() });
+
+  const addDiagnosis = () => {
+    const v = diagInput.trim().toLowerCase();
+    if (!v || diagnoses.includes(v)) return;
+    setDiagnoses([...diagnoses, v]);
+    setDiagInput("");
+  };
+
+  const handleSaveBase = () => {
+    updateConfig.mutate(
+      { tortId: config.id, data: { valid_diagnoses: diagnoses, intro_text: introText || null, active } },
+      {
+        onSuccess: () => {
+          invalidate();
+          toast({ title: "Saved", description: `${config.label} updated.` });
+        },
+        onError: (err: any) => toast({ title: "Save failed", description: err?.message || "Update failed", variant: "destructive" }),
+      }
+    );
+  };
+
+  const handleAddField = () => {
+    const key = newField.key.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    if (!key || !newField.label.trim()) {
+      toast({ title: "Field invalid", description: "Key and label are required", variant: "destructive" });
+      return;
+    }
+    if (customFields.some(f => f.key === key)) {
+      toast({ title: "Duplicate key", description: `Key "${key}" already exists`, variant: "destructive" });
+      return;
+    }
+    const field: CustomField = {
+      ...newField,
+      key,
+      options: newField.type === "select"
+        ? (newField.options && newField.options.length > 0 ? newField.options : ["Option 1"])
+        : undefined,
+    };
+    addField.mutate(
+      { tortId: config.id, data: field },
+      {
+        onSuccess: (data) => {
+          invalidate();
+          setCustomFields(data.custom_fields || [...customFields, field]);
+          setNewField({ key: "", label: "", type: "text", required: false });
+          toast({ title: "Field added", description: field.label });
+        },
+        onError: (err: any) => toast({ title: "Add failed", description: err?.message || "Failed to add field", variant: "destructive" }),
+      }
+    );
+  };
+
+  const handleRemoveField = (key: string) => {
+    removeField.mutate(
+      { tortId: config.id, key },
+      {
+        onSuccess: (data) => {
+          invalidate();
+          setCustomFields(data.custom_fields || customFields.filter(f => f.key !== key));
+          toast({ title: "Field removed" });
+        },
+        onError: (err: any) => toast({ title: "Remove failed", description: err?.message, variant: "destructive" }),
+      }
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="ghost" size="sm" className="w-full" data-testid={`button-edit-${config.id}`}>
+          <Pencil className="h-4 w-4 mr-2" /> Edit Form
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-[720px] max-h-[88vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Edit: {config.label}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-6">
+          <div className="flex items-center justify-between rounded-md border p-3">
+            <div>
+              <Label>Active</Label>
+              <p className="text-xs text-muted-foreground">Inactive campaigns return 404 on embed.</p>
+            </div>
+            <Switch checked={active} onCheckedChange={setActive} data-testid={`switch-active-${config.id}`} />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Form Intro Text</Label>
+            <Textarea
+              value={introText}
+              onChange={(e) => setIntroText(e.target.value)}
+              placeholder="Optional intro shown at the top of the embedded form."
+              rows={2}
+              data-testid={`textarea-intro-${config.id}`}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Valid Diagnoses (matched case-insensitively)</Label>
+            <div className="flex gap-2">
+              <Input
+                value={diagInput}
+                onChange={(e) => setDiagInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addDiagnosis(); }}}
+                placeholder="e.g. non-hodgkin lymphoma"
+                data-testid={`input-diagnosis-${config.id}`}
+              />
+              <Button type="button" onClick={addDiagnosis} variant="outline">Add</Button>
+            </div>
+            <div className="flex flex-wrap gap-1.5 pt-2">
+              {diagnoses.map((d) => (
+                <Badge key={d} variant="secondary" className="gap-1.5">
+                  {d}
+                  <button type="button" onClick={() => setDiagnoses(diagnoses.filter(x => x !== d))} className="hover:text-red-500" aria-label={`Remove ${d}`}>
+                    <XCircle className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+              {diagnoses.length === 0 && <span className="text-xs text-muted-foreground">No diagnoses configured.</span>}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label>Custom Fields</Label>
+              <Badge variant="outline">{customFields.length} field(s)</Badge>
+            </div>
+            <div className="space-y-2">
+              {customFields.map((f) => (
+                <div key={f.key} className="flex items-center justify-between rounded-md border p-3 text-sm">
+                  <div className="space-y-0.5">
+                    <div className="font-medium">{f.label} {f.required && <span className="text-red-500">*</span>}</div>
+                    <div className="text-xs text-muted-foreground font-mono">{f.key} · {f.type}{f.options ? ` (${f.options.length} options)` : ""}</div>
+                  </div>
+                  <Button type="button" size="icon" variant="ghost" onClick={() => handleRemoveField(f.key)} data-testid={`button-remove-field-${f.key}`}>
+                    <Trash2 className="h-4 w-4 text-red-500" />
+                  </Button>
+                </div>
+              ))}
+              {customFields.length === 0 && <p className="text-xs text-muted-foreground">No custom fields yet.</p>}
+            </div>
+
+            <div className="rounded-md border bg-muted/20 p-3 space-y-3">
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Add Custom Field</div>
+              <div className="grid grid-cols-2 gap-2">
+                <Input placeholder="Key (snake_case)" value={newField.key} onChange={(e) => setNewField({ ...newField, key: e.target.value })} data-testid="input-field-key" />
+                <Input placeholder="Label" value={newField.label} onChange={(e) => setNewField({ ...newField, label: e.target.value })} data-testid="input-field-label" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Select value={newField.type} onValueChange={(v) => setNewField({ ...newField, type: v as CustomField["type"] })}>
+                  <SelectTrigger data-testid="select-field-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {FIELD_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <div className="flex items-center justify-between rounded-md border bg-background px-3">
+                  <Label className="text-sm">Required</Label>
+                  <Switch checked={newField.required} onCheckedChange={(c) => setNewField({ ...newField, required: c })} data-testid="switch-field-required" />
+                </div>
+              </div>
+              <Input placeholder="Placeholder (optional)" value={newField.placeholder || ""} onChange={(e) => setNewField({ ...newField, placeholder: e.target.value })} />
+              {newField.type === "select" && (
+                <Input
+                  placeholder="Options comma-separated (e.g. Yes,No,Maybe)"
+                  value={(newField.options || []).join(",")}
+                  onChange={(e) => setNewField({ ...newField, options: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })}
+                />
+              )}
+              <Button type="button" onClick={handleAddField} disabled={addField.isPending} data-testid="button-add-field">
+                <Plus className="h-4 w-4 mr-2" /> Add Field
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <Button variant="ghost" onClick={() => setOpen(false)}>Close</Button>
+            <Button onClick={handleSaveBase} disabled={updateConfig.isPending} data-testid={`button-save-${config.id}`}>
+              {updateConfig.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

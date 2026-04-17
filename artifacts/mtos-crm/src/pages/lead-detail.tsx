@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useParams, Link } from "wouter";
-import { useGetLead, getGetLeadQueryKey, useUpdateLead, useDeleteLead, useListDocuments, getListDocumentsQueryKey, useQualifyLead, UpdateLeadBodyStatus } from "@workspace/api-client-react";
+import { useGetLead, getGetLeadQueryKey, useUpdateLead, useDeleteLead, useListDocuments, getListDocumentsQueryKey, useQualifyLead, useGetFormConfigs, UpdateLeadBodyStatus } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -492,6 +492,8 @@ export default function LeadDetail() {
                 <FieldRow label="Contact Information" value={lead.hospital_contact_info} />
               </CardContent>
             </Card>
+
+            <CustomFieldsCard tortType={lead.tort_type} customFields={(lead as any).custom_fields} />
           </div>
         </TabsContent>
 
@@ -849,5 +851,54 @@ export default function LeadDetail() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function CustomFieldsCard({ tortType, customFields }: { tortType?: string | null; customFields?: Record<string, unknown> | null }) {
+  const { data: configsData } = useGetFormConfigs();
+  const all = ((configsData as { tort_campaigns?: Array<{ id: string; label: string; custom_fields?: Array<{ key: string; label: string; type: string }> }> })?.tort_campaigns) || [];
+  const needle = (tortType || "").toLowerCase().trim();
+  const cfg = all.find(c => c.id.toLowerCase() === needle || c.label.toLowerCase() === needle) || null;
+  const cfgFields = (cfg?.custom_fields || []) as Array<{ key: string; label: string; type: string }>;
+  const values = (customFields || {}) as Record<string, unknown>;
+  const valueKeys = Object.keys(values);
+
+  if (cfgFields.length === 0 && valueKeys.length === 0) return null;
+
+  const seen = new Set<string>();
+  const rows: Array<{ key: string; label: string; value: unknown }> = [];
+  for (const f of cfgFields) {
+    seen.add(f.key);
+    rows.push({ key: f.key, label: f.label, value: values[f.key] });
+  }
+  for (const k of valueKeys) {
+    if (!seen.has(k)) rows.push({ key: k, label: k.replace(/_/g, " "), value: values[k] });
+  }
+
+  const renderValue = (v: unknown): string => {
+    if (v === null || v === undefined || v === "") return "—";
+    if (typeof v === "boolean") return v ? "Yes" : "No";
+    if (Array.isArray(v)) return v.join(", ");
+    if (typeof v === "object") return JSON.stringify(v);
+    return String(v);
+  };
+
+  return (
+    <Card data-testid="card-custom-fields">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">Custom Fields</CardTitle>
+        <CardDescription>Form fields defined for the {tortType || "tort"} campaign.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-0">
+        {rows.map(r => (
+          <div key={r.key} className="flex flex-col py-2 border-b border-gray-100 last:border-0" data-testid={`row-cf-${r.key}`}>
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{r.label}</span>
+            <span className={`text-sm mt-0.5 ${values[r.key] !== undefined && values[r.key] !== null && values[r.key] !== "" ? "text-foreground" : "text-muted-foreground italic"}`}>
+              {renderValue(r.value)}
+            </span>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }

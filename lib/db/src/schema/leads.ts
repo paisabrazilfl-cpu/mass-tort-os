@@ -8,6 +8,7 @@ import {
   decimal,
   timestamp,
   date,
+  jsonb,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -77,6 +78,8 @@ export const leadsTable = pgTable("leads", {
   law_firm: varchar("law_firm", { length: 255 }),
   client_id: varchar("client_id", { length: 100 }),
   created_by_user_id: integer("created_by_user_id"),
+
+  custom_fields: jsonb("custom_fields").$type<Record<string, unknown>>().notNull().default({}),
 
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),

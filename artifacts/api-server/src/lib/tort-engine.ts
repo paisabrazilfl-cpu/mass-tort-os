@@ -275,6 +275,104 @@ export const TORT_REGISTRY: Record<string, TortDefinition> = {
     rules: [],
     rejection_conditions: ["DIAGNOSIS_MISMATCH"],
   },
+  "suboxone": {
+    id: "suboxone",
+    label: "Suboxone (Tooth Decay)",
+    category: "pharmaceutical",
+    valid_diagnoses: [
+      "tooth decay", "dental decay", "tooth loss", "tooth extraction",
+      "dental erosion", "enamel erosion", "cavities", "caries",
+      "periodontal disease", "gum disease", "oral infection", "root canal"
+    ],
+    required_exposure: true,
+    exposure_fields: ["exposure_start", "exposure_end"],
+    extra_fields: [],
+    rules: ["EXPOSURE_DATES_REQUIRED"],
+    rejection_conditions: ["NO_EXPOSURE", "DIAGNOSIS_MISMATCH"],
+  },
+  "paragard": {
+    id: "paragard",
+    label: "Paragard IUD",
+    category: "medical_device",
+    valid_diagnoses: [
+      "iud breakage", "device breakage", "device fracture", "iud fracture",
+      "uterine perforation", "perforation", "device migration", "embedment",
+      "infection", "ectopic pregnancy", "hysterectomy", "removal surgery",
+      "pelvic inflammatory disease", "pid", "infertility"
+    ],
+    required_exposure: false,
+    exposure_fields: [],
+    extra_fields: [],
+    rules: [],
+    rejection_conditions: ["DIAGNOSIS_MISMATCH"],
+  },
+  "bard-powerport": {
+    id: "bard-powerport",
+    label: "Bard PowerPort",
+    category: "medical_device",
+    valid_diagnoses: [
+      "catheter fracture", "device fracture", "catheter migration",
+      "blood clot", "deep vein thrombosis", "dvt", "pulmonary embolism", "pe",
+      "infection", "sepsis", "bloodstream infection", "perforation",
+      "cardiac tamponade", "arrhythmia", "necrosis", "tissue damage",
+      "revision surgery", "device failure"
+    ],
+    required_exposure: false,
+    exposure_fields: [],
+    extra_fields: [],
+    rules: [],
+    rejection_conditions: ["DIAGNOSIS_MISMATCH"],
+  },
+  "ozempic": {
+    id: "ozempic",
+    label: "Ozempic / Mounjaro / Wegovy",
+    category: "pharmaceutical",
+    valid_diagnoses: [
+      "gastroparesis", "stomach paralysis", "delayed gastric emptying",
+      "ileus", "intestinal obstruction", "bowel obstruction", "small bowel obstruction",
+      "deep vein thrombosis", "pulmonary embolism",
+      "gallbladder disease", "cholecystitis", "gallstones", "cholelithiasis",
+      "pancreatitis", "acute pancreatitis", "vision loss", "naion",
+      "non-arteritic anterior ischemic optic neuropathy"
+    ],
+    required_exposure: true,
+    exposure_fields: ["exposure_start"],
+    extra_fields: ["medications"],
+    rules: [],
+    rejection_conditions: ["NO_EXPOSURE", "DIAGNOSIS_MISMATCH"],
+  },
+  "exactech": {
+    id: "exactech",
+    label: "Exactech Hip/Knee/Ankle Implant",
+    category: "medical_device",
+    valid_diagnoses: [
+      "implant failure", "polyethylene wear", "osteolysis", "bone loss",
+      "revision surgery", "loosening", "instability", "dislocation",
+      "chronic pain", "metallosis", "device failure"
+    ],
+    required_exposure: false,
+    exposure_fields: [],
+    extra_fields: [],
+    rules: [],
+    rejection_conditions: ["DIAGNOSIS_MISMATCH"],
+  },
+  "philips-cpap": {
+    id: "philips-cpap",
+    label: "Philips CPAP/BiPAP Recall",
+    category: "medical_device",
+    valid_diagnoses: [
+      "lung cancer", "kidney cancer", "liver cancer", "nasal cancer",
+      "throat cancer", "sinus cancer", "respiratory failure",
+      "chemical poisoning", "pulmonary fibrosis", "asthma exacerbation",
+      "chronic bronchitis", "copd", "foam degradation injury",
+      "reactive airway disease"
+    ],
+    required_exposure: true,
+    exposure_fields: ["exposure_start", "exposure_end"],
+    extra_fields: [],
+    rules: ["EXPOSURE_DATES_REQUIRED"],
+    rejection_conditions: ["NO_EXPOSURE", "DIAGNOSIS_MISMATCH"],
+  },
 };
 
 export interface TortValidationResult {
@@ -317,16 +415,26 @@ export function validateTortClaim(data: {
     errors.push("DIAGNOSIS_MISMATCH");
   }
 
-  if (tort.required_exposure && !data.exposure_start && !data.was_at_location) {
-    errors.push("NO_EXPOSURE");
+  if (tort.required_exposure) {
+    const requiresStart = tort.exposure_fields.includes("exposure_start");
+    const hasStart = !!(data.exposure_start && data.exposure_start.trim());
+    if (requiresStart && !hasStart && !data.was_at_location) {
+      errors.push("NO_EXPOSURE");
+    } else if (!requiresStart && !hasStart && !data.was_at_location) {
+      errors.push("NO_EXPOSURE");
+    }
   }
 
   for (const rule of tort.rules) {
     if (rule === "LOCATION_REQUIRED" && (!data.location_name || !data.location_name.trim())) {
       errors.push("TORT_RULE:LOCATION_REQUIRED");
     }
-    if (rule === "EXPOSURE_DATES_REQUIRED" && (!data.exposure_start || !data.exposure_start.trim())) {
-      errors.push("TORT_RULE:EXPOSURE_DATES_REQUIRED");
+    if (rule === "EXPOSURE_DATES_REQUIRED") {
+      if (!data.exposure_start || !data.exposure_start.trim()) {
+        errors.push("TORT_RULE:EXPOSURE_DATES_REQUIRED");
+      } else if (tort.exposure_fields.includes("exposure_end") && (!data.exposure_end || !data.exposure_end.trim())) {
+        errors.push("TORT_RULE:EXPOSURE_END_REQUIRED");
+      }
     }
   }
 

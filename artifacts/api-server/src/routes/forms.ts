@@ -12,37 +12,165 @@ import { runFraudDetection } from "../lib/fraud-engine";
 import { finalArbiter } from "../lib/final-arbiter";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { requireRole, auditAction } from "../lib/rbac";
+import { requireRole, auditAction, authMiddleware } from "../lib/rbac";
+import {
+  getAllFormConfigs,
+  getFormConfig,
+  getFormConfigByIdOrLabel,
+  updateFormConfig,
+  addCustomField,
+  removeCustomField,
+  type CustomField,
+} from "../lib/form-config-service";
+import { customFieldSchema } from "@workspace/db";
 
 const router = Router();
 
-router.get("/config", (_req, res) => {
-  const configs = Object.entries(TORT_REGISTRY).map(([id, config]) => ({
-    id,
-    label: config.label,
-    category: config.category,
-    fields: [...config.extra_fields, ...config.exposure_fields],
-    rules: config.rules,
-    valid_diagnoses: config.valid_diagnoses,
-  }));
-  res.json({ tort_campaigns: configs });
+router.get("/config", async (_req, res) => {
+  try {
+    const all = await getAllFormConfigs();
+    const configs = all.map(c => ({
+      id: c.id,
+      label: c.label,
+      category: c.category,
+      fields: [...c.extra_fields, ...c.exposure_fields],
+      rules: c.rules,
+      valid_diagnoses: c.valid_diagnoses,
+      custom_fields: c.custom_fields,
+      required_exposure: c.required_exposure,
+      intro_text: c.intro_text,
+      active: c.active,
+      updated_at: c.updated_at,
+    }));
+    res.json({ tort_campaigns: configs });
+  } catch (err) {
+    logger.error({ err }, "Failed to load form configs");
+    res.status(500).json({ error: "Failed to load form configurations" });
+  }
 });
 
-router.get("/config/:tortId", (req, res) => {
-  const config = TORT_REGISTRY[req.params.tortId];
-  if (!config) {
-    res.status(404).json({ error: "Tort campaign not found" });
-    return;
+router.get("/config/:tortId", async (req, res) => {
+  try {
+    const config = await getFormConfig(req.params.tortId);
+    if (!config) {
+      res.status(404).json({ error: "Tort campaign not found" });
+      return;
+    }
+    res.json({
+      id: config.id,
+      label: config.label,
+      category: config.category,
+      fields: [...config.extra_fields, ...config.exposure_fields],
+      rules: config.rules,
+      valid_diagnoses: config.valid_diagnoses,
+      custom_fields: config.custom_fields,
+      required_exposure: config.required_exposure,
+      intro_text: config.intro_text,
+      active: config.active,
+      updated_at: config.updated_at,
+    });
+  } catch (err) {
+    logger.error({ err }, "Failed to load form config");
+    res.status(500).json({ error: "Failed to load form configuration" });
   }
-  res.json({
-    id: req.params.tortId,
-    label: config.label,
-    category: config.category,
-    fields: [...config.extra_fields, ...config.exposure_fields],
-    rules: config.rules,
-    valid_diagnoses: config.valid_diagnoses,
-  });
 });
+
+router.put(
+  "/config/:tortId",
+  authMiddleware,
+  requireRole("admin"),
+  auditAction("form_config_update"),
+  async (req, res) => {
+    try {
+      const { label, valid_diagnoses, exposure_fields, extra_fields, custom_fields, rules, rejection_conditions, required_exposure, intro_text, active } = req.body ?? {};
+      if (custom_fields !== undefined) {
+        if (!Array.isArray(custom_fields)) {
+          res.status(400).json({ error: "custom_fields must be an array" });
+          return;
+        }
+        for (const f of custom_fields) {
+          const parsed = customFieldSchema.safeParse(f);
+          if (!parsed.success) {
+            res.status(400).json({ error: "Invalid custom field", details: parsed.error.issues });
+            return;
+          }
+        }
+        const keys = new Set<string>();
+        for (const f of custom_fields as CustomField[]) {
+          if (keys.has(f.key)) {
+            res.status(400).json({ error: `Duplicate field key: ${f.key}` });
+            return;
+          }
+          keys.add(f.key);
+        }
+      }
+      const userId = req.user?.id ?? 0;
+      const updated = await updateFormConfig(req.params.tortId, {
+        label, valid_diagnoses, exposure_fields, extra_fields, custom_fields, rules, rejection_conditions, required_exposure, intro_text, active,
+      }, userId);
+      if (!updated) {
+        res.status(404).json({ error: "Tort campaign not found" });
+        return;
+      }
+      res.json(updated);
+    } catch (err) {
+      logger.error({ err }, "Failed to update form config");
+      res.status(500).json({ error: "Failed to update form configuration" });
+    }
+  }
+);
+
+router.post(
+  "/config/:tortId/fields",
+  authMiddleware,
+  requireRole("admin"),
+  auditAction("form_field_add"),
+  async (req, res) => {
+    try {
+      const parsed = customFieldSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid custom field", details: parsed.error.issues });
+        return;
+      }
+      const userId = req.user?.id ?? 0;
+      const updated = await addCustomField(req.params.tortId, parsed.data as CustomField, userId);
+      if (!updated) {
+        res.status(404).json({ error: "Tort campaign not found" });
+        return;
+      }
+      res.json(updated);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to add field";
+      if (msg.includes("already exists")) {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      logger.error({ err }, "Failed to add custom field");
+      res.status(500).json({ error: msg });
+    }
+  }
+);
+
+router.delete(
+  "/config/:tortId/fields/:key",
+  authMiddleware,
+  requireRole("admin"),
+  auditAction("form_field_remove"),
+  async (req, res) => {
+    try {
+      const userId = req.user?.id ?? 0;
+      const updated = await removeCustomField(req.params.tortId, req.params.key, userId);
+      if (!updated) {
+        res.status(404).json({ error: "Tort campaign not found" });
+        return;
+      }
+      res.json(updated);
+    } catch (err) {
+      logger.error({ err }, "Failed to remove custom field");
+      res.status(500).json({ error: "Failed to remove custom field" });
+    }
+  }
+);
 
 router.get("/categories", (_req, res) => {
   res.json(getTortCategories());
@@ -59,28 +187,37 @@ router.post("/validate/address", (req, res) => {
   res.json(result);
 });
 
-router.get("/embed/:tortId", (req, res) => {
-  const tortId = req.params.tortId;
-  const config = TORT_REGISTRY[tortId];
-  if (!config) {
-    res.status(404).json({ error: "Tort campaign not found" });
-    return;
-  }
-
-  const host = req.get("host") || "localhost";
-  const protocol = req.get("x-forwarded-proto") || req.protocol;
-  const baseUrl = `${protocol}://${host}`;
-
-  const embedScript = generateEmbedScript(tortId, config, baseUrl);
-  res.setHeader("Content-Type", "application/javascript");
-  res.send(embedScript);
-});
+// NOTE: GET /forms/preview/:tortId, /forms/embed/:tortId, and
+// /forms/preview-blocker.js are served by forms-public.ts mounted before
+// authMiddleware so they are publicly embeddable.
 
 interface PipelineStep {
   name: string;
   status: "passed" | "failed" | "skipped" | "error";
   errors: string[];
   data?: Record<string, unknown>;
+}
+
+function extractCustomFieldValues(
+  data: Record<string, unknown>,
+  allowlist?: string[],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(data)) {
+    if (k.startsWith("cf_")) {
+      out[k.slice(3)] = data[k];
+    }
+  }
+  if (data.custom_fields && typeof data.custom_fields === "object" && !Array.isArray(data.custom_fields)) {
+    Object.assign(out, data.custom_fields as Record<string, unknown>);
+  }
+  if (allowlist && allowlist.length >= 0) {
+    const allow = new Set(allowlist);
+    for (const k of Object.keys(out)) {
+      if (!allow.has(k)) delete out[k];
+    }
+  }
+  return out;
 }
 
 router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditAction("form_submit"), async (req, res) => {
@@ -418,6 +555,11 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
         ad_spend: data.ad_spend ? String(data.ad_spend) : null,
         source: data.source ?? "form_embed",
         status,
+        custom_fields: await (async () => {
+          const cfg = await getFormConfigByIdOrLabel(String(data.tort_type ?? ""));
+          const allow = (cfg?.custom_fields ?? []).map((f) => f.key);
+          return extractCustomFieldValues(data, allow);
+        })(),
       }))
       .returning();
 
@@ -663,15 +805,31 @@ router.post("/escalate/fbi", requireRole("attorney", "admin"), auditAction("esca
   }
 });
 
-function generateEmbedScript(tortId: string, config: typeof TORT_REGISTRY[string], baseUrl: string): string {
+interface EmbedConfig {
+  label: string;
+  extra_fields: string[];
+  exposure_fields: string[];
+  intro_text: string | null;
+  custom_fields: CustomField[];
+}
+
+export function escapeJs(s: string): string {
+  return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/<\//g, "<\\/");
+}
+
+export function generateEmbedScript(tortId: string, config: EmbedConfig, baseUrl: string): string {
   const allStates = '["AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"]';
   const extraFields = [...config.extra_fields, ...config.exposure_fields];
+  const customFieldsJson = JSON.stringify(config.custom_fields ?? []);
+  const introText = config.intro_text ? escapeJs(config.intro_text) : "Complete all required fields to submit your claim for review.";
 
   return `(function(){
 var API="${baseUrl}/api/forms";
-var TORT_ID="${tortId}";
-var TORT_LABEL="${config.label}";
+var TORT_ID="${escapeJs(tortId)}";
+var TORT_LABEL="${escapeJs(config.label)}";
+var TORT_INTRO="${introText}";
 var EXTRA_FIELDS=${JSON.stringify(extraFields)};
+var CUSTOM_FIELDS=${customFieldsJson};
 
 function el(tag,attrs,children){
   var e=document.createElement(tag);
@@ -788,6 +946,23 @@ if(EXTRA_FIELDS.indexOf("exposure_start")>=0){
 }
 if(EXTRA_FIELDS.indexOf("exposure_end")>=0){
   form.appendChild(input("exposure_end","Exposure End Date","date",{optional:true}));
+}
+
+if(CUSTOM_FIELDS&&CUSTOM_FIELDS.length>0){
+  var customNodes=CUSTOM_FIELDS.map(function(cf){
+    var opts={optional:!cf.required};
+    if(cf.placeholder)opts.placeholder=cf.placeholder;
+    if(cf.options)opts.options=cf.options;
+    if(cf.max_length)opts.maxLength=String(cf.max_length);
+    if(cf.type==="checkbox")opts.checkLabel=cf.label;
+    var node=input("cf_"+cf.key,cf.label,cf.type,opts);
+    if(cf.helper_text){
+      var help=el("p",{style:{fontSize:"12px",color:"#6b7280",marginTop:"-6px",marginBottom:"8px"}},cf.helper_text);
+      node.appendChild(help);
+    }
+    return node;
+  });
+  form.appendChild(section("Additional Information",customNodes));
 }
 
 form.appendChild(section("Physician Information",[

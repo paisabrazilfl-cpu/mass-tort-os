@@ -640,13 +640,59 @@ export interface AuditSummary {
   last_7d: number;
 }
 
+export type CustomFieldType =
+  (typeof CustomFieldType)[keyof typeof CustomFieldType];
+
+export const CustomFieldType = {
+  text: "text",
+  email: "email",
+  tel: "tel",
+  date: "date",
+  number: "number",
+  select: "select",
+  textarea: "textarea",
+  checkbox: "checkbox",
+} as const;
+
+export interface CustomField {
+  key: string;
+  label: string;
+  type: CustomFieldType;
+  required: boolean;
+  placeholder?: string | null;
+  helper_text?: string | null;
+  options?: string[] | null;
+  max_length?: number | null;
+}
+
+export type FormConfigRejectionConditionsItem = { [key: string]: unknown };
+
 export interface FormConfig {
   id: string;
   label: string;
   category?: string;
+  active?: boolean;
+  intro_text?: string | null;
   fields: string[];
+  extra_fields?: string[];
+  exposure_fields?: string[];
   rules: string[];
   valid_diagnoses?: string[];
+  custom_fields?: CustomField[];
+  rejection_conditions?: FormConfigRejectionConditionsItem[];
+  updated_at?: string | null;
+  updated_by?: string | null;
+}
+
+export interface FormConfigUpdate {
+  label?: string;
+  category?: string;
+  active?: boolean;
+  intro_text?: string | null;
+  valid_diagnoses?: string[];
+  extra_fields?: string[];
+  exposure_fields?: string[];
+  custom_fields?: CustomField[];
 }
 
 export type NpiVerifyResultTaxonomyMatch = {

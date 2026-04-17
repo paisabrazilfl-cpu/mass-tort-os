@@ -11,6 +11,7 @@ import complianceRouter from "./compliance";
 import npiRouter from "./npi";
 import reviewQueueRouter from "./review-queue";
 import formsRouter from "./forms";
+import formsPublicRouter from "./forms-public";
 import vendorsRouter from "./vendors";
 import securityRouter from "./security";
 import timelineRouter from "./timeline";
@@ -26,6 +27,7 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use("/auth", authRouter);
+router.use("/forms", formsPublicRouter);
 router.use(authMiddleware);
 router.use("/leads", leadsRouter);
 router.use("/documents", documentsRouter);

@@ -777,6 +777,78 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FormConfig"
+    put:
+      operationId: updateFormConfig
+      tags: [forms]
+      summary: Update a tort form configuration (admin only)
+      parameters:
+        - name: tortId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FormConfigUpdate"
+      responses:
+        "200":
+          description: Updated configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FormConfig"
+
+  /forms/config/{tortId}/fields:
+    post:
+      operationId: addCustomField
+      tags: [forms]
+      summary: Add a custom field to a tort form (admin only)
+      parameters:
+        - name: tortId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomField"
+      responses:
+        "200":
+          description: Updated configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FormConfig"
+
+  /forms/config/{tortId}/fields/{key}:
+    delete:
+      operationId: removeCustomField
+      tags: [forms]
+      summary: Remove a custom field from a tort form (admin only)
+      parameters:
+        - name: tortId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FormConfig"
 
   /forms/validate/email:
     post:
@@ -2503,6 +2575,34 @@ components:
           type: integer
       required: [by_entity, by_action, total_events, last_24h, last_7d]
 
+    CustomField:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        type:
+          type: string
+          enum: [text, email, tel, date, number, select, textarea, checkbox]
+        required:
+          type: boolean
+        placeholder:
+          type: string
+          nullable: true
+        helper_text:
+          type: string
+          nullable: true
+        options:
+          type: array
+          nullable: true
+          items:
+            type: string
+        max_length:
+          type: integer
+          nullable: true
+      required: [key, label, type, required]
+
     FormConfig:
       type: object
       properties:
@@ -2512,7 +2612,20 @@ components:
           type: string
         category:
           type: string
+        active:
+          type: boolean
+        intro_text:
+          type: string
+          nullable: true
         fields:
+          type: array
+          items:
+            type: string
+        extra_fields:
+          type: array
+          items:
+            type: string
+        exposure_fields:
           type: array
           items:
             type: string
@@ -2524,7 +2637,50 @@ components:
           type: array
           items:
             type: string
+        custom_fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomField"
+        rejection_conditions:
+          type: array
+          items:
+            type: object
+        updated_at:
+          type: string
+          nullable: true
+        updated_by:
+          type: string
+          nullable: true
       required: [id, label, fields, rules]
+
+    FormConfigUpdate:
+      type: object
+      properties:
+        label:
+          type: string
+        category:
+          type: string
+        active:
+          type: boolean
+        intro_text:
+          type: string
+          nullable: true
+        valid_diagnoses:
+          type: array
+          items:
+            type: string
+        extra_fields:
+          type: array
+          items:
+            type: string
+        exposure_fields:
+          type: array
+          items:
+            type: string
+        custom_fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomField"
 
     NpiVerifyResult:
       type: object

@@ -16,5 +16,6 @@ export * from "./users";
 export * from "./integrations";
 export * from "./image_objects";
 export * from "./import_batches";
+export * from "./form_configurations";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";
