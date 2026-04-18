@@ -1,22 +1,79 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request } from "express";
 import { getFormConfig } from "../lib/form-config-service";
 import { generateEmbedScript } from "./forms";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
+// Strict host pattern: alphanumerics, dot, hyphen, optional :port.
+// Blocks Host-header injection vectors (CR/LF, quotes, angle brackets, spaces).
+const SAFE_HOST = /^[a-zA-Z0-9.-]+(?::\d{1,5})?$/;
+
+/**
+ * Resolve the public base URL for embed/preview links.
+ *
+ * Priority:
+ *   1) PUBLIC_API_BASE_URL env var (set this in production / when running
+ *      behind the future host site so links never depend on Host header).
+ *   2) X-Forwarded-Proto + Host header, validated against SAFE_HOST.
+ *
+ * If the Host header fails validation we refuse to render rather than
+ * emit attacker-controlled URLs into HTML or JS.
+ */
+function resolveBaseUrl(req: Request): string | null {
+  const fromEnv = process.env.PUBLIC_API_BASE_URL?.trim();
+  if (fromEnv) return fromEnv.replace(/\/+$/, "");
+
+  const host = req.get("host") ?? "";
+  if (!SAFE_HOST.test(host)) return null;
+
+  const proto = (req.get("x-forwarded-proto") ?? req.protocol ?? "https")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  if (proto !== "http" && proto !== "https") return null;
+
+  return `${proto}://${host}`;
+}
+
+// CSP shared by preview HTML. TrustedForm requires:
+//  - script-src + connect-src for api.trustedform.com (+ subdomains)
+//  - worker-src incl. blob: for its instrumentation worker
+//  - frame-src for any iframes the TF script may inject
+const PREVIEW_CSP = [
+  "default-src 'self'",
+  "script-src 'self' https://api.trustedform.com https://*.trustedform.com",
+  "worker-src 'self' blob: https://*.trustedform.com",
+  "frame-src 'self' https://*.trustedform.com",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "connect-src 'self' https://api.trustedform.com https://*.trustedform.com",
+  "frame-ancestors *",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
+function htmlEscape(s: string): string {
+  return s.replace(/[<>&"']/g, (c) =>
+    ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" })[c] as string,
+  );
+}
+
 router.get("/preview/:tortId", async (req, res) => {
   const tortId = req.params.tortId;
   try {
+    const baseUrl = resolveBaseUrl(req);
+    if (!baseUrl) {
+      res.status(400).type("html").send("<h1>Bad request</h1>");
+      return;
+    }
     const config = await getFormConfig(tortId);
     if (!config) {
       res.status(404).type("html").send("<h1>Form not found</h1>");
       return;
     }
-    const host = req.get("host") || "localhost";
-    const protocol = req.get("x-forwarded-proto") || req.protocol;
-    const baseUrl = `${protocol}://${host}`;
-    const safeLabel = config.label.replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" })[c] as string);
+    const safeLabel = htmlEscape(config.label);
+    const safeTortId = encodeURIComponent(tortId);
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -28,16 +85,15 @@ router.get("/preview/:tortId", async (req, res) => {
 <body>
 <div class="banner"><strong>Preview Mode</strong> — submissions are disabled in this preview window.</div>
 <div id="mtos-form"></div>
-<script src="${baseUrl}/api/forms/embed/${encodeURIComponent(tortId)}"></script>
-<script src="${baseUrl}/api/forms/preview-blocker.js"></script>
+<script src="${htmlEscape(baseUrl)}/api/forms/embed/${safeTortId}"></script>
+<script src="${htmlEscape(baseUrl)}/api/forms/preview-blocker.js"></script>
 </body>
 </html>`;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
-    res.setHeader(
-      "Content-Security-Policy",
-      "default-src 'self'; script-src 'self' https://api.trustedform.com https://*.trustedform.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.trustedform.com https://*.trustedform.com; frame-ancestors *",
-    );
+    res.setHeader("Content-Security-Policy", PREVIEW_CSP);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
     res.removeHeader("X-Frame-Options");
@@ -59,14 +115,16 @@ router.get("/preview-blocker.js", (_req, res) => {
 router.get("/embed/:tortId", async (req, res) => {
   const tortId = req.params.tortId;
   try {
+    const baseUrl = resolveBaseUrl(req);
+    if (!baseUrl) {
+      res.status(400).json({ error: "Invalid host" });
+      return;
+    }
     const config = await getFormConfig(tortId);
     if (!config || !config.active) {
       res.status(404).json({ error: "Tort campaign not found" });
       return;
     }
-    const host = req.get("host") || "localhost";
-    const protocol = req.get("x-forwarded-proto") || req.protocol;
-    const baseUrl = `${protocol}://${host}`;
     const embedScript = generateEmbedScript(
       tortId,
       {

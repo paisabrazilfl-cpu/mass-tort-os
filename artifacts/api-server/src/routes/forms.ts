@@ -220,6 +220,12 @@ function extractCustomFieldValues(
   return out;
 }
 
+// SECURITY NOTE — /submit is intentionally authenticated.
+// Public unauthenticated submission from third-party host sites is DEFERRED
+// pending: (1) per-buyer/per-tort API keys, (2) per-key rate limiting,
+// (3) origin allowlist, (4) TrustedForm cert URL verification against
+// api.trustedform.com before accepting a lead, (5) CAPTCHA or equivalent
+// bot deterrent. Until then, /submit requires a logged-in CRM user role.
 router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditAction("form_submit"), async (req, res) => {
   const data = req.body;
   const pipeline: PipelineStep[] = [];
@@ -1070,10 +1076,9 @@ form.addEventListener("submit",function(e){
 
 container.appendChild(form);
 
-var tfScript=document.createElement("script");
-tfScript.type="text/javascript";
-tfScript.src="https://api.trustedform.com/trustedform.js?field=xxTrustedFormCertUrl&ping_field=xxTrustedFormPingUrl&l="+(new Date().getTime())+Math.random();
-document.head.appendChild(tfScript);
+// NOTE: TrustedForm script is injected once by installTrustedForm() above.
+// Do not re-inject here; duplicate loaders create two certificates and
+// cause inconsistent xxTrustedFormCertUrl values on submit.
 })();`;
 }
 
