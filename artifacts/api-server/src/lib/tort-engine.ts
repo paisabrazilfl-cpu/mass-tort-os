@@ -15,7 +15,16 @@ export const TORT_REGISTRY: Record<string, TortDefinition> = {
     id: "roundup",
     label: "Roundup",
     category: "pharmaceutical",
-    valid_diagnoses: ["non-hodgkin lymphoma", "nhl", "b-cell lymphoma", "diffuse large b-cell lymphoma", "follicular lymphoma", "mantle cell lymphoma", "burkitt lymphoma"],
+    // 2026 update: NHL subtypes per MDL 2741 case management order; multiple myeloma added
+    // following 2024 Bayer settlement framework expansion.
+    valid_diagnoses: [
+      "non-hodgkin lymphoma", "nhl", "b-cell lymphoma", "t-cell lymphoma",
+      "diffuse large b-cell lymphoma", "dlbcl", "follicular lymphoma",
+      "mantle cell lymphoma", "burkitt lymphoma", "marginal zone lymphoma",
+      "hairy cell leukemia", "primary cutaneous lymphoma", "cutaneous t-cell lymphoma",
+      "chronic lymphocytic leukemia", "cll",
+      "multiple myeloma"
+    ],
     required_exposure: true,
     exposure_fields: ["exposure_start"],
     extra_fields: [],
@@ -169,7 +178,15 @@ export const TORT_REGISTRY: Record<string, TortDefinition> = {
     id: "afff",
     label: "AFFF / PFAS",
     category: "environmental",
-    valid_diagnoses: ["kidney cancer", "testicular cancer", "thyroid cancer", "bladder cancer", "prostate cancer", "liver cancer", "pancreatic cancer"],
+    // 2026 update: ulcerative colitis and hypothyroidism added per MDL 2873
+    // (D.S.C.) updated qualifying-injury list. Breast cancer accepted in
+    // Tier 2 review as of late-2025 case management orders.
+    valid_diagnoses: [
+      "kidney cancer", "testicular cancer", "thyroid cancer",
+      "bladder cancer", "prostate cancer", "liver cancer", "pancreatic cancer",
+      "ulcerative colitis", "hypothyroidism", "thyroid disease",
+      "breast cancer", "non-hodgkin lymphoma", "leukemia"
+    ],
     required_exposure: true,
     exposure_fields: ["exposure_start"],
     extra_fields: ["location_name"],
@@ -355,6 +372,23 @@ export const TORT_REGISTRY: Record<string, TortDefinition> = {
     extra_fields: [],
     rules: [],
     rejection_conditions: ["DIAGNOSIS_MISMATCH"],
+  },
+  "tepezza": {
+    id: "tepezza",
+    label: "Tepezza (Hearing Loss)",
+    category: "pharmaceutical",
+    // 2026 update: MDL 3079 (N.D. Ill.) — qualifying injuries center on
+    // ototoxicity. Patulous eustachian tube added as a recognized injury.
+    valid_diagnoses: [
+      "hearing loss", "permanent hearing loss", "sensorineural hearing loss",
+      "tinnitus", "ringing in ears", "ear pain", "ototoxicity",
+      "patulous eustachian tube", "autophony", "deafness"
+    ],
+    required_exposure: true,
+    exposure_fields: ["exposure_start"],
+    extra_fields: ["medications"],
+    rules: [],
+    rejection_conditions: ["NO_EXPOSURE", "DIAGNOSIS_MISMATCH"],
   },
   "philips-cpap": {
     id: "philips-cpap",

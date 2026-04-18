@@ -28,26 +28,51 @@ let seeded = false;
 export async function seedFormConfigurations(): Promise<void> {
   if (seeded) return;
   try {
-    const existing = await db.select({ id: formConfigurationsTable.id }).from(formConfigurationsTable);
-    const existingIds = new Set(existing.map(r => r.id));
-    const toInsert = Object.entries(TORT_REGISTRY)
-      .filter(([id]) => !existingIds.has(id))
-      .map(([id, def]: [string, TortDefinition]) => ({
-        id,
-        label: def.label,
-        category: def.category,
-        valid_diagnoses: def.valid_diagnoses,
-        exposure_fields: def.exposure_fields,
-        extra_fields: def.extra_fields,
-        custom_fields: [] as CustomField[],
-        rules: def.rules,
-        rejection_conditions: def.rejection_conditions,
-        required_exposure: def.required_exposure,
-        active: true,
-      }));
-    if (toInsert.length > 0) {
-      await db.insert(formConfigurationsTable).values(toInsert);
-      logger.info(`Seeded ${toInsert.length} form configurations from tort registry`);
+    const existing = await db.select().from(formConfigurationsTable);
+    const existingById = new Map(existing.map(r => [r.id, r]));
+
+    let inserted = 0;
+    let refreshed = 0;
+    for (const [id, def] of Object.entries(TORT_REGISTRY) as [string, TortDefinition][]) {
+      const row = existingById.get(id);
+      if (!row) {
+        await db.insert(formConfigurationsTable).values({
+          id,
+          label: def.label,
+          category: def.category,
+          valid_diagnoses: def.valid_diagnoses,
+          exposure_fields: def.exposure_fields,
+          extra_fields: def.extra_fields,
+          custom_fields: [] as CustomField[],
+          rules: def.rules,
+          rejection_conditions: def.rejection_conditions,
+          required_exposure: def.required_exposure,
+          active: true,
+        });
+        inserted++;
+      } else if (row.updated_by === null) {
+        // Row has never been hand-edited via the admin UI. Refresh registry-managed
+        // fields so 2026/MDL updates to TORT_REGISTRY flow through automatically.
+        // Custom fields and intro_text are user-curated and never overwritten.
+        await db
+          .update(formConfigurationsTable)
+          .set({
+            label: def.label,
+            category: def.category,
+            valid_diagnoses: def.valid_diagnoses,
+            exposure_fields: def.exposure_fields,
+            extra_fields: def.extra_fields,
+            rules: def.rules,
+            rejection_conditions: def.rejection_conditions,
+            required_exposure: def.required_exposure,
+            updated_at: new Date(),
+          })
+          .where(eq(formConfigurationsTable.id, id));
+        refreshed++;
+      }
+    }
+    if (inserted > 0 || refreshed > 0) {
+      logger.info(`Form config seed: inserted=${inserted}, refreshed=${refreshed}`);
     }
     seeded = true;
   } catch (e) {

@@ -82,7 +82,20 @@ router.get("/export", requireRole("attorney", "admin"), auditAction("export_lead
 
   const escapeCSV = (val: unknown): string => {
     if (val === null || val === undefined) return "";
-    const str = String(val);
+    // Serialize objects/arrays (e.g. custom_fields JSONB) as JSON
+    // so CSV cells contain usable data instead of "[object Object]".
+    let str: string;
+    if (val instanceof Date) {
+      str = val.toISOString();
+    } else if (typeof val === "object") {
+      try {
+        str = JSON.stringify(val);
+      } catch {
+        str = "";
+      }
+    } else {
+      str = String(val);
+    }
     if (str.includes(",") || str.includes('"') || str.includes("\n")) {
       return `"${str.replace(/"/g, '""')}"`;
     }

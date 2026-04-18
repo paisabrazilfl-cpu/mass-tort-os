@@ -660,7 +660,11 @@ function FormEditDialog({ config }: { config: FormConfig }) {
       {
         onSuccess: (data) => {
           invalidate();
-          setCustomFields(data.custom_fields || [...customFields, field]);
+          // Prefer server response when present; otherwise append locally.
+          // Functional updater avoids stale closure issues.
+          const fromServer = (data as { custom_fields?: CustomField[] } | undefined)?.custom_fields;
+          if (fromServer) setCustomFields(fromServer);
+          else setCustomFields(prev => [...prev, field]);
           setNewField({ key: "", label: "", type: "text", required: false });
           toast({ title: "Field added", description: field.label });
         },
@@ -675,7 +679,9 @@ function FormEditDialog({ config }: { config: FormConfig }) {
       {
         onSuccess: (data) => {
           invalidate();
-          setCustomFields(data.custom_fields || customFields.filter(f => f.key !== key));
+          const fromServer = (data as { custom_fields?: CustomField[] } | undefined)?.custom_fields;
+          if (fromServer) setCustomFields(fromServer);
+          else setCustomFields(prev => prev.filter(f => f.key !== key));
           toast({ title: "Field removed" });
         },
         onError: (err: any) => toast({ title: "Remove failed", description: err?.message, variant: "destructive" }),
