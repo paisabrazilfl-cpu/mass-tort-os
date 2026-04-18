@@ -60,7 +60,7 @@ function htmlEscape(s: string): string {
 }
 
 router.get("/preview/:tortId", async (req, res) => {
-  const tortId = req.params.tortId;
+  const tortId = String(req.params.tortId);
   try {
     const baseUrl = resolveBaseUrl(req);
     if (!baseUrl) {
@@ -113,7 +113,7 @@ router.get("/preview-blocker.js", (_req, res) => {
 });
 
 router.get("/embed/:tortId", async (req, res) => {
-  const tortId = req.params.tortId;
+  const tortId = String(req.params.tortId);
   try {
     const baseUrl = resolveBaseUrl(req);
     if (!baseUrl) {

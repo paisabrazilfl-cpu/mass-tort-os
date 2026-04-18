@@ -95,7 +95,7 @@ router.get("/results", requireRole("paralegal"), async (_req, res) => {
  * Get a single Legora Grid result
  */
 router.get("/results/:id", requireRole("paralegal"), async (req, res) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) {
     res.status(400).json({ error: "Invalid ID" });
     return;
@@ -150,7 +150,7 @@ router.post("/ai-fields", requireRole("paralegal", "attorney", "admin"), auditAc
 });
 
 router.post("/ai-fields/result/:id", requireRole("paralegal", "attorney", "admin"), async (req, res) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
   const [faxResult] = await db.select().from(faxResultsTable).where(eq(faxResultsTable.id, id));

@@ -12,8 +12,8 @@ router.use(requireRole("admin"));
 
 router.get("/alerts", async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
-  const severity = req.query.severity as string;
-  const status = req.query.status as string;
+  const severity = String(req.query.severity ?? "");
+  const status = String(req.query.status ?? "");
 
   const conditions = [];
   if (severity) conditions.push(eq(securityAlertsTable.severity, severity));

@@ -101,7 +101,7 @@ router.get("/search", requireRole("paralegal"), async (req, res) => {
       throw new Error(`NPI API returned ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as { result_count?: number; results?: unknown[] };
     const results = parseNpiResponse(data);
     const result_count = data.result_count || results.length;
 
@@ -113,7 +113,7 @@ router.get("/search", requireRole("paralegal"), async (req, res) => {
 });
 
 router.get("/lookup/:npi", requireRole("paralegal"), async (req, res) => {
-  const { npi } = req.params;
+  const npi = String(req.params.npi);
 
   if (!/^\d{10}$/.test(npi)) {
     res.status(400).json({ error: "NPI must be a 10-digit number" });

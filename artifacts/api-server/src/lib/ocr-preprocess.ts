@@ -13,9 +13,11 @@ import { logger } from "./logger";
 
 export async function preprocessFaxBuffer(input: Buffer): Promise<Buffer> {
   try {
+    const meta = await sharp(input).metadata();
+    const targetWidth = meta.width ? meta.width * 2 : undefined;
     const processed = await sharp(input)
       .grayscale()
-      .resize({ width: undefined, height: undefined, factor: 2 })
+      .resize({ width: targetWidth })
       .sharpen({ sigma: 1.5, m1: 0, m2: 3 })
       .normalize()
       .png()

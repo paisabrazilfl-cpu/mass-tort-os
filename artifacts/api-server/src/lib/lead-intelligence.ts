@@ -314,7 +314,7 @@ Use precise legal/professional language. No hedging. Be direct and authoritative
       recommended_action = parsed.recommended_action || "";
     }
   } catch (err) {
-    logger.error("Lead intelligence AI assessment failed, using deterministic fallback", err);
+    logger.error({ err: err }, "Lead intelligence AI assessment failed, using deterministic fallback");
     const avg = Math.round((completion.score + reliability.score + truthfulness.score) / 3);
     if (avg >= 75) {
       overall_assessment = "This claimant's file demonstrates strong completeness and verifiable data integrity. The lead is well-positioned for advancement in the litigation pipeline.";

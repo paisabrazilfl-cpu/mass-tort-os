@@ -47,7 +47,7 @@ export default function OcrInbox() {
 
   const { data: faxes = [], isLoading } = useListFaxResults();
   const { data: queueStats } = useGetOcrQueueStats({ 
-    query: { refetchInterval: 5000 } 
+    query: { refetchInterval: 5000 } as any
   });
   
   const uploadMutation = useUploadFax({

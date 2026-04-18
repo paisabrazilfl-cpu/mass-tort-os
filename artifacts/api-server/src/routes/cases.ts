@@ -29,7 +29,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
 });
 
 router.post("/:id/upload", requireRole("paralegal", "attorney", "admin"), auditAction("upload_case_file"), async (req, res) => {
-  const case_id = req.params.id;
+  const case_id = String(req.params.id);
   if (!validateCaseId(case_id)) {
     res.status(400).json({ error: "Invalid case ID format" });
     return;
@@ -62,7 +62,7 @@ router.post("/:id/upload", requireRole("paralegal", "attorney", "admin"), auditA
 });
 
 router.post("/:id/analyze", requireRole("paralegal"), async (req, res) => {
-  const case_id = req.params.id;
+  const case_id = String(req.params.id);
   if (!validateCaseId(case_id)) {
     res.status(400).json({ error: "Invalid case ID format" });
     return;
@@ -88,7 +88,7 @@ router.get("/", requireRole("viewer"), async (req, res) => {
 });
 
 router.get("/:id", requireRole("viewer"), async (req, res) => {
-  const case_id = req.params.id;
+  const case_id = String(req.params.id);
 
   const [caseRow] = await db
     .select()

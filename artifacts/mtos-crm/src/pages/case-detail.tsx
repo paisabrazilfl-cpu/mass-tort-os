@@ -78,8 +78,8 @@ export default function CaseDetail() {
   const { data: caseDetail, isLoading, refetch } = useGetCase(id, {
     query: {
       enabled: !!id,
-      refetchInterval: (data) => data?.state?.data?.case?.status === 'processing' ? 3000 : false,
-    }
+      refetchInterval: (data: any) => data?.state?.data?.case?.status === 'processing' ? 3000 : false,
+    } as any
   });
 
   const uploadFile = useUploadCaseFile();
@@ -94,8 +94,9 @@ export default function CaseDetail() {
   });
 
   function onUploadSubmit(data: UploadFormValues) {
+    if (!id) return;
     uploadFile.mutate(
-      { data: { ...data, content_type: "text/plain" } },
+      { id, data: { ...data, content_type: "text/plain" } },
       {
         onSuccess: () => {
           toast({ title: "Document Uploaded", description: "The document has been securely stored in the vault." });

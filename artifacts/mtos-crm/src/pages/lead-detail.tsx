@@ -223,6 +223,16 @@ export default function LeadDetail() {
     );
   }
 
+  const leadExt = lead as typeof lead & {
+    medications?: string | null;
+    npi_number?: string | null;
+    physician_taxonomy?: string | null;
+    npi_verified?: boolean | null;
+    fraud_status?: string | null;
+    fraud_score?: number | null;
+    fraud_indicators?: string[] | string | null;
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -441,7 +451,7 @@ export default function LeadDetail() {
                 <FieldRow label="Primary Diagnosis" value={lead.diagnosis} />
                 <FieldRow label="Diagnosis Date" value={lead.diagnosis_date} />
                 <FieldRow label="Diagnosis Type" value={lead.diagnosis_type} />
-                <FieldRow label="Current Medications" value={lead.medications} />
+                <FieldRow label="Current Medications" value={leadExt.medications} />
                 <div className="flex items-center gap-3 py-3 border-b border-gray-100">
                   {lead.diagnosis_confirmed ? <CheckCircle className="text-emerald-500 h-4 w-4" /> : <XCircle className="text-red-500 h-4 w-4" />}
                   <span className="text-sm">{lead.diagnosis_confirmed ? "Diagnosis confirmed by claimant" : "Diagnosis not confirmed"}</span>
@@ -473,11 +483,11 @@ export default function LeadDetail() {
                 <FieldRow label="Last Name" value={lead.physician_last_name} />
                 <FieldRow label="Full Address" value={lead.physician_full_address} />
                 <FieldRow label="Contact Information" value={lead.physician_contact_info} />
-                <FieldRow label="NPI Number" value={lead.npi_number} />
-                <FieldRow label="Taxonomy Code" value={lead.physician_taxonomy} />
+                <FieldRow label="NPI Number" value={leadExt.npi_number} />
+                <FieldRow label="Taxonomy Code" value={leadExt.physician_taxonomy} />
                 <div className="flex items-center gap-3 py-3">
-                  {lead.npi_verified ? <CheckCircle className="text-emerald-500 h-4 w-4" /> : <XCircle className="text-red-500 h-4 w-4" />}
-                  <span className="text-sm">{lead.npi_verified ? "NPI verified via NPPES registry" : "NPI not yet verified"}</span>
+                  {leadExt.npi_verified ? <CheckCircle className="text-emerald-500 h-4 w-4" /> : <XCircle className="text-red-500 h-4 w-4" />}
+                  <span className="text-sm">{leadExt.npi_verified ? "NPI verified via NPPES registry" : "NPI not yet verified"}</span>
                 </div>
               </CardContent>
             </Card>
@@ -558,29 +568,29 @@ export default function LeadDetail() {
                 <CardTitle>Fraud Assessment</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                {lead.fraud_status && (
+                {leadExt.fraud_status && (
                   <div className="flex items-center justify-between py-2 border-b border-gray-100">
                     <span className="text-sm font-medium">Final Arbiter Decision</span>
                     <Badge variant={
-                      lead.fraud_status === "ACCEPTED" ? "default" :
-                      lead.fraud_status === "REJECTED" ? "destructive" : "secondary"
-                    } className={lead.fraud_status === "ACCEPTED" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : lead.fraud_status === "TO_BE_REVIEWED" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : ""}>
-                      {lead.fraud_status}
+                      leadExt.fraud_status === "ACCEPTED" ? "default" :
+                      leadExt.fraud_status === "REJECTED" ? "destructive" : "secondary"
+                    } className={leadExt.fraud_status === "ACCEPTED" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : leadExt.fraud_status === "TO_BE_REVIEWED" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : ""}>
+                      {leadExt.fraud_status}
                     </Badge>
                   </div>
                 )}
-                {typeof lead.fraud_score === "number" && (
+                {typeof leadExt.fraud_score === "number" && (
                   <div className="flex items-center justify-between py-2 border-b border-gray-100">
                     <span className="text-sm font-medium">Fraud Risk Score</span>
-                    <span className={`text-lg font-bold font-mono ${lead.fraud_score >= 60 ? "text-red-600" : lead.fraud_score >= 20 ? "text-amber-600" : "text-emerald-600"}`}>
-                      {lead.fraud_score}/100
+                    <span className={`text-lg font-bold font-mono ${leadExt.fraud_score >= 60 ? "text-red-600" : leadExt.fraud_score >= 20 ? "text-amber-600" : "text-emerald-600"}`}>
+                      {leadExt.fraud_score}/100
                     </span>
                   </div>
                 )}
-                {lead.fraud_indicators && (
+                {leadExt.fraud_indicators && (
                   <div className="py-2">
                     <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Indicators</span>
-                    <p className="text-sm mt-1">{lead.fraud_indicators}</p>
+                    <p className="text-sm mt-1">{leadExt.fraud_indicators}</p>
                   </div>
                 )}
               </CardContent>

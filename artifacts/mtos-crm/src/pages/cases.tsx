@@ -38,7 +38,7 @@ export default function Cases() {
   
   const { data: cases = [], isLoading } = useListCases();
   const { data: queueStats } = useGetQueueStats({ 
-    query: { refetchInterval: 5000 } 
+    query: { refetchInterval: 5000 } as any
   });
 
   const filteredCases = cases.filter(c => 

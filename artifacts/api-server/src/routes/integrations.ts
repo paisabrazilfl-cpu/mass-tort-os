@@ -37,7 +37,7 @@ router.get("/", requireRole("admin"), async (_req, res) => {
 });
 
 router.get("/:id", requireRole("admin"), async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(String(req.params.id));
   const [integration] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!integration) { res.status(404).json({ error: "Integration not found" }); return; }
   res.json({ ...integration, api_key_hash: integration.api_key_hash ? "****" : null });
@@ -67,7 +67,7 @@ router.post("/", requireRole("admin"), async (req, res) => {
 });
 
 router.patch("/:id", requireRole("admin"), async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(String(req.params.id));
   const updates: Record<string, any> = {};
   const { name, status, api_url, api_key, webhook_url, config, sync_direction, field_mapping } = req.body;
 
@@ -89,7 +89,7 @@ router.patch("/:id", requireRole("admin"), async (req, res) => {
 });
 
 router.delete("/:id", requireRole("admin"), async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(String(req.params.id));
   const [deleted] = await db.delete(integrationsTable).where(eq(integrationsTable.id, id)).returning();
   if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
   await auditLog("integration", String(req.user?.id || 0), "integration_deleted", { id, provider: deleted.provider });
@@ -97,7 +97,7 @@ router.delete("/:id", requireRole("admin"), async (req, res) => {
 });
 
 router.post("/:id/test", requireRole("admin"), async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(String(req.params.id));
   const [integration] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!integration) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -109,7 +109,7 @@ router.post("/:id/test", requireRole("admin"), async (req, res) => {
 });
 
 router.post("/:id/sync", requireRole("admin"), async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(String(req.params.id));
   const [integration] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!integration) { res.status(404).json({ error: "Not found" }); return; }
 

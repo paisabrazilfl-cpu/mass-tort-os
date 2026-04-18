@@ -25,7 +25,7 @@ router.post("/", requireRole("admin"), auditAction("create_paralegal"), async (r
 });
 
 router.get("/:id", requireRole("attorney"), async (req, res) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
   if (!p) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -51,7 +51,7 @@ router.get("/:id", requireRole("attorney"), async (req, res) => {
 });
 
 router.get("/:id/performance", requireRole("attorney"), async (req, res) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
   if (!p) { res.status(404).json({ error: "Not found" }); return; }
 

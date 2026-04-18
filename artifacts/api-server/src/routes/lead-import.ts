@@ -237,10 +237,10 @@ async function checkDuplicate(lead: Record<string, any>): Promise<{ isDuplicate:
 router.post("/preview", requireRole("paralegal"), async (req, res) => {
   try {
     const { csv_data } = req.body;
-    if (!csv_data) return res.status(400).json({ error: "csv_data is required" });
+    if (!csv_data) { res.status(400).json({ error: "csv_data is required" }); return; }
 
     const { headers, rows } = parseCSV(csv_data);
-    if (headers.length === 0) return res.status(400).json({ error: "No valid CSV headers found" });
+    if (headers.length === 0) { res.status(400).json({ error: "No valid CSV headers found" }); return; }
 
     const columnMapping = autoMapColumns(headers);
     const unmappedColumns = headers.filter(h => !columnMapping[h]);
@@ -263,14 +263,14 @@ router.post("/preview", requireRole("paralegal"), async (req, res) => {
 router.post("/execute", requireRole("attorney"), async (req, res) => {
   try {
     const { csv_data, column_mapping, filename = "import.csv" } = req.body;
-    if (!csv_data) return res.status(400).json({ error: "csv_data is required" });
+    if (!csv_data) { res.status(400).json({ error: "csv_data is required" }); return; }
 
     const { headers, rows } = parseCSV(csv_data);
-    if (rows.length === 0) return res.status(400).json({ error: "No data rows found in CSV" });
+    if (rows.length === 0) { res.status(400).json({ error: "No data rows found in CSV" }); return; }
 
     const maxRows = 5000;
     if (rows.length > maxRows) {
-      return res.status(400).json({ error: `Import limited to ${maxRows} rows per batch. This file has ${rows.length} rows.` });
+      res.status(400).json({ error: `Import limited to ${maxRows} rows per batch. This file has ${rows.length} rows.` }); return;
     }
 
     const mapping = column_mapping || autoMapColumns(headers);
@@ -386,7 +386,7 @@ async function processImportBatch(
 
       const [newLead] = await db
         .insert(leadsTable)
-        .values(encrypted)
+        .values(encrypted as any)
         .returning({ id: leadsTable.id });
 
       const rowStatus = conflictResult.has_conflict ? "conflict" : "success";
@@ -469,7 +469,7 @@ router.get("/batches/:id", requireRole("paralegal"), async (req, res) => {
       .from(importBatchesTable)
       .where(eq(importBatchesTable.id, Number(req.params.id)));
 
-    if (!batch) return res.status(404).json({ error: "Batch not found" });
+    if (!batch) { res.status(404).json({ error: "Batch not found" }); return; }
 
     const rows = await db
       .select()

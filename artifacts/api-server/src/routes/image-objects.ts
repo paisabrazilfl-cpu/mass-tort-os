@@ -65,7 +65,7 @@ router.get("/:id", requireRole("paralegal"), async (req, res) => {
       .from(imageObjectsTable)
       .where(eq(imageObjectsTable.id, Number(req.params.id)));
 
-    if (!image) return res.status(404).json({ error: "Image object not found" });
+    if (!image) { res.status(404).json({ error: "Image object not found" }); return; }
     res.json(sanitizeForClient(image));
   } catch (err) {
     logger.error({ err }, "Failed to get image object");
@@ -90,19 +90,19 @@ router.post("/", requireRole("paralegal"), async (req, res) => {
     } = req.body;
 
     if (!file_data || !original_filename || !mime_type) {
-      return res.status(400).json({ error: "file_data, original_filename, and mime_type are required" });
+      res.status(400).json({ error: "file_data, original_filename, and mime_type are required" }); return;
     }
 
     const allowedMimes = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/tiff", "application/pdf"];
     if (!allowedMimes.includes(mime_type)) {
-      return res.status(400).json({ error: `Unsupported mime type: ${mime_type}. Allowed: ${allowedMimes.join(", ")}` });
+      res.status(400).json({ error: `Unsupported mime type: ${mime_type}. Allowed: ${allowedMimes.join(", ")}` }); return;
     }
 
     const buffer = Buffer.from(file_data, "base64");
 
     const maxSize = 50 * 1024 * 1024;
     if (buffer.length > maxSize) {
-      return res.status(400).json({ error: `File exceeds maximum size of ${maxSize / 1024 / 1024}MB` });
+      res.status(400).json({ error: `File exceeds maximum size of ${maxSize / 1024 / 1024}MB` }); return;
     }
 
     const checksum = crypto.createHash("sha256").update(buffer).digest("hex");
@@ -113,11 +113,11 @@ router.post("/", requireRole("paralegal"), async (req, res) => {
       .where(eq(imageObjectsTable.checksum_sha256, checksum));
 
     if (existing) {
-      return res.status(409).json({
+      res.status(409).json({
         error: "Duplicate image detected",
         existing_id: existing.id,
         checksum,
-      });
+      }); return;
     }
 
     let width: number | null = null;
@@ -199,7 +199,7 @@ router.patch("/:id", requireRole("paralegal"), async (req, res) => {
       .where(eq(imageObjectsTable.id, Number(req.params.id)))
       .returning();
 
-    if (!updated) return res.status(404).json({ error: "Image object not found" });
+    if (!updated) { res.status(404).json({ error: "Image object not found" }); return; }
 
     await auditLog("image_object", String(updated.id), "image_object_updated", {
       fields_updated: Object.keys(updates).filter(k => k !== "updated_at"),
@@ -220,7 +220,7 @@ router.delete("/:id", requireRole("admin"), async (req, res) => {
       .from(imageObjectsTable)
       .where(eq(imageObjectsTable.id, Number(req.params.id)));
 
-    if (!image) return res.status(404).json({ error: "Image object not found" });
+    if (!image) { res.status(404).json({ error: "Image object not found" }); return; }
 
     try {
       const fs = await import("fs");
@@ -253,11 +253,11 @@ router.get("/:id/integrity", requireRole("paralegal"), async (req, res) => {
       .from(imageObjectsTable)
       .where(eq(imageObjectsTable.id, Number(req.params.id)));
 
-    if (!image) return res.status(404).json({ error: "Image object not found" });
+    if (!image) { res.status(404).json({ error: "Image object not found" }); return; }
 
     const fs = await import("fs");
     if (!fs.existsSync(image.vault_path)) {
-      return res.json({ valid: false, reason: "File missing from vault", image_id: image.id });
+      res.json({ valid: false, reason: "File missing from vault", image_id: image.id }); return;
     }
 
     const buffer = fs.readFileSync(image.vault_path);

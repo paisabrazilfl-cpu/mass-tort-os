@@ -51,7 +51,7 @@ export async function seedFormConfigurations(): Promise<void> {
     }
     seeded = true;
   } catch (e) {
-    logger.error("Failed to seed form configurations", e);
+    logger.error({ err: e }, "Failed to seed form configurations");
   }
 }
 

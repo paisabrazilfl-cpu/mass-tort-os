@@ -7,8 +7,8 @@ const router = Router();
 
 router.get("/audit-trail", requireRole("admin"), async (req, res) => {
   const limit = parseInt(req.query.limit as string) || 100;
-  const entityType = req.query.entity_type as string | undefined;
-  const action = req.query.action as string | undefined;
+  const entityType = req.query.entity_type == null ? undefined : String(req.query.entity_type);
+  const action = req.query.action == null ? undefined : String(req.query.action);
 
   let query = db
     .select()

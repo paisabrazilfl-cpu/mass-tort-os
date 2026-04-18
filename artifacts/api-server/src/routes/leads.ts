@@ -227,7 +227,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
           notes: data.notes ?? null,
           ad_spend: data.ad_spend ? String(data.ad_spend) : null,
           source: data.source ?? null,
-        }))
+        }) as any)
         .returning();
 
       try {
@@ -276,7 +276,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
       ad_spend: data.ad_spend ? String(data.ad_spend) : null,
       source: data.source ?? null,
       created_by_user_id: req.user?.id ?? null,
-    }))
+    }) as any)
     .returning();
 
   await auditLog("lead", String(lead.id), "created", { output_state: "ACCEPT", status });
@@ -531,7 +531,7 @@ router.post("/:id/intelligence", requireRole("paralegal", "attorney", "admin"), 
     try {
       documents = await db.select().from(documentsTable).where(eq(documentsTable.lead_id, leadId));
     } catch (docErr) {
-      logger.warn("Document retrieval failed during intelligence scoring — proceeding without documents", docErr);
+      logger.warn({ err: docErr }, "Document retrieval failed during intelligence scoring — proceeding without documents");
     }
 
     const result = await scoreLeadIntelligence({
@@ -541,7 +541,7 @@ router.post("/:id/intelligence", requireRole("paralegal", "attorney", "admin"), 
 
     res.json(result);
   } catch (err) {
-    logger.error("Lead intelligence scoring encountered an unrecoverable error", err);
+    logger.error({ err: err }, "Lead intelligence scoring encountered an unrecoverable error");
     res.status(500).json({ error: "Intelligence scoring temporarily unavailable. Please retry." });
   }
 });
@@ -583,7 +583,7 @@ router.patch("/:id/notes", requireRole("paralegal", "attorney", "admin"), auditA
 
     res.json({ success: true, updated_at: lead.updated_at });
   } catch (err) {
-    logger.error("Notes update failed", err);
+    logger.error({ err: err }, "Notes update failed");
     res.status(500).json({ error: "Unable to save notes. Please retry." });
   }
 });

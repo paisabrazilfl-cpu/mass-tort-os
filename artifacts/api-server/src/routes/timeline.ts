@@ -7,7 +7,7 @@ import { requireRole } from "../lib/rbac";
 const router = Router();
 
 router.get("/lead/:id", requireRole("paralegal"), async (req, res) => {
-  const leadId = parseInt(req.params.id, 10);
+  const leadId = parseInt(String(req.params.id), 10);
   if (isNaN(leadId)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
 
   const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));

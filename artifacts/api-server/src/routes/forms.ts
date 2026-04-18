@@ -51,7 +51,7 @@ router.get("/config", async (_req, res) => {
 
 router.get("/config/:tortId", async (req, res) => {
   try {
-    const config = await getFormConfig(req.params.tortId);
+    const config = await getFormConfig(String(req.params.tortId));
     if (!config) {
       res.status(404).json({ error: "Tort campaign not found" });
       return;
@@ -105,7 +105,7 @@ router.put(
         }
       }
       const userId = req.user?.id ?? 0;
-      const updated = await updateFormConfig(req.params.tortId, {
+      const updated = await updateFormConfig(String(req.params.tortId), {
         label, valid_diagnoses, exposure_fields, extra_fields, custom_fields, rules, rejection_conditions, required_exposure, intro_text, active,
       }, userId);
       if (!updated) {
@@ -133,7 +133,7 @@ router.post(
         return;
       }
       const userId = req.user?.id ?? 0;
-      const updated = await addCustomField(req.params.tortId, parsed.data as CustomField, userId);
+      const updated = await addCustomField(String(req.params.tortId), parsed.data as CustomField, userId);
       if (!updated) {
         res.status(404).json({ error: "Tort campaign not found" });
         return;
@@ -159,7 +159,7 @@ router.delete(
   async (req, res) => {
     try {
       const userId = req.user?.id ?? 0;
-      const updated = await removeCustomField(req.params.tortId, req.params.key, userId);
+      const updated = await removeCustomField(String(req.params.tortId), String(req.params.key), userId);
       if (!updated) {
         res.status(404).json({ error: "Tort campaign not found" });
         return;
@@ -568,7 +568,7 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
           const allow = (cfg?.custom_fields ?? []).map((f) => f.key);
           return extractCustomFieldValues(data, allow);
         })(),
-      }))
+      }) as any)
       .returning();
 
     step10.data = { lead_id: lead.id, status };
