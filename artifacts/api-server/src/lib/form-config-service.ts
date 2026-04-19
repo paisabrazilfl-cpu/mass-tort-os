@@ -20,6 +20,10 @@ export interface FormConfigPublic {
   required_exposure: boolean;
   intro_text: string | null;
   active: boolean;
+  avg_settlement_low: number | null;
+  avg_settlement_high: number | null;
+  mdl_status: string | null;
+  sol_months: number | null;
   updated_at: string;
 }
 
@@ -94,6 +98,10 @@ function toPublic(row: FormConfiguration): FormConfigPublic {
     required_exposure: row.required_exposure ?? false,
     intro_text: row.intro_text ?? null,
     active: row.active ?? true,
+    avg_settlement_low: row.avg_settlement_low ?? null,
+    avg_settlement_high: row.avg_settlement_high ?? null,
+    mdl_status: row.mdl_status ?? null,
+    sol_months: row.sol_months ?? null,
     updated_at: row.updated_at?.toISOString?.() ?? new Date().toISOString(),
   };
 }
@@ -154,6 +162,10 @@ export interface FormConfigUpdate {
   required_exposure?: boolean;
   intro_text?: string | null;
   active?: boolean;
+  avg_settlement_low?: number | null;
+  avg_settlement_high?: number | null;
+  mdl_status?: string | null;
+  sol_months?: number | null;
 }
 
 export async function updateFormConfig(

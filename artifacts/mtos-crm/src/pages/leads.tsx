@@ -176,6 +176,7 @@ export default function Leads() {
               <TableHead>Name</TableHead>
               <TableHead>Tort</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Convexity</TableHead>
               <TableHead>Created</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -193,7 +194,7 @@ export default function Leads() {
               ))
             ) : leads?.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center">
+                <TableCell colSpan={6} className="h-24 text-center">
                   No leads found.
                 </TableCell>
               </TableRow>
@@ -214,6 +215,17 @@ export default function Leads() {
                     } className={lead.status === "review_required" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : ""}>
                       {lead.status === "review_required" ? "REVIEW" : lead.status.toUpperCase()}
                     </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {(() => {
+                      const c = (lead as any).convexity_score as string | null | undefined;
+                      const flags = (((lead as any).convexity_ruin_flags ?? []) as string[]).length;
+                      if (flags > 0) return <Badge className="bg-rose-100 text-rose-800 border-rose-300" data-testid={`badge-convexity-${lead.id}`}>RUIN</Badge>;
+                      if (c === "convex") return <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300" data-testid={`badge-convexity-${lead.id}`}>Convex</Badge>;
+                      if (c === "concave") return <Badge className="bg-amber-100 text-amber-800 border-amber-300" data-testid={`badge-convexity-${lead.id}`}>Concave</Badge>;
+                      if (c === "neutral") return <Badge variant="secondary" data-testid={`badge-convexity-${lead.id}`}>Neutral</Badge>;
+                      return <Badge variant="outline" data-testid={`badge-convexity-${lead.id}`}>—</Badge>;
+                    })()}
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm font-mono">
                     {format(new Date(lead.created_at), "yyyy-MM-dd")}

@@ -25,7 +25,8 @@
     "pdf-lib": "^1.17.1",
     "pino": "^9",
     "pino-http": "^10",
-    "sharp": "^0.34.5"
+    "sharp": "^0.34.5",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",

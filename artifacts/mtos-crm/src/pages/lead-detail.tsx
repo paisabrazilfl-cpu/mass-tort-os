@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { ConvexityCard } from "@/components/convexity-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -438,6 +439,19 @@ export default function LeadDetail() {
               </div>
             </CardContent>
           </Card>
+
+          <ConvexityCard
+            leadId={lead.id}
+            score={(lead as any).convexity_score ?? null}
+            action={(lead as any).convexity_action ?? null}
+            rationale={(lead as any).convexity_rationale ?? null}
+            ruinFlags={((lead as any).convexity_ruin_flags ?? []) as string[]}
+            downsideUsd={(lead as any).convexity_downside_usd ?? null}
+            upsideUsd={(lead as any).convexity_upside_usd ?? null}
+            ratio={(lead as any).convexity_ratio ?? null}
+            confidence={(lead as any).convexity_confidence ?? null}
+            computedAt={(lead as any).convexity_computed_at ?? null}
+          />
         </TabsContent>
 
         <TabsContent value="medical" className="space-y-6 mt-6">

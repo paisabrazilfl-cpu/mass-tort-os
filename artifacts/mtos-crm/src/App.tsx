@@ -31,6 +31,8 @@ import IntegrationsPage from "@/pages/integrations";
 import News from "@/pages/news";
 import FinancialNews from "@/pages/financial-news";
 import LeadImport from "@/pages/lead-import";
+import DecisionEnginePage from "@/pages/decision-engine";
+import DecisionEngineSettings from "@/pages/decision-engine-settings";
 
 const queryClient = new QueryClient();
 
@@ -64,6 +66,8 @@ function Router() {
         <Route path="/news" component={News} />
         <Route path="/financial-news" component={FinancialNews} />
         <Route path="/lead-import" component={LeadImport} />
+        <Route path="/decision-engine" component={DecisionEnginePage} />
+        <Route path="/decision-engine/settings" component={DecisionEngineSettings} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

@@ -609,6 +609,10 @@ function FormEditDialog({ config }: { config: FormConfig }) {
   const [diagInput, setDiagInput] = useState("");
   const [introText, setIntroText] = useState(config.intro_text || "");
   const [active, setActive] = useState(config.active !== false);
+  const [avgSettlementLow, setAvgSettlementLow] = useState<string>(config.avg_settlement_low?.toString() ?? "");
+  const [avgSettlementHigh, setAvgSettlementHigh] = useState<string>(config.avg_settlement_high?.toString() ?? "");
+  const [mdlStatus, setMdlStatus] = useState<string>(config.mdl_status ?? "");
+  const [solMonths, setSolMonths] = useState<string>(config.sol_months?.toString() ?? "");
   const [customFields, setCustomFields] = useState<CustomField[]>(config.custom_fields || []);
   const [newField, setNewField] = useState<CustomField>({ key: "", label: "", type: "text", required: false });
 
@@ -627,7 +631,15 @@ function FormEditDialog({ config }: { config: FormConfig }) {
 
   const handleSaveBase = () => {
     updateConfig.mutate(
-      { tortId: config.id, data: { valid_diagnoses: diagnoses, intro_text: introText || null, active } },
+      { tortId: config.id, data: {
+        valid_diagnoses: diagnoses,
+        intro_text: introText || null,
+        active,
+        avg_settlement_low: avgSettlementLow === "" ? null : Number(avgSettlementLow),
+        avg_settlement_high: avgSettlementHigh === "" ? null : Number(avgSettlementHigh),
+        mdl_status: mdlStatus || null,
+        sol_months: solMonths === "" ? null : Number(solMonths),
+      } },
       {
         onSuccess: () => {
           invalidate();
@@ -718,6 +730,38 @@ function FormEditDialog({ config }: { config: FormConfig }) {
               rows={2}
               data-testid={`textarea-intro-${config.id}`}
             />
+          </div>
+
+          <div className="rounded-md border p-3 space-y-3 bg-muted/10">
+            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Decision Engine inputs</div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label>Avg settlement LOW ($)</Label>
+                <Input type="number" value={avgSettlementLow} onChange={e => setAvgSettlementLow(e.target.value)} placeholder="e.g. 50000" data-testid={`input-settlement-low-${config.id}`} />
+              </div>
+              <div>
+                <Label>Avg settlement HIGH ($)</Label>
+                <Input type="number" value={avgSettlementHigh} onChange={e => setAvgSettlementHigh(e.target.value)} placeholder="e.g. 250000" data-testid={`input-settlement-high-${config.id}`} />
+              </div>
+              <div>
+                <Label>MDL status</Label>
+                <Select value={mdlStatus || "_none"} onValueChange={v => setMdlStatus(v === "_none" ? "" : v)}>
+                  <SelectTrigger data-testid={`select-mdl-${config.id}`}><SelectValue placeholder="—" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— Unset —</SelectItem>
+                    <SelectItem value="pre_mdl">Pre-MDL</SelectItem>
+                    <SelectItem value="active_bellwether">Active bellwether</SelectItem>
+                    <SelectItem value="settling">Settling</SelectItem>
+                    <SelectItem value="closed">Closed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>SOL window (months)</Label>
+                <Input type="number" value={solMonths} onChange={e => setSolMonths(e.target.value)} placeholder="e.g. 24" data-testid={`input-sol-${config.id}`} />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">Used to score lead convexity and detect ruin flags.</p>
           </div>
 
           <div className="space-y-2">

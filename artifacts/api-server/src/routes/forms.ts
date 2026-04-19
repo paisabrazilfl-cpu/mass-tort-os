@@ -40,6 +40,10 @@ router.get("/config", async (_req, res) => {
       required_exposure: c.required_exposure,
       intro_text: c.intro_text,
       active: c.active,
+      avg_settlement_low: c.avg_settlement_low,
+      avg_settlement_high: c.avg_settlement_high,
+      mdl_status: c.mdl_status,
+      sol_months: c.sol_months,
       updated_at: c.updated_at,
     }));
     res.json({ tort_campaigns: configs });
@@ -67,6 +71,10 @@ router.get("/config/:tortId", async (req, res) => {
       required_exposure: config.required_exposure,
       intro_text: config.intro_text,
       active: config.active,
+      avg_settlement_low: config.avg_settlement_low,
+      avg_settlement_high: config.avg_settlement_high,
+      mdl_status: config.mdl_status,
+      sol_months: config.sol_months,
       updated_at: config.updated_at,
     });
   } catch (err) {
@@ -82,7 +90,7 @@ router.put(
   auditAction("form_config_update"),
   async (req, res) => {
     try {
-      const { label, valid_diagnoses, exposure_fields, extra_fields, custom_fields, rules, rejection_conditions, required_exposure, intro_text, active } = req.body ?? {};
+      const { label, valid_diagnoses, exposure_fields, extra_fields, custom_fields, rules, rejection_conditions, required_exposure, intro_text, active, avg_settlement_low, avg_settlement_high, mdl_status, sol_months } = req.body ?? {};
       if (custom_fields !== undefined) {
         if (!Array.isArray(custom_fields)) {
           res.status(400).json({ error: "custom_fields must be an array" });
@@ -107,6 +115,7 @@ router.put(
       const userId = req.user?.id ?? 0;
       const updated = await updateFormConfig(String(req.params.tortId), {
         label, valid_diagnoses, exposure_fields, extra_fields, custom_fields, rules, rejection_conditions, required_exposure, intro_text, active,
+        avg_settlement_low, avg_settlement_high, mdl_status, sol_months,
       }, userId);
       if (!updated) {
         res.status(404).json({ error: "Tort campaign not found" });
@@ -572,6 +581,12 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
       .returning();
 
     step10.data = { lead_id: lead.id, status };
+
+    // Decision Engine — score every lead created via form submission.
+    {
+      const { computeAndPersistLeadScore } = await import("../lib/decision-engine-service");
+      computeAndPersistLeadScore(lead.id).catch(() => {});
+    }
 
     if (status === "review_required") {
       try {

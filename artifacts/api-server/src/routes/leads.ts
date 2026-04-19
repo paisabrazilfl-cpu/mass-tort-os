@@ -18,6 +18,7 @@ import { logger } from "../lib/logger";
 import { encryptLeadFields, decryptLeadFields, decryptLeadArray } from "../lib/encryption";
 import { requireRole, auditAction } from "../lib/rbac";
 import { scoreLeadIntelligence } from "../lib/lead-intelligence";
+import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 
 function buildLeadFilters(data: {
   status?: string;
@@ -258,6 +259,9 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
           );
       } catch (_) {}
 
+      // Decision Engine — score even review-required leads (banner + portfolio rollup).
+      computeAndPersistLeadScore(lead.id).catch(() => {});
+
       res.status(201).json({
         ...decryptLeadFields(lead),
         _conflict: {
@@ -293,6 +297,9 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
     .returning();
 
   await auditLog("lead", String(lead.id), "created", { output_state: "ACCEPT", status });
+
+  // Decision Engine — score asynchronously; never block lead creation on errors.
+  computeAndPersistLeadScore(lead.id).catch(() => {});
 
   res.status(201).json(decryptLeadFields(lead));
 });
@@ -427,6 +434,12 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
     } catch (conflictErr) {
       logger.warn({ leadId: lead.id }, "Post-update conflict check failed (non-blocking)");
     }
+  }
+
+  // Decision Engine — recompute when relevant fields change.
+  const convexityFields = ["tort_type", "diagnosis", "diagnosis_date", "diagnosis_confirmed", "exposure_start", "source", "rejection_reason", "ad_spend", "status"];
+  if (convexityFields.some(f => (body as Record<string, unknown>)[f] !== undefined)) {
+    computeAndPersistLeadScore(lead.id).catch(() => {});
   }
 
   res.json(decryptLeadFields(lead));

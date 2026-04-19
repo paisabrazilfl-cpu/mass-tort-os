@@ -22,6 +22,12 @@ export const formConfigurationsTable = pgTable("form_configurations", {
   required_exposure: boolean("required_exposure").notNull().default(false),
   intro_text: varchar("intro_text", { length: 1000 }),
   active: boolean("active").notNull().default(true),
+  // Decision Engine inputs
+  avg_settlement_low: integer("avg_settlement_low"),
+  avg_settlement_high: integer("avg_settlement_high"),
+  expected_duration_months: integer("expected_duration_months"),
+  mdl_status: varchar("mdl_status", { length: 30 }),
+  sol_months: integer("sol_months"),
   updated_by: integer("updated_by"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),

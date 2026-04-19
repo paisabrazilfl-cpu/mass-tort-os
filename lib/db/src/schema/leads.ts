@@ -83,6 +83,17 @@ export const leadsTable = pgTable("leads", {
 
   custom_fields: jsonb("custom_fields").$type<Record<string, unknown>>().notNull().default({}),
 
+  // Decision Engine — convexity scoring (computed on create/update)
+  convexity_score: varchar("convexity_score", { length: 20 }),
+  convexity_action: varchar("convexity_action", { length: 20 }),
+  convexity_rationale: text("convexity_rationale"),
+  convexity_ruin_flags: jsonb("convexity_ruin_flags").$type<string[]>().notNull().default([]),
+  convexity_downside_usd: decimal("convexity_downside_usd", { precision: 12, scale: 2 }),
+  convexity_upside_usd: decimal("convexity_upside_usd", { precision: 12, scale: 2 }),
+  convexity_ratio: decimal("convexity_ratio", { precision: 10, scale: 4 }),
+  convexity_confidence: varchar("convexity_confidence", { length: 10 }),
+  convexity_computed_at: timestamp("convexity_computed_at"),
+
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });

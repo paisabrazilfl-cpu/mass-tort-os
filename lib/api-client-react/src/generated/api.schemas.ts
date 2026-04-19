@@ -680,6 +680,10 @@ export interface FormConfig {
   valid_diagnoses?: string[];
   custom_fields?: CustomField[];
   rejection_conditions?: FormConfigRejectionConditionsItem[];
+  avg_settlement_low?: number | null;
+  avg_settlement_high?: number | null;
+  mdl_status?: string | null;
+  sol_months?: number | null;
   updated_at?: string | null;
   updated_by?: string | null;
 }
@@ -693,6 +697,10 @@ export interface FormConfigUpdate {
   extra_fields?: string[];
   exposure_fields?: string[];
   custom_fields?: CustomField[];
+  avg_settlement_low?: number | null;
+  avg_settlement_high?: number | null;
+  mdl_status?: string | null;
+  sol_months?: number | null;
 }
 
 export type NpiVerifyResultTaxonomyMatch = {

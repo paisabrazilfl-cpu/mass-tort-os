@@ -21,6 +21,8 @@ import integrationsRouter from "./integrations";
 import newsRouter from "./news";
 import imageObjectsRouter from "./image-objects";
 import leadImportRouter from "./lead-import";
+import decisionEngineRouter from "./decision-engine";
+import leadSourcesRouter from "./lead-sources";
 import { authMiddleware } from "../lib/rbac";
 
 const router: IRouter = Router();
@@ -48,5 +50,7 @@ router.use("/integrations", integrationsRouter);
 router.use("/news", newsRouter);
 router.use("/image-objects", imageObjectsRouter);
 router.use("/lead-import", leadImportRouter);
+router.use("/decision-engine", decisionEngineRouter);
+router.use("/lead-sources", leadSourcesRouter);
 
 export default router;

@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Users, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck, BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch, Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp } from "lucide-react";
+import { LayoutDashboard, Users, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck, BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch, Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp, Scale } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -21,6 +21,7 @@ const navigation = [
   { name: "Timeline", href: "/timeline", icon: Clock },
   { name: "Drafting AI", href: "/drafting", icon: Sparkles },
   { name: "Praxis AI", href: "/predictive", icon: Brain },
+  { name: "Decision Engine", href: "/decision-engine", icon: Scale },
   { name: "Integrations", href: "/integrations", icon: Plug },
   { name: "Tort News", href: "/news", icon: Newspaper },
   { name: "Financial", href: "/financial-news", icon: TrendingUp },
