@@ -12,6 +12,8 @@ interface ConvexityCardProps {
   action: string | null;
   rationale: string | null;
   ruinFlags: string[];
+  missingFields?: string[];
+  contradictions?: string[];
   downsideUsd: string | null;
   upsideUsd: string | null;
   ratio: string | null;
@@ -25,6 +27,23 @@ const flagLabels: Record<string, string> = {
   diagnosis_invalid: "Diagnosis not valid for this tort",
   exposure_missing: "Required exposure data missing",
   prior_rejection: "Lead carries prior rejection",
+};
+
+const missingLabels: Record<string, string> = {
+  diagnosis: "Diagnosis",
+  diagnosis_date: "Diagnosis date",
+  state: "State of residence",
+  contact: "Phone or email",
+  exposure_start: "Exposure start date",
+};
+
+const contradictionLabels: Record<string, string> = {
+  diagnosis_before_exposure: "Diagnosis date is before exposure start",
+  exposure_end_before_start: "Exposure end is before exposure start",
+  diagnosis_in_future: "Diagnosis date is in the future",
+  exposure_start_in_future: "Exposure start is in the future",
+  diagnosis_before_birth: "Diagnosis date is before date of birth",
+  birth_in_future: "Date of birth is in the future",
 };
 
 function classificationBadge(score: string | null) {
@@ -106,6 +125,35 @@ export function ConvexityCard(props: ConvexityCardProps) {
             </AlertDescription>
           </Alert>
         )}
+        {(() => {
+          const contradictions = props.contradictions ?? [];
+          return contradictions.length > 0 ? (
+            <Alert variant="destructive" data-testid="alert-contradictions">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                <div className="font-semibold mb-1">Data contradiction — verify before scoring</div>
+                <ul className="list-disc list-inside text-sm">
+                  {contradictions.map(c => <li key={c}>{contradictionLabels[c] || c}</li>)}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          ) : null;
+        })()}
+        {(() => {
+          const missing = props.missingFields ?? [];
+          return missing.length > 0 ? (
+            <Alert className="border-amber-300 bg-amber-50 text-amber-900" data-testid="alert-missing-fields">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                <div className="font-semibold mb-1">Missing critical intake fields</div>
+                <ul className="list-disc list-inside text-sm">
+                  {missing.map(f => <li key={f}>{missingLabels[f] || f}</li>)}
+                </ul>
+                <div className="text-xs mt-1 italic">Collect these on the next call to enable a reliable score.</div>
+              </AlertDescription>
+            </Alert>
+          ) : null;
+        })()}
         {props.rationale && (
           <p className="text-sm text-muted-foreground" data-testid="text-convexity-rationale">{props.rationale}</p>
         )}

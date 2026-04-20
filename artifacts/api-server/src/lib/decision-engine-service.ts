@@ -167,6 +167,8 @@ export async function computeAndPersistLeadScore(leadId: number): Promise<ScoreR
         convexity_action: result.action,
         convexity_rationale: result.rationale,
         convexity_ruin_flags: result.ruin_flags,
+        convexity_missing_fields: result.missing_fields,
+        convexity_contradictions: result.contradictions,
         convexity_downside_usd: String(result.downside_usd),
         convexity_upside_usd: String(result.upside_usd),
         convexity_ratio: String(result.ratio),

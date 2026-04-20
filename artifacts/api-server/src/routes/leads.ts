@@ -437,7 +437,7 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
   }
 
   // Decision Engine — recompute when relevant fields change.
-  const convexityFields = ["tort_type", "diagnosis", "diagnosis_date", "diagnosis_confirmed", "exposure_start", "source", "rejection_reason", "ad_spend", "status"];
+  const convexityFields = ["tort_type", "diagnosis", "diagnosis_date", "diagnosis_confirmed", "exposure_start", "exposure_end", "date_of_birth", "state", "phone", "email", "source", "rejection_reason", "ad_spend", "status"];
   if (convexityFields.some(f => (body as Record<string, unknown>)[f] !== undefined)) {
     computeAndPersistLeadScore(lead.id).catch(() => {});
   }

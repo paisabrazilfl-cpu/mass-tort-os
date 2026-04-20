@@ -51,10 +51,79 @@ export interface ScoreResult {
   action: Action;
   rationale: string;
   ruin_flags: string[];
+  missing_fields: string[];
+  contradictions: string[];
   downside_usd: number;
   upside_usd: number;
   ratio: number;
   confidence: Confidence;
+}
+
+/**
+ * Critical intake fields. If too many are missing, the convexity score is
+ * statistically meaningless and the lead is forced into human review (DEFER).
+ * Field codes are stable and surface in the UI via missingFieldLabels.
+ */
+const BASELINE_CRITICAL_FIELDS = [
+  "diagnosis",
+  "diagnosis_date",
+  "state",
+  "contact",
+] as const;
+
+const MAX_MISSING_FIELDS_BEFORE_DEFER = 2;
+
+/**
+ * Detect missing critical intake fields. Returns short codes (UI labels them).
+ * Tort-aware: torts with required_exposure also demand exposure_start.
+ */
+export function detectMissingFields(
+  lead: Pick<Lead, "diagnosis" | "diagnosis_date" | "exposure_start" | "state" | "phone" | "email">,
+  tort: TortInputs
+): string[] {
+  const missing: string[] = [];
+  if (!lead.diagnosis || !String(lead.diagnosis).trim()) missing.push("diagnosis");
+  if (!lead.diagnosis_date || !String(lead.diagnosis_date).trim()) missing.push("diagnosis_date");
+  if (!lead.state || !String(lead.state).trim()) missing.push("state");
+  if (!lead.phone && !lead.email) missing.push("contact");
+  if (tort.required_exposure && !lead.exposure_start) missing.push("exposure_start");
+  return missing;
+}
+
+/**
+ * Detect cross-field contradictions in the intake data. These usually indicate
+ * sloppy data entry, fraud, or upstream form bugs — always force human review.
+ */
+export function detectContradictions(
+  lead: Pick<Lead, "diagnosis_date" | "exposure_start" | "exposure_end" | "date_of_birth">
+): string[] {
+  const out: string[] = [];
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+
+  const parse = (v: unknown): Date | null => {
+    if (!v) return null;
+    let s = String(v).trim();
+    // Treat date-only strings as local midnight to avoid UTC-vs-local off-by-one
+    // when comparing against `today` constructed in the local timezone.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) s = s + "T00:00:00";
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+
+  const dx = parse(lead.diagnosis_date);
+  const expStart = parse(lead.exposure_start);
+  const expEnd = parse(lead.exposure_end);
+  const dob = parse(lead.date_of_birth);
+
+  if (dx && expStart && dx < expStart) out.push("diagnosis_before_exposure");
+  if (expStart && expEnd && expEnd < expStart) out.push("exposure_end_before_start");
+  if (dx && dx > today) out.push("diagnosis_in_future");
+  if (expStart && expStart > today) out.push("exposure_start_in_future");
+  if (dob && dx && dx < dob) out.push("diagnosis_before_birth");
+  if (dob && dob > today) out.push("birth_in_future");
+
+  return out;
 }
 
 /**
@@ -110,18 +179,26 @@ export function scoreLead(
     | "diagnosis"
     | "diagnosis_confirmed"
     | "exposure_start"
+    | "exposure_end"
     | "state"
     | "tort_type"
     | "diagnosis_date"
+    | "date_of_birth"
     | "rejection_reason"
     | "source"
+    | "phone"
+    | "email"
   >,
   tort: TortInputs,
   source: SourceInputs | null,
   settings: EngineSettings
 ): ScoreResult {
-  // Step 3: Ruin detection FIRST — overrides everything
+  // Pre-score gates run in order: contradictions first (data must be coherent
+  // before ruin/SOL math is trustworthy), then ruin (hard veto on coherent data),
+  // then missing fields (defer when signal is too thin to score reliably).
+  const contradictions = detectContradictions(lead);
   const ruin_flags = detectRuinFlags(lead, tort);
+  const missing_fields = detectMissingFields(lead, tort);
 
   // Step 1+2: Compute downside / upside in USD
   const cpl = source?.cost_per_lead ?? 0;
@@ -161,6 +238,16 @@ export function scoreLead(
     classification = "concave";
     action = "review";
     rationale = `Ruin path detected: ${ruin_flags.join(", ")}. Human review required — do not auto-reject.`;
+  } else if (contradictions.length > 0) {
+    classification = "concave";
+    action = "review";
+    confidence = "low";
+    rationale = `Data contradiction(s): ${contradictions.join(", ")}. Verify intake before scoring.`;
+  } else if (missing_fields.length >= MAX_MISSING_FIELDS_BEFORE_DEFER) {
+    classification = "neutral";
+    action = "review";
+    confidence = "low";
+    rationale = `Insufficient evidence — missing ${missing_fields.length} critical field(s): ${missing_fields.join(", ")}. Collect before scoring.`;
   } else if (ratio === Infinity) {
     classification = "convex";
     action = "execute";
@@ -188,6 +275,8 @@ export function scoreLead(
     action,
     rationale,
     ruin_flags,
+    missing_fields,
+    contradictions,
     downside_usd: Math.round(downside_usd * 100) / 100,
     upside_usd: Math.round(upside_usd * 100) / 100,
     ratio: Number.isFinite(ratio) ? Math.round(ratio * 100) / 100 : 9999,

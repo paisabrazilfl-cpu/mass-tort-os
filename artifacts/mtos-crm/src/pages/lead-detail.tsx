@@ -446,6 +446,8 @@ export default function LeadDetail() {
             action={(lead as any).convexity_action ?? null}
             rationale={(lead as any).convexity_rationale ?? null}
             ruinFlags={((lead as any).convexity_ruin_flags ?? []) as string[]}
+            missingFields={((lead as any).convexity_missing_fields ?? []) as string[]}
+            contradictions={((lead as any).convexity_contradictions ?? []) as string[]}
             downsideUsd={(lead as any).convexity_downside_usd ?? null}
             upsideUsd={(lead as any).convexity_upside_usd ?? null}
             ratio={(lead as any).convexity_ratio ?? null}

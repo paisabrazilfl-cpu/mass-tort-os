@@ -92,6 +92,8 @@ export const leadsTable = pgTable("leads", {
   convexity_upside_usd: decimal("convexity_upside_usd", { precision: 12, scale: 2 }),
   convexity_ratio: decimal("convexity_ratio", { precision: 10, scale: 4 }),
   convexity_confidence: varchar("convexity_confidence", { length: 10 }),
+  convexity_missing_fields: jsonb("convexity_missing_fields").$type<string[]>().notNull().default([]),
+  convexity_contradictions: jsonb("convexity_contradictions").$type<string[]>().notNull().default([]),
   convexity_computed_at: timestamp("convexity_computed_at"),
 
   created_at: timestamp("created_at").defaultNow().notNull(),
