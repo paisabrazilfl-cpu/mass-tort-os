@@ -15,8 +15,9 @@ import { format } from "date-fns";
 import {
   ArrowLeft, Trash2, FileText, CheckCircle, XCircle, FileSignature,
   AlertTriangle, Download, Brain, Save, RefreshCw, Shield, User,
-  MapPin, Phone, Mail, Building2, Stethoscope, Scale, Activity
+  MapPin, Phone, Mail, Building2, Stethoscope, Scale, Activity, Zap
 } from "lucide-react";
+import { EnvelopeTimeline } from "@/components/envelope-timeline";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
 interface IntelligenceScore {
@@ -357,11 +358,12 @@ export default function LeadDetail() {
       )}
 
       <Tabs defaultValue="profile" className="w-full">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="profile" className="flex items-center gap-2"><User className="h-4 w-4" />Claimant Profile</TabsTrigger>
           <TabsTrigger value="medical" className="flex items-center gap-2"><Stethoscope className="h-4 w-4" />Medical & Exposure</TabsTrigger>
           <TabsTrigger value="compliance" className="flex items-center gap-2"><Shield className="h-4 w-4" />Compliance</TabsTrigger>
           <TabsTrigger value="documents" className="flex items-center gap-2"><FileText className="h-4 w-4" />Documents</TabsTrigger>
+          <TabsTrigger value="automation" className="flex items-center gap-2"><Zap className="h-4 w-4" />Automation</TabsTrigger>
           <TabsTrigger value="intelligence" className="flex items-center gap-2"><Brain className="h-4 w-4" />AI Intelligence</TabsTrigger>
         </TabsList>
 
@@ -721,6 +723,10 @@ export default function LeadDetail() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="automation" className="space-y-6 mt-6">
+          <EnvelopeTimeline leadId={leadId} />
         </TabsContent>
 
         <TabsContent value="intelligence" className="space-y-6 mt-6">

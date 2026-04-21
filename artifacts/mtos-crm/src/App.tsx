@@ -33,6 +33,10 @@ import FinancialNews from "@/pages/financial-news";
 import LeadImport from "@/pages/lead-import";
 import DecisionEnginePage from "@/pages/decision-engine";
 import DecisionEngineSettings from "@/pages/decision-engine-settings";
+import BuyersPage from "@/pages/buyers";
+import DocumentTemplatesPage from "@/pages/document-templates";
+import TemplateAssignmentsPage from "@/pages/template-assignments";
+import WorkflowSettingsPage from "@/pages/workflow-settings";
 
 const queryClient = new QueryClient();
 
@@ -68,6 +72,10 @@ function Router() {
         <Route path="/lead-import" component={LeadImport} />
         <Route path="/decision-engine" component={DecisionEnginePage} />
         <Route path="/decision-engine/settings" component={DecisionEngineSettings} />
+        <Route path="/buyers" component={BuyersPage} />
+        <Route path="/document-templates" component={DocumentTemplatesPage} />
+        <Route path="/template-assignments" component={TemplateAssignmentsPage} />
+        <Route path="/workflow-settings" component={WorkflowSettingsPage} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

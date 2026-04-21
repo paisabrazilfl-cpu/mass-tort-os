@@ -26,6 +26,7 @@ import leadSourcesRouter from "./lead-sources";
 import buyersRouter from "./buyers";
 import documentTemplatesRouter from "./document-templates";
 import workflowSettingsRouter from "./workflow-settings";
+import webhooksRouter from "./webhooks";
 import { authMiddleware } from "../lib/rbac";
 
 const router: IRouter = Router();
@@ -33,6 +34,9 @@ const router: IRouter = Router();
 router.use(healthRouter);
 router.use("/auth", authRouter);
 router.use("/forms", formsPublicRouter);
+// Provider webhooks must be PUBLIC (callbacks have no Bearer token).
+// Each handler verifies provider signatures internally and always returns 200.
+router.use("/webhooks", webhooksRouter);
 router.use(authMiddleware);
 router.use("/leads", leadsRouter);
 router.use("/documents", documentsRouter);

@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Users, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck, BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch, Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp, Scale } from "lucide-react";
+import { LayoutDashboard, Users, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck, BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch, Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -27,6 +27,10 @@ const navigation = [
   { name: "Financial", href: "/financial-news", icon: TrendingUp },
   { name: "Lead Import", href: "/lead-import", icon: FileUp },
   { name: "New Intake", href: "/leads/new", icon: PlusCircle },
+  { name: "Buyers", href: "/buyers", icon: Building },
+  { name: "Doc Templates", href: "/document-templates", icon: FileSignature },
+  { name: "Assignment Matrix", href: "/template-assignments", icon: Grid3x3 },
+  { name: "Workflow Settings", href: "/workflow-settings", icon: Settings },
 ];
 
 export function Sidebar() {

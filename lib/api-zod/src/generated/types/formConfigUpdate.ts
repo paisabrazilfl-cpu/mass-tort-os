@@ -16,4 +16,8 @@ export interface FormConfigUpdate {
   extra_fields?: string[];
   exposure_fields?: string[];
   custom_fields?: CustomField[];
+  avg_settlement_low?: number | null;
+  avg_settlement_high?: number | null;
+  mdl_status?: string | null;
+  sol_months?: number | null;
 }

@@ -872,6 +872,10 @@ export const GetFormConfigsResponse = zod.object({
         )
         .optional(),
       rejection_conditions: zod.array(zod.object({}).passthrough()).optional(),
+      avg_settlement_low: zod.number().nullish(),
+      avg_settlement_high: zod.number().nullish(),
+      mdl_status: zod.string().nullish(),
+      sol_months: zod.number().nullish(),
       updated_at: zod.string().nullish(),
       updated_by: zod.string().nullish(),
     }),
@@ -920,6 +924,10 @@ export const GetFormConfigResponse = zod.object({
     )
     .optional(),
   rejection_conditions: zod.array(zod.object({}).passthrough()).optional(),
+  avg_settlement_low: zod.number().nullish(),
+  avg_settlement_high: zod.number().nullish(),
+  mdl_status: zod.string().nullish(),
+  sol_months: zod.number().nullish(),
   updated_at: zod.string().nullish(),
   updated_by: zod.string().nullish(),
 });
@@ -962,6 +970,10 @@ export const UpdateFormConfigBody = zod.object({
       }),
     )
     .optional(),
+  avg_settlement_low: zod.number().nullish(),
+  avg_settlement_high: zod.number().nullish(),
+  mdl_status: zod.string().nullish(),
+  sol_months: zod.number().nullish(),
 });
 
 export const UpdateFormConfigResponse = zod.object({
@@ -999,6 +1011,10 @@ export const UpdateFormConfigResponse = zod.object({
     )
     .optional(),
   rejection_conditions: zod.array(zod.object({}).passthrough()).optional(),
+  avg_settlement_low: zod.number().nullish(),
+  avg_settlement_high: zod.number().nullish(),
+  mdl_status: zod.string().nullish(),
+  sol_months: zod.number().nullish(),
   updated_at: zod.string().nullish(),
   updated_by: zod.string().nullish(),
 });
@@ -1065,6 +1081,10 @@ export const AddCustomFieldResponse = zod.object({
     )
     .optional(),
   rejection_conditions: zod.array(zod.object({}).passthrough()).optional(),
+  avg_settlement_low: zod.number().nullish(),
+  avg_settlement_high: zod.number().nullish(),
+  mdl_status: zod.string().nullish(),
+  sol_months: zod.number().nullish(),
   updated_at: zod.string().nullish(),
   updated_by: zod.string().nullish(),
 });
@@ -1112,6 +1132,10 @@ export const RemoveCustomFieldResponse = zod.object({
     )
     .optional(),
   rejection_conditions: zod.array(zod.object({}).passthrough()).optional(),
+  avg_settlement_low: zod.number().nullish(),
+  avg_settlement_high: zod.number().nullish(),
+  mdl_status: zod.string().nullish(),
+  sol_months: zod.number().nullish(),
   updated_at: zod.string().nullish(),
   updated_by: zod.string().nullish(),
 });

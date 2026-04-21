@@ -2645,6 +2645,18 @@ components:
           type: array
           items:
             type: object
+        avg_settlement_low:
+          type: number
+          nullable: true
+        avg_settlement_high:
+          type: number
+          nullable: true
+        mdl_status:
+          type: string
+          nullable: true
+        sol_months:
+          type: integer
+          nullable: true
         updated_at:
           type: string
           nullable: true
@@ -2681,6 +2693,18 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/CustomField"
+        avg_settlement_low:
+          type: number
+          nullable: true
+        avg_settlement_high:
+          type: number
+          nullable: true
+        mdl_status:
+          type: string
+          nullable: true
+        sol_months:
+          type: integer
+          nullable: true
 
     NpiVerifyResult:
       type: object

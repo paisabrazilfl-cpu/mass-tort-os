@@ -332,6 +332,64 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
   res.json(decryptLeadFields(lead));
 });
 
+/**
+ * Ownership/role check shared by lead-scoped automation endpoints.
+ * Returns true if request is allowed; false (and writes 403/404) otherwise.
+ */
+async function ensureLeadAccess(req: Express.Request, res: import("express").Response, leadId: number): Promise<boolean> {
+  if (!Number.isFinite(leadId)) {
+    res.status(400).json({ error: "invalid_id" });
+    return false;
+  }
+  const [check] = await db
+    .select({
+      id: leadsTable.id,
+      created_by_user_id: leadsTable.created_by_user_id,
+      assigned_to: leadsTable.assigned_to,
+    })
+    .from(leadsTable)
+    .where(eq(leadsTable.id, leadId));
+  if (!check) {
+    res.status(404).json({ error: "Lead not found" });
+    return false;
+  }
+  const user = (req as { user?: { id: number; role: string } }).user;
+  if (user && user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+    if (check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
+      res.status(403).json({ error: "Insufficient permissions" });
+      return false;
+    }
+  }
+  return true;
+}
+
+router.get("/:id/envelopes", requireRole("viewer"), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!(await ensureLeadAccess(req, res, id))) return;
+  const { documentEnvelopesTable } = await import("@workspace/db");
+  const { desc } = await import("drizzle-orm");
+  const rows = await db
+    .select()
+    .from(documentEnvelopesTable)
+    .where(eq(documentEnvelopesTable.lead_id, id))
+    .orderBy(desc(documentEnvelopesTable.created_at));
+  res.json(rows);
+});
+
+router.get("/:id/fax-results", requireRole("viewer"), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!(await ensureLeadAccess(req, res, id))) return;
+  const { faxResultsTable } = await import("@workspace/db");
+  const { desc, like } = await import("drizzle-orm");
+  // fax_results has no lead_id column; we tag source_file with `_lead_${id}_` when enqueued.
+  const rows = await db
+    .select()
+    .from(faxResultsTable)
+    .where(like(faxResultsTable.source_file, `%_lead_${id}_%`))
+    .orderBy(desc(faxResultsTable.created_at));
+  res.json(rows);
+});
+
 router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction("update_lead"), async (req, res) => {
   const paramsParsed = UpdateLeadParams.safeParse({ id: Number(req.params.id) });
   if (!paramsParsed.success) {
@@ -405,6 +463,13 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
 
   const encryptedUpdate = encryptLeadFields(updateData);
 
+  // Capture old status BEFORE update so we can detect a transition to "approved".
+  const [priorLead] = await db
+    .select({ status: leadsTable.status })
+    .from(leadsTable)
+    .where(eq(leadsTable.id, paramsParsed.data.id));
+  const priorStatus = priorLead?.status ?? null;
+
   const [lead] = await db
     .update(leadsTable)
     .set(encryptedUpdate)
@@ -414,6 +479,17 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
   if (!lead) {
     res.status(404).json({ error: "Lead not found" });
     return;
+  }
+
+  // Workflow hook: lead JUST transitioned to "qualified" (this CRM's term for "approved")
+  // → fire document automation. Fire-and-forget; never block the API response on it.
+  if (body.status === "qualified" && priorStatus !== "qualified") {
+    import("../lib/workflow-engine")
+      .then(({ enqueueLeadApprovalPackets }) => enqueueLeadApprovalPackets(lead.id))
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error("[workflow-engine] dispatch failed for lead", lead.id, err);
+      });
   }
 
   const conflictFields = ["diagnosis", "tort_type", "diagnosis_confirmed", "was_at_location", "location_name", "exposure_start"];
@@ -526,6 +602,16 @@ router.post("/:id/qualify", requireRole("paralegal", "attorney", "admin"), audit
       updated_at: new Date(),
     })
     .where(eq(leadsTable.id, lead.id));
+
+  // Workflow hook: just transitioned into "qualified" — dispatch document packets.
+  if (qualified && lead.status !== "qualified") {
+    import("../lib/workflow-engine")
+      .then(({ enqueueLeadApprovalPackets }) => enqueueLeadApprovalPackets(lead.id))
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error("[workflow-engine] dispatch failed for lead", lead.id, err);
+      });
+  }
 
   res.json({
     lead_id: lead.id,

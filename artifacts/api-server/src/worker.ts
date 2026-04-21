@@ -14,6 +14,7 @@ import { auditLog } from "./lib/audit";
 import { preprocessFaxBuffer, base64ToBuffer, detectMimeType } from "./lib/ocr-preprocess";
 import { extractOcrData } from "./lib/ai-ocr";
 import { withErrorFallback, createLoopGuard, DEFAULT_LIMITS } from "./lib/error-fallback";
+import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail } from "./lib/workflow-handlers";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -214,6 +215,12 @@ async function processJob(job: {
         .where(eq(faxResultsTable.id, fax_result_id));
       logger.error({ fax_result_id, output_state: faxResult.output_state }, "Fax OCR failed — routed to review");
     }
+  } else if (job.job_type === "send_esign_packet") {
+    await handleSendEsignPacket(payload as unknown as Parameters<typeof handleSendEsignPacket>[0]);
+  } else if (job.job_type === "fax_med_records_request") {
+    await handleFaxMedRecordsRequest(payload as unknown as Parameters<typeof handleFaxMedRecordsRequest>[0]);
+  } else if (job.job_type === "send_workflow_email") {
+    await handleSendWorkflowEmail(payload as unknown as Parameters<typeof handleSendWorkflowEmail>[0]);
   } else {
     logger.warn({ job_type: job.job_type }, "Unknown job type — skipping");
   }

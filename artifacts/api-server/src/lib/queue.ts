@@ -5,12 +5,35 @@ import { logger } from "./logger";
 export type JobType =
   | "create_case"
   | "ingest_file"
-  | "analyze_case";
+  | "analyze_case"
+  | "send_esign_packet"
+  | "fax_med_records_request"
+  | "send_workflow_email";
 
 export interface JobPayload {
   create_case: { case_id: string; data: Record<string, unknown> };
   ingest_file: { case_id: string; file_name: string; content: string; content_type?: string };
   analyze_case: { case_id: string };
+  send_esign_packet: {
+    lead_id: number;
+    template_id: number;
+    envelope_id?: number;
+    explicit_integration_id?: number | null;
+  };
+  fax_med_records_request: {
+    lead_id: number;
+    envelope_id: number;
+    explicit_integration_id?: number | null;
+  };
+  send_workflow_email: {
+    lead_id?: number;
+    to: string;
+    to_name?: string;
+    subject: string;
+    html: string;
+    text?: string;
+    explicit_integration_id?: number | null;
+  };
 }
 
 export async function enqueueJob<T extends JobType>(
