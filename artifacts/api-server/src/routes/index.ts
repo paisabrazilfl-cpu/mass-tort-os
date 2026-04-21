@@ -23,6 +23,9 @@ import imageObjectsRouter from "./image-objects";
 import leadImportRouter from "./lead-import";
 import decisionEngineRouter from "./decision-engine";
 import leadSourcesRouter from "./lead-sources";
+import buyersRouter from "./buyers";
+import documentTemplatesRouter from "./document-templates";
+import workflowSettingsRouter from "./workflow-settings";
 import { authMiddleware } from "../lib/rbac";
 
 const router: IRouter = Router();
@@ -52,5 +55,8 @@ router.use("/image-objects", imageObjectsRouter);
 router.use("/lead-import", leadImportRouter);
 router.use("/decision-engine", decisionEngineRouter);
 router.use("/lead-sources", leadSourcesRouter);
+router.use("/buyers", buyersRouter);
+router.use("/document-templates", documentTemplatesRouter);
+router.use("/workflow-settings", workflowSettingsRouter);
 
 export default router;

@@ -79,6 +79,7 @@ export const leadsTable = pgTable("leads", {
   vendor_id: integer("vendor_id"),
   law_firm: varchar("law_firm", { length: 255 }),
   client_id: varchar("client_id", { length: 100 }),
+  buyer_id: integer("buyer_id"),
   created_by_user_id: integer("created_by_user_id"),
 
   custom_fields: jsonb("custom_fields").$type<Record<string, unknown>>().notNull().default({}),

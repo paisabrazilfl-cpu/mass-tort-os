@@ -144,6 +144,10 @@ export async function getFormConfig(tortId: string): Promise<FormConfigPublic | 
       required_exposure: def.required_exposure,
       intro_text: null,
       active: true,
+      avg_settlement_low: null,
+      avg_settlement_high: null,
+      mdl_status: null,
+      sol_months: null,
       updated_at: new Date().toISOString(),
     };
   }
