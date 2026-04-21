@@ -12,3 +12,9 @@ id = "gXdGlEwjDtKUKhihOa3Qq"
 uri = "file://exports/mtos-crm-source.tar.gz"
 type = "unspecified"
 title = "MTOS CRM — Full Source Code (tar.gz)"
+
+[[outputs]]
+id = "-QYARtcbTInhDiVUTN5_b"
+uri = "file://exports/mtos-crm-source.pdf"
+type = "pdf"
+title = "MTOS CRM — Full Source Code (PDF, 420 files, 1.9 MB)"
