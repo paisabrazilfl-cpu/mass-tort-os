@@ -6,3 +6,9 @@ id = "C4bPm5HiXuqVirNkO8qef"
 uri = "file://exports/MTOS_Forms_Todo.pdf"
 type = "pdf"
 title = "MTOS Forms Todo List"
+
+[[outputs]]
+id = "gXdGlEwjDtKUKhihOa3Qq"
+uri = "file://exports/mtos-crm-source.tar.gz"
+type = "unspecified"
+title = "MTOS CRM — Full Source Code (tar.gz)"
