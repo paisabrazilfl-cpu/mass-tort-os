@@ -6,7 +6,7 @@
 import { db, casesTable, caseDocumentsTable, analysisTable, faxResultsTable, reviewQueueTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./lib/logger";
-import { claimNextJob, markJobDone, markJobFailed } from "./lib/queue";
+import { claimNextJob, markJobDone, markJobFailed, reclaimStaleProcessingJobs } from "./lib/queue";
 import { saveFile, readFile, listCaseFiles } from "./lib/vault";
 import { extractFeatures } from "./lib/ai-extract";
 import { scoreFeatures, scoreToVerdict } from "./lib/scoring";
@@ -236,7 +236,27 @@ export async function workerLoop(): Promise<void> {
   workerStarted = true;
   logger.info("MTOS Worker started — polling job queue");
 
+  // Reclaim stale jobs every 60 seconds so a crashed worker can't park
+  // jobs in `processing` forever.
+  let lastReclaimAt = 0;
+  const RECLAIM_EVERY_MS = 60_000;
+  const STALE_AFTER_MS = 5 * 60_000;
+
   while (true) {
+    try {
+      const now = Date.now();
+      if (now - lastReclaimAt > RECLAIM_EVERY_MS) {
+        lastReclaimAt = now;
+        try {
+          await reclaimStaleProcessingJobs(STALE_AFTER_MS);
+        } catch (e) {
+          logger.error({ err: e }, "Stale-job reclaim failed");
+        }
+      }
+    } catch {
+      // never let bookkeeping crash the loop
+    }
+
     try {
       const job = await claimNextJob();
       if (job) {

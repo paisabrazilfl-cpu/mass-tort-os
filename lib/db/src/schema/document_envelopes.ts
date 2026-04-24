@@ -1,4 +1,4 @@
-import { pgTable, serial, varchar, text, timestamp, integer, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, varchar, text, timestamp, integer, jsonb, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { leadsTable } from "./leads";
@@ -38,7 +38,11 @@ export const documentEnvelopesTable = pgTable("document_envelopes", {
   last_error: text("last_error"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  leadIdx: index("document_envelopes_lead_id_idx").on(t.lead_id),
+  leadStatusIdx: index("document_envelopes_lead_status_idx").on(t.lead_id, t.status),
+  externalIdx: index("document_envelopes_external_id_idx").on(t.external_envelope_id),
+}));
 
 export interface EnvelopeEvent {
   type: string;

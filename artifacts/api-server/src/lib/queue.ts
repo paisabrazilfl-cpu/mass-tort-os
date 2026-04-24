@@ -82,6 +82,31 @@ export async function markJobFailed(id: number, error: string) {
     .where(eq(jobQueueTable.id, id));
 }
 
+/**
+ * Reset jobs that have been stuck in `processing` for longer than maxAgeMs.
+ * Called periodically by the worker loop to recover from worker crashes /
+ * autoscale container kills that left a job claimed but not finished.
+ *
+ * Returns the number of jobs reclaimed.
+ */
+export async function reclaimStaleProcessingJobs(maxAgeMs: number = 5 * 60 * 1000): Promise<number> {
+  const seconds = Math.max(1, Math.floor(maxAgeMs / 1000));
+  const result = await db.execute(sql`
+    UPDATE job_queue
+    SET status = 'pending', started_at = NULL,
+        error = COALESCE(error, '') || ' [reclaimed-stale]'
+    WHERE status = 'processing'
+      AND started_at IS NOT NULL
+      AND started_at < NOW() - (${seconds} || ' seconds')::interval
+    RETURNING id
+  `);
+  const count = result.rows?.length ?? 0;
+  if (count > 0) {
+    logger.warn({ count, maxAgeMs }, "Reclaimed stale processing jobs (likely from a crashed/killed worker)");
+  }
+  return count;
+}
+
 export async function getQueueStats() {
   const rows = await db
     .select({
