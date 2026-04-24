@@ -1,0 +1,133 @@
+GOAL: Full security + correctness audit of MTOS source code in a 1666-page PDF.
+
+PLAN: Extract text → inventory files/modules → systematic security sweep (auth, injection, IDOR, secrets, crypto, PII/HIPAA, uploads, deserialization, CORS/CSRF, rate limits, SSRF) → correctness sweep (async, race, error handling, transactions, engine logic) → triage by severity → deliver report.
+
+CURRENT TASK: Extract and inventory.
+
+RESULT: 420 files, Node/TypeScript MTOS CRM. Let me parse file boundaries and prioritize security-critical files.
+
+CAUGHT A BUG: My splitter only captured the first page of each multi-page file. The PDF has 1666 pages, 420 files = ~4 pages/file average. Let me re-parse correctly.
+
+RESULT: 417 files, 54,633 lines, fully extracted. Now the real audit begins.
+
+---
+
+## ⚠ INTERIM AUDIT — Tool budget hit mid-sweep
+
+Luis — heads up: I ran out of tool-call budget after reading the core security files but before getting through all 70+ api-server files. What follows is **partial but real** findings from `app.ts`, `index.ts`, `routes/auth.ts`, and `lib/rbac.ts` (~1,300 LOC of the most critical code). Bigger files — `routes/forms.ts` (1,126 LOC), `routes/leads.ts` (710), `lib/workflow-handlers.ts` (564), `lib/tort-engine.ts` (506), `lib/encryption.ts`, `lib/vault.ts`, `lib/totp.ts`, `lib/audit.ts`, `routes/webhooks.ts`, `routes/documents.ts`, `routes/forms-public.ts`, all the AI/decision engines, and every frontend file — have **not been reviewed yet**.
+
+**The extracted source is on disk at `/home/claude/src/` (417 files, 54,633 LOC).** Ask me to continue in a new turn and I'll pick up exactly where I stopped.
+
+---
+
+## 🔴 CRITICAL — fix before any prod deploy
+
+**C1. Dev-mode auth bypass is reachable in any non-prod/non-staging env** — `lib/rbac.ts:139-144`
+```ts
+if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "staging") {
+  req.user = { id: 0, email: "dev@mtos.local", name: "Dev Admin", role: "admin" };
+  next(); return;
+}
+```
+Any request with no `Authorization` header gets silently promoted to **admin user id=0** on any box where `NODE_ENV` is unset, misspelled (`produciton`), `"dev"`, `"test"`, `"preview"`, `"qa"`, empty string, or anything not exactly `"production"` or `"staging"`. A Replit preview, a forgotten env var, a typo in a deploy script — game over. **Fail-closed default:** flip the logic to `NODE_ENV === "development" && process.env.ALLOW_DEV_AUTH_BYPASS === "1"` and require the explicit opt-in.
+
+**C2. Rate-limit bypass via `X-Forwarded-For` spoofing** — `app.ts:42-46` and `routes/auth.ts:35-36`
+```ts
+keyGenerator: (req) => (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
+  || req.socket.remoteAddress || "unknown"
+```
+Trusting the *first* (leftmost) X-F-F entry is exactly backwards. Clients can send anything; the value you want is the *last untrusted hop* your proxy added. An attacker rotates `X-Forwarded-For: 1.2.3.4`, `1.2.3.5`, `1.2.3.6`… and the global 500/15min and `/login` 20/15min limits do nothing. The `/login` limiter is the one credential-stuffers will target. **Fix:** set `app.set('trust proxy', <n>)` to the number of your real proxy hops, then let `express-rate-limit` use `req.ip` (default keyGenerator). Don't write your own.
+
+**C3. JWT dev-secret fallback** — `lib/rbac.ts:15`
+```ts
+return secret || "mtos-dev-secret";
+```
+Same pattern as C1: any non-prod/non-staging env signs JWTs with a hardcoded, world-readable string now published inside your source PDF. If a dev JWT ever reaches a real environment (shared staging DB, leaked `.env`, misconfigured preview URL), forgery is trivial. **Fix:** require `SESSION_SECRET` unconditionally; let dev boots fail fast.
+
+**C4. SQL injection in the lockout update via `sql.raw`** — `lib/rbac.ts:271`
+```ts
+THEN NOW() + INTERVAL '${sql.raw(String(LOCKOUT_MINUTES))} minutes'
+```
+`LOCKOUT_MINUTES` is a hardcoded `15` today, so this is **not exploitable as written** — but it's a landmine. `sql.raw(String(x))` is a code pattern that will be copy-pasted; the moment `LOCKOUT_MINUTES` becomes configurable (env var, admin setting, per-tenant policy) it's an injection. **Fix now:** `NOW() + (${LOCKOUT_MINUTES} * INTERVAL '1 minute')` using parameter binding, or `make_interval(mins => ${LOCKOUT_MINUTES})`.
+
+**C5. 55MB JSON/urlencoded body limit is a cheap DoS vector** — `app.ts:77-78`
+```ts
+app.use(express.json({ limit: "55mb" }));
+app.use(express.urlencoded({ extended: true, limit: "55mb" }));
+```
+Applied globally. One unauthenticated POST to `/api/anything` with a 55MB JSON body forces Node to parse it before any auth check; a handful of concurrent requests pin event loop + memory. The 55MB is presumably for document uploads — scope that limit to the upload routes only and keep the default (100kb–1mb) everywhere else. Also consider `express.raw()` for upload endpoints so you skip JSON parse entirely.
+
+---
+
+## 🟠 HIGH
+
+**H1. CORS origin can become an empty-array allow-nothing in prod if `REPL_SLUG` is unset** — `app.ts:68-76`. The `.filter(Boolean)` means if `REPL_SLUG` is missing in prod, the allowed-origins list is `[]` → every preflight fails silently and you'll chase a "CORS broken" ghost for hours. Make the prod origin an explicit required env var (`ALLOWED_ORIGIN`) and throw at boot if missing.
+
+**H2. `scrypt` with default cost parameters** — `routes/auth.ts:66-84`. `crypto.scrypt(pwd, salt, 64)` uses Node defaults (N=16384, r=8, p=1). OWASP 2023+ recommendation is N≥2^17. More importantly you're **not versioning the KDF params** in the stored hash (`${salt}:${hash}` — no algo tag, no N/r/p), so you can't rotate without a forced password reset. **Fix:** store `scrypt$N=131072$r=8$p=1$salt$hash`, or just use `argon2id` (`argon2` npm package) which handles this for you.
+
+**H3. `verifyPassword` timing leak on malformed stored hash** — `routes/auth.ts:76-84`. If `stored` lacks a `:`, `salt`/`hash` are `undefined`, `Buffer.from(undefined,'hex')` returns empty buffer, `timingSafeEqual` throws on length mismatch → unhandled rejection path. Not exploitable on current data but will bite during a migration. Guard with `if (!salt || !hash) return false;` and fixed-time dummy hash to avoid user-enumeration via timing.
+
+**H4. Audit log fire-and-forget on critical alert** — `lib/rbac.ts:90-92`. `dispatchCriticalAlert(...).catch(() => {})` silently swallows delivery failures on **token-theft detection** — the one event you most need durable. Persist the alert to DB first (synchronously), then attempt out-of-band delivery. `.catch(() => {})` on a security-critical path is never okay.
+
+**H5. Token-version fail-closed returns 503, not 401** — `lib/rbac.ts:169-172`. Returning 503 on DB failure is defensible ("we can't verify, so deny"), but clients/SDKs typically retry 503 and **don't** retry 401. You'll get retry storms against an already-failing DB. Use 401 with `WWW-Authenticate: Bearer error="invalid_token"` and log the DB error internally.
+
+**H6. `/api/listUsers` and `getUserByEmail` leak `token_version`** — `rbac.ts:240`. Response shape of `getUserByEmail` includes `token_version`, `failed_login_attempts`, `locked_until` — if any route accidentally `res.json(user)`'s that object (common Drizzle footgun), you leak lockout state and session-versioning internals. Split into a DB-row type and a wire type; the `AuthUser` interface should never include those fields. Grep every route for `res.json(user)` when I get to the routes.
+
+**H7. `listUsers()` has no pagination and no role gate shown** — `rbac.ts:257`. `SELECT ... FROM mtos_users ORDER BY id` dumps the whole users table. Presumably `requireRole("admin")` is applied at the route layer — **verify** when I read `routes/auth.ts` lines 95+ and whatever exposes this. If it's reachable by any authenticated user, it's a user-enumeration oracle.
+
+---
+
+## 🟡 MEDIUM
+
+**M1. CSP `styleSrc: 'unsafe-inline'`** — `app.ts:17`. Standard for Tailwind/component-lib apps but still weakens XSS defense. Move to nonce-based CSP when you harden.
+
+**M2. `crossOriginEmbedderPolicy: false`** — `app.ts:27`. Disables COEP entirely. If you don't need Spectre isolation (SharedArrayBuffer), fine, but document why — otherwise re-enable with `credentialless`.
+
+**M3. HSTS preload is set but TLS termination context is unclear** — `app.ts:28`. `preload: true` commits you to the HSTS preload list forever. Only set this once you've submitted to hstspreload.org and you control every subdomain. On Replit's `.replit.app` it's a no-op; on your own domain it's a foot-gun.
+
+**M4. pino-http scrubs query strings from logs but not request bodies** — `app.ts:52-58`. Login requests will log the full body unless `pino-http` redacts it. `SSN`, `DOB`, `password`, `totp_code`, Authorization header — confirm `logger.ts` has `redact: ['req.body.password', 'req.body.totp_code', 'req.headers.authorization', ...]`. I haven't read `logger.ts` yet.
+
+**M5. Refresh-token reuse revokes all user tokens *then* checks user existence** — `rbac.ts:82-116`. Revocation happens at lines 82-88, then `getUserById` at 109. Correct ordering, but the `dispatchCriticalAlert` is `.catch(() => {})` (see H4) and `getUserById` returning null after revocation leaves the user logged out with no alert delivered and no explanation. Unlikely but possible. Low-severity correctness issue.
+
+**M6. `jwt.sign` doesn't set `issuer`, `audience`, or `jwtid`** — `rbac.ts:46-51`. If you ever run multiple services sharing a secret (unlikely but…), tokens are interchangeable. `jti` would also let you revoke specific tokens without bumping `token_version` for everyone.
+
+**M7. `authMiddleware` accepts any token signed with HS256 but doesn't check `alg` in the header before verify** — handled by `algorithms: ["HS256"]` restriction — ✅ good, you got this right. Noting because it's the classic bug.
+
+**M8. `refreshTokensTable` — no index on `token_hash` shown** — `rbac.ts:72-76`. If the schema doesn't have a unique index on `token_hash`, the lookup is a table scan and refresh rotation becomes a latency/DoS vector at scale. Check `@workspace/db` schema (haven't read yet).
+
+---
+
+## 🟢 GOOD — credit where due
+
+- JWT algorithm pinning (`algorithms: ["HS256"]`) — correct.
+- Refresh-token rotation with reuse-detection + cascade revocation via `token_version` bump — architecturally sound.
+- `x-powered-by` disabled.
+- HSTS, noSniff, frameSrc 'none', objectSrc 'none' — solid baseline.
+- `scrypt` + `timingSafeEqual` for password verification — right primitives.
+- Account lockout after 5 failed attempts with 15-min cooldown.
+- Refresh tokens stored as SHA-256 hashes, not plaintext.
+- `PORT` required at boot, fail-fast.
+- Login requires `email + password` validation before DB hit.
+- Form-config seed is idempotent and preserves admin edits (claim — needs verification in `form-config-service.ts`).
+
+---
+
+## What I haven't reviewed yet
+
+Every file except `app.ts`, `index.ts`, `routes/auth.ts` (first 94 lines only — the file is 94 lines total, so fully read), `lib/rbac.ts`. Remaining high-priority targets in order:
+
+1. `lib/encryption.ts`, `lib/vault.ts`, `lib/totp.ts` — crypto primitives
+2. `lib/logger.ts` — PII redaction (M4 depends on this)
+3. `lib/audit.ts` — tamper-evidence of the audit trail
+4. `routes/forms-public.ts` — unauthenticated surface
+5. `routes/webhooks.ts` — signature verification (H for esign, fax)
+6. `routes/documents.ts`, `routes/image-objects.ts` — file upload, path traversal, SSRF
+7. `routes/leads.ts` (710 LOC), `routes/forms.ts` (1,126 LOC), `routes/cases.ts` — IDOR, tenant isolation
+8. `lib/ai-extract.ts`, `lib/ai-ocr.ts`, `lib/drafting-ai.ts`, `lib/final-arbiter.ts` — prompt injection, output validation
+9. `lib/fraud-engine.ts`, `lib/tort-engine.ts`, `lib/decision-engine.ts`, `lib/scoring.ts` — engine correctness
+10. `lib/workflow-engine.ts`, `lib/workflow-handlers.ts`, `lib/queue.ts` — async/race
+11. All the `lib/esign/*`, `lib/fax/*`, `lib/email/*` — provider integrations (where you flagged stubs)
+12. DB schema (`@workspace/db`) — was not in the PDF; need it to verify unique indexes, FK constraints, tenant_id scoping
+13. Every frontend file — XSS sinks, token storage (localStorage vs httpOnly cookie), dangerouslySetInnerHTML
+
+**Say "continue"** and I'll pick up at `lib/encryption.ts` and grind through the rest. I'll deliver the findings in the same severity-tiered format and consolidate everything into a single final report at the end.
