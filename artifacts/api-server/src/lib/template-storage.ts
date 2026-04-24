@@ -1,23 +1,28 @@
-import fs from "fs/promises";
-import path from "path";
 import crypto from "crypto";
+import { db, templateFilesTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
-const TEMPLATES_BASE = path.resolve(process.cwd(), "vault", "templates");
-
-function assertWithinBase(targetPath: string): void {
-  const resolved = path.resolve(targetPath);
-  if (!resolved.startsWith(TEMPLATES_BASE + path.sep) && resolved !== TEMPLATES_BASE) {
-    throw new Error("Path traversal detected — template storage access denied");
-  }
-}
-
-async function ensureBase(): Promise<void> {
-  await fs.mkdir(TEMPLATES_BASE, { recursive: true });
-}
+/**
+ * Postgres-backed template storage.
+ *
+ * Production runs on autoscale, where local disk is ephemeral and not shared
+ * across replicas. Storing template PDFs as bytea in Postgres makes uploads
+ * durable and visible to every API + worker process.
+ *
+ * The returned `storagePath` (a stable storage_key like "tpl:<ts>_<rand>_<name>")
+ * is persisted in document_templates.storage_path; downloads/deletes look it up
+ * directly in template_files.
+ */
 
 function sanitizeFileName(name: string): string {
   const cleaned = name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 200);
   return cleaned || "template.pdf";
+}
+
+function buildStorageKey(safeName: string): string {
+  const ts = Date.now();
+  const random = crypto.randomBytes(4).toString("hex");
+  return `tpl:${ts}_${random}_${safeName}`;
 }
 
 export interface StoredTemplate {
@@ -26,56 +31,76 @@ export interface StoredTemplate {
   sizeBytes: number;
 }
 
-/**
- * Save a template PDF to local storage. Returns a stable storage_path
- * suitable for persistence in document_templates.storage_path.
- */
+export const MAX_TEMPLATE_BYTES = 10 * 1024 * 1024; // 10 MB
+
 export async function uploadTemplate(
   content: Buffer,
   fileName: string,
+  contentType: string = "application/pdf",
 ): Promise<StoredTemplate> {
-  await ensureBase();
+  if (!Buffer.isBuffer(content) || content.length === 0) {
+    throw new Error("Template content is empty");
+  }
+  if (content.length > MAX_TEMPLATE_BYTES) {
+    throw new Error(
+      `Template too large: ${content.length} bytes (max ${MAX_TEMPLATE_BYTES})`,
+    );
+  }
   const safeName = sanitizeFileName(fileName);
-  const timestamp = Date.now();
-  const random = crypto.randomBytes(4).toString("hex");
-  const filePath = path.join(TEMPLATES_BASE, `${timestamp}_${random}_${safeName}`);
-  assertWithinBase(filePath);
-  await fs.writeFile(filePath, content);
+  const storageKey = buildStorageKey(safeName);
   const hash = crypto.createHash("sha256").update(content).digest("hex");
-  return { storagePath: filePath, hash, sizeBytes: content.length };
+  const sizeBytes = content.length;
+
+  await db.insert(templateFilesTable).values({
+    storage_key: storageKey,
+    file_name: safeName,
+    content_type: contentType,
+    content,
+    hash,
+    size_bytes: sizeBytes,
+  });
+
+  return { storagePath: storageKey, hash, sizeBytes };
 }
 
-/**
- * Read a template by its stored path. Always validates the path is within
- * the template vault — no traversal, no symlinks.
- */
 export async function downloadTemplate(storagePath: string): Promise<Buffer> {
-  const resolved = path.resolve(storagePath);
-  assertWithinBase(resolved);
-  const stat = await fs.lstat(resolved);
-  if (stat.isSymbolicLink()) {
-    throw new Error("Symlink access denied in template vault");
+  if (!storagePath) {
+    throw new Error("storagePath is required");
   }
-  return fs.readFile(resolved);
+  // Templates uploaded before the Postgres-backed storage migration used
+  // local filesystem paths. Those files are gone in autoscale; surface a
+  // clear error so callers (and admins) can re-upload instead of getting
+  // a confusing "not found".
+  if (!storagePath.startsWith("tpl:")) {
+    throw new Error(
+      `Legacy disk-based template path detected ("${storagePath}"). Please re-upload this template — files on local disk do not persist in the deployed environment.`,
+    );
+  }
+  const rows = await db
+    .select({ content: templateFilesTable.content })
+    .from(templateFilesTable)
+    .where(eq(templateFilesTable.storage_key, storagePath))
+    .limit(1);
+  if (rows.length === 0) {
+    throw new Error(`Template not found: ${storagePath}`);
+  }
+  const buf = rows[0]!.content;
+  return Buffer.isBuffer(buf) ? buf : Buffer.from(buf as unknown as Uint8Array);
 }
 
 export async function deleteTemplate(storagePath: string): Promise<void> {
-  const resolved = path.resolve(storagePath);
-  assertWithinBase(resolved);
-  try {
-    await fs.unlink(resolved);
-  } catch {
-    // Already gone — idempotent.
-  }
+  if (!storagePath) return;
+  await db
+    .delete(templateFilesTable)
+    .where(eq(templateFilesTable.storage_key, storagePath));
 }
 
 export async function templateExists(storagePath: string): Promise<boolean> {
-  try {
-    const resolved = path.resolve(storagePath);
-    assertWithinBase(resolved);
-    await fs.access(resolved);
-    return true;
-  } catch {
-    return false;
-  }
+  if (!storagePath) return false;
+  const rows = await db
+    .select({ id: templateFilesTable.id })
+    .from(templateFilesTable)
+    .where(eq(templateFilesTable.storage_key, storagePath))
+    .limit(1);
+  return rows.length > 0;
 }

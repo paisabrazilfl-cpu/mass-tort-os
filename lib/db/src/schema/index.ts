@@ -24,5 +24,6 @@ export * from "./document_templates";
 export * from "./template_assignments";
 export * from "./document_envelopes";
 export * from "./workflow_settings";
+export * from "./template_files";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";

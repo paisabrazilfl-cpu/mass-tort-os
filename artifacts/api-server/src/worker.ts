@@ -226,7 +226,14 @@ async function processJob(job: {
   }
 }
 
-async function workerLoop() {
+let workerStarted = false;
+
+export async function workerLoop(): Promise<void> {
+  if (workerStarted) {
+    logger.warn("workerLoop() called more than once in the same process — ignoring duplicate start");
+    return;
+  }
+  workerStarted = true;
   logger.info("MTOS Worker started — polling job queue");
 
   while (true) {
@@ -250,4 +257,12 @@ async function workerLoop() {
   }
 }
 
-workerLoop();
+// Auto-start when invoked as the standalone worker entry point
+// (i.e. `node dist/worker.mjs` via the dev workflow).
+// When imported by the API server (index.ts), the caller decides when to start.
+const isStandaloneWorker = process.env["MTOS_WORKER_STANDALONE"] === "1"
+  || process.argv.some((a) => a.endsWith("worker.mjs") || a.endsWith("worker.ts"));
+
+if (isStandaloneWorker) {
+  workerLoop();
+}
