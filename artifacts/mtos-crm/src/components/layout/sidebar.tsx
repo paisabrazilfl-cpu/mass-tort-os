@@ -80,13 +80,13 @@ export function Sidebar() {
         <span className="font-bold text-lg tracking-tight text-sidebar-foreground">MTOS</span>
         <span className="ml-2 rounded-md bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">v1.0</span>
       </div>
-      <nav className="flex-1 overflow-y-auto px-2 py-4">
+      <nav className="flex-1 overflow-y-auto px-2 py-2">
         {navigation.map((group) => (
-          <div key={group.section} className="mb-4">
-            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
+          <div key={group.section} className="mb-2">
+            <div className="px-2 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
               {group.section}
             </div>
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {group.items.map((item) => {
                 const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
                 return (
@@ -97,13 +97,13 @@ export function Sidebar() {
                       isActive
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
-                      "group flex items-center rounded-md px-2 py-2 text-sm font-medium"
+                      "group flex items-center rounded-md px-2 py-1 text-xs font-medium"
                     )}
                   >
                     <item.icon
                       className={cn(
                         isActive ? "text-sidebar-accent-foreground" : "text-sidebar-foreground/70 group-hover:text-sidebar-accent-foreground",
-                        "mr-3 h-5 w-5 flex-shrink-0"
+                        "mr-2.5 h-4 w-4 flex-shrink-0"
                       )}
                       aria-hidden="true"
                     />
