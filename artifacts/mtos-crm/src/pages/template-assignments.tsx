@@ -33,13 +33,18 @@ export default function TemplateAssignmentsPage() {
         fetch("/api/document-templates"),
         fetch("/api/buyers"),
         fetch("/api/document-templates/assignments/all"),
-        fetch("/api/forms"),
+        fetch("/api/forms/config"),
       ]);
       setTemplates(await tRes.json());
       setBuyers(await bRes.json());
       setAssignments(await aRes.json());
-      const formsBody = await fRes.json().catch(() => []);
-      setTorts(Array.isArray(formsBody) ? formsBody.filter((f: FormConfig) => f.active) : []);
+      const formsBody = await fRes.json().catch(() => ({}));
+      const list: FormConfig[] = Array.isArray(formsBody)
+        ? formsBody
+        : Array.isArray(formsBody?.tort_campaigns)
+          ? formsBody.tort_campaigns
+          : [];
+      setTorts(list.filter((f) => f.active));
     } finally {
       setLoading(false);
     }

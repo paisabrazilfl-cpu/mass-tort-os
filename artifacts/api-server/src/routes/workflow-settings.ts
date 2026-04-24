@@ -34,12 +34,30 @@ router.get("/", requireRole("viewer"), async (_req, res) => {
 });
 
 router.get("/:scope", requireRole("viewer"), async (req, res) => {
+  const scope = String(req.params.scope);
   const [row] = await db
     .select()
     .from(workflowSettingsTable)
-    .where(eq(workflowSettingsTable.scope, String(req.params.scope)));
+    .where(eq(workflowSettingsTable.scope, scope));
   if (!row) {
-    res.status(404).json({ error: "not_found" });
+    res.json({
+      scope,
+      esign_provider_integration_id: null,
+      fax_provider_integration_id: null,
+      email_provider_integration_id: null,
+      default_email_from_name: null,
+      default_email_from_address: null,
+      default_fax_from_number: null,
+      auto_send_on_approval: false,
+      auto_fax_doctor_on_signed_hipaa: false,
+      esign_resend_after_days: 3,
+      esign_expire_after_days: 30,
+      max_send_retries: 3,
+      notify_on_failure_email: null,
+      med_records_cover_letter_template_id: null,
+      notes: null,
+      _is_default: true,
+    });
     return;
   }
   res.json(row);
