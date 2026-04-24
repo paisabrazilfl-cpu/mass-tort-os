@@ -41,23 +41,18 @@ export function encrypt(plaintext: string, fieldName?: string, entityId?: string
   return `enc:v${CURRENT_KEY_VERSION}:${hasAAD}:${combined.toString(ENCODING)}`;
 }
 
-export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
-  if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+/**
+ * Try to decrypt with a specific AAD configuration. Returns null on failure.
+ * Used by decrypt() to attempt multiple AAD variants for backward compatibility
+ * when historical data was encrypted with a different (or no) AAD than what the
+ * caller is now passing.
+ */
+function tryDecryptWithAAD(
+  payload: string,
+  keyVersion: number,
+  aad: Buffer | undefined,
+): string | null {
   try {
-    let keyVersion = 1;
-    let hasAADFlag = 0;
-    let payload: string;
-
-    if (ciphertext.startsWith("enc:v")) {
-      const parts = ciphertext.split(":");
-      keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-      hasAADFlag = parseInt(parts[2], 10) || 0;
-      payload = parts.slice(3).join(":");
-    } else {
-      payload = ciphertext.slice(4);
-    }
-
     const key = getKey(keyVersion);
     const combined = Buffer.from(payload, ENCODING);
     const iv = combined.subarray(0, IV_LENGTH);
@@ -65,32 +60,53 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
     const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
     const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
     decipher.setAuthTag(authTag);
-    if (hasAADFlag && fieldName) {
-      const aad = buildAAD(fieldName, entityId);
-      if (aad) decipher.setAAD(aad);
-    }
+    if (aad) decipher.setAAD(aad);
     const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
     return decrypted.toString("utf8");
   } catch {
-    if (!ciphertext.startsWith("enc:v")) {
-      try {
-        const key = getKey(1);
-        const combined = Buffer.from(ciphertext.slice(4), ENCODING);
-        const iv = combined.subarray(0, IV_LENGTH);
-        const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
-        const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
-        const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
-        decipher.setAuthTag(authTag);
-        const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-        return decrypted.toString("utf8");
-      } catch {
-        logger.error("Decryption failed — data may be corrupted or key mismatch");
-        return "[DECRYPTION_ERROR]";
-      }
-    }
-    logger.error("Decryption failed — AAD mismatch or data corruption on versioned ciphertext");
-    return "[DECRYPTION_ERROR]";
+    return null;
   }
+}
+
+export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
+  if (!ciphertext) return ciphertext;
+  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  let keyVersion = 1;
+  let hasAADFlag = 0;
+  let payload: string;
+
+  if (ciphertext.startsWith("enc:v")) {
+    const parts = ciphertext.split(":");
+    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
+    hasAADFlag = parseInt(parts[2], 10) || 0;
+    payload = parts.slice(3).join(":");
+  } else {
+    payload = ciphertext.slice(4);
+  }
+
+  // Try the AAD configuration the ciphertext was tagged with first. If that
+  // fails, fall back through other AAD variants — historical inconsistencies
+  // (e.g. data encrypted before the entityId was known on insert) would
+  // otherwise be permanently unrecoverable. AES-GCM auth tag verification
+  // still prevents corruption: every fallback that succeeds is cryptographically
+  // valid for the key + IV.
+  const candidates: (Buffer | undefined)[] = [];
+  if (hasAADFlag && fieldName) {
+    candidates.push(buildAAD(fieldName, entityId));      // primary: field+entity
+    candidates.push(buildAAD(fieldName, undefined));     // fallback: field only
+  }
+  candidates.push(undefined);                             // fallback: no AAD
+
+  for (const aad of candidates) {
+    const result = tryDecryptWithAAD(payload, keyVersion, aad);
+    if (result !== null) return result;
+  }
+
+  logger.error(
+    { fieldName, hasAAD: !!hasAADFlag, keyVersion },
+    "Decryption failed — exhausted all AAD variants. Data may be corrupted or encryption key changed.",
+  );
+  return "[DECRYPTION_ERROR]";
 }
 
 export const ENCRYPTED_FIELDS = [
