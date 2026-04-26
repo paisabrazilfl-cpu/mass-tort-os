@@ -257,8 +257,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     Permission.FORMS_BACKGROUND_CHECK,
     Permission.FORMS_NPI_VERIFY,
     Permission.FORMS_FRAUD_CHECK,
-    // Vendors / lead-sources / templates / workflow-settings
+    // Vendors / buyers / lead-sources / templates / workflow-settings
     Permission.VENDORS_VIEW,
+    Permission.BUYERS_VIEW,
     Permission.LEAD_SOURCES_VIEW,
     Permission.TEMPLATES_VIEW,
     Permission.WORKFLOW_SETTINGS_VIEW,

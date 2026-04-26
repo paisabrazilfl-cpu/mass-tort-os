@@ -187,6 +187,15 @@ describe("ROLE_PERMISSIONS catalogue", () => {
       Permission.DOCUMENTS_UPDATE,
       Permission.DOCUMENTS_REDACT,
       Permission.ANALYTICS_PREDICTIVE_LEAD_VIEW,
+      // Read-only catalogues that were previously requireRole("viewer") and
+      // therefore admitted paralegal via role hierarchy. The migration must
+      // preserve that access — regression test.
+      Permission.BUYERS_VIEW,
+      Permission.LEAD_SOURCES_VIEW,
+      Permission.TEMPLATES_VIEW,
+      Permission.WORKFLOW_SETTINGS_VIEW,
+      Permission.DOCUMENTS_VIEW,
+      Permission.VENDORS_VIEW,
     ]) {
       assert.equal(ROLE_PERMISSIONS.paralegal.has(p), true, `paralegal should have ${p}`);
     }
