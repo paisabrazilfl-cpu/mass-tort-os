@@ -14,26 +14,14 @@ import {
 /**
  * Single source of truth for RBAC.
  *
- * Layers:
- *  - {@link UserRole}     — coarse seat-level role attached to the JWT (admin/attorney/paralegal/viewer).
- *  - {@link Permission}   — fine-grained capability checked at the handler layer.
- *  - {@link ROLE_PERMISSIONS} — declarative role → permission mapping. The ONLY place
- *    where new capabilities should be wired to a role.
- *  - {@link hasPermission}, {@link requirePermission}, {@link requireRole},
- *    {@link canBypassOwnership} — express helpers that consume the map above.
- *
- * Hard rules enforced here so future contributors cannot regress:
- *  1. Dev auth bypass fires ONLY when `NODE_ENV === "development"` (not when env is
- *     unset, not in test, not in staging, not in production). Anything else
- *     means an unauthenticated request gets a 401 envelope.
- *  2. SESSION_SECRET is REQUIRED in production AND staging — the boot fails if missing.
- *     The dev fallback "mtos-dev-secret" is only ever used when NODE_ENV === "development".
- *  3. Privilege bypass for ownership checks goes through {@link canBypassOwnership}.
- *     We deliberately do NOT special-case `user.id === 0` ("god mode") anywhere — every
- *     check must be expressed in terms of role.
- *  4. All denial paths (401/403) emit the canonical envelope:
- *       { status: "error", code: "UNAUTHENTICATED" | "FORBIDDEN", message }
- *     and write an audit_log row so an SOC review can reconstruct who tried what.
+ * Hard rules:
+ *  1. Dev auth bypass fires ONLY when NODE_ENV === "development".
+ *  2. SESSION_SECRET is required in production/staging; the dev fallback is
+ *     only reachable when NODE_ENV === "development".
+ *  3. Per-row ownership bypass goes through {@link canBypassOwnership} — no
+ *     `user.id !== 0` god-mode special-case.
+ *  4. Every 401/403 path emits the canonical envelope and writes an
+ *     audit_log row through {@link auditDenial}.
  */
 
 const NODE_ENV = process.env.NODE_ENV;
@@ -46,13 +34,29 @@ const JWT_SECRET = (() => {
     throw new Error("FATAL: SESSION_SECRET environment variable is required in production/staging");
   }
   if (!secret && !IS_DEV) {
-    // test or any other non-dev/non-prod-like env: still require a secret so unit
-    // tests do not silently exercise the dev fallback path that is supposed to be
-    // unreachable from CI.
     throw new Error(`FATAL: SESSION_SECRET is required when NODE_ENV="${NODE_ENV ?? ""}" (only NODE_ENV="development" gets the fallback)`);
   }
   return secret || "mtos-dev-secret";
 })();
+
+/**
+ * drizzle-orm/node-postgres' `db.execute()` resolves to a pg `QueryResult`
+ * whose row array lives on `.rows`. The few callsites in this file that
+ * speak raw SQL go through this helper so we don't sprinkle `as any`
+ * casts at every single one.
+ */
+interface PgQueryResultLike<T> {
+  rows: T[];
+}
+
+function rowsOf<T extends Record<string, unknown>>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  if (result && typeof result === "object" && "rows" in (result as object)) {
+    const rows = (result as PgQueryResultLike<T>).rows;
+    return Array.isArray(rows) ? rows : [];
+  }
+  return [];
+}
 
 const ACCESS_TOKEN_EXPIRY = "15m";
 const REFRESH_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -351,10 +355,8 @@ export function isTokenVersionRevoked(decodedTv: number | undefined, currentDbTv
 
 /**
  * Global authentication. Fails closed in prod/staging/test/anything-not-dev.
- *
- * The dev bypass is intentionally narrow: ONLY when `NODE_ENV === "development"`
- * AND no Authorization header is present. Any token-bearing request must verify
- * properly even in dev so contributors notice broken token plumbing immediately.
+ * The dev bypass fires only when NODE_ENV === "development" AND no
+ * Authorization header is present — token-bearing requests always verify.
  */
 async function _authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
@@ -365,7 +367,7 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
       next();
       return;
     }
-    auditDenial(req, "missing_credentials", undefined);
+    auditDenial(req, "missing_credentials");
     sendUnauthorized(res, "Authentication required");
     return;
   }
@@ -373,29 +375,29 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
   const token = authHeader.slice(7);
   const decoded = verifyToken(token);
   if (!decoded) {
-    auditDenial(req, "invalid_or_expired_token", undefined);
+    auditDenial(req, "invalid_or_expired_token");
     sendUnauthorized(res, "Invalid or expired token");
     return;
   }
 
   try {
-    const rows = await db.execute(sql`
+    const result = await db.execute(sql`
       SELECT token_version FROM mtos_users WHERE id = ${decoded.id} LIMIT 1
     `);
-    const row = (Array.isArray(rows) ? rows : (rows as any).rows ?? [])[0] as any;
+    const row = rowsOf<{ token_version: number }>(result)[0];
     if (!row) {
-      auditDenial(req, "user_account_not_found", { user_id: decoded.id });
+      auditDenial(req, "user_account_not_found", { decoded });
       sendUnauthorized(res, "User account not found");
       return;
     }
     if (isTokenVersionRevoked(decoded.tv, row.token_version)) {
-      auditDenial(req, "token_revoked", { user_id: decoded.id });
+      auditDenial(req, "token_revoked", { decoded });
       sendUnauthorized(res, "Token has been revoked");
       return;
     }
   } catch {
     // Fail closed: a DB outage during token-version check must NOT silently
-    // grant access. We return 503 so the client can retry.
+    // grant access — return 503 so the client can retry.
     logger.error("Token version check failed — denying request (fail-closed)");
     res.status(503).json({
       status: "error",
@@ -409,8 +411,6 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
   next();
 }
 
-// Stamped with AUTH_MIDDLEWARE_FLAG so the boot-time route table validator
-// recognises this as the auth gate even after bundling rewrites names.
 export const authMiddleware = markAuthMiddleware(_authMiddleware);
 
 // =============================================================================
@@ -418,25 +418,14 @@ export const authMiddleware = markAuthMiddleware(_authMiddleware);
 // =============================================================================
 
 /**
- * Requires the caller hold one of `roles` OR a higher role per
- * {@link ROLE_HIERARCHY}. Pure hierarchy — no separate "exact match" branch.
- *
- * Pass the LOWEST role that is acceptable. e.g. `requireRole("paralegal")`
- * lets paralegal, attorney, admin through. `requireRole("admin")` lets only
- * admin through.
+ * Requires the caller hold one of `roles` or a higher role per
+ * {@link ROLE_HIERARCHY}. Pass the LOWEST role that is acceptable.
  */
 export function requireRole(...roles: UserRole[]) {
   if (roles.length === 0) {
     throw new Error("requireRole called with no roles — refusing to mount a deny-all middleware");
   }
   const minRequired = Math.min(...roles.map(r => ROLE_HIERARCHY[r]));
-  // Stamped with GATE_MIDDLEWARE_FLAG so the boot-time route table validator
-  // (lib/route-protection.ts) can identify this as a role gate even after
-  // bundling renames inner functions. Function.name alone is unreliable.
-  // Also stamped with GATE_METADATA so the boot-time policy report can
-  // surface the EFFECTIVE required role(s) per route. We carry the LOWEST
-  // role label that is acceptable (the minimum-required role per
-  // hierarchy semantics) — same as the runtime check.
   const minLabel = (Object.keys(ROLE_HIERARCHY) as UserRole[]).find(r => ROLE_HIERARCHY[r] === minRequired) ?? roles[0];
   return markGateMiddleware(function requireRole(req: Request, res: Response, next: NextFunction): void {
     const user = req.user;
@@ -450,36 +439,20 @@ export function requireRole(...roles: UserRole[]) {
       next();
       return;
     }
-    auditDenial(req, "insufficient_role", {
-      required_roles: roles,
-      user_role: user.role,
-      user_id: user.id,
-    });
+    auditDenial(req, "insufficient_role", { required_roles: roles });
     sendForbidden(res, "Insufficient permissions");
   }, { kind: "role", values: [minLabel] });
 }
 
 /**
- * Permission-gated middleware. Prefer this over {@link requireRole} for
- * NEW handlers — it lets us reassign which role gets a capability without
- * touching every route file.
- *
- * Variadic: pass one or more {@link Permission} values; the gate accepts the
- * caller iff their role grants AT LEAST ONE of the listed permissions
- * (any-of). This matches typical "the caller may do X *or* Y" route usage
- * (e.g. `requirePermission(LEAD_VIEW_OWN, LEAD_VIEW_ANY)` for a list endpoint
- * that filters by ownership downstream). Passing zero permissions throws at
- * mount time — refusing to install a deny-all middleware that would only
- * surface the misconfiguration at runtime.
+ * Permission-gated middleware. Variadic — the gate accepts iff the caller
+ * holds AT LEAST ONE of the listed permissions (any-of). Passing zero
+ * permissions throws at mount time so misconfiguration surfaces at boot.
  */
 export function requirePermission(...permissions: Permission[]) {
   if (permissions.length === 0) {
     throw new Error("requirePermission called with no permissions — refusing to mount a deny-all middleware");
   }
-  // Stamped with GATE_MIDDLEWARE_FLAG — see requireRole above for rationale.
-  // Also stamped with GATE_METADATA carrying the full any-of permission set
-  // so the boot policy report and audit doc matrix can render the
-  // capability requirements per route.
   return markGateMiddleware(function requirePermission(req: Request, res: Response, next: NextFunction): void {
     const user = req.user;
     if (!user) {
@@ -491,11 +464,7 @@ export function requirePermission(...permissions: Permission[]) {
       next();
       return;
     }
-    auditDenial(req, "missing_permission", {
-      required_permissions: permissions,
-      user_role: user.role,
-      user_id: user.id,
-    });
+    auditDenial(req, "missing_permission", { required_permissions: permissions });
     sendForbidden(res, "Insufficient permissions");
   }, { kind: "permission", values: permissions });
 }
@@ -504,27 +473,70 @@ export function requirePermission(...permissions: Permission[]) {
 // Audit & user CRUD
 // =============================================================================
 
-function auditDenial(req: Request, reason: string, extra: Record<string, unknown> | undefined): void {
-  const userId = req.user?.id;
-  // Fire-and-forget; audit failures must not turn a 401 into a 500.
-  auditLog("access_denied", userId !== undefined ? String(userId) : "anonymous", reason, {
+/**
+ * Options accepted by {@link auditDenial}. Every denial path in this module
+ * funnels through that helper so the SOC audit trail is uniform.
+ */
+interface AuditDenialOpts {
+  /** Roles the gate required (any-of). Empty for unauth/missing-token paths. */
+  required_roles?: readonly UserRole[];
+  /** Permissions the gate required (any-of). Empty for unauth/missing-token paths. */
+  required_permissions?: readonly Permission[];
+  /** Decoded JWT for paths where req.user has not been populated yet
+   *  (user_account_not_found / token_revoked). */
+  decoded?: { id: number; email: string; role: UserRole };
+  /** Per-route ownership metadata (case_id, lead_id, owner_user_id, …). */
+  extra?: Record<string, unknown>;
+}
+
+/**
+ * Canonical 401/403 audit-log writer.
+ *
+ * EVERY denial — anonymous, missing token, expired token, revoked token,
+ * insufficient role, missing permission, ownership violation — produces an
+ * audit_log row with the same payload shape:
+ *
+ *   {
+ *     reason, path, method,
+ *     user_id, user_email, user_role,    // null when unknown
+ *     required_roles[], required_permissions[],   // empty arrays default
+ *     ip_address, user_agent,
+ *     ...extra (per-route ownership metadata)
+ *   }
+ *
+ * The shape is documented in docs/audits/rbac-remediation-2026-04-26.md §5.
+ * Fire-and-forget; audit failures must NEVER turn a 401 into a 500.
+ */
+function auditDenial(req: Request, reason: string, opts: AuditDenialOpts = {}): void {
+  const u = req.user;
+  const userId = u?.id ?? opts.decoded?.id ?? null;
+  const userEmail = u?.email ?? opts.decoded?.email ?? null;
+  const userRole = u?.role ?? opts.decoded?.role ?? null;
+
+  const subject = userId !== null ? String(userId) : "anonymous";
+  const xff = req.headers["x-forwarded-for"];
+  const ip = (Array.isArray(xff) ? xff[0] : xff)?.split(",")[0]?.trim() || req.socket.remoteAddress;
+
+  auditLog("access_denied", subject, reason, {
+    reason,
     path: req.path,
     method: req.method,
-    ...(extra ?? {}),
+    user_id: userId,
+    user_email: userEmail,
+    user_role: userRole,
+    required_roles: opts.required_roles ?? [],
+    required_permissions: opts.required_permissions ?? [],
+    ...(opts.extra ?? {}),
   }, {
-    ip_address: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
+    ip_address: ip,
     user_agent: req.headers["user-agent"],
   }).catch(() => {});
 }
 
 /**
  * Audited 403 helper for ownership / domain-rule denials inside route
- * handlers. Centralises the pattern:
- *   1. write an audit_log row,
- *   2. send the canonical FORBIDDEN envelope.
- * Use this anywhere a handler decides "this user is authenticated and has
- * the right role, but can't see THIS specific resource" — those denials
- * would otherwise bypass the rbac.ts middleware and leave no audit trail.
+ * handlers — writes an audit_log row and sends the canonical FORBIDDEN
+ * envelope. Use anywhere a handler decides "right role, wrong row".
  */
 export function denyForbidden(
   req: Request,
@@ -533,7 +545,7 @@ export function denyForbidden(
   message = "Insufficient permissions",
   extra?: Record<string, unknown>,
 ): void {
-  auditDenial(req, reason, extra);
+  auditDenial(req, reason, { extra });
   sendForbidden(res, message);
 }
 
@@ -555,45 +567,53 @@ export function auditAction(action: string) {
   };
 }
 
+type UserRow = AuthUser & Record<string, unknown>;
+type UserCredentialsRow = AuthUser & {
+  password_hash: string;
+  mfa_enabled: boolean;
+  totp_secret: string | null;
+  failed_login_attempts: number;
+  locked_until: Date | null;
+  token_version: number;
+};
+
 export async function createUser(email: string, name: string, role: UserRole, passwordHash: string): Promise<AuthUser> {
   const result = await db.execute(sql`
     INSERT INTO mtos_users (email, name, role, password_hash)
     VALUES (${email}, ${name}, ${role}, ${passwordHash})
     RETURNING id, email, name, role, token_version
   `);
-  const rows = Array.isArray(result) ? result : (result as any).rows ?? [result];
-  return rows[0] as unknown as AuthUser;
+  const rows = rowsOf<UserRow>(result);
+  return rows[0] as AuthUser;
 }
 
-export async function getUserByEmail(email: string): Promise<(AuthUser & { password_hash: string; mfa_enabled: boolean; totp_secret: string | null; failed_login_attempts: number; locked_until: Date | null; token_version: number }) | null> {
-  const rows = await db.execute(sql`
+export async function getUserByEmail(email: string): Promise<UserCredentialsRow | null> {
+  const result = await db.execute(sql`
     SELECT id, email, name, role, password_hash, mfa_enabled, totp_secret, failed_login_attempts, locked_until, token_version
     FROM mtos_users WHERE email = ${email} LIMIT 1
   `);
-  const result = Array.isArray(rows) ? rows : (rows as any).rows ?? [];
-  if (!result.length) return null;
-  return result[0] as any;
+  const rows = rowsOf<UserCredentialsRow>(result);
+  return rows[0] ?? null;
 }
 
 export async function getUserById(id: number): Promise<AuthUser | null> {
-  const rows = await db.execute(sql`
+  const result = await db.execute(sql`
     SELECT id, email, name, role, token_version FROM mtos_users WHERE id = ${id} LIMIT 1
   `);
-  const result = Array.isArray(rows) ? rows : (rows as any).rows ?? [];
-  if (!result.length) return null;
-  return result[0] as unknown as AuthUser;
+  const rows = rowsOf<UserRow>(result);
+  return rows[0] ? (rows[0] as AuthUser) : null;
 }
 
 export async function listUsers(): Promise<AuthUser[]> {
-  const rows = await db.execute(sql`SELECT id, email, name, role FROM mtos_users ORDER BY id`);
-  return (Array.isArray(rows) ? rows : (rows as any).rows ?? []) as unknown as AuthUser[];
+  const result = await db.execute(sql`SELECT id, email, name, role FROM mtos_users ORDER BY id`);
+  return rowsOf<UserRow>(result) as AuthUser[];
 }
 
 export async function incrementFailedAttempts(email: string): Promise<{ attempts: number; locked: boolean }> {
   const MAX_ATTEMPTS = 5;
   const LOCKOUT_MINUTES = 15;
 
-  const rows = await db.execute(sql`
+  const result = await db.execute(sql`
     UPDATE mtos_users
     SET failed_login_attempts = failed_login_attempts + 1,
         locked_until = CASE
@@ -605,11 +625,11 @@ export async function incrementFailedAttempts(email: string): Promise<{ attempts
     WHERE email = ${email}
     RETURNING failed_login_attempts, locked_until
   `);
-  const result = (Array.isArray(rows) ? rows : (rows as any).rows ?? [])[0] as any;
-  if (!result) return { attempts: 0, locked: false };
+  const row = rowsOf<{ failed_login_attempts: number; locked_until: Date | null }>(result)[0];
+  if (!row) return { attempts: 0, locked: false };
   return {
-    attempts: result.failed_login_attempts,
-    locked: result.locked_until && new Date(result.locked_until) > new Date(),
+    attempts: row.failed_login_attempts,
+    locked: row.locked_until !== null && new Date(row.locked_until) > new Date(),
   };
 }
 

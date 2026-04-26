@@ -312,19 +312,48 @@ Every denial now returns:
 | `lib/ids.ts` | Inline 403 normalised. |
 | `routes/leads.ts` | Inline 403s normalised. |
 
+### Canonical audit-denial payload contract (5th-pass review fix)
+
+EVERY 401 / 403 emitted from `lib/rbac.ts` — anonymous, missing token,
+expired token, revoked token, missing user account, insufficient role,
+missing permission, ownership rejection — funnels through the single
+private helper `auditDenial(req, reason, opts)` and writes an `audit_log`
+row with this fixed shape:
+
+| Field | Always populated? | Source |
+| --- | --- | --- |
+| `reason` | yes | symbolic reason string (`missing_credentials`, `invalid_or_expired_token`, `user_account_not_found`, `token_revoked`, `unauthenticated_role_check`, `insufficient_role`, `unauthenticated_permission_check`, `missing_permission`, plus per-route `<resource>_ownership_denied`) |
+| `path`, `method` | yes | `req.path`, `req.method` |
+| `user_id` | nullable | `req.user?.id ?? opts.decoded?.id ?? null` |
+| `user_email` | nullable | `req.user?.email ?? opts.decoded?.email ?? null` |
+| `user_role` | nullable | `req.user?.role ?? opts.decoded?.role ?? null` |
+| `required_roles` | yes (`[]` if not applicable) | the roles arg the gate was mounted with |
+| `required_permissions` | yes (`[]` if not applicable) | the permissions arg the gate was mounted with |
+| `ip_address` | best-effort | `x-forwarded-for[0]` or `req.socket.remoteAddress` |
+| `user_agent` | best-effort | `req.headers["user-agent"]` |
+| `…ownership extras` | per route | e.g. `case_id`, `lead_id`, `owner_user_id`, `assigned_to` (passed via `denyForbidden(..., extra)`) |
+
+The contract guarantees an SOC reviewer can answer **who tried to do
+what, with which credentials, against which gate, and why we said no**
+from a single audit row — without joining back into the user table or
+re-deriving the gate's required-role/permission set from source.
+
+For the two paths where `req.user` is not yet populated
+(`user_account_not_found`, `token_revoked`), the helper accepts
+`opts.decoded` so the JWT-claimed identity (id, email, role) is recorded
+even though authentication ultimately failed — that is exactly the
+forensic signal an SOC review needs ("token issued for user X was
+rejected because…").
+
 ### Audited ownership denials
 
-The original implementation only wrote audit entries from the rbac middleware
-(401/403 from `requireRole`, `requirePermission`, `authMiddleware`). Per-route
-ownership rejections (e.g. "you have the right role, but you don't own this
-case") still emitted a 403 but skipped the audit log — invisible in an SOC
-review.
+Per-route ownership rejections ("right role, wrong row") used to emit a
+403 without an audit row. `lib/rbac.ts` exports
+`denyForbidden(req, res, reason, message?, extra?)` which writes an
+`audit_log` row through the same `auditDenial` helper above before
+sending the canonical envelope.
 
-`lib/rbac.ts` now exports `denyForbidden(req, res, reason, message?, extra?)`
-which writes an `audit_log` row with the per-route reason and ownership
-metadata before sending the canonical envelope.
-
-| Site | Reason | Metadata |
+| Site | Reason | Extra metadata |
 | --- | --- | --- |
 | `cases.ts` GET `/:id` | `case_ownership_denied` | `case_id`, `owner_user_id`, `assigned_to` |
 | `leads.ts` GET `/:id` | `lead_ownership_denied` | `lead_id`, `owner_user_id`, `assigned_to` |
@@ -337,14 +366,13 @@ Audit log writes are best-effort and never throw into the denial path;
 `RBAC_DISABLE_AUDIT=1` disables audit writes in unit tests so test runs do not
 require a database connection.
 
-**Production safety guard (4th-pass review fix):** `RBAC_DISABLE_AUDIT=1`
-is now honoured **only** when `NODE_ENV` is NOT `production` and NOT
-`staging`. In a production-like deployment the flag is silently ignored
-and a `WARN`-level "RBAC_DISABLE_AUDIT=1 is IGNORED in production/staging
-— audit writes remain enabled" line is logged at module load so an SOC
-reviewer can grep for the misconfiguration. This closes the prior risk
-that an accidentally-set env var could suppress audit trails in a
-deployed environment.
+**Production safety guard:** `RBAC_DISABLE_AUDIT=1` is honoured **only**
+when `NODE_ENV` is NOT `production` and NOT `staging`. In a production-like
+deployment the flag is silently ignored and a `WARN`-level
+"RBAC_DISABLE_AUDIT=1 is IGNORED in production/staging — audit writes
+remain enabled" line is logged at module load so an SOC reviewer can grep
+for the misconfiguration. This closes the prior risk that an accidentally-
+set env var could suppress audit trails in a deployed environment.
 
 ---
 

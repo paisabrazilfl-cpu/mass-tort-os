@@ -1,32 +1,16 @@
-// =============================================================================
 // MTOS Task #10 — booted-app role × route access matrix.
 //
-// Where rbac.test.ts exercises the pure helpers (hasPermission,
-// requirePermission, isCaseVisibleToUser, …) against in-memory request /
-// response stand-ins, THIS file boots the *real* express app on an ephemeral
-// port, inserts one ephemeral user per role, mints a JWT for each one, and
-// asserts the actual HTTP outcome for representative routes that span every
-// trust boundary the validator recognises:
-//
-//   - public            (no auth needed)
-//   - auth-exception    (auth router login/refresh/register — unauthenticated by design)
-//   - auth-only         (authenticated, no role gate — self-service / utility)
-//   - role-gated        (the default; admin / attorney / paralegal / viewer)
-//
-// The test also pulls the route-policy report emitted by `validateRouteTable`
-// and asserts that the only routes the boot validator considers
-// unauthenticated are mounted under one of the well-known public bases
-// (`/api/health`, `/api/forms-public`, `/api/webhooks`) or the auth router's
-// explicit exception list (login / refresh / register).
-//
-// Side effects: the test creates 4 ephemeral users with email
-// `rbac-matrix-<role>-<timestamp>@mtos.test` and deletes them in `after()`.
-// =============================================================================
+// Boots the real express app on an ephemeral port, inserts one ephemeral
+// user per role, mints a JWT for each, and asserts the actual HTTP outcome
+// for routes that span every trust boundary the validator recognises:
+// public, auth-exception, auth-only, role-gated. The route-policy report
+// from validateRouteTable is asserted directly so any drift fails the build.
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import type { AddressInfo } from "node:net";
+import type { Express, Router } from "express";
 import { db, pool } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { generateToken, type UserRole } from "../rbac.js";
@@ -35,16 +19,43 @@ import {
   type RoutePolicyEntry,
 } from "../route-protection.js";
 
-// We disable the audit-log writes in this test to keep the audit_log table
-// from filling with role-matrix probe rows. The denial path itself is
-// already covered (with the audit row) by rbac.test.ts.
+// Audit writes are disabled here so the role-matrix probe doesn't pollute
+// audit_log. rbac.test.ts already asserts the denial+audit-row path.
 process.env["RBAC_DISABLE_AUDIT"] = "1";
 
-// =============================================================================
-// Boot the app + capture the policy report from validateRouteTable.
-// We import app dynamically so the env-var above is set BEFORE any module
-// initialisation that reads it.
-// =============================================================================
+// -----------------------------------------------------------------------------
+// Typed helpers — keep the test free of `as any` escapes.
+// -----------------------------------------------------------------------------
+
+/** drizzle-orm/node-postgres returns a pg `QueryResult`-shaped object. */
+interface PgQueryResult<T> { rows: T[] }
+
+function queryRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  if (result && typeof result === "object" && "rows" in (result as object)) {
+    const r = (result as PgQueryResult<T>).rows;
+    return Array.isArray(r) ? r : [];
+  }
+  return [];
+}
+
+/** express 5 exposes the internal router as `_router`; older typings use `router`. */
+function expressRouterOf(app: Express): Router {
+  const a = app as unknown as { _router?: Router; router?: Router };
+  const router = a._router ?? a.router;
+  if (!router) throw new Error("could not resolve express router from app");
+  return router;
+}
+
+/** node http.Server `closeAllConnections` is not in the public Server type. */
+function closeAllConnections(server: import("node:http").Server): void {
+  const fn = (server as unknown as { closeAllConnections?: () => void }).closeAllConnections;
+  if (typeof fn === "function") fn.call(server);
+}
+
+// -----------------------------------------------------------------------------
+// Boot the app + capture validateRouteTable's policy report.
+// -----------------------------------------------------------------------------
 
 interface BootedApp {
   baseUrl: string;
@@ -58,20 +69,14 @@ let booted: BootedApp | undefined;
 const TS = Date.now();
 
 async function bootApp(): Promise<BootedApp> {
-  // The app's index.ts performs side effects we don't want in tests
-  // (worker boot, port resolution from env, etc.), so we import app.ts
-  // directly and listen on an ephemeral port.
-  const appMod = (await import("../../app.js")) as { default: import("express").Express };
+  // Import app.ts directly (not index.ts) — index.ts boots a worker we
+  // don't need here. The dynamic import is required so the
+  // RBAC_DISABLE_AUDIT env var above is set before module init.
+  const appMod = (await import("../../app.js")) as { default: Express };
   const app = appMod.default;
 
-  // app.ts already invoked validateRouteTable() at import time; re-run it
-  // here so we can inspect the per-route policy report (the inner router is
-  // exposed via app._router in express 5).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const router = (app as unknown as { _router?: import("express").Router; router?: import("express").Router })._router
-    ?? (app as unknown as { router?: import("express").Router }).router;
-  if (!router) throw new Error("could not resolve express router from app");
-  const report = validateRouteTable(router);
+  // app.ts ran validateRouteTable() at import; re-run to capture the report.
+  const report = validateRouteTable(expressRouterOf(app));
 
   return await new Promise((resolve, reject) => {
     const server = app.listen(0, () => {
@@ -86,11 +91,8 @@ async function bootApp(): Promise<BootedApp> {
         policy: report.policy,
         close: () =>
           new Promise<void>((res) => {
-            // Force-drop any lingering keep-alive sockets, otherwise
-            // node:test waits for the listener to finish even though
-            // server.close() was called.
-            const closeAll = (server as unknown as { closeAllConnections?: () => void }).closeAllConnections;
-            if (typeof closeAll === "function") closeAll.call(server);
+            // Drop keep-alive sockets so node:test doesn't wait for them.
+            closeAllConnections(server);
             server.close(() => res());
           }),
       });
@@ -102,8 +104,8 @@ async function bootApp(): Promise<BootedApp> {
 before(async () => {
   booted = await bootApp();
 
-  // Insert one ephemeral user per role. We use a known password hash placeholder
-  // (bcrypt-style) — the auth path won't run because we mint JWTs directly.
+  // One ephemeral user per role. Password hash is a placeholder — we mint
+  // JWTs directly, the login path doesn't run.
   for (const role of ["admin", "attorney", "paralegal", "viewer"] as const) {
     const email = `rbac-matrix-${role}-${TS}@mtos.test`;
     const inserted = await db.execute(sql`
@@ -111,8 +113,7 @@ before(async () => {
       VALUES (${email}, ${`Matrix ${role}`}, ${role}, ${"$2b$10$test.placeholder.hash.not.usable"}, 0)
       RETURNING id
     `);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const id = (inserted.rows as Array<{ id: number }>)[0]?.id;
+    const id = queryRows<{ id: number }>(inserted)[0]?.id;
     if (typeof id !== "number") throw new Error(`failed to insert ${role}`);
     const token = generateToken({ id, email, name: `Matrix ${role}`, role });
     ephemeralUsers.push({ id, role, token, email });
@@ -407,17 +408,11 @@ describe("role × route allow/deny matrix", () => {
   }
 });
 
-// =============================================================================
-// 5. Token revocation via DB token_version bump (full HTTP round-trip)
-//
-// 4th-pass code-review fix: prove end-to-end that bumping
-// `mtos_users.token_version` causes the next request that carries an
-// already-minted JWT (with the OLD `tv` claim) to be denied with 401 by
-// authMiddleware. This is the path real session invalidation runs through
-// (logout-all, password reset, MFA enrol). The unit test
-// `isTokenVersionRevoked()` covers the predicate; this one covers the
-// runtime express path that actually serves users.
-// =============================================================================
+// 5. Token revocation via DB token_version bump (full HTTP round-trip).
+// Proves end-to-end that bumping mtos_users.token_version causes the
+// previously-minted JWT (with stale `tv`) to be denied 401 by authMiddleware
+// — the path real session invalidation (logout-all, password reset, MFA
+// enrol) flows through.
 
 describe("token revocation via DB token_version bump (HTTP path)", () => {
   test("bumping mtos_users.token_version causes a previously-valid token to be denied 401", async () => {
@@ -428,7 +423,7 @@ describe("token revocation via DB token_version bump (HTTP path)", () => {
       VALUES (${email}, ${"Revocation Probe"}, ${"attorney"}, ${"$2b$10$test.placeholder.hash.not.usable"}, 0)
       RETURNING id
     `);
-    const id = (inserted.rows as Array<{ id: number }>)[0]?.id;
+    const id = queryRows<{ id: number }>(inserted)[0]?.id;
     if (typeof id !== "number") throw new Error("failed to insert revocation probe user");
 
     try {
@@ -468,20 +463,10 @@ describe("token revocation via DB token_version bump (HTTP path)", () => {
   });
 });
 
-// =============================================================================
-// 6. Viewer ownership filter on cases endpoints (full HTTP round-trip)
-//
-// 4th-pass code-review fix: the unit test exercises
-// `isCaseVisibleToUser()` against literal row stand-ins. THIS test inserts
-// real rows into `cases` (one owned by the viewer probe user, one owned
-// by a different user) and asserts:
-//
-//   - GET /api/cases as the viewer returns ONLY the owned row.
-//   - GET /api/cases as an attorney returns BOTH rows (no per-row scope).
-//   - GET /api/cases/:id of the unowned row, as the viewer, returns 403
-//     with the documented `case_ownership_denied`-class envelope.
-//   - GET /api/cases/:id of the owned row, as the viewer, returns 200.
-// =============================================================================
+// 6. Viewer ownership filter on cases endpoints (full HTTP round-trip).
+// Inserts real rows owned by the viewer / assigned to the viewer / owned
+// by someone else and asserts the GET /api/cases list and per-id reads
+// match the documented ownership rules.
 
 describe("viewer ownership filter on cases endpoints (HTTP path)", () => {
   // Need a stable second user-id for the "unowned" case. The matrix's

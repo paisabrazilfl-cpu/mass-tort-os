@@ -243,6 +243,7 @@ export function idsMiddleware() {
   };
 }
 
+// .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
 setInterval(() => {
   const now = Date.now();
   for (const [ip, entry] of ipRequestLog.entries()) {
@@ -250,4 +251,4 @@ setInterval(() => {
       ipRequestLog.delete(ip);
     }
   }
-}, 60_000);
+}, 60_000).unref();

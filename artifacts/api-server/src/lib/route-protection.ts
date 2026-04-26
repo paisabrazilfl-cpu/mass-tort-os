@@ -2,56 +2,29 @@ import type { IRouter, Router } from "express";
 import { logger } from "./logger";
 
 /**
- * Boot-time route table validator.
+ * Boot-time route table validator. Refuses to start the process if any
+ * non-public handler is missing a `requireRole` / `requirePermission` gate.
  *
- * Why this exists: a contributor adds a new handler, forgets to call
- * `requireRole` / `requirePermission`, and because the global
- * `router.use(authMiddleware)` in `routes/index.ts` only checks that the
- * caller is *some* authenticated user, the new endpoint silently becomes
- * "any logged-in viewer can hit it". This validator catches that class of
- * bug at boot — the process refuses to start if any non-public handler is
- * missing a role/permission gate.
+ * The walker descends each router tracking two bits inherited from parent
+ * routers:
+ *   - hasAuth: an `authMiddleware` layer is mounted in the chain
+ *   - hasGate: a `requireRole` / `requirePermission` layer is mounted
  *
- * The walker tracks two state bits as it descends each router:
- *   - hasAuth: an `authMiddleware` layer has been mounted on this router
- *     (or inherited from a parent), so any subsequent route is authenticated.
- *   - hasGate: a `requireRole` / `requirePermission` layer has been mounted
- *     on this router (or on the route's per-handler stack), so any
- *     subsequent route has role-checked authorisation.
- *
- * For each terminal route the validator asserts (hasAuth && hasGate) unless
- * the containing router was tagged via `markPublic()`. Authentication-only
- * routes (e.g. login) live on a router whose name is in
- * AUTH_ROUTE_EXCEPTIONS.
+ * For each terminal route, asserts `(hasAuth && hasGate)` unless the
+ * router is tagged `markPublic(...)` or the route is in the per-router
+ * `AUTH_ROUTE_EXCEPTIONS` / `AUTH_ONLY_ROUTES` allowlists below.
  */
 
-// Router-level markers. Like the auth/gate flags below, these are
-// module-LOCAL `Symbol(...)` values — NOT registered through `Symbol.for(...)`.
-// If they were, any other module could compute the same key from a string
-// literal and stamp `markPublic` on a router it does not own, silently
-// excluding all of its routes from the boot-time validator.
+// Module-LOCAL symbols (NOT registered via Symbol.for) — only this module
+// can mark or read them. That keeps the trust boundary inside this file:
+// a contributor cannot import a helper from elsewhere and forge a passing
+// validation by stamping their own router/middleware.
 const PUBLIC_ROUTER_FLAG: unique symbol = Symbol("route-protection/public");
 const ROUTER_LABEL_FLAG: unique symbol = Symbol("route-protection/label");
-// Markers stamped on middleware functions returned by lib/rbac.ts factories.
-// Function names are unreliable: esbuild renames inner named expressions
-// when the same identifier appears in the outer scope, so we tag the
-// returned middleware itself with a module-LOCAL symbol.
-//
-// Important: these symbols are NOT exported and NOT registered via Symbol.for.
-// Only this module can read them, and only this module can write them through
-// the markAuthMiddleware/markGateMiddleware helpers — which are themselves
-// only re-exported to lib/rbac.ts via a private internal entry point. That
-// keeps the validator's trust boundary inside the rbac module: no contributor
-// can import a "stamp this as a gate" helper into a feature router and forge
-// a passing validation.
 const AUTH_MIDDLEWARE_FLAG: unique symbol = Symbol("route-protection/auth");
 const GATE_MIDDLEWARE_FLAG: unique symbol = Symbol("route-protection/gate");
-// Stamp carrying the EFFECTIVE required role/permission metadata for a
-// gate middleware so the boot-time route-policy report can render it
-// alongside the route. Shape: { kind: "role" | "permission", values: string[] }.
-// The validator collects metadata from every gate in a route's chain (so a
-// route protected by both `requireRole("admin")` AND
-// `requirePermission(LEAD_VIEW_ANY)` shows up with both columns populated).
+// Carries the EFFECTIVE { kind: "role"|"permission", values: string[] }
+// for a gate middleware so the boot-time policy report can render it.
 const GATE_METADATA_FLAG: unique symbol = Symbol("route-protection/gate-metadata");
 
 export interface GateMetadata {
@@ -115,15 +88,13 @@ function routerLabel(router: unknown, fallback: string): string {
   return fallback;
 }
 
-// Symbol-based detection ONLY. We deliberately do NOT fall back to
-// Function.name / layer.name matching: a contributor could trivially defeat
-// the validator by naming any noop middleware "requireRole". Symbols are
-// unforgeable from outside this module.
+// Symbol-based detection only — no Function.name fallback (a contributor
+// could otherwise defeat the validator by naming a noop "requireRole").
 
 /**
- * Auth-router routes that are deliberately unauthenticated. The route paths
- * are matched against `${METHOD} ${path}` exactly so we don't accidentally
- * exempt new login-adjacent endpoints.
+ * Auth-router routes that are deliberately unauthenticated. Matched
+ * `${METHOD} ${path}` exactly so new login-adjacent endpoints aren't
+ * accidentally exempt.
  */
 const AUTH_ROUTE_EXCEPTIONS = new Set([
   "POST /login",
@@ -132,34 +103,20 @@ const AUTH_ROUTE_EXCEPTIONS = new Set([
 ]);
 
 /**
- * Routes that REQUIRE authentication but legitimately do NOT need a role gate
- * because they act on the caller's own account or are caller-agnostic
- * utilities.
- *
- * Keys are `${routerLabel} ${METHOD} ${path}`. Every entry is a deliberate,
- * reviewed decision — adding a row here is the only way to opt out of the
- * "auth + role gate" requirement, so an SOC review can grep for this list
- * to enumerate all auth-only endpoints.
- *
- * Auth router self-service: a logged-in user can manage their own account
- * (logout, rotate password, enrol/verify/disable their own MFA, fetch
- * their own profile) regardless of role.
- *
- * Forms router utilities: form-builder config/preview lookups and pure
- * validation helpers (no DB writes, no PII enrichment).
+ * Authenticated routes that legitimately do not need a role gate (caller's
+ * own account or pure stateless utility). Keys are
+ * `${routerLabel} ${METHOD} ${path}`; an SOC review can grep this set to
+ * enumerate every "auth-only" exception.
  */
 const AUTH_ONLY_ROUTES = new Set([
+  // auth router — self-service on caller's own account.
   "auth POST /logout",
   "auth POST /change-password",
   "auth POST /mfa/setup",
   "auth POST /mfa/verify",
   "auth POST /mfa/disable",
   "auth GET /me",
-  // Forms router pure utilities: no DB reads of campaign config, no PII
-  // enrichment, no writes — just static enums and validators that any
-  // authenticated user can legitimately call from a form-builder UI.
-  // (`forms GET /config` and `forms GET /config/:tortId` are now gated to
-  // attorney+ — see `routes/forms.ts`.)
+  // forms router — pure stateless utilities. config GETs are role-gated.
   "forms GET /categories",
   "forms POST /validate/email",
   "forms POST /validate/address",
@@ -173,42 +130,24 @@ interface RouteIssue {
 }
 
 /**
- * Per-route authorisation decision recorded by the validator. Emitted at
- * boot so an SOC reviewer can see, in one place, EVERY route the process
- * exposes and which trust boundary applies. The four statuses are:
- *
- *   - "public"          — mounted under a router stamped `markPublic(...)`.
- *                         No auth required (rate-limit lives elsewhere).
- *   - "auth-exception"  — a deliberate per-route exception on the auth
- *                         router (login / refresh / register). Unauthenticated
- *                         on purpose; tracked so adding a new login-adjacent
- *                         endpoint requires explicit AUTH_ROUTE_EXCEPTIONS opt-in.
- *   - "auth-only"       — authenticated, no role gate. Allowed only for
- *                         entries explicitly listed in AUTH_ONLY_ROUTES
- *                         (self-service & pure utility endpoints).
- *   - "role-gated"      — authenticated AND gated by `requireRole` /
- *                         `requirePermission`. The default for every new
- *                         protected handler.
+ * Per-route authorisation decision emitted at boot. Statuses:
+ *   - "public"          — router tagged `markPublic(...)`. No auth.
+ *   - "auth-exception"  — auth-router exception (login/refresh/register).
+ *   - "auth-only"       — authenticated; explicitly allowlisted in
+ *                         AUTH_ONLY_ROUTES (self-service / pure utility).
+ *   - "role-gated"      — authenticated AND gated by requireRole /
+ *                         requirePermission. Default for every protected
+ *                         handler.
  */
 export interface RoutePolicyEntry {
   router: string;
   method: string;
   path: string;
   status: "public" | "auth-exception" | "auth-only" | "role-gated";
-  /**
-   * Effective required roles for the route, collected from every
-   * `requireRole(...)` gate in the chain. Empty for non-role-gated routes.
-   * Multiple entries mean the route mounts multiple role gates and all
-   * must be satisfied.
-   */
+  /** Required roles collected from every `requireRole` gate in the chain. */
   requiredRoles?: string[];
-  /**
-   * Effective required permissions for the route, collected from every
-   * `requirePermission(...)` gate in the chain. Within a single gate the
-   * semantics are "any of these permissions" (the gate accepts the caller
-   * iff they hold at least one); across multiple gates the semantics are
-   * "and", since express runs them in sequence.
-   */
+  /** Required permissions collected from every `requirePermission` gate in
+   *  the chain. Within one gate: any-of. Across gates: and. */
   requiredPermissions?: string[];
 }
 
@@ -262,14 +201,9 @@ function classifyHandlerNames(handlers: Array<{ handle?: unknown }>): {
 }
 
 /**
- * Walk a single router's `stack` in order. State accumulates as we descend:
- *   - When we encounter a top-level middleware layer, classify it; if it's
- *     authMiddleware or requireRole/requirePermission, set the corresponding
- *     bit for ALL subsequent layers in this router.
- *   - When we encounter a sub-router (layer.handle is itself a router),
- *     recurse with the inherited bits.
- *   - When we encounter a terminal route, classify its per-route handler
- *     stack and combine with the inherited bits.
+ * Walk a router's `stack` in declaration order, accumulating
+ * auth/gate/role/perm state. Sub-routers recurse with inherited state;
+ * terminal routes combine inherited state with their per-handler stack.
  */
 function walkRouter(
   router: ExpressRouterLike,
@@ -353,10 +287,9 @@ function walkRouter(
       continue;
     }
 
-    // Non-route layer: middleware OR mounted sub-router. Express routers
-    // are CALLABLE functions (so they can be used as middleware) that also
-    // expose a `.stack` array — `typeof` is "function", not "object", so
-    // we accept either. Plain middleware functions never carry `.stack`.
+    // Non-route layer: middleware OR mounted sub-router. Express routers are
+    // callable (typeof "function") with a `.stack` array; plain middleware
+    // never carries `.stack`.
     const handle = layer.handle as ExpressRouterLike | undefined;
     const isSubRouter =
       handle != null &&
@@ -424,9 +357,7 @@ export function validateRouteTable(parent: Router): {
     throw new Error(msg);
   }
 
-  // Per-route policy report. Emitted at info so SOC review can grep one
-  // log line per route; the structured `policy` field carries the full
-  // table for tooling (alerting, drift detection, etc.).
+  // Structured policy report at info level — one log line, full table.
   const byStatus = policy.reduce(
     (acc, p) => {
       acc[p.status] = (acc[p.status] ?? 0) + 1;
@@ -448,20 +379,11 @@ export function validateRouteTable(parent: Router): {
 export type ProtectedRouter = Router;
 
 /**
- * Inspect a single express handle (a middleware function or a sub-router)
- * and report which trust-boundary stamps it carries.
- *
- * Exported under the `__internal_` prefix so external callers know they are
- * reaching into the validator's private vocabulary. The intended consumer is
- * `src/scripts/dump-route-matrix.ts`, which renders the audit doc's per-route
- * matrix; using this helper guarantees that the matrix is computed against
- * the SAME symbol identities `validateRouteTable` checks (no string-name or
- * label-list drift).
- *
- * The returned booleans are based on identity comparison against the
- * module-local `Symbol(...)` flags. Forging is impossible from outside this
- * module: the symbols are not registered with `Symbol.for()` and are not
- * exported.
+ * Inspect a single express handle (middleware or sub-router) and report
+ * which trust-boundary stamps it carries. Consumed by
+ * `scripts/dump-route-matrix.ts` so the audit-doc matrix is computed
+ * against the same symbol identities `validateRouteTable` checks (no
+ * string-name drift).
  */
 export function __internal_inspectLayer(handle: unknown): {
   hasAuthStamp: boolean;
