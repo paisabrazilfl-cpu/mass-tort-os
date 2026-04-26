@@ -87,6 +87,36 @@ router.get("/", requireRole("viewer"), async (req, res) => {
   res.json(cases);
 });
 
+// NOTE: worker admin routes are registered BEFORE the parameterized
+// `/:id` route so a future change to that param's pattern can't shadow
+// them. Express matches in registration order.
+router.get("/worker/queue-stats", requireRole("admin"), async (req, res) => {
+  const stats = await getQueueStats();
+  res.json(stats);
+});
+
+// Admin: requeue a dead-lettered job after the underlying issue has been
+// fixed (e.g. vendor outage resolved, missing API key added). Resets
+// retry_count to 0 so the operator gets a clean fresh attempt.
+router.post(
+  "/worker/jobs/:id/requeue",
+  requireRole("admin"),
+  auditAction("requeue_dead_letter_job"),
+  async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid job id" });
+      return;
+    }
+    const ok = await requeueDeadLetterJob(id);
+    if (!ok) {
+      res.status(404).json({ error: "Job not found or not in dead_letter status" });
+      return;
+    }
+    res.json({ ok: true, job_id: id, status: "pending" });
+  },
+);
+
 router.get("/:id", requireRole("viewer"), async (req, res) => {
   const case_id = String(req.params.id);
   if (!validateCaseId(case_id)) {
@@ -119,32 +149,5 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
     audit_trail: auditEntries,
   });
 });
-
-router.get("/worker/queue-stats", requireRole("admin"), async (req, res) => {
-  const stats = await getQueueStats();
-  res.json(stats);
-});
-
-// Admin: requeue a dead-lettered job after the underlying issue has been
-// fixed (e.g. vendor outage resolved, missing API key added). Resets
-// retry_count to 0 so the operator gets a clean fresh attempt.
-router.post(
-  "/worker/jobs/:id/requeue",
-  requireRole("admin"),
-  auditAction("requeue_dead_letter_job"),
-  async (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid job id" });
-      return;
-    }
-    const ok = await requeueDeadLetterJob(id);
-    if (!ok) {
-      res.status(404).json({ error: "Job not found or not in dead_letter status" });
-      return;
-    }
-    res.json({ ok: true, job_id: id, status: "pending" });
-  },
-);
 
 export default router;

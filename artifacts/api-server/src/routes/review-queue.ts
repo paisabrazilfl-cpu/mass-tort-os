@@ -18,9 +18,14 @@ router.get("/", requireRole("paralegal"), async (req, res) => {
 
   // Hard cap to keep this endpoint consistent with the other paginated lists
   // (default 100, max 500) — without this an attacker could request
-  // ?limit=10000000 and force a massive scan.
-  const rawLimit = Number(limit);
-  const cappedLimit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100, 1), 500);
+  // ?limit=10000000 and force a massive scan. Strict integer parsing so
+  // values like "1.5" or "abc" fall back to the default rather than being
+  // silently coerced into surprising query plans.
+  const parsedLimit = limit === undefined ? NaN : parseInt(limit, 10);
+  const cappedLimit =
+    Number.isInteger(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 500)
+      : 100;
 
   const items = conditions.length > 0
     ? await db.select().from(reviewQueueTable).where(and(...conditions)).orderBy(desc(reviewQueueTable.created_at)).limit(cappedLimit)
