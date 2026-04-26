@@ -4,15 +4,15 @@ import { eq } from "drizzle-orm";
 import { generateDraft, getAvailableTemplates } from "../lib/drafting-ai";
 import { createBlankPdfWithText } from "../lib/pdf-redaction";
 import { decryptLeadFields } from "../lib/encryption";
-import { requireRole, auditAction } from "../lib/rbac";
+import { Permission, requirePermission, auditAction } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/templates", requireRole("paralegal"), async (_req, res) => {
+router.get("/templates", requirePermission(Permission.DRAFTING_TEMPLATES_VIEW), async (_req, res) => {
   res.json(getAvailableTemplates());
 });
 
-router.post("/generate", requireRole("paralegal", "attorney", "admin"), auditAction("generate_draft"), async (req, res) => {
+router.post("/generate", requirePermission(Permission.DRAFTING_GENERATE), auditAction("generate_draft"), async (req, res) => {
   const { template_type, lead_id, firm_name, attorney_name, custom_instructions } = req.body;
   if (!template_type) { res.status(400).json({ error: "template_type is required" }); return; }
 
@@ -34,7 +34,7 @@ router.post("/generate", requireRole("paralegal", "attorney", "admin"), auditAct
   res.json(draft);
 });
 
-router.post("/generate-pdf", requireRole("paralegal", "attorney", "admin"), auditAction("generate_draft_pdf"), async (req, res) => {
+router.post("/generate-pdf", requirePermission(Permission.DRAFTING_GENERATE), auditAction("generate_draft_pdf"), async (req, res) => {
   const { template_type, lead_id, firm_name, attorney_name, custom_instructions } = req.body;
   if (!template_type) { res.status(400).json({ error: "template_type is required" }); return; }
 

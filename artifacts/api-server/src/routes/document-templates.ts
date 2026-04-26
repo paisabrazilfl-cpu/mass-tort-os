@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, documentTemplatesTable, templateAssignmentsTable } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
-import { authMiddleware, requireRole } from "../lib/rbac";
+import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
 import { auditAction } from "../lib/rbac";
 import { z } from "zod/v4";
 import { uploadTemplate, deleteTemplate, downloadTemplate } from "../lib/template-storage";
@@ -37,12 +37,12 @@ const assignmentSchema = z.object({
 
 // ---------- Templates ----------
 
-router.get("/", requireRole("viewer"), async (_req, res) => {
+router.get("/", requirePermission(Permission.TEMPLATES_VIEW), async (_req, res) => {
   const rows = await db.select().from(documentTemplatesTable).orderBy(documentTemplatesTable.name);
   res.json(rows);
 });
 
-router.get("/:id", requireRole("viewer"), async (req, res) => {
+router.get("/:id", requirePermission(Permission.TEMPLATES_VIEW), async (req, res) => {
   const id = Number(req.params.id);
   const [row] = await db.select().from(documentTemplatesTable).where(eq(documentTemplatesTable.id, id));
   if (!row) {
@@ -52,7 +52,7 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
   res.json(row);
 });
 
-router.post("/", requireRole("admin"), auditAction("create_template"), async (req, res) => {
+router.post("/", requirePermission(Permission.TEMPLATES_MANAGE), auditAction("create_template"), async (req, res) => {
   const parsed = templateSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -74,7 +74,7 @@ router.post("/", requireRole("admin"), auditAction("create_template"), async (re
   res.status(201).json(row);
 });
 
-router.put("/:id", requireRole("admin"), auditAction("update_template"), async (req, res) => {
+router.put("/:id", requirePermission(Permission.TEMPLATES_MANAGE), auditAction("update_template"), async (req, res) => {
   const id = Number(req.params.id);
   const parsed = templateSchema.partial().safeParse(req.body);
   if (!parsed.success) {
@@ -94,7 +94,7 @@ router.put("/:id", requireRole("admin"), auditAction("update_template"), async (
   res.json(row);
 });
 
-router.delete("/:id", requireRole("admin"), auditAction("delete_template"), async (req, res) => {
+router.delete("/:id", requirePermission(Permission.TEMPLATES_MANAGE), auditAction("delete_template"), async (req, res) => {
   const id = Number(req.params.id);
   const [existing] = await db.select().from(documentTemplatesTable).where(eq(documentTemplatesTable.id, id));
   if (!existing) {
@@ -115,7 +115,7 @@ router.delete("/:id", requireRole("admin"), auditAction("delete_template"), asyn
  * with that storage_path to actually create the template row.
  * Body: { fileName: string, base64: string }
  */
-router.post("/upload", requireRole("admin"), auditAction("upload_template_pdf"), async (req, res) => {
+router.post("/upload", requirePermission(Permission.TEMPLATES_MANAGE), auditAction("upload_template_pdf"), async (req, res) => {
   const { fileName, base64 } = req.body || {};
   if (!fileName || typeof fileName !== "string") {
     badRequest(res, "fileName_required");
@@ -142,7 +142,7 @@ router.post("/upload", requireRole("admin"), auditAction("upload_template_pdf"),
   }
 });
 
-router.get("/:id/preview", requireRole("viewer"), async (req, res) => {
+router.get("/:id/preview", requirePermission(Permission.TEMPLATES_VIEW), async (req, res) => {
   const id = Number(req.params.id);
   const [row] = await db.select().from(documentTemplatesTable).where(eq(documentTemplatesTable.id, id));
   if (!row || !row.storage_path) {
@@ -161,12 +161,12 @@ router.get("/:id/preview", requireRole("viewer"), async (req, res) => {
 
 // ---------- Assignments (buyer × tort × template) ----------
 
-router.get("/assignments/all", requireRole("viewer"), async (_req, res) => {
+router.get("/assignments/all", requirePermission(Permission.TEMPLATES_VIEW), async (_req, res) => {
   const rows = await db.select().from(templateAssignmentsTable);
   res.json(rows);
 });
 
-router.get("/assignments/by-template/:templateId", requireRole("viewer"), async (req, res) => {
+router.get("/assignments/by-template/:templateId", requirePermission(Permission.TEMPLATES_VIEW), async (req, res) => {
   const templateId = Number(req.params.templateId);
   const rows = await db
     .select()
@@ -175,7 +175,7 @@ router.get("/assignments/by-template/:templateId", requireRole("viewer"), async 
   res.json(rows);
 });
 
-router.post("/assignments", requireRole("admin"), auditAction("upsert_template_assignment"), async (req, res) => {
+router.post("/assignments", requirePermission(Permission.TEMPLATES_MANAGE), auditAction("upsert_template_assignment"), async (req, res) => {
   const parsed = assignmentSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -221,7 +221,7 @@ router.post("/assignments", requireRole("admin"), auditAction("upsert_template_a
   res.status(201).json(row);
 });
 
-router.delete("/assignments/:id", requireRole("admin"), auditAction("delete_template_assignment"), async (req, res) => {
+router.delete("/assignments/:id", requirePermission(Permission.TEMPLATES_MANAGE), auditAction("delete_template_assignment"), async (req, res) => {
   const id = Number(req.params.id);
   await db.delete(templateAssignmentsTable).where(eq(templateAssignmentsTable.id, id));
   res.status(204).end();

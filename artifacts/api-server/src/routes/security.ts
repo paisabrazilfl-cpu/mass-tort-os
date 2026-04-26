@@ -3,14 +3,14 @@ import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, desc, sql, gte, and, count } from "drizzle-orm";
 import { analyzeThreats } from "../lib/threat-analyzer";
 import { logger } from "../lib/logger";
-import { requireRole } from "../lib/rbac";
+import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { getUnacknowledgedNotifications, acknowledgeNotification, dispatchCriticalAlert } from "../lib/security-alerts";
 import { badRequest, notFound } from "../lib/http-errors";
 
 const router = Router();
 
-router.use(requireRole("admin"));
+router.use(requirePermission(Permission.SECURITY_MANAGE));
 
 router.get("/alerts", async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);

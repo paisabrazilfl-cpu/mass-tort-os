@@ -26,12 +26,12 @@ const CreateParalegalSchema = z.object({
   role: z.enum(PARALEGAL_ROLES).optional(),
 });
 import { decryptLeadArray } from "../lib/encryption";
-import { requireRole, auditAction } from "../lib/rbac";
+import { Permission, requirePermission, auditAction } from "../lib/rbac";
 
 const router = Router();
 
 
-router.get("/", requireRole("attorney"), async (_req, res) => {
+router.get("/", requirePermission(Permission.PARALEGAL_VIEW), async (_req, res) => {
   const paralegals = await db
     .select()
     .from(paralegalsTable)
@@ -39,7 +39,7 @@ router.get("/", requireRole("attorney"), async (_req, res) => {
   res.json(paralegals);
 });
 
-router.post("/", requireRole("admin"), auditAction("create_paralegal"), async (req, res) => {
+router.post("/", requirePermission(Permission.PARALEGAL_MANAGE), auditAction("create_paralegal"), async (req, res) => {
   // CreateParalegalSchema (above) is stricter than the OpenAPI-generated
   // CreateParalegalBody: it enforces that `email` is a valid RFC-compliant
   // address (or null/omitted) and that `role` is one of a small operator
@@ -70,7 +70,7 @@ router.post("/", requireRole("admin"), auditAction("create_paralegal"), async (r
   res.status(201).json(p);
 });
 
-router.get("/:id", requireRole("attorney"), auditAction("view_paralegal"), async (req, res) => {
+router.get("/:id", requirePermission(Permission.PARALEGAL_VIEW), auditAction("view_paralegal"), async (req, res) => {
   // GetParalegalParams uses zod.coerce.number() which safely converts the
   // string param to int and rejects garbage like "abc" with a parse error
   // instead of producing NaN.
@@ -108,7 +108,7 @@ router.get("/:id", requireRole("attorney"), auditAction("view_paralegal"), async
   });
 });
 
-router.get("/:id/performance", requireRole("attorney"), auditAction("view_paralegal_performance"), async (req, res) => {
+router.get("/:id/performance", requirePermission(Permission.PARALEGAL_VIEW), auditAction("view_paralegal_performance"), async (req, res) => {
   const parsed = GetParalegalPerformanceParams.safeParse({ id: req.params.id });
   if (!parsed.success) {
     res.status(400).json({ status: "error", code: "invalid_id", message: "Paralegal id must be a positive integer" });

@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { db, auditLogTable } from "@workspace/db";
 import { desc, eq, sql, and, gte } from "drizzle-orm";
-import { requireRole } from "../lib/rbac";
+import { Permission, requirePermission } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/audit-trail", requireRole("admin"), async (req, res) => {
+router.get("/audit-trail", requirePermission(Permission.COMPLIANCE_VIEW), async (req, res) => {
   // Hard-cap to 1000 rows so an attacker (or a curious admin) can't request
   // limit=10000000 and OOM the container. Default 100.
   const rawLimit = parseInt(req.query.limit as string);
@@ -31,7 +31,7 @@ router.get("/audit-trail", requireRole("admin"), async (req, res) => {
   res.json(results);
 });
 
-router.get("/audit-summary", requireRole("admin"), async (_req, res) => {
+router.get("/audit-summary", requirePermission(Permission.COMPLIANCE_VIEW), async (_req, res) => {
   const byEntity = await db
     .select({
       entity_type: auditLogTable.entity_type,

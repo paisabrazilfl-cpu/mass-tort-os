@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { logger } from "../lib/logger";
-import { requireRole } from "../lib/rbac";
+import { Permission, requirePermission } from "../lib/rbac";
 
 const router = Router();
 
@@ -84,7 +84,7 @@ let massCache: { articles: NewsArticle[]; fetched: number } = { articles: [], fe
 let financeCache: { articles: NewsArticle[]; fetched: number } = { articles: [], fetched: 0 };
 const CACHE_TTL = 10 * 60 * 1000;
 
-router.get("/mass-tort", requireRole("viewer"), async (_req, res) => {
+router.get("/mass-tort", requirePermission(Permission.NEWS_VIEW), async (_req, res) => {
   if (massCache.articles.length > 0 && Date.now() - massCache.fetched < CACHE_TTL) {
     res.json(massCache.articles);
     return;
@@ -106,7 +106,7 @@ router.get("/mass-tort", requireRole("viewer"), async (_req, res) => {
   res.json(deduped);
 });
 
-router.get("/financial", requireRole("viewer"), async (_req, res) => {
+router.get("/financial", requirePermission(Permission.NEWS_VIEW), async (_req, res) => {
   if (financeCache.articles.length > 0 && Date.now() - financeCache.fetched < CACHE_TTL) {
     res.json(financeCache.articles);
     return;

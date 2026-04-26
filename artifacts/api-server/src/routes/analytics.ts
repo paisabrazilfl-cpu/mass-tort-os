@@ -2,12 +2,12 @@ import { Router } from "express";
 import { db, leadsTable, casesTable, analysisTable, faxResultsTable, paralegalsTable } from "@workspace/db";
 import { sql, eq, gte, and, desc } from "drizzle-orm";
 import { scoreLeadPredictive, getModelStats, getBatchPredictions, getTortPredictions } from "../lib/predictive-scoring";
-import { requireRole } from "../lib/rbac";
+import { Permission, requirePermission } from "../lib/rbac";
 import { notFound } from "../lib/http-errors";
 
 const router = Router();
 
-router.get("/overview", requireRole("attorney"), async (_req, res) => {
+router.get("/overview", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
   const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000);
@@ -75,7 +75,7 @@ router.get("/overview", requireRole("attorney"), async (_req, res) => {
   });
 });
 
-router.get("/pipeline-trend", requireRole("attorney"), async (_req, res) => {
+router.get("/pipeline-trend", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
   const result = await db
     .select({
       date: sql<string>`to_char(created_at, 'YYYY-MM-DD')`,
@@ -91,7 +91,7 @@ router.get("/pipeline-trend", requireRole("attorney"), async (_req, res) => {
   res.json(result);
 });
 
-router.get("/conversion-funnel", requireRole("attorney"), async (_req, res) => {
+router.get("/conversion-funnel", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
   const [counts] = await db
     .select({
       total_leads: sql<number>`count(*)::int`,
@@ -114,7 +114,7 @@ router.get("/conversion-funnel", requireRole("attorney"), async (_req, res) => {
   res.json(stages);
 });
 
-router.get("/tort-breakdown", requireRole("attorney"), async (_req, res) => {
+router.get("/tort-breakdown", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
   const result = await db
     .select({
       tort_type: leadsTable.tort_type,
@@ -131,7 +131,7 @@ router.get("/tort-breakdown", requireRole("attorney"), async (_req, res) => {
   res.json(result);
 });
 
-router.get("/paralegal-leaderboard", requireRole("attorney"), async (_req, res) => {
+router.get("/paralegal-leaderboard", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
   const result = await db
     .select({
       id: paralegalsTable.id,
@@ -155,7 +155,7 @@ router.get("/paralegal-leaderboard", requireRole("attorney"), async (_req, res) 
   res.json(leaderboard);
 });
 
-router.get("/predictive/lead/:id", requireRole("paralegal"), async (req, res) => {
+router.get("/predictive/lead/:id", requirePermission(Permission.ANALYTICS_PREDICTIVE_LEAD_VIEW), async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
   try {
@@ -166,18 +166,18 @@ router.get("/predictive/lead/:id", requireRole("paralegal"), async (req, res) =>
   }
 });
 
-router.get("/predictive/batch", requireRole("attorney"), async (req, res) => {
+router.get("/predictive/batch", requirePermission(Permission.ANALYTICS_VIEW), async (req, res) => {
   const limit = parseInt(req.query.limit as string) || 50;
   const predictions = await getBatchPredictions(limit);
   res.json(predictions);
 });
 
-router.get("/predictive/by-tort", requireRole("attorney"), async (_req, res) => {
+router.get("/predictive/by-tort", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
   const predictions = await getTortPredictions();
   res.json(predictions);
 });
 
-router.get("/predictive/model", requireRole("attorney"), async (_req, res) => {
+router.get("/predictive/model", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
   const stats = await getModelStats();
   res.json(stats);
 });

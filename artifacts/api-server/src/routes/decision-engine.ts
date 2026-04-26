@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authMiddleware, requireRole } from "../lib/rbac";
+import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
 import { badRequest, notFound, serverError } from "../lib/http-errors";
 import {
   buildPortfolioSummary,
@@ -21,13 +21,13 @@ const router = Router();
 //   - PUT /settings, POST /leads/:id/recompute, POST /recompute-all
 //     → admin only (mutations / cluster-wide work).
 //
-// We deliberately do NOT mount a global `requireRole` on the router — the
-// boot-time route validator enforces a gate on every route, so each
+// We deliberately do NOT mount a global `requirePermission` on the router —
+// the boot-time route validator enforces a gate on every route, so each
 // handler below must declare its own. That keeps the "admin-only writes"
 // policy auditable in this file rather than buried in a shared middleware.
 router.use(authMiddleware);
 
-router.get("/portfolio", requireRole("attorney"), async (_req, res) => {
+router.get("/portfolio", requirePermission(Permission.DECISION_ENGINE_VIEW), async (_req, res) => {
   try {
     const summary = await buildPortfolioSummary();
     res.json(summary);
@@ -37,7 +37,7 @@ router.get("/portfolio", requireRole("attorney"), async (_req, res) => {
   }
 });
 
-router.get("/settings", requireRole("attorney"), async (_req, res) => {
+router.get("/settings", requirePermission(Permission.DECISION_ENGINE_VIEW), async (_req, res) => {
   const s = await getEngineSettings();
   res.json(s);
 });
@@ -51,7 +51,7 @@ const updateSettingsSchema = z.object({
   ruin_auto_flag: z.boolean().optional(),
 });
 
-router.put("/settings", requireRole("admin"), async (req, res) => {
+router.put("/settings", requirePermission(Permission.DECISION_ENGINE_MANAGE), async (req, res) => {
   const parsed = updateSettingsSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -62,7 +62,7 @@ router.put("/settings", requireRole("admin"), async (req, res) => {
   res.json(s);
 });
 
-router.post("/leads/:id/recompute", requireRole("admin"), async (req, res) => {
+router.post("/leads/:id/recompute", requirePermission(Permission.DECISION_ENGINE_MANAGE), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
     badRequest(res, "invalid_id");
@@ -76,7 +76,7 @@ router.post("/leads/:id/recompute", requireRole("admin"), async (req, res) => {
   res.json(result);
 });
 
-router.post("/recompute-all", requireRole("admin"), async (_req, res) => {
+router.post("/recompute-all", requirePermission(Permission.DECISION_ENGINE_MANAGE), async (_req, res) => {
   const result = await recomputeAllScores();
   res.json(result);
 });

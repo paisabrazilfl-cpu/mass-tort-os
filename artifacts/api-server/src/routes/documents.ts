@@ -10,11 +10,11 @@ import {
   DeleteDocumentParams,
 } from "@workspace/api-zod";
 import { redactPdf, highlightPdfRegions, getPdfPageCount } from "../lib/pdf-redaction";
-import { requireRole, auditAction } from "../lib/rbac";
+import { Permission, requirePermission, auditAction } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/", requireRole("viewer"), async (req, res) => {
+router.get("/", requirePermission(Permission.DOCUMENTS_VIEW), async (req, res) => {
   const parsed = ListDocumentsQueryParams.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -37,7 +37,7 @@ router.get("/", requireRole("viewer"), async (req, res) => {
   res.json(docs);
 });
 
-router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("create_document"), async (req, res) => {
+router.post("/", requirePermission(Permission.DOCUMENTS_CREATE), auditAction("create_document"), async (req, res) => {
   const parsed = CreateDocumentBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -61,7 +61,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
   res.status(201).json(doc);
 });
 
-router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction("update_document"), async (req, res) => {
+router.patch("/:id", requirePermission(Permission.DOCUMENTS_UPDATE), auditAction("update_document"), async (req, res) => {
   const paramsParsed = UpdateDocumentParams.safeParse({ id: Number(req.params.id) });
   if (!paramsParsed.success) {
     res.status(400).json({ error: paramsParsed.error.message });
@@ -98,7 +98,7 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
   res.json(doc);
 });
 
-router.delete("/:id", requireRole("attorney", "admin"), auditAction("delete_document"), async (req, res) => {
+router.delete("/:id", requirePermission(Permission.DOCUMENTS_DELETE), auditAction("delete_document"), async (req, res) => {
   const parsed = DeleteDocumentParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -109,7 +109,7 @@ router.delete("/:id", requireRole("attorney", "admin"), auditAction("delete_docu
   res.status(204).send();
 });
 
-router.post("/redact", requireRole("paralegal", "attorney", "admin"), auditAction("redact_document"), async (req, res) => {
+router.post("/redact", requirePermission(Permission.DOCUMENTS_REDACT), auditAction("redact_document"), async (req, res) => {
   const { pdf_base64, rules } = req.body;
   if (!pdf_base64) { res.status(400).json({ error: "pdf_base64 is required" }); return; }
 
@@ -122,7 +122,7 @@ router.post("/redact", requireRole("paralegal", "attorney", "admin"), auditActio
   }
 });
 
-router.post("/highlight", requireRole("paralegal", "attorney", "admin"), async (req, res) => {
+router.post("/highlight", requirePermission(Permission.DOCUMENTS_UPDATE), async (req, res) => {
   const { pdf_base64, highlights } = req.body;
   if (!pdf_base64) { res.status(400).json({ error: "pdf_base64 is required" }); return; }
 

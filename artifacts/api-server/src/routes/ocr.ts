@@ -9,7 +9,7 @@ import { logger } from "../lib/logger";
 import { saveFile } from "../lib/vault";
 import { auditLog } from "../lib/audit";
 import { extractMedicalFields, analyzeDocumentText } from "../lib/ai-fields";
-import { requireRole, auditAction } from "../lib/rbac";
+import { Permission, requirePermission, auditAction } from "../lib/rbac";
 import { badRequest, notFound, serverError } from "../lib/http-errors";
 
 const router = Router();
@@ -19,7 +19,7 @@ const router = Router();
  * Upload a fax image (base64-encoded) → enqueues process_fax job
  * Body: { file_name: string, image_base64: string, mime_type?: string }
  */
-router.post("/upload", requireRole("paralegal", "attorney", "admin"), auditAction("ocr_upload"), async (req, res) => {
+router.post("/upload", requirePermission(Permission.OCR_UPLOAD), auditAction("ocr_upload"), async (req, res) => {
   const { file_name, image_base64, mime_type } = req.body as {
     file_name: string;
     image_base64: string;
@@ -82,7 +82,7 @@ router.post("/upload", requireRole("paralegal", "attorney", "admin"), auditActio
  * GET /api/ocr/results
  * List all Legora Grid results
  */
-router.get("/results", requireRole("paralegal"), async (_req, res) => {
+router.get("/results", requirePermission(Permission.OCR_VIEW), async (_req, res) => {
   const results = await db
     .select()
     .from(faxResultsTable)
@@ -95,7 +95,7 @@ router.get("/results", requireRole("paralegal"), async (_req, res) => {
  * GET /api/ocr/results/:id
  * Get a single Legora Grid result
  */
-router.get("/results/:id", requireRole("paralegal"), async (req, res) => {
+router.get("/results/:id", requirePermission(Permission.OCR_VIEW), async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) {
     badRequest(res, "Invalid ID");
@@ -119,7 +119,7 @@ router.get("/results/:id", requireRole("paralegal"), async (req, res) => {
  * GET /api/ocr/queue-stats
  * OCR queue stats
  */
-router.get("/queue-stats", requireRole("admin"), async (_req, res) => {
+router.get("/queue-stats", requirePermission(Permission.OCR_QUEUE_ADMIN), async (_req, res) => {
   const results = await db.select().from(faxResultsTable);
   const stats: Record<string, number> = {};
   for (const r of results) {
@@ -128,7 +128,7 @@ router.get("/queue-stats", requireRole("admin"), async (_req, res) => {
   res.json(stats);
 });
 
-router.post("/ai-fields", requireRole("paralegal", "attorney", "admin"), auditAction("ai_fields_extract"), async (req, res) => {
+router.post("/ai-fields", requirePermission(Permission.OCR_AI_FIELDS), auditAction("ai_fields_extract"), async (req, res) => {
   const { image_base64, mime_type, text } = req.body;
 
   if (!image_base64 && !text) {
@@ -150,7 +150,7 @@ router.post("/ai-fields", requireRole("paralegal", "attorney", "admin"), auditAc
   }
 });
 
-router.post("/ai-fields/result/:id", requireRole("paralegal", "attorney", "admin"), async (req, res) => {
+router.post("/ai-fields/result/:id", requirePermission(Permission.OCR_AI_FIELDS), async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 

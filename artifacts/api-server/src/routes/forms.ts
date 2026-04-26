@@ -12,7 +12,7 @@ import { runFraudDetection } from "../lib/fraud-engine";
 import { finalArbiter } from "../lib/final-arbiter";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { requireRole, auditAction, authMiddleware } from "../lib/rbac";
+import { Permission, requirePermission, auditAction, authMiddleware } from "../lib/rbac";
 import {
   getAllFormConfigs,
   getFormConfig,
@@ -61,7 +61,7 @@ const router = Router();
 // config matrix and the data is operational rather than per-lead. The
 // public intake form goes through `/api/forms-public/preview/:tortId`,
 // which is its own (rate-limited, public) router.
-router.get("/config", authMiddleware, requireRole("attorney"), async (_req, res) => {
+router.get("/config", authMiddleware, requirePermission(Permission.FORMS_CONFIG_VIEW), async (_req, res) => {
   try {
     const all = await getAllFormConfigs();
     const configs = all.map(c => ({
@@ -88,7 +88,7 @@ router.get("/config", authMiddleware, requireRole("attorney"), async (_req, res)
   }
 });
 
-router.get("/config/:tortId", authMiddleware, requireRole("attorney"), async (req, res) => {
+router.get("/config/:tortId", authMiddleware, requirePermission(Permission.FORMS_CONFIG_VIEW), async (req, res) => {
   try {
     const config = await getFormConfig(String(req.params.tortId));
     if (!config) {
@@ -121,7 +121,7 @@ router.get("/config/:tortId", authMiddleware, requireRole("attorney"), async (re
 router.put(
   "/config/:tortId",
   authMiddleware,
-  requireRole("admin"),
+  requirePermission(Permission.FORMS_CONFIG_MANAGE),
   auditAction("form_config_update"),
   async (req, res) => {
     try {
@@ -167,7 +167,7 @@ router.put(
 router.post(
   "/config/:tortId/fields",
   authMiddleware,
-  requireRole("admin"),
+  requirePermission(Permission.FORMS_CONFIG_MANAGE),
   auditAction("form_field_add"),
   async (req, res) => {
     try {
@@ -205,7 +205,7 @@ router.post(
 router.delete(
   "/config/:tortId/fields/:key",
   authMiddleware,
-  requireRole("admin"),
+  requirePermission(Permission.FORMS_CONFIG_MANAGE),
   auditAction("form_field_remove"),
   async (req, res) => {
     try {
@@ -277,7 +277,7 @@ function extractCustomFieldValues(
 // (3) origin allowlist, (4) TrustedForm cert URL verification against
 // api.trustedform.com before accepting a lead, (5) CAPTCHA or equivalent
 // bot deterrent. Until then, /submit requires a logged-in CRM user role.
-router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditAction("form_submit"), async (req, res) => {
+router.post("/submit", requirePermission(Permission.FORMS_SUBMIT), auditAction("form_submit"), async (req, res) => {
   const data = req.body;
   const pipeline: PipelineStep[] = [];
 
@@ -742,7 +742,7 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
   }
 });
 
-router.post("/background-check", requireRole("paralegal"), async (req, res) => {
+router.post("/background-check", requirePermission(Permission.FORMS_BACKGROUND_CHECK), async (req, res) => {
   const { first_name, last_name, state, date_of_birth } = req.body;
   if (!first_name || !last_name) {
     badRequest(res, "first_name and last_name are required");
@@ -758,7 +758,7 @@ router.post("/background-check", requireRole("paralegal"), async (req, res) => {
   }
 });
 
-router.post("/background-check/lead/:id", requireRole("paralegal"), async (req, res) => {
+router.post("/background-check/lead/:id", requirePermission(Permission.FORMS_BACKGROUND_CHECK), async (req, res) => {
   const leadId = Number(req.params.id);
   if (isNaN(leadId)) {
     badRequest(res, "Invalid lead ID");
@@ -805,7 +805,7 @@ router.post("/background-check/lead/:id", requireRole("paralegal"), async (req, 
   }
 });
 
-router.post("/npi-verify", requireRole("paralegal"), async (req, res) => {
+router.post("/npi-verify", requirePermission(Permission.FORMS_NPI_VERIFY), async (req, res) => {
   const { physician_first_name, physician_last_name, diagnosis } = req.body;
   if (!physician_first_name || !physician_last_name || !diagnosis) {
     badRequest(res, "physician_first_name, physician_last_name, and diagnosis are required");
@@ -821,7 +821,7 @@ router.post("/npi-verify", requireRole("paralegal"), async (req, res) => {
   }
 });
 
-router.post("/fraud-check", requireRole("paralegal"), async (req, res) => {
+router.post("/fraud-check", requirePermission(Permission.FORMS_FRAUD_CHECK), async (req, res) => {
   const { lead_data, tort_type, diagnosis, physician_first_name, physician_last_name } = req.body;
   if (!diagnosis || !tort_type) {
     badRequest(res, "tort_type and diagnosis are required");
@@ -857,7 +857,7 @@ router.post("/fraud-check", requireRole("paralegal"), async (req, res) => {
   }
 });
 
-router.post("/escalate/fbi", requireRole("attorney", "admin"), auditAction("escalate_fbi"), async (req, res) => {
+router.post("/escalate/fbi", requirePermission(Permission.FORMS_ESCALATE_FBI), auditAction("escalate_fbi"), async (req, res) => {
   const { lead_id, reason, fraud_indicators } = req.body;
   if (!lead_id || !reason) {
     badRequest(res, "lead_id and reason are required");

@@ -2,11 +2,11 @@ import { Router } from "express";
 import { db, leadsTable, faxResultsTable, documentsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { decryptLeadFields } from "../lib/encryption";
-import { requireRole } from "../lib/rbac";
+import { Permission, requirePermission } from "../lib/rbac";
 
 const router = Router();
 
-router.get("/lead/:id", requireRole("paralegal"), async (req, res) => {
+router.get("/lead/:id", requirePermission(Permission.TIMELINE_VIEW), async (req, res) => {
   const leadId = parseInt(String(req.params.id), 10);
   if (isNaN(leadId)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
 

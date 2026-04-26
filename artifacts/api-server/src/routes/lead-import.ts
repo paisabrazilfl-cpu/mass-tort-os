@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, leadsTable, importBatchesTable, importRowsTable } from "@workspace/db";
 import { eq, desc, or, and, ilike, sql } from "drizzle-orm";
-import { requireRole } from "../lib/rbac";
+import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { encryptLeadFields, decrypt, hashForLookup } from "../lib/encryption";
 import { runFullConflictCheck } from "../lib/conflict-engine";
@@ -235,7 +235,7 @@ async function checkDuplicate(lead: Record<string, any>): Promise<{ isDuplicate:
   }
 }
 
-router.post("/preview", requireRole("paralegal"), async (req, res) => {
+router.post("/preview", requirePermission(Permission.LEAD_IMPORT_PREVIEW), async (req, res) => {
   try {
     const { csv_data } = req.body;
     if (!csv_data) { res.status(400).json({ error: "csv_data is required" }); return; }
@@ -261,7 +261,7 @@ router.post("/preview", requireRole("paralegal"), async (req, res) => {
   }
 });
 
-router.post("/execute", requireRole("attorney"), async (req, res) => {
+router.post("/execute", requirePermission(Permission.LEAD_IMPORT_EXECUTE), async (req, res) => {
   try {
     const { csv_data, column_mapping, filename = "import.csv" } = req.body;
     if (!csv_data) { res.status(400).json({ error: "csv_data is required" }); return; }
@@ -470,7 +470,7 @@ async function processImportBatch(
   );
 }
 
-router.get("/batches", requireRole("paralegal"), async (_req, res) => {
+router.get("/batches", requirePermission(Permission.LEAD_IMPORT_PREVIEW), async (_req, res) => {
   try {
     const batches = await db
       .select()
@@ -484,7 +484,7 @@ router.get("/batches", requireRole("paralegal"), async (_req, res) => {
   }
 });
 
-router.get("/batches/:id", requireRole("paralegal"), async (req, res) => {
+router.get("/batches/:id", requirePermission(Permission.LEAD_IMPORT_PREVIEW), async (req, res) => {
   try {
     const [batch] = await db
       .select()
@@ -506,7 +506,7 @@ router.get("/batches/:id", requireRole("paralegal"), async (req, res) => {
   }
 });
 
-router.get("/batches/:id/errors", requireRole("paralegal"), async (req, res) => {
+router.get("/batches/:id/errors", requirePermission(Permission.LEAD_IMPORT_PREVIEW), async (req, res) => {
   try {
     const rows = await db
       .select()
@@ -529,7 +529,7 @@ router.get("/batches/:id/errors", requireRole("paralegal"), async (req, res) => 
   }
 });
 
-router.get("/batches/:id/duplicates", requireRole("paralegal"), async (req, res) => {
+router.get("/batches/:id/duplicates", requirePermission(Permission.LEAD_IMPORT_PREVIEW), async (req, res) => {
   try {
     const rows = await db
       .select()

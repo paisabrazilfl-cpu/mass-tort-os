@@ -17,7 +17,7 @@ import { withErrorFallback } from "../lib/error-fallback";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { encryptLeadFields, decryptLeadFields, decryptLeadArray } from "../lib/encryption";
-import { requireRole, auditAction, canBypassOwnership, denyForbidden } from "../lib/rbac";
+import { Permission, requirePermission, auditAction, canBypassOwnership, denyForbidden } from "../lib/rbac";
 import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 
@@ -101,7 +101,7 @@ function forbidden(res: import("express").Response, message = "Insufficient perm
   res.status(403).json({ status: "error", code: "FORBIDDEN", message });
 }
 
-router.get("/export", requireRole("attorney", "admin"), auditAction("export_leads"), async (req, res) => {
+router.get("/export", requirePermission(Permission.LEAD_EXPORT), auditAction("export_leads"), async (req, res) => {
   const parsed = ExportLeadsQueryParams.safeParse(req.query);
   if (!parsed.success) {
     badRequest(res, parsed.error);
@@ -177,7 +177,7 @@ router.get("/export", requireRole("attorney", "admin"), auditAction("export_lead
   res.send(csv);
 });
 
-router.get("/", requireRole("viewer"), async (req, res) => {
+router.get("/", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW_ANY), async (req, res) => {
   const parsed = ListLeadsQueryParams.safeParse(req.query);
   if (!parsed.success) {
     badRequest(res, parsed.error);
@@ -228,7 +228,7 @@ router.get("/", requireRole("viewer"), async (req, res) => {
   res.json(decryptLeadArray(leads));
 });
 
-router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("create_lead"), async (req, res) => {
+router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_lead"), async (req, res) => {
   const parsed = CreateLeadBody.safeParse(req.body);
   if (!parsed.success) {
     badRequest(res, parsed.error);
@@ -412,7 +412,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
   res.status(201).json(decryptLeadFields(lead));
 });
 
-router.get("/:id", requireRole("viewer"), auditAction("view_lead"), async (req, res) => {
+router.get("/:id", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW_ANY), auditAction("view_lead"), async (req, res) => {
   const parsed = GetLeadParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
     badRequest(res, parsed.error);
@@ -479,7 +479,7 @@ async function ensureLeadAccess(req: Express.Request, res: import("express").Res
   return true;
 }
 
-router.get("/:id/envelopes", requireRole("viewer"), async (req, res) => {
+router.get("/:id/envelopes", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW_ANY), async (req, res) => {
   const id = Number(req.params.id);
   if (!(await ensureLeadAccess(req, res, id))) return;
   const { documentEnvelopesTable } = await import("@workspace/db");
@@ -492,7 +492,7 @@ router.get("/:id/envelopes", requireRole("viewer"), async (req, res) => {
   res.json(rows);
 });
 
-router.get("/:id/fax-results", requireRole("viewer"), async (req, res) => {
+router.get("/:id/fax-results", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW_ANY), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
     res.status(400).json({ status: "error", code: "validation_failed", message: "Invalid lead id" });
@@ -513,7 +513,7 @@ router.get("/:id/fax-results", requireRole("viewer"), async (req, res) => {
   res.json(rows);
 });
 
-router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction("update_lead"), async (req, res) => {
+router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("update_lead"), async (req, res) => {
   const paramsParsed = UpdateLeadParams.safeParse({ id: Number(req.params.id) });
   if (!paramsParsed.success) {
     badRequest(res, paramsParsed.error);
@@ -648,7 +648,7 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
   res.json(decryptLeadFields(lead));
 });
 
-router.delete("/:id", requireRole("attorney", "admin"), auditAction("delete_lead"), async (req, res) => {
+router.delete("/:id", requirePermission(Permission.LEAD_DELETE), auditAction("delete_lead"), async (req, res) => {
   const parsed = DeleteLeadParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
     badRequest(res, parsed.error);
@@ -659,7 +659,7 @@ router.delete("/:id", requireRole("attorney", "admin"), auditAction("delete_lead
   res.status(204).send();
 });
 
-router.post("/:id/qualify", requireRole("paralegal", "attorney", "admin"), auditAction("qualify_lead"), async (req, res) => {
+router.post("/:id/qualify", requirePermission(Permission.LEAD_QUALIFY), auditAction("qualify_lead"), async (req, res) => {
   const parsed = QualifyLeadParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
     badRequest(res, parsed.error);
@@ -759,7 +759,7 @@ router.post("/:id/qualify", requireRole("paralegal", "attorney", "admin"), audit
   });
 });
 
-router.post("/:id/intelligence", requireRole("paralegal", "attorney", "admin"), auditAction("score_lead_intelligence"), async (req, res) => {
+router.post("/:id/intelligence", requirePermission(Permission.LEAD_QUALIFY), auditAction("score_lead_intelligence"), async (req, res) => {
   try {
     const leadId = Number(req.params.id);
     if (isNaN(leadId)) {
@@ -794,7 +794,7 @@ router.post("/:id/intelligence", requireRole("paralegal", "attorney", "admin"), 
   }
 });
 
-router.patch("/:id/notes", requireRole("paralegal", "attorney", "admin"), auditAction("update_lead_notes"), async (req, res) => {
+router.patch("/:id/notes", requirePermission(Permission.LEAD_UPDATE), auditAction("update_lead_notes"), async (req, res) => {
   try {
     const leadId = Number(req.params.id);
     if (isNaN(leadId)) {

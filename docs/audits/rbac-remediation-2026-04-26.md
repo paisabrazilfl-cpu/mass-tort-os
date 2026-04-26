@@ -537,9 +537,6 @@ docs/audits/rbac-remediation-2026-04-26.md (new)           this report
 
 ## 10. Known follow-ups (not in scope)
 
-- Migrate the remaining `requireRole(...)` call sites in `routes/forms.ts`,
-  `routes/security.ts`, and similar to `requirePermission(...)` so future
-  capability changes don't require touching every route file.
 - Add a CI job that runs `pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts`
   on every PR so the role × route matrix runs on every change.
 - Consider promoting the boot-time validator to also flag routes that pass

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, integrationsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
-import { requireRole } from "../lib/rbac";
+import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { PRESET_INTEGRATIONS } from "../lib/integration-presets";
 import { encrypt, decrypt } from "../lib/encryption";
@@ -95,12 +95,12 @@ export async function getIntegrationCredentials(provider: string): Promise<Decry
   return decryptRowCredentials(active[0]);
 }
 
-router.get("/categories", requireRole("admin"), (_req, res) => {
+router.get("/categories", requirePermission(Permission.INTEGRATIONS_MANAGE), (_req, res) => {
   const cats = Array.from(new Set(PRESET_INTEGRATIONS.map(p => p.category))).sort();
   res.json(cats);
 });
 
-router.get("/presets", requireRole("admin"), (_req, res) => {
+router.get("/presets", requirePermission(Permission.INTEGRATIONS_MANAGE), (_req, res) => {
   res.json(PRESET_INTEGRATIONS);
 });
 
@@ -113,19 +113,19 @@ function maskRow(row: any) {
   };
 }
 
-router.get("/", requireRole("admin"), async (_req, res) => {
+router.get("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (_req, res) => {
   const rows = await db.select().from(integrationsTable).orderBy(desc(integrationsTable.created_at));
   res.json(rows.map(maskRow));
 });
 
-router.get("/:id", requireRole("admin"), async (req, res) => {
+router.get("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseInt(String(req.params.id));
   const [row] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!row) { res.status(404).json({ error: "Integration not found" }); return; }
   res.json(maskRow(row));
 });
 
-router.post("/", requireRole("admin"), async (req, res) => {
+router.post("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const { name, type, provider, api_url, webhook_url, config, sync_direction, field_mapping, api_key } = req.body;
   if (!name || !type || !provider) {
     res.status(400).json({ error: "Name, type, and provider are required" }); return;
@@ -164,7 +164,7 @@ router.post("/", requireRole("admin"), async (req, res) => {
   res.status(201).json(maskRow(row));
 });
 
-router.patch("/:id", requireRole("admin"), async (req, res) => {
+router.patch("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseInt(String(req.params.id));
   const [existing] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
@@ -197,7 +197,7 @@ router.patch("/:id", requireRole("admin"), async (req, res) => {
   res.json(maskRow(updated));
 });
 
-router.delete("/:id", requireRole("admin"), async (req, res) => {
+router.delete("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseInt(String(req.params.id));
   const [deleted] = await db.delete(integrationsTable).where(eq(integrationsTable.id, id)).returning();
   if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
@@ -205,7 +205,7 @@ router.delete("/:id", requireRole("admin"), async (req, res) => {
   res.json({ success: true });
 });
 
-router.post("/:id/test", requireRole("admin"), async (req, res) => {
+router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseInt(String(req.params.id));
   const [row] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
@@ -255,7 +255,7 @@ router.post("/:id/test", requireRole("admin"), async (req, res) => {
   });
 });
 
-router.post("/:id/sync", requireRole("admin"), async (req, res) => {
+router.post("/:id/sync", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseInt(String(req.params.id));
   const [integration] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!integration) { res.status(404).json({ error: "Not found" }); return; }

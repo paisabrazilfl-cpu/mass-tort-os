@@ -156,6 +156,94 @@ describe("ROLE_PERMISSIONS catalogue", () => {
     assert.equal(ROLE_PERMISSIONS.paralegal.has(Permission.LEAD_DELETE), false);
     assert.equal(ROLE_PERMISSIONS.paralegal.has(Permission.LEAD_EXPORT), false);
   });
+
+  test("attorney cannot reach admin-only newly migrated surfaces", () => {
+    for (const p of [
+      Permission.OCR_QUEUE_ADMIN,
+      Permission.IMAGE_OBJECTS_DELETE,
+      Permission.COMPLIANCE_VIEW,
+      Permission.VENDORS_DELETE,
+    ]) {
+      assert.equal(ROLE_PERMISSIONS.attorney.has(p), false, `attorney must not have ${p}`);
+    }
+  });
+
+  test("paralegal can perform read-tier work on newly migrated surfaces", () => {
+    for (const p of [
+      Permission.NEWS_VIEW,
+      Permission.NPI_LOOKUP,
+      Permission.TIMELINE_VIEW,
+      Permission.DASHBOARD_VIEW,
+      Permission.REVIEW_QUEUE_VIEW,
+      Permission.IMAGE_OBJECTS_VIEW,
+      Permission.OCR_VIEW,
+      Permission.OCR_UPLOAD,
+      Permission.OCR_AI_FIELDS,
+      Permission.LEAD_IMPORT_PREVIEW,
+      Permission.DRAFTING_TEMPLATES_VIEW,
+      Permission.DRAFTING_GENERATE,
+      Permission.DOCUMENTS_VIEW,
+      Permission.DOCUMENTS_CREATE,
+      Permission.DOCUMENTS_UPDATE,
+      Permission.DOCUMENTS_REDACT,
+      Permission.ANALYTICS_PREDICTIVE_LEAD_VIEW,
+    ]) {
+      assert.equal(ROLE_PERMISSIONS.paralegal.has(p), true, `paralegal should have ${p}`);
+    }
+  });
+
+  test("paralegal cannot perform attorney-tier write actions on migrated surfaces", () => {
+    for (const p of [
+      Permission.LEAD_IMPORT_EXECUTE,
+      Permission.REVIEW_QUEUE_RESOLVE,
+      Permission.DOCUMENTS_DELETE,
+      Permission.ANALYTICS_VIEW,
+      Permission.DECISION_ENGINE_VIEW,
+      Permission.PARALEGAL_VIEW,
+      Permission.VENDORS_MANAGE,
+      Permission.FORMS_CONFIG_VIEW,
+    ]) {
+      assert.equal(ROLE_PERMISSIONS.paralegal.has(p), false, `paralegal must not have ${p}`);
+    }
+  });
+
+  test("viewer can browse but not act on newly migrated surfaces", () => {
+    // Viewer-tier reads
+    for (const p of [
+      Permission.DASHBOARD_VIEW,
+      Permission.NEWS_VIEW,
+      Permission.DOCUMENTS_VIEW,
+      Permission.BUYERS_VIEW,
+      Permission.LEAD_SOURCES_VIEW,
+      Permission.WORKFLOW_SETTINGS_VIEW,
+      Permission.TEMPLATES_VIEW,
+    ]) {
+      assert.equal(ROLE_PERMISSIONS.viewer.has(p), true, `viewer should have ${p}`);
+    }
+    // But not any mutation/admin
+    for (const p of [
+      Permission.DOCUMENTS_CREATE,
+      Permission.DOCUMENTS_UPDATE,
+      Permission.DOCUMENTS_DELETE,
+      Permission.BUYERS_MANAGE,
+      Permission.LEAD_SOURCES_MANAGE,
+      Permission.WORKFLOW_SETTINGS_MANAGE,
+      Permission.TEMPLATES_MANAGE,
+      Permission.NPI_LOOKUP,
+      Permission.OCR_UPLOAD,
+      Permission.LEAD_IMPORT_PREVIEW,
+      Permission.REVIEW_QUEUE_VIEW,
+      Permission.IMAGE_OBJECTS_VIEW,
+      Permission.DECISION_ENGINE_VIEW,
+      Permission.ANALYTICS_VIEW,
+      Permission.PARALEGAL_VIEW,
+      Permission.VENDORS_VIEW,
+      Permission.FORMS_CONFIG_VIEW,
+      Permission.TIMELINE_VIEW,
+    ]) {
+      assert.equal(ROLE_PERMISSIONS.viewer.has(p), false, `viewer must not have ${p}`);
+    }
+  });
 });
 
 describe("hasPermission()", () => {

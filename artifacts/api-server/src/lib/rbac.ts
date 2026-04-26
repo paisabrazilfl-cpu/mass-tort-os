@@ -82,6 +82,10 @@ export const Permission = {
   LEAD_QUALIFY: "lead:qualify",
   LEAD_EXPORT: "lead:export",
 
+  // Lead import
+  LEAD_IMPORT_PREVIEW: "lead_import:preview",
+  LEAD_IMPORT_EXECUTE: "lead_import:execute",
+
   // Cases
   CASE_VIEW_ANY: "case:view:any",
   CASE_VIEW_OWN: "case:view:own",
@@ -95,10 +99,20 @@ export const Permission = {
   PARALEGAL_MANAGE: "paralegal:manage",
 
   // Forms
+  // FORMS_CONFIG_VIEW_PUBLIC is the redacted/public-facing form config
+  // (held by every authenticated role); FORMS_CONFIG_VIEW is the full
+  // internal config (attorney+ only).
   FORMS_CONFIG_VIEW_PUBLIC: "forms:config:view:public",
+  FORMS_CONFIG_VIEW: "forms:config:view",
   FORMS_CONFIG_MANAGE: "forms:config:manage",
+  FORMS_SUBMIT: "forms:submit",
+  FORMS_BACKGROUND_CHECK: "forms:background_check",
+  FORMS_NPI_VERIFY: "forms:npi_verify",
+  FORMS_FRAUD_CHECK: "forms:fraud_check",
+  FORMS_ESCALATE_FBI: "forms:escalate_fbi",
 
   // Decision engine
+  DECISION_ENGINE_VIEW: "decision_engine:view",
   DECISION_ENGINE_MANAGE: "decision_engine:manage",
 
   // Security & compliance
@@ -110,12 +124,46 @@ export const Permission = {
   BUYERS_MANAGE: "buyers:manage",
   VENDORS_VIEW: "vendors:view",
   VENDORS_MANAGE: "vendors:manage",
+  // Vendor delete is admin-only (sub-set of "manage" tier).
+  VENDORS_DELETE: "vendors:delete",
   LEAD_SOURCES_VIEW: "lead_sources:view",
   LEAD_SOURCES_MANAGE: "lead_sources:manage",
   TEMPLATES_VIEW: "templates:view",
   TEMPLATES_MANAGE: "templates:manage",
   WORKFLOW_SETTINGS_VIEW: "workflow_settings:view",
   WORKFLOW_SETTINGS_MANAGE: "workflow_settings:manage",
+
+  // Documents
+  DOCUMENTS_VIEW: "documents:view",
+  DOCUMENTS_CREATE: "documents:create",
+  DOCUMENTS_UPDATE: "documents:update",
+  DOCUMENTS_DELETE: "documents:delete",
+  DOCUMENTS_REDACT: "documents:redact",
+
+  // OCR
+  OCR_UPLOAD: "ocr:upload",
+  OCR_VIEW: "ocr:view",
+  OCR_QUEUE_ADMIN: "ocr:queue_admin",
+  OCR_AI_FIELDS: "ocr:ai_fields",
+
+  // Drafting
+  DRAFTING_TEMPLATES_VIEW: "drafting:templates_view",
+  DRAFTING_GENERATE: "drafting:generate",
+
+  // Image objects
+  IMAGE_OBJECTS_VIEW: "image_objects:view",
+  IMAGE_OBJECTS_MANAGE: "image_objects:manage",
+  IMAGE_OBJECTS_DELETE: "image_objects:delete",
+
+  // NPI / news / timeline / review-queue / dashboard / analytics
+  NPI_LOOKUP: "npi:lookup",
+  NEWS_VIEW: "news:view",
+  TIMELINE_VIEW: "timeline:view",
+  REVIEW_QUEUE_VIEW: "review_queue:view",
+  REVIEW_QUEUE_RESOLVE: "review_queue:resolve",
+  DASHBOARD_VIEW: "dashboard:view",
+  ANALYTICS_VIEW: "analytics:view",
+  ANALYTICS_PREDICTIVE_LEAD_VIEW: "analytics:predictive:lead",
 
   // Integrations
   INTEGRATIONS_MANAGE: "integrations:manage",
@@ -132,39 +180,110 @@ export type Permission = (typeof Permission)[keyof typeof Permission];
 export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
   admin: new Set<Permission>(Object.values(Permission)),
   attorney: new Set<Permission>([
+    // Leads / lead-import
     Permission.LEAD_VIEW_ANY,
     Permission.LEAD_CREATE,
     Permission.LEAD_UPDATE,
     Permission.LEAD_DELETE,
     Permission.LEAD_QUALIFY,
     Permission.LEAD_EXPORT,
+    Permission.LEAD_IMPORT_PREVIEW,
+    Permission.LEAD_IMPORT_EXECUTE,
+    // Cases
     Permission.CASE_VIEW_ANY,
     Permission.CASE_CREATE,
     Permission.CASE_UPLOAD,
     Permission.CASE_ANALYZE,
+    // Paralegals
     Permission.PARALEGAL_VIEW,
+    // Forms
     Permission.FORMS_CONFIG_VIEW_PUBLIC,
+    Permission.FORMS_CONFIG_VIEW,
+    Permission.FORMS_SUBMIT,
+    Permission.FORMS_BACKGROUND_CHECK,
+    Permission.FORMS_NPI_VERIFY,
+    Permission.FORMS_FRAUD_CHECK,
+    Permission.FORMS_ESCALATE_FBI,
+    // Decision engine
+    Permission.DECISION_ENGINE_VIEW,
+    // Buyers / vendors / lead-sources / templates / workflow-settings
     Permission.BUYERS_VIEW,
     Permission.VENDORS_VIEW,
     Permission.VENDORS_MANAGE,
     Permission.LEAD_SOURCES_VIEW,
     Permission.TEMPLATES_VIEW,
     Permission.WORKFLOW_SETTINGS_VIEW,
+    // Documents
+    Permission.DOCUMENTS_VIEW,
+    Permission.DOCUMENTS_CREATE,
+    Permission.DOCUMENTS_UPDATE,
+    Permission.DOCUMENTS_DELETE,
+    Permission.DOCUMENTS_REDACT,
+    // OCR
+    Permission.OCR_UPLOAD,
+    Permission.OCR_VIEW,
+    Permission.OCR_AI_FIELDS,
+    // Drafting
+    Permission.DRAFTING_TEMPLATES_VIEW,
+    Permission.DRAFTING_GENERATE,
+    // Image objects (delete is admin-only)
+    Permission.IMAGE_OBJECTS_VIEW,
+    Permission.IMAGE_OBJECTS_MANAGE,
+    // NPI / news / timeline / review-queue / dashboard / analytics
+    Permission.NPI_LOOKUP,
+    Permission.NEWS_VIEW,
+    Permission.TIMELINE_VIEW,
+    Permission.REVIEW_QUEUE_VIEW,
+    Permission.REVIEW_QUEUE_RESOLVE,
+    Permission.DASHBOARD_VIEW,
+    Permission.ANALYTICS_VIEW,
+    Permission.ANALYTICS_PREDICTIVE_LEAD_VIEW,
   ]),
   paralegal: new Set<Permission>([
+    // Leads / lead-import (no delete/export, no execute)
     Permission.LEAD_VIEW_OWN,
     Permission.LEAD_CREATE,
     Permission.LEAD_UPDATE,
     Permission.LEAD_QUALIFY,
+    Permission.LEAD_IMPORT_PREVIEW,
+    // Cases
     Permission.CASE_VIEW_OWN,
     Permission.CASE_CREATE,
     Permission.CASE_UPLOAD,
     Permission.CASE_ANALYZE,
+    // Forms (no FBI escalation, no internal config view)
     Permission.FORMS_CONFIG_VIEW_PUBLIC,
+    Permission.FORMS_SUBMIT,
+    Permission.FORMS_BACKGROUND_CHECK,
+    Permission.FORMS_NPI_VERIFY,
+    Permission.FORMS_FRAUD_CHECK,
+    // Vendors / lead-sources / templates / workflow-settings
     Permission.VENDORS_VIEW,
     Permission.LEAD_SOURCES_VIEW,
     Permission.TEMPLATES_VIEW,
     Permission.WORKFLOW_SETTINGS_VIEW,
+    // Documents (no delete)
+    Permission.DOCUMENTS_VIEW,
+    Permission.DOCUMENTS_CREATE,
+    Permission.DOCUMENTS_UPDATE,
+    Permission.DOCUMENTS_REDACT,
+    // OCR (no queue admin)
+    Permission.OCR_UPLOAD,
+    Permission.OCR_VIEW,
+    Permission.OCR_AI_FIELDS,
+    // Drafting
+    Permission.DRAFTING_TEMPLATES_VIEW,
+    Permission.DRAFTING_GENERATE,
+    // Image objects (no delete)
+    Permission.IMAGE_OBJECTS_VIEW,
+    Permission.IMAGE_OBJECTS_MANAGE,
+    // NPI / news / timeline / review-queue / dashboard / analytics-predictive
+    Permission.NPI_LOOKUP,
+    Permission.NEWS_VIEW,
+    Permission.TIMELINE_VIEW,
+    Permission.REVIEW_QUEUE_VIEW,
+    Permission.DASHBOARD_VIEW,
+    Permission.ANALYTICS_PREDICTIVE_LEAD_VIEW,
   ]),
   viewer: new Set<Permission>([
     Permission.LEAD_VIEW_OWN,
@@ -174,6 +293,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     Permission.LEAD_SOURCES_VIEW,
     Permission.TEMPLATES_VIEW,
     Permission.WORKFLOW_SETTINGS_VIEW,
+    Permission.DOCUMENTS_VIEW,
+    Permission.NEWS_VIEW,
+    Permission.DASHBOARD_VIEW,
   ]),
 };
 

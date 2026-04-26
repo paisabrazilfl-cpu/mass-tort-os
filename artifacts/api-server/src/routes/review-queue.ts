@@ -3,12 +3,12 @@ import { db, reviewQueueTable } from "@workspace/db";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { requireRole, auditAction } from "../lib/rbac";
+import { Permission, requirePermission, auditAction } from "../lib/rbac";
 import { badRequest, notFound } from "../lib/http-errors";
 
 const router = Router();
 
-router.get("/", requireRole("paralegal"), async (req, res) => {
+router.get("/", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req, res) => {
   const { resolution, conflict_type, severity, entity_type, limit } = req.query as Record<string, string | undefined>;
 
   const conditions = [];
@@ -55,7 +55,7 @@ router.get("/", requireRole("paralegal"), async (req, res) => {
   res.json(sanitized);
 });
 
-router.get("/stats", requireRole("paralegal"), async (req, res) => {
+router.get("/stats", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req, res) => {
   const byResolution = await db
     .select({
       resolution: reviewQueueTable.resolution,
@@ -99,7 +99,7 @@ router.get("/stats", requireRole("paralegal"), async (req, res) => {
   });
 });
 
-router.patch("/:id", requireRole("attorney"), auditAction("resolve_review_item"), async (req, res) => {
+router.patch("/:id", requirePermission(Permission.REVIEW_QUEUE_RESOLVE), auditAction("resolve_review_item"), async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id)) {
     badRequest(res, "Invalid ID");

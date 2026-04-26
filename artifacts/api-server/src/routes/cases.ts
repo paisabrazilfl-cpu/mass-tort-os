@@ -6,7 +6,7 @@ import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
 import { auditLog } from "../lib/audit";
 import crypto from "crypto";
 import type { AuthUser } from "../lib/rbac";
-import { requireRole, auditAction, denyForbidden } from "../lib/rbac";
+import { Permission, requirePermission, auditAction, denyForbidden } from "../lib/rbac";
 import { badRequest, notFound, forbidden } from "../lib/http-errors";
 
 /**
@@ -45,7 +45,7 @@ const MAX_CONTENT_BASE64_BYTES = 25 * 1024 * 1024;
 
 const router = Router();
 
-router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("create_case"), async (req, res) => {
+router.post("/", requirePermission(Permission.CASE_CREATE), auditAction("create_case"), async (req, res) => {
   // CreateCaseBody is `record<string, unknown>` in OpenAPI — we still want
   // to reject non-objects (arrays, primitives, null) so the worker never sees
   // garbage that would dead-letter post-enqueue.
@@ -75,7 +75,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
   res.status(201).json({ case_id, status: "queued", job_id });
 });
 
-router.post("/:id/upload", requireRole("paralegal", "attorney", "admin"), auditAction("upload_case_file"), async (req, res) => {
+router.post("/:id/upload", requirePermission(Permission.CASE_UPLOAD), auditAction("upload_case_file"), async (req, res) => {
   const case_id = String(req.params.id);
   if (!validateCaseId(case_id)) {
     res.status(400).json({ status: "error", code: "invalid_case_id", message: "Invalid case ID format (expected UUID)" });
@@ -124,7 +124,7 @@ router.post("/:id/upload", requireRole("paralegal", "attorney", "admin"), auditA
   res.json({ case_id, status: "queued", job_id, file_name });
 });
 
-router.post("/:id/analyze", requireRole("paralegal"), async (req, res) => {
+router.post("/:id/analyze", requirePermission(Permission.CASE_ANALYZE), async (req, res) => {
   const case_id = String(req.params.id);
   if (!validateCaseId(case_id)) {
     badRequest(res, "Invalid case ID format");
@@ -141,7 +141,7 @@ router.post("/:id/analyze", requireRole("paralegal"), async (req, res) => {
   res.json({ case_id, status: "queued", job_id });
 });
 
-router.get("/", requireRole("viewer"), async (req, res) => {
+router.get("/", requirePermission(Permission.CASE_VIEW_OWN, Permission.CASE_VIEW_ANY), async (req, res) => {
   // Ownership filter: viewer sees only rows they own (created_by_user_id)
   // or are assigned to (assigned_to). paralegal/attorney/admin see all
   // rows — paralegals must triage the whole intake queue. Rows with both
@@ -171,7 +171,7 @@ router.get("/", requireRole("viewer"), async (req, res) => {
 // NOTE: worker admin routes are registered BEFORE the parameterized
 // `/:id` route so a future change to that param's pattern can't shadow
 // them. Express matches in registration order.
-router.get("/worker/queue-stats", requireRole("admin"), async (req, res) => {
+router.get("/worker/queue-stats", requirePermission(Permission.CASE_WORKER_ADMIN), async (req, res) => {
   const stats = await getQueueStats();
   res.json(stats);
 });
@@ -181,7 +181,7 @@ router.get("/worker/queue-stats", requireRole("admin"), async (req, res) => {
 // retry_count to 0 so the operator gets a clean fresh attempt.
 router.post(
   "/worker/jobs/:id/requeue",
-  requireRole("admin"),
+  requirePermission(Permission.CASE_WORKER_ADMIN),
   auditAction("requeue_dead_letter_job"),
   async (req, res) => {
     const id = Number(req.params.id);
@@ -198,7 +198,7 @@ router.post(
   },
 );
 
-router.get("/:id", requireRole("viewer"), async (req, res) => {
+router.get("/:id", requirePermission(Permission.CASE_VIEW_OWN, Permission.CASE_VIEW_ANY), async (req, res) => {
   const case_id = String(req.params.id);
   if (!validateCaseId(case_id)) {
     badRequest(res, "Invalid case ID format");

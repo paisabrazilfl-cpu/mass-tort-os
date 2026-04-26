@@ -2,7 +2,7 @@ import { Router } from "express";
 import crypto from "crypto";
 import { db, imageObjectsTable } from "@workspace/db";
 import { eq, desc, and, sql } from "drizzle-orm";
-import { requireRole } from "../lib/rbac";
+import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { serverError } from "../lib/http-errors";
@@ -14,7 +14,7 @@ function sanitizeForClient(image: any) {
   return safe;
 }
 
-router.get("/", requireRole("paralegal"), async (req, res) => {
+router.get("/", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, res) => {
   try {
     const { source_type, lead_id, case_id, limit = "50", offset = "0" } = req.query;
 
@@ -38,7 +38,7 @@ router.get("/", requireRole("paralegal"), async (req, res) => {
   }
 });
 
-router.get("/stats", requireRole("paralegal"), async (_req, res) => {
+router.get("/stats", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (_req, res) => {
   try {
     const totalResult = await db.execute(sql`SELECT count(*)::int as total FROM image_objects`);
     const bySource = await db.execute(sql`SELECT source_type, count(*)::int as count FROM image_objects GROUP BY source_type`);
@@ -59,7 +59,7 @@ router.get("/stats", requireRole("paralegal"), async (_req, res) => {
   }
 });
 
-router.get("/:id", requireRole("paralegal"), async (req, res) => {
+router.get("/:id", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, res) => {
   try {
     const [image] = await db
       .select()
@@ -74,7 +74,7 @@ router.get("/:id", requireRole("paralegal"), async (req, res) => {
   }
 });
 
-router.post("/", requireRole("paralegal"), async (req, res) => {
+router.post("/", requirePermission(Permission.IMAGE_OBJECTS_MANAGE), async (req, res) => {
   try {
     const {
       file_data,
@@ -179,7 +179,7 @@ router.post("/", requireRole("paralegal"), async (req, res) => {
   }
 });
 
-router.patch("/:id", requireRole("paralegal"), async (req, res) => {
+router.patch("/:id", requirePermission(Permission.IMAGE_OBJECTS_MANAGE), async (req, res) => {
   try {
     const allowedFields = [
       "ocr_status", "ocr_text", "ocr_confidence", "ocr_extracted_fields",
@@ -214,7 +214,7 @@ router.patch("/:id", requireRole("paralegal"), async (req, res) => {
   }
 });
 
-router.delete("/:id", requireRole("admin"), async (req, res) => {
+router.delete("/:id", requirePermission(Permission.IMAGE_OBJECTS_DELETE), async (req, res) => {
   try {
     const [image] = await db
       .select()
@@ -247,7 +247,7 @@ router.delete("/:id", requireRole("admin"), async (req, res) => {
   }
 });
 
-router.get("/:id/integrity", requireRole("paralegal"), async (req, res) => {
+router.get("/:id/integrity", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, res) => {
   try {
     const [image] = await db
       .select()

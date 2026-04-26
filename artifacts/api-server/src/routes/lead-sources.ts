@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, leadSourcesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { authMiddleware, requireRole } from "../lib/rbac";
+import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
 import { z } from "zod/v4";
 import { badRequest, conflict, notFound } from "../lib/http-errors";
 
@@ -17,12 +17,12 @@ const sourceSchema = z.object({
   active: z.boolean().optional(),
 });
 
-router.get("/", requireRole("viewer"), async (_req, res) => {
+router.get("/", requirePermission(Permission.LEAD_SOURCES_VIEW), async (_req, res) => {
   const rows = await db.select().from(leadSourcesTable).orderBy(leadSourcesTable.name);
   res.json(rows);
 });
 
-router.post("/", requireRole("admin"), async (req, res) => {
+router.post("/", requirePermission(Permission.LEAD_SOURCES_MANAGE), async (req, res) => {
   const parsed = sourceSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -51,7 +51,7 @@ router.post("/", requireRole("admin"), async (req, res) => {
   }
 });
 
-router.put("/:id", requireRole("admin"), async (req, res) => {
+router.put("/:id", requirePermission(Permission.LEAD_SOURCES_MANAGE), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
     badRequest(res, "invalid_id");
@@ -82,7 +82,7 @@ router.put("/:id", requireRole("admin"), async (req, res) => {
   res.json(row);
 });
 
-router.delete("/:id", requireRole("admin"), async (req, res) => {
+router.delete("/:id", requirePermission(Permission.LEAD_SOURCES_MANAGE), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
     badRequest(res, "invalid_id");

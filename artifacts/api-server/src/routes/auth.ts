@@ -12,7 +12,8 @@ import {
   createUser,
   listUsers,
   authMiddleware,
-  requireRole,
+  Permission,
+  requirePermission,
   incrementFailedAttempts,
   resetFailedAttempts,
   isAccountLocked,
@@ -359,7 +360,7 @@ router.get("/me", authMiddleware, async (req, res) => {
   });
 });
 
-router.get("/users", authMiddleware, requireRole("admin"), async (_req, res) => {
+router.get("/users", authMiddleware, requirePermission(Permission.USERS_LIST), async (_req, res) => {
   const users = await listUsers();
   res.json(users);
 });

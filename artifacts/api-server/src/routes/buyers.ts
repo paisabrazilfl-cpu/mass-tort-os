@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, buyersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { authMiddleware, requireRole } from "../lib/rbac";
+import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
 import { auditAction } from "../lib/rbac";
 import { z } from "zod/v4";
 import { badRequest, conflict, notFound } from "../lib/http-errors";
@@ -26,12 +26,12 @@ const buyerSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
-router.get("/", requireRole("viewer"), async (_req, res) => {
+router.get("/", requirePermission(Permission.BUYERS_VIEW), async (_req, res) => {
   const rows = await db.select().from(buyersTable).orderBy(buyersTable.name);
   res.json(rows);
 });
 
-router.get("/:id", requireRole("viewer"), async (req, res) => {
+router.get("/:id", requirePermission(Permission.BUYERS_VIEW), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
     badRequest(res, "invalid_id");
@@ -45,7 +45,7 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
   res.json(row);
 });
 
-router.post("/", requireRole("admin"), auditAction("create_buyer"), async (req, res) => {
+router.post("/", requirePermission(Permission.BUYERS_MANAGE), auditAction("create_buyer"), async (req, res) => {
   const parsed = buyerSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -63,7 +63,7 @@ router.post("/", requireRole("admin"), auditAction("create_buyer"), async (req, 
   }
 });
 
-router.put("/:id", requireRole("admin"), auditAction("update_buyer"), async (req, res) => {
+router.put("/:id", requirePermission(Permission.BUYERS_MANAGE), auditAction("update_buyer"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
     badRequest(res, "invalid_id");
@@ -83,7 +83,7 @@ router.put("/:id", requireRole("admin"), auditAction("update_buyer"), async (req
   res.json(row);
 });
 
-router.delete("/:id", requireRole("admin"), auditAction("delete_buyer"), async (req, res) => {
+router.delete("/:id", requirePermission(Permission.BUYERS_MANAGE), auditAction("delete_buyer"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
     badRequest(res, "invalid_id");

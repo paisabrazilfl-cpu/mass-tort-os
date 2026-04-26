@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, workflowSettingsTable, integrationsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { authMiddleware, requireRole } from "../lib/rbac";
+import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
 import { auditAction } from "../lib/rbac";
 import { z } from "zod/v4";
 import { listEsignProviders } from "../lib/esign";
@@ -28,12 +28,12 @@ const settingsSchema = z.object({
   notes: z.string().nullish(),
 });
 
-router.get("/", requireRole("viewer"), async (_req, res) => {
+router.get("/", requirePermission(Permission.WORKFLOW_SETTINGS_VIEW), async (_req, res) => {
   const rows = await db.select().from(workflowSettingsTable);
   res.json(rows);
 });
 
-router.get("/:scope", requireRole("viewer"), async (req, res) => {
+router.get("/:scope", requirePermission(Permission.WORKFLOW_SETTINGS_VIEW), async (req, res) => {
   const scope = String(req.params.scope);
   const [row] = await db
     .select()
@@ -66,7 +66,7 @@ router.get("/:scope", requireRole("viewer"), async (req, res) => {
 /**
  * Upsert by scope. PUT /api/workflow-settings  with { scope: "global", ...fields }
  */
-router.put("/", requireRole("admin"), auditAction("update_workflow_settings"), async (req, res) => {
+router.put("/", requirePermission(Permission.WORKFLOW_SETTINGS_MANAGE), auditAction("update_workflow_settings"), async (req, res) => {
   const parsed = settingsSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -97,7 +97,7 @@ router.put("/", requireRole("admin"), auditAction("update_workflow_settings"), a
  * Helper for the CRM: list active integrations grouped by category so the admin
  * UI can render dropdowns for each provider slot.
  */
-router.get("/_options/providers", requireRole("admin"), async (_req, res) => {
+router.get("/_options/providers", requirePermission(Permission.WORKFLOW_SETTINGS_MANAGE), async (_req, res) => {
   const all = await db
     .select()
     .from(integrationsTable)
