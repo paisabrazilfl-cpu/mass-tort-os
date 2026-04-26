@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { db, casesTable, analysisTable, caseDocumentsTable, auditLogTable } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { eq, or, desc } from "drizzle-orm";
 import { CreateCaseBody, UploadCaseFileBody } from "@workspace/api-zod";
 import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
 import { auditLog } from "../lib/audit";
 import crypto from "crypto";
-import { requireRole, auditAction, canBypassOwnership, denyForbidden } from "../lib/rbac";
+import { requireRole, auditAction, denyForbidden } from "../lib/rbac";
 import { badRequest, notFound, forbidden } from "../lib/http-errors";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -120,22 +120,33 @@ router.post("/:id/analyze", requireRole("paralegal"), async (req, res) => {
 });
 
 router.get("/", requireRole("viewer"), async (req, res) => {
-  // Ownership filter (Task #10): viewers/paralegals only see cases THEY
-  // created. admin/attorney bypass via canBypassOwnership(). A case row
-  // with created_by_user_id IS NULL is treated as "owner-less" and is only
-  // visible to the bypass set — the filter must use a non-null comparison
-  // so dev-mode rows (id=0) and historical rows do not silently leak.
+  // Ownership filter (Task #10):
+  //   - admin / attorney / paralegal:  see all cases (full caseload visibility,
+  //     audited by route-level auditAction on the mutating siblings).
+  //   - viewer (read-only role):       see ONLY cases they own
+  //     (created_by_user_id) OR are explicitly assigned to (assigned_to).
+  //
+  // Rationale: paralegals must triage the whole intake queue, so we do NOT
+  // restrict them. The viewer role is the only one with a per-row visibility
+  // shrink. Rows with both ownership columns NULL are treated as
+  // "no-assignment" — viewers do not see them, paralegal+ do.
   const user = req.user!;
-  const rows = canBypassOwnership(user)
+  const isViewerOnly = user.role === "viewer";
+  const rows = isViewerOnly
     ? await db
         .select()
         .from(casesTable)
+        .where(
+          or(
+            eq(casesTable.created_by_user_id, user.id),
+            eq(casesTable.assigned_to, user.id),
+          ),
+        )
         .orderBy(desc(casesTable.created_at))
         .limit(100)
     : await db
         .select()
         .from(casesTable)
-        .where(eq(casesTable.created_by_user_id, user.id))
         .orderBy(desc(casesTable.created_at))
         .limit(100);
   res.json(rows);
@@ -189,17 +200,22 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
     return;
   }
 
-  // Ownership check (Task #10): same rule as GET /. Returning 404 instead of
-  // 403 here avoids confirming the existence of a case the caller cannot
-  // see — but for the audit trail we still record the denial in rbac.ts via
-  // the dedicated forbidden() path on a dedicated /access endpoint if/when
-  // we add one. For now we emit 403 so the CRM can show a clear "no access"
-  // banner; the case id is opaque (UUID) so existence-leak is low-value.
+  // Ownership check (Task #10): mirrors the GET / filter. Only the viewer
+  // role is restricted; paralegal+ see every case. Viewers are allowed
+  // through if they OWN (created_by_user_id) or are ASSIGNED TO
+  // (assigned_to) the case — same convention as the leads table.
+  // We emit 403 (not 404) so the CRM can show a clear "no access" banner;
+  // case ids are opaque UUIDs so existence-leak is low-value.
   const user = req.user!;
-  if (!canBypassOwnership(user) && caseRow.created_by_user_id !== user.id) {
+  if (
+    user.role === "viewer" &&
+    caseRow.created_by_user_id !== user.id &&
+    caseRow.assigned_to !== user.id
+  ) {
     denyForbidden(req, res, "case_ownership_denied", "Insufficient permissions", {
       case_id,
       owner_user_id: caseRow.created_by_user_id,
+      assigned_to: caseRow.assigned_to,
     });
     return;
   }

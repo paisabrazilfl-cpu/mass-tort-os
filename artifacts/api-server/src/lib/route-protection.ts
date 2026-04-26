@@ -303,3 +303,45 @@ export function validateRouteTable(parent: Router): { checked: number; public: n
 }
 
 export type ProtectedRouter = Router;
+
+/**
+ * Inspect a single express handle (a middleware function or a sub-router)
+ * and report which trust-boundary stamps it carries.
+ *
+ * Exported under the `__internal_` prefix so external callers know they are
+ * reaching into the validator's private vocabulary. The intended consumer is
+ * `src/scripts/dump-route-matrix.ts`, which renders the audit doc's per-route
+ * matrix; using this helper guarantees that the matrix is computed against
+ * the SAME symbol identities `validateRouteTable` checks (no string-name or
+ * label-list drift).
+ *
+ * The returned booleans are based on identity comparison against the
+ * module-local `Symbol(...)` flags. Forging is impossible from outside this
+ * module: the symbols are not registered with `Symbol.for()` and are not
+ * exported.
+ */
+export function __internal_inspectLayer(handle: unknown): {
+  hasAuthStamp: boolean;
+  hasGateStamp: boolean;
+  isPublicRouter: boolean;
+  routerLabel: string | undefined;
+} {
+  if (handle == null || (typeof handle !== "function" && typeof handle !== "object")) {
+    return { hasAuthStamp: false, hasGateStamp: false, isPublicRouter: false, routerLabel: undefined };
+  }
+  const bag = handle as Record<symbol, unknown>;
+  const label = bag[ROUTER_LABEL_FLAG];
+  return {
+    hasAuthStamp: Boolean(bag[AUTH_MIDDLEWARE_FLAG]),
+    hasGateStamp: Boolean(bag[GATE_MIDDLEWARE_FLAG]),
+    isPublicRouter: Boolean(bag[PUBLIC_ROUTER_FLAG]),
+    routerLabel: typeof label === "string" ? label : undefined,
+  };
+}
+
+/**
+ * The exact same auth-router exception list `validateRouteTable` consults.
+ * Re-exported so the route-matrix dumper renders consistent labels.
+ */
+export const __internal_AUTH_ROUTE_EXCEPTIONS: ReadonlySet<string> = AUTH_ROUTE_EXCEPTIONS;
+export const __internal_AUTH_ONLY_ROUTES: ReadonlySet<string> = AUTH_ONLY_ROUTES;
