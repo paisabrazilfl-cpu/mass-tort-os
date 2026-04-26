@@ -265,8 +265,16 @@ export async function workerLoop(): Promise<void> {
           await markJobDone(job.id as number);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          logger.error({ err, job_id: job.id }, "Job processing failed");
-          await markJobFailed(job.id as number, msg);
+          // Default policy: every thrown error is *potentially* transient
+          // (network blip, vendor 5xx, transient DB error). Workflow
+          // handlers explicitly swallow non-retryable provider failures
+          // and return normally, so anything that bubbles up here is
+          // already screened. The bounded MAX_RETRIES + exponential
+          // backoff in markJobFailed prevents a poison-pill job from
+          // looping forever; once retries are exhausted it lands in
+          // `dead_letter` for human attention.
+          logger.error({ err, job_id: job.id }, "Job processing failed — markJobFailed will retry or dead-letter");
+          await markJobFailed(job.id as number, msg, { retryable: true });
         }
       }
     } catch (err) {

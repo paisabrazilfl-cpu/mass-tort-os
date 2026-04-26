@@ -15,13 +15,25 @@ would have degraded into table scans, queue starvation, and OOM risk.
 This pass:
 
 - Added **45 new indexes** across the 9 highest-traffic tables.
-- Capped pagination on the three unbounded list endpoints.
+- Capped pagination on the four unbounded list endpoints (`/leads`,
+  `/leads/export`, `/documents`, `/review-queue`).
 - Fixed a real correctness bug in `/compliance/audit-trail` (filters were
   applied in JS *after* `LIMIT`, so most filtered queries returned 0 rows).
 - Parallelized the 4 sequential queries in `GET /cases/:id`.
+- **Implemented worker retry/backoff/dead-letter** — the `outcome.retryable`
+  signal flowing up from the email/fax/e-sign integration layer was
+  previously discarded; transient vendor failures became terminal on the
+  first try. The worker now re-queues retryable failures up to 5 times
+  with exponential backoff (2s → 4s → 8s → 16s → 32s) and parks
+  exhausted jobs in a new `dead_letter` terminal status. Stale
+  `processing` jobs (crashed worker, killed container) are likewise
+  reclaimed with retry_count incremented so a poison-pill job can no
+  longer loop forever. An admin requeue endpoint
+  (`POST /api/cases/worker/jobs/:id/requeue`) lets an operator restart
+  a dead-lettered job once the underlying issue is fixed.
 
-It does **not** change any column types, drop any data, or alter the API
-surface.
+It does **not** change any column types, drop any data, or alter the
+public API surface.
 
 ---
 
@@ -120,13 +132,74 @@ malformed IDs).
 
 ---
 
+## Reliability fix (this pass)
+
+### F1. Worker retry mechanism — FIXED THIS PASS
+**Before:** `job_queue.attempts` was declared as `serial("attempts")` —
+sequence-backed, assigned once at INSERT, never incremented. Nothing
+read or wrote it as a retry counter. `markJobFailed` set
+`status='failed'` and walked away, so the `outcome.retryable = true`
+signal flowing up from the email/fax/e-sign integration layer was
+silently discarded: a transient vendor 5xx was just as terminal as a
+non-retryable configuration error.
+
+**After:** Two additive columns on `job_queue` (the misdeclared
+`attempts` column is left in place to avoid disturbing existing rows):
+
+- `retry_count integer NOT NULL DEFAULT 0` — the real retry counter.
+- `next_attempt_at timestamp` — when the job is eligible to be claimed
+  again. `NULL` for fresh jobs (claim immediately).
+
+`markJobFailed(id, error, { retryable })` now:
+- If retryable AND `retry_count < 5` → re-queue the job:
+  `status='pending'`, increment `retry_count`, set
+  `next_attempt_at = NOW() + 2^retry_count` seconds (capped at 5 min),
+  clear `started_at`.
+- Otherwise → `status='dead_letter'` (new terminal state) and
+  `completed_at = NOW()`.
+
+`claimNextJob` filters on
+`(next_attempt_at IS NULL OR next_attempt_at <= NOW())`, served by a new
+composite index `job_queue_claim_ready_idx (status, next_attempt_at,
+created_at)` so the claim stays an index range scan as the queue grows.
+
+`reclaimStaleProcessingJobs` was upgraded too: a job stuck in
+`processing` for >5 minutes (crashed worker, killed container) is now
+returned to `pending` with `retry_count` incremented and
+`next_attempt_at` pushed out 5 seconds. If that bumps `retry_count`
+past `MAX_RETRIES` it goes straight to `dead_letter`, so a poison-pill
+job that consistently kills its worker can no longer loop forever.
+
+`POST /api/cases/worker/jobs/:id/requeue` (admin-only, audited) moves a
+dead-lettered job back to `pending` with `retry_count` reset to 0, so
+once the underlying issue is fixed the operator can recover the job
+without touching SQL. `getQueueStats` already groups by status, so the
+existing `/api/cases/worker/queue-stats` endpoint surfaces
+`dead_letter` counts automatically.
+
+**Idempotency note:** the bounded retry (max 5) pairs cleanly with the
+existing handlers, but isn't free of duplication risk:
+
+- `create_case` → idempotent (uses `onConflictDoNothing()` on PK).
+- `send_esign_packet`, `fax_med_records_request`,
+  `send_workflow_email` → idempotent at the integration layer
+  (envelope_id / external IDs deduplicate vendor-side; non-retryable
+  failures are swallowed before the worker sees them).
+- `process_fax` → idempotent (updates by primary key).
+- `ingest_file` and `analyze_case` → **not strictly idempotent** — a
+  retried run could insert a duplicate `case_documents` or `analysis`
+  row. Bounded by max 5 retries and visible via the audit log; a
+  proper content-hash guard is filed as a follow-up.
+
+---
+
 ## Findings deferred to follow-up tasks
 
 These are real perf/reliability problems but require schema changes or
 new infrastructure that is too large to land in an audit pass without
-broader review. Each is being filed as its own project task.
+broader review. Each is filed as its own project task.
 
-### F1. Worker has no real retry mechanism
+### Original F1 finding (kept for context, now resolved)
 `job_queue.attempts` is declared as `serial("attempts")` — that creates a
 sequence-backed column whose value is *assigned at INSERT*, not
 incremented per retry. There is no code anywhere that increments it, and
