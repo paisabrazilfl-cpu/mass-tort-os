@@ -96,9 +96,8 @@ function notFound(res: import("express").Response, what = "Lead not found") {
   res.status(404).json({ status: "error", code: "not_found", message: what });
 }
 function forbidden(res: import("express").Response, message = "Insufficient permissions") {
-  // Normalized envelope (Task #10): code is the SCREAMING_SNAKE_CASE constant
-  // matching lib/http-errors.ts so the CRM can switch on it without
-  // string-matching the human-readable message.
+  // Normalized envelope: SCREAMING_SNAKE code matches lib/http-errors.ts
+  // so the CRM can switch on it instead of string-matching the message.
   res.status(403).json({ status: "error", code: "FORBIDDEN", message });
 }
 

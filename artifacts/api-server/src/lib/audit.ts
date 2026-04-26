@@ -1,21 +1,11 @@
 import { db, auditLogTable } from "@workspace/db";
 import { logger } from "./logger";
 
-/**
- * Test-mode escape hatch (Task #10): the unit tests under
- * src/lib/__tests__/rbac.test.ts deliberately exercise dozens of denial
- * paths — each one fires off an audit insert. Letting those hit a real
- * pg pool keeps the event loop alive long after node:test has finished
- * its assertions and reports the file as "Promise resolution still pending".
- * When the test harness sets RBAC_DISABLE_AUDIT=1 we no-op cleanly.
- *
- * SAFETY: this flag is honoured ONLY when NODE_ENV is NOT one of
- * `production` / `staging` (i.e., it is gated to dev / test contexts).
- * If someone accidentally sets RBAC_DISABLE_AUDIT=1 in a deployed
- * environment, the gate refuses to suppress audit writes and the flag
- * is a no-op. We log a warning at module-load time so ops can grep
- * for the misconfiguration.
- */
+// Test-mode escape hatch: when RBAC_DISABLE_AUDIT=1 the audit insert is
+// a no-op so unit tests that exercise denial paths don't hold the pg pool
+// open past assertion time. Honoured ONLY in non-production / non-staging
+// — production-like processes ignore the flag and log a warning so an
+// accidental misconfiguration is greppable instead of silent.
 const NODE_ENV_FOR_AUDIT = process.env["NODE_ENV"];
 const IS_PROD_LIKE_FOR_AUDIT = NODE_ENV_FOR_AUDIT === "production" || NODE_ENV_FOR_AUDIT === "staging";
 const AUDIT_DISABLE_REQUESTED = process.env["RBAC_DISABLE_AUDIT"] === "1";

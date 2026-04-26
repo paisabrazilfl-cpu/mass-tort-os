@@ -317,10 +317,8 @@ describe("requirePermission()", () => {
     assert.equal((res.body as { code: string }).code, "UNAUTHENTICATED");
   });
 
-  // ---------------------------------------------------------------------------
-  // Variadic contract — task #10 explicitly requires `requirePermission(...perms)`
-  // with any-of semantics so callers can express "may view own OR view any".
-  // ---------------------------------------------------------------------------
+  // Variadic contract: requirePermission(...perms) is any-of so callers
+  // can express e.g. "may view own OR view any".
 
   test("variadic: passes when role grants ANY one of the listed perms (any-of)", async () => {
     // viewer has LEAD_VIEW_OWN but not LEAD_VIEW_ANY. The any-of gate must
@@ -551,6 +549,54 @@ describe("validateRouteTable (boot-time)", () => {
       /no authMiddleware in chain/,
     );
   });
+
+  test("path-scoped middleware does NOT authorize sibling paths in the same router", async () => {
+    // router.use("/admin", requireRole("admin")) must only credit
+    // routes whose path starts with /admin. A sibling like /public
+    // on the same router must still fail validation because the
+    // gate's regexp does not match its path.
+    const { validateRouteTable, labelRouter } = await import("../route-protection.js");
+    const Router = (await import("express")).Router;
+
+    const parent = Router();
+    const child = labelRouter(Router(), "scoped-test");
+    child.use(authMiddleware);
+    child.use("/admin", requireRole("admin"));
+    child.get("/admin/users", (_req, res) => res.json({ ok: true }));
+    child.get("/public", (_req, res) => res.json({ ok: true }));
+    parent.use("/scoped-test", child);
+
+    assert.throws(
+      () => validateRouteTable(parent),
+      /scoped-test.*GET \/public.*no requireRole/s,
+      "GET /public must fail validation because /admin-scoped requireRole does not cover it",
+    );
+  });
+
+  test("path-scoped middleware DOES authorize sibling paths whose path matches", async () => {
+    // The complement of the previous test: when both routes are under
+    // /admin, the path-scoped requireRole must satisfy the gate check
+    // for both — proving the validator's path matching works in both
+    // directions.
+    const { validateRouteTable, labelRouter } = await import("../route-protection.js");
+    const Router = (await import("express")).Router;
+
+    const parent = Router();
+    const child = labelRouter(Router(), "scoped-positive");
+    child.use(authMiddleware);
+    child.use("/admin", requireRole("admin"));
+    child.get("/admin/users", (_req, res) => res.json({ ok: true }));
+    child.get("/admin/audit", (_req, res) => res.json({ ok: true }));
+    parent.use("/scoped-positive", child);
+
+    const result = validateRouteTable(parent);
+    assert.equal(result.checked, 2);
+    assert.equal(result.protected, 2);
+    for (const entry of result.policy) {
+      assert.equal(entry.status, "role-gated");
+      assert.deepEqual(entry.requiredRoles, ["admin"]);
+    }
+  });
 });
 
 // =============================================================================
@@ -694,9 +740,9 @@ describe("isCaseVisibleToUser()", () => {
 // flip it inside this process. Instead we spawn a child node that sets
 // `NODE_ENV=production` BEFORE importing rbac, then asserts the
 // authMiddleware refuses an unauthenticated request — i.e. no dev shim
-// engages. This is the single most important regression for task #10:
-// the previous bug was a dev bypass active under `NODE_ENV !== "production"`,
-// which silently fired on staging, on test, and when the var was unset.
+// engages. Guards against the prior bug where the dev bypass fired
+// under `NODE_ENV !== "production"` (staging, test, and unset all
+// silently bypassed auth).
 // =============================================================================
 
 describe("production NODE_ENV refuses the dev-mode bypass", () => {

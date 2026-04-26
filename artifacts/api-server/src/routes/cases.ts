@@ -142,16 +142,10 @@ router.post("/:id/analyze", requireRole("paralegal"), async (req, res) => {
 });
 
 router.get("/", requireRole("viewer"), async (req, res) => {
-  // Ownership filter (Task #10):
-  //   - admin / attorney / paralegal:  see all cases (full caseload visibility,
-  //     audited by route-level auditAction on the mutating siblings).
-  //   - viewer (read-only role):       see ONLY cases they own
-  //     (created_by_user_id) OR are explicitly assigned to (assigned_to).
-  //
-  // Rationale: paralegals must triage the whole intake queue, so we do NOT
-  // restrict them. The viewer role is the only one with a per-row visibility
-  // shrink. Rows with both ownership columns NULL are treated as
-  // "no-assignment" — viewers do not see them, paralegal+ do.
+  // Ownership filter: viewer sees only rows they own (created_by_user_id)
+  // or are assigned to (assigned_to). paralegal/attorney/admin see all
+  // rows — paralegals must triage the whole intake queue. Rows with both
+  // ownership columns NULL are visible only to paralegal+.
   const user = req.user!;
   const isViewerOnly = user.role === "viewer";
   const rows = isViewerOnly
@@ -222,10 +216,8 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
     return;
   }
 
-  // Ownership check (Task #10): mirrors the GET / filter. Only the viewer
-  // role is restricted; paralegal+ see every case. Viewers are allowed
-  // through if they OWN (created_by_user_id) or are ASSIGNED TO
-  // (assigned_to) the case — same convention as the leads table.
+  // Ownership check: mirrors the GET / filter. Only the viewer role is
+  // restricted; paralegal+ see every case.
   // We emit 403 (not 404) so the CRM can show a clear "no access" banner;
   // case ids are opaque UUIDs so existence-leak is low-value.
   const user = req.user!;

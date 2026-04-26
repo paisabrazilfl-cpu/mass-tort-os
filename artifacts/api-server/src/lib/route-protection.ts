@@ -4,27 +4,17 @@ import { logger } from "./logger";
 /**
  * Boot-time route table validator. Refuses to start the process if any
  * non-public handler is missing a `requireRole` / `requirePermission` gate.
- *
- * The walker descends each router tracking two bits inherited from parent
- * routers:
- *   - hasAuth: an `authMiddleware` layer is mounted in the chain
- *   - hasGate: a `requireRole` / `requirePermission` layer is mounted
- *
  * For each terminal route, asserts `(hasAuth && hasGate)` unless the
- * router is tagged `markPublic(...)` or the route is in the per-router
- * `AUTH_ROUTE_EXCEPTIONS` / `AUTH_ONLY_ROUTES` allowlists below.
+ * router is `markPublic(...)` or the route is in `AUTH_ROUTE_EXCEPTIONS`
+ * or `AUTH_ONLY_ROUTES`.
  */
 
-// Module-LOCAL symbols (NOT registered via Symbol.for) — only this module
-// can mark or read them. That keeps the trust boundary inside this file:
-// a contributor cannot import a helper from elsewhere and forge a passing
-// validation by stamping their own router/middleware.
+// Module-local symbols (NOT registered via Symbol.for) so only this file can
+// stamp or read them — the trust boundary is the import surface.
 const PUBLIC_ROUTER_FLAG: unique symbol = Symbol("route-protection/public");
 const ROUTER_LABEL_FLAG: unique symbol = Symbol("route-protection/label");
 const AUTH_MIDDLEWARE_FLAG: unique symbol = Symbol("route-protection/auth");
 const GATE_MIDDLEWARE_FLAG: unique symbol = Symbol("route-protection/gate");
-// Carries the EFFECTIVE { kind: "role"|"permission", values: string[] }
-// for a gate middleware so the boot-time policy report can render it.
 const GATE_METADATA_FLAG: unique symbol = Symbol("route-protection/gate-metadata");
 
 export interface GateMetadata {
@@ -153,7 +143,12 @@ export interface RoutePolicyEntry {
 
 interface ExpressLayer {
   name?: string;
-  regexp?: RegExp;
+  // Express 5 marks unscoped (`router.use(fn)`) layers with `slash = true`.
+  // Express 4 marked them with `regexp.fast_slash = true`.
+  slash?: boolean;
+  regexp?: RegExp & { fast_slash?: boolean };
+  // Express 5: layer.match(path) → boolean. Express 4: regexp.test(path).
+  match?: (path: string) => boolean;
   handle?: unknown;
   route?: {
     path: string;
@@ -164,6 +159,42 @@ interface ExpressLayer {
 
 interface ExpressRouterLike {
   stack?: ExpressLayer[];
+}
+
+// A path-scoped middleware contribution accumulated while walking a router's
+// declaration order. Only applies to sibling routes whose path the layer's
+// matcher accepts (mirrors Express's runtime semantics).
+interface ScopedContribution {
+  matches: (path: string) => boolean;
+  hasAuth: boolean;
+  hasGate: boolean;
+  requiredRoles: string[];
+  requiredPermissions: string[];
+}
+
+// True for `router.use(handler)` (no path argument). Express 5 exposes a
+// boolean `slash` flag on the layer; Express 4 exposes `regexp.fast_slash`
+// (or the canonical source `^\/?(?=\/|$)`). When neither shape is present
+// we conservatively treat the layer as scoped — falsely classifying it as
+// unscoped would over-credit unrelated sibling routes.
+function isUnscopedLayer(layer: ExpressLayer): boolean {
+  if (typeof layer.slash === "boolean") return layer.slash;
+  const re = layer.regexp;
+  if (!re) return false;
+  if (re.fast_slash === true) return true;
+  return re.source === "^\\/?(?=\\/|$)";
+}
+
+// Build the path-match predicate for a path-scoped layer. Prefer Express 5's
+// `layer.match(path)` when present; fall back to the v4 regexp.
+function pathMatcherFor(layer: ExpressLayer): ((path: string) => boolean) | undefined {
+  if (typeof layer.match === "function") {
+    const fn = layer.match.bind(layer);
+    return (p) => Boolean(fn(p));
+  }
+  const re = layer.regexp;
+  if (re) return (p) => re.test(p);
+  return undefined;
 }
 
 function readGateMetadata(handle: unknown): GateMetadata | undefined {
@@ -200,11 +231,13 @@ function classifyHandlerNames(handlers: Array<{ handle?: unknown }>): {
   return { hasAuth, hasGate, requiredRoles, requiredPermissions };
 }
 
-/**
- * Walk a router's `stack` in declaration order, accumulating
- * auth/gate/role/perm state. Sub-routers recurse with inherited state;
- * terminal routes combine inherited state with their per-handler stack.
- */
+// Walk a router's `stack` in declaration order, accumulating auth/gate/role/
+// perm state. Unscoped middleware (`router.use(handler)`) is promoted to
+// inherited state for every subsequent sibling and sub-router. Path-scoped
+// middleware (`router.use("/admin", handler)`) is recorded as a scoped
+// contribution that only applies to siblings whose path the layer's regexp
+// matches — siblings that don't match are NOT credited with that layer's
+// auth/gate. Sub-routers do NOT inherit scoped contributions (conservative).
 function walkRouter(
   router: ExpressRouterLike,
   inherited: {
@@ -223,11 +256,33 @@ function walkRouter(
   let { hasAuth, hasGate } = inherited;
   const inheritedRoles = [...inherited.requiredRoles];
   const inheritedPerms = [...inherited.requiredPermissions];
+  const scopedLocal: ScopedContribution[] = [];
+
+  function applyScoped(routePath: string): {
+    hasAuth: boolean;
+    hasGate: boolean;
+    roles: string[];
+    perms: string[];
+  } {
+    let a = false;
+    let g = false;
+    const roles: string[] = [];
+    const perms: string[] = [];
+    for (const s of scopedLocal) {
+      if (s.matches(routePath)) {
+        if (s.hasAuth) a = true;
+        if (s.hasGate) g = true;
+        roles.push(...s.requiredRoles);
+        perms.push(...s.requiredPermissions);
+      }
+    }
+    return { hasAuth: a, hasGate: g, roles, perms };
+  }
 
   for (const layer of stack) {
     if (layer.route) {
-      // Terminal route on THIS router.
       const route = layer.route;
+      const sc = applyScoped(route.path);
       for (const method of Object.keys(route.methods)) {
         counters.checked++;
         const M = method.toUpperCase();
@@ -246,10 +301,10 @@ function walkRouter(
           continue;
         }
         const perRoute = classifyHandlerNames(route.stack);
-        const finalAuth = hasAuth || perRoute.hasAuth;
-        const finalGate = hasGate || perRoute.hasGate;
-        const finalRoles = [...inheritedRoles, ...perRoute.requiredRoles];
-        const finalPerms = [...inheritedPerms, ...perRoute.requiredPermissions];
+        const finalAuth = hasAuth || sc.hasAuth || perRoute.hasAuth;
+        const finalGate = hasGate || sc.hasGate || perRoute.hasGate;
+        const finalRoles = [...inheritedRoles, ...sc.roles, ...perRoute.requiredRoles];
+        const finalPerms = [...inheritedPerms, ...sc.perms, ...perRoute.requiredPermissions];
         if (!finalAuth) {
           issues.push({
             router: inherited.label,
@@ -316,15 +371,37 @@ function walkRouter(
       continue;
     }
 
-    // Plain middleware on this router. Update inherited state for downstream
-    // siblings — express applies layers in declaration order.
-    if (hasFlag(handle, AUTH_MIDDLEWARE_FLAG)) hasAuth = true;
-    if (hasFlag(handle, GATE_MIDDLEWARE_FLAG)) {
-      hasGate = true;
-      const meta = readGateMetadata(handle);
-      if (meta?.kind === "role") inheritedRoles.push(...meta.values);
-      if (meta?.kind === "permission") inheritedPerms.push(...meta.values);
+    // Plain middleware on this router. Unscoped layers (`router.use(fn)`)
+    // promote to inherited state for every subsequent sibling AND every
+    // sub-router. Path-scoped layers (`router.use("/admin", fn)`) become a
+    // scoped contribution that only applies to siblings whose path matches
+    // the layer's regexp.
+    const layerHasAuth = hasFlag(handle, AUTH_MIDDLEWARE_FLAG);
+    const layerHasGate = hasFlag(handle, GATE_MIDDLEWARE_FLAG);
+    if (!layerHasAuth && !layerHasGate) continue;
+    const meta = layerHasGate ? readGateMetadata(handle) : undefined;
+    const layerRoles = meta?.kind === "role" ? meta.values.map(String) : [];
+    const layerPerms = meta?.kind === "permission" ? meta.values.map(String) : [];
+
+    if (isUnscopedLayer(layer)) {
+      if (layerHasAuth) hasAuth = true;
+      if (layerHasGate) {
+        hasGate = true;
+        inheritedRoles.push(...layerRoles);
+        inheritedPerms.push(...layerPerms);
+      }
+      continue;
     }
+
+    const matches = pathMatcherFor(layer);
+    if (!matches) continue;
+    scopedLocal.push({
+      matches,
+      hasAuth: layerHasAuth,
+      hasGate: layerHasGate,
+      requiredRoles: layerRoles,
+      requiredPermissions: layerPerms,
+    });
   }
 }
 

@@ -1,10 +1,7 @@
-// MTOS Task #10 — booted-app role × route access matrix.
-//
-// Boots the real express app on an ephemeral port, inserts one ephemeral
-// user per role, mints a JWT for each, and asserts the actual HTTP outcome
-// for routes that span every trust boundary the validator recognises:
-// public, auth-exception, auth-only, role-gated. The route-policy report
-// from validateRouteTable is asserted directly so any drift fails the build.
+// Booted-app role × route access matrix. Spins up the real express app on
+// an ephemeral port, mints a JWT per role, and asserts the actual HTTP
+// outcome for routes that span every trust boundary the validator
+// recognises (public, auth-exception, auth-only, role-gated).
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";

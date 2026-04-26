@@ -3,28 +3,11 @@ import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
 import { workerLoop } from "./worker";
 
-// =============================================================================
-// Boot env validation (Task #10).
-//
-// The single biggest "silent" RBAC vulnerability we've shipped historically is
-// booting production with a dev-shaped environment — a missing SESSION_SECRET
-// lets express-session fall back to a generated key on every restart (logging
-// every user out), and a missing ENCRYPTION_KEY means the integrations
-// credential store can't decrypt tokens. We fail fast on boot so the
-// container restart loop alerts ops instead of running half-broken.
-//
-// `development` is the only mode allowed to skip these — it mirrors the
-// dev-gate in lib/rbac.ts so the two cannot drift apart.
-//
-// Strict semantics: NODE_ENV MUST be the literal string "development" for
-// IS_DEV to be true. We do NOT default unset NODE_ENV to "development" the
-// way a Node convention might suggest — that would cause the startup
-// banner's `dev_mode: true` to disagree with `rbac.ts`'s
-// `IS_DEV = NODE_ENV === "development"` (which evaluates to false for
-// `undefined`), creating a confusing posture-vs-enforcement drift in ops
-// telemetry. Unset / blank NODE_ENV is treated as production-like and
-// forces SESSION_SECRET / ENCRYPTION_KEY / DATABASE_URL to be set.
-// =============================================================================
+// Boot env validation. Fail fast in non-dev when SESSION_SECRET /
+// ENCRYPTION_KEY / DATABASE_URL are missing so the container restart loop
+// alerts ops instead of running half-broken. IS_DEV mirrors lib/rbac.ts:
+// only the literal string "development" enables dev-mode. Unset / blank
+// NODE_ENV is treated as production-like.
 const NODE_ENV = process.env["NODE_ENV"];
 const IS_DEV = NODE_ENV === "development";
 
@@ -59,8 +42,8 @@ app.listen(port, async (err) => {
     process.exit(1);
   }
 
-  // Startup banner (Task #10): a single log line that ops can grep for to
-  // confirm which security posture the process actually booted with.
+  // Single grep-friendly startup banner so ops can confirm the process's
+  // security posture at boot.
   logger.info(
     {
       port,

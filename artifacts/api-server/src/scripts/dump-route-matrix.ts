@@ -147,14 +147,10 @@ walk(routesIndex as unknown as { stack?: unknown[] }, "/api", "(root)", false, f
 
 rows.sort((a, b) => (a.router + a.path + a.method).localeCompare(b.router + b.path + b.method));
 
-// Audit doc requirement (4th-pass code review): the matrix MUST surface,
-// per route, the EFFECTIVE required role and permission(s), whether the
-// route writes an audit row on denial, and whether it sits on the public
-// allowlist. The "Audited" column is true for every authenticated route —
-// the auditDenial() hook in lib/rbac.ts fires from BOTH requireRole AND
-// requirePermission, so any role-gated or auth-only route logs denials.
-// Public routes (no auth gate at all) cannot produce a denial event by
-// definition and so are marked "—".
+// Per-route columns: effective required role / permission(s), public-
+// allowlist membership, and "audited on denial" (true for every
+// authenticated route since auditDenial() fires from requireRole AND
+// requirePermission; "—" for public routes that cannot produce a denial).
 console.log(
   "| Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |",
 );

@@ -78,10 +78,10 @@ async function processJob(job: {
         `Invalid payload: data must be an object or null (got ${Array.isArray(data) ? "array" : typeof data})`,
       );
     }
-    // RBAC ownership: the API enqueues `created_by_user_id` from req.user.id
-    // (Task #10). We accept null/undefined so legacy queue rows enqueued
-    // before this column existed do not dead-letter; cases without an owner
-    // are visible only to admin/attorney via the route-layer ownership filter.
+    // RBAC ownership: the API enqueues `created_by_user_id` from req.user.id.
+    // Null/undefined is accepted so legacy queue rows do not dead-letter;
+    // owner-less cases are visible only to admin/attorney via the route-layer
+    // ownership filter.
     const ownerUserId =
       typeof created_by_user_id === "number" && Number.isInteger(created_by_user_id) && created_by_user_id > 0
         ? created_by_user_id

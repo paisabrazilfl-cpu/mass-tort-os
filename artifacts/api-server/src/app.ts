@@ -95,13 +95,10 @@ app.use(idsMiddleware());
 
 app.use("/api", router);
 
-// Boot-time route table validator (Task #10). Walks the freshly-mounted
-// router and throws if any non-public terminal route is missing
-// authMiddleware or a requireRole/requirePermission gate. This is the
-// deny-by-default backstop — a contributor cannot ship an unprotected
-// handler, even if every other code review and lint rule misses it.
-// Synchronous + at module-load time so the process crashes BEFORE
-// app.listen() ever accepts a connection.
+// Deny-by-default backstop: walk the freshly-mounted router and throw if
+// any non-public terminal route is missing authMiddleware or a role /
+// permission gate. Synchronous + at module-load so the process crashes
+// before app.listen() accepts a connection.
 validateRouteTable(router as unknown as import("express").Router);
 
 // 404 for unknown /api/* routes — without this, Express falls through to
