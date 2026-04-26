@@ -29,6 +29,12 @@ import { dispatchCriticalAlert } from "../lib/security-alerts";
 
 const router = Router();
 
+// Reserved internal addresses that public registration must reject.
+// system@mtos.local identifies the case-ownership-backfill admin user;
+// allowing a viewer to register that email would let them inherit
+// ownership of every backfilled row.
+const RESERVED_EMAILS = new Set<string>(["system@mtos.local"]);
+
 // Inline zod schemas for auth payloads. The api-zod package does not currently
 // generate schemas for /auth/* (operations are tagged "auth" but body schemas
 // are too loose to be useful). Validating up front prevents undefined/non-string
@@ -116,11 +122,28 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  const [salt, hash] = stored.split(":");
+  // Fail closed on malformed stored hashes. The expected format is
+  // `${salt:hex}:${derivedKey:hex}` (see hashPassword above). A row that
+  // doesn't match — corrupted, manually-inserted, or a placeholder for a
+  // disabled account — must NEVER fall through to `Buffer.from(undefined,
+  // "hex")` or `crypto.timingSafeEqual` with mismatched lengths: both will
+  // throw and, because the throw originates inside the scrypt callback
+  // (off the request's promise chain), the rejection becomes an
+  // unhandled async error and a denial-of-service hazard. Returning
+  // `false` here keeps the auth surface honest: bad row ⇒ bad credentials.
+  if (typeof stored !== "string" || stored.length === 0) return false;
+  const idx = stored.indexOf(":");
+  if (idx <= 0 || idx === stored.length - 1) return false;
+  const salt = stored.slice(0, idx);
+  const hashHex = stored.slice(idx + 1);
+  // hex chars only and an even length, otherwise Buffer.from will pad/truncate silently.
+  if (hashHex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hashHex)) return false;
+  const expected = Buffer.from(hashHex, "hex");
+  if (expected.length !== 64) return false;
   return new Promise((resolve, reject) => {
     crypto.scrypt(password, salt, 64, (err, derivedKey) => {
       if (err) reject(err);
-      else resolve(crypto.timingSafeEqual(Buffer.from(hash, "hex"), derivedKey));
+      else resolve(crypto.timingSafeEqual(expected, derivedKey));
     });
   });
 }
@@ -220,6 +243,18 @@ router.post("/register", authRateLimit, async (req, res) => {
   const parsed = RegisterBody.safeParse(req.body);
   if (!parsed.success) { badRequest(res, parsed.error, "Email, password, and name required"); return; }
   const { email, password, name } = parsed.data;
+
+  // Block public registration of reserved/system addresses. Compared
+  // case-insensitively because email addresses are case-insensitive in
+  // practice and getUserByEmail normalizes already, but we don't want to
+  // depend on that for a security-critical check.
+  if (RESERVED_EMAILS.has(email.toLowerCase())) {
+    // Return the same 409 the duplicate-email path returns so this
+    // endpoint cannot be used as an oracle to enumerate reserved
+    // addresses.
+    res.status(409).json({ error: "Email already registered" });
+    return;
+  }
 
   const passwordError = validatePasswordComplexity(password);
   if (passwordError) { res.status(400).json({ error: passwordError }); return; }

@@ -6,13 +6,18 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Express, Router } from "express";
-import { db, pool } from "@workspace/db";
+import { db, pool, usersTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { generateToken, type UserRole } from "../rbac.js";
 import {
   validateRouteTable,
   type RoutePolicyEntry,
 } from "../route-protection.js";
+import {
+  backfillCaseOwnership,
+  ensureSystemUser,
+  inferOwnerFromAuditLog,
+} from "../case-ownership-backfill.js";
 
 // Audit writes off — rbac.test.ts covers the denial+audit-row path.
 process.env["RBAC_DISABLE_AUDIT"] = "1";
@@ -473,5 +478,258 @@ describe("viewer ownership filter on cases endpoints (HTTP path)", () => {
     } finally {
       await db.execute(sql`DELETE FROM cases WHERE id IN (${ownedId}, ${unownedId}, ${assignedId})`);
     }
+  });
+});
+
+// 7. Cases ownership backfill smoke test (Task #22).
+// Proves the historical-row remediation works end-to-end:
+//   1. A case with NULL `created_by_user_id` (the legacy state every
+//      pre-Task-#22 row was in) is invisible to viewers.
+//   2. After running `backfillCaseOwnership()`, the case is owned by
+//      the user recorded in the earliest audit-log entry (audit-log
+//      inference path) and the same viewer's GET /api/cases now lists it.
+// Restores the NOT NULL constraint at the end so it does not leak into
+// later test runs.
+
+describe("cases ownership backfill smoke test (Task #22)", () => {
+  test("legacy NULL-owner case becomes visible to its viewer after backfillCaseOwnership() recovers the owner from audit_log", async () => {
+    const viewer = ephemeralUsers.find((u) => u.role === "viewer");
+    if (!viewer) throw new Error("ephemeral viewer not initialised");
+
+    const legacyId = crypto.randomUUID();
+    let nullableDropped = false;
+    try {
+      // Drop NOT NULL so we can simulate the pre-backfill state. Wrapped
+      // in a try/finally below so a thrown assertion still re-applies it.
+      await db.execute(sql`ALTER TABLE cases ALTER COLUMN created_by_user_id DROP NOT NULL`);
+      nullableDropped = true;
+
+      // Insert the "legacy" row with NULL ownership — exactly the shape
+      // every pre-Task-#22 row was in.
+      await db.execute(sql`
+        INSERT INTO cases (id, data, status, created_by_user_id, assigned_to)
+        VALUES (${legacyId}, ${"{}"}::jsonb, ${"open"}, NULL, NULL)
+      `);
+
+      // Pre-backfill: viewer must NOT see the row (the OR-eq filter on
+      // a NULL column returns no rows for any positive user id).
+      const before = await probe("GET", "/api/cases", { token: viewer.token });
+      assert.equal(before.status, 200, `pre-backfill viewer GET /api/cases must be 200, got ${before.status}`);
+      const beforeIds = ((before.body as Array<{ id: string }>) ?? []).map((r) => r.id);
+      assert.ok(
+        !beforeIds.includes(legacyId),
+        `pre-backfill viewer must NOT see legacy NULL-owner case ${legacyId} — leaked: ${JSON.stringify(beforeIds)}`,
+      );
+
+      // Seed an audit_log row that records the viewer as the original
+      // creator. The backfill walks the earliest audit row per case and
+      // pulls `details.created_by_user_id` if present and points at a
+      // real user — exactly the shape `routes/cases.ts` writes today.
+      await db.execute(sql`
+        INSERT INTO audit_log (entity_type, entity_id, action, details, occurred_at)
+        VALUES (
+          ${"case"},
+          ${legacyId},
+          ${"intake_submitted"},
+          ${JSON.stringify({ created_by_user_id: viewer.id, data: {} })}::jsonb,
+          NOW() - INTERVAL '1 day'
+        )
+      `);
+
+      // The unit-level inference function should pick up the viewer.
+      const inferred = await inferOwnerFromAuditLog(legacyId);
+      assert.equal(
+        inferred,
+        viewer.id,
+        `inferOwnerFromAuditLog must recover viewer.id (${viewer.id}) from the seeded audit row, got ${String(inferred)}`,
+      );
+
+      // Run the backfill. It must scan our row, infer owner=viewer.id
+      // from the audit log, and write the update.
+      const result = await backfillCaseOwnership();
+      assert.ok(
+        result.scanned >= 1,
+        `backfillCaseOwnership must scan at least 1 row, got ${result.scanned}`,
+      );
+      assert.ok(
+        result.inferredFromAudit >= 1,
+        `backfillCaseOwnership must infer at least 1 row from audit log, got ${result.inferredFromAudit}`,
+      );
+
+      // DB-level check: the row's owner is now the viewer.
+      const ownerCheck = await db.execute(sql`
+        SELECT created_by_user_id FROM cases WHERE id = ${legacyId}
+      `);
+      const ownerRow = queryRows<{ created_by_user_id: number | null }>(ownerCheck)[0];
+      assert.equal(
+        ownerRow?.created_by_user_id,
+        viewer.id,
+        `post-backfill case ${legacyId} must be owned by viewer ${viewer.id}, got ${String(ownerRow?.created_by_user_id)}`,
+      );
+
+      // HTTP smoke: viewer GET /api/cases now lists the row.
+      const after = await probe("GET", "/api/cases", { token: viewer.token });
+      assert.equal(after.status, 200, `post-backfill viewer GET /api/cases must be 200, got ${after.status}`);
+      const afterIds = ((after.body as Array<{ id: string }>) ?? []).map((r) => r.id);
+      assert.ok(
+        afterIds.includes(legacyId),
+        `post-backfill viewer must see backfilled case ${legacyId} in list, got ${JSON.stringify(afterIds)}`,
+      );
+
+      // GET /:id round-trip — also 200.
+      const single = await probe("GET", `/api/cases/${legacyId}`, { token: viewer.token });
+      assert.equal(single.status, 200, `post-backfill viewer GET /api/cases/${legacyId} must be 200, got ${single.status}`);
+    } finally {
+      // Cleanup in reverse order: row → audit row → restore NOT NULL.
+      await db.execute(sql`DELETE FROM cases WHERE id = ${legacyId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM audit_log WHERE entity_type = ${"case"} AND entity_id = ${legacyId}`).catch(() => {});
+      if (nullableDropped) {
+        await db.execute(sql`ALTER TABLE cases ALTER COLUMN created_by_user_id SET NOT NULL`).catch(() => {});
+      }
+    }
+  });
+
+  // Pin both defenses against a system-email hijack:
+  //   (1) /api/auth/register rejects the reserved email with 409.
+  //   (2) ensureSystemUser refuses any existing row at that email
+  //       whose role is not admin.
+  test("public registration cannot hijack the system backfill email; ensureSystemUser refuses non-admin row", async () => {
+    // Make sure no system user row exists at the start so we can place a
+    // poisoned one. Save the prior id (and any cases already owned by it)
+    // so we can restore them in finally.
+    const prior = await db.execute(sql`SELECT id FROM mtos_users WHERE email = 'system@mtos.local'`);
+    const priorRow = queryRows<{ id: number }>(prior)[0];
+    let priorReassigned: Array<{ id: string }> = [];
+    let placedPoisonRow = false;
+    let poisonRowId: number | null = null;
+    try {
+      if (priorRow) {
+        // Park any cases pointing at the real system user under the
+        // poison row will fail FK if we try to delete it directly.
+        // Instead, drop NOT NULL momentarily, null them out, restore
+        // later. (audit_log has no FK on user id so we can leave it.)
+        await db.execute(sql`ALTER TABLE cases ALTER COLUMN created_by_user_id DROP NOT NULL`);
+        const owned = await db.execute(sql`SELECT id FROM cases WHERE created_by_user_id = ${priorRow.id}`);
+        priorReassigned = queryRows<{ id: string }>(owned);
+        if (priorReassigned.length > 0) {
+          await db.execute(sql`UPDATE cases SET created_by_user_id = NULL WHERE created_by_user_id = ${priorRow.id}`);
+        }
+        await db.execute(sql`DELETE FROM mtos_users WHERE id = ${priorRow.id}`);
+      }
+
+      // Defense (1): /api/auth/register must reject the reserved email.
+      const regResp = await probe("POST", "/api/auth/register", {
+        body: {
+          email: "system@mtos.local",
+          password: "Sup3r$ecret!Pa$$w0rd-attempt-1",
+          name: "Attacker",
+        },
+      });
+      assert.equal(
+        regResp.status,
+        409,
+        `register MUST reject reserved system@mtos.local with 409 (duplicate-email parity), got ${regResp.status} (body: ${JSON.stringify(regResp.body)})`,
+      );
+      // ...and not because a row actually exists yet — confirm none was created.
+      const afterRegister = await db.execute(sql`SELECT id FROM mtos_users WHERE email = 'system@mtos.local'`);
+      assert.equal(
+        queryRows(afterRegister).length,
+        0,
+        "register handler must not create a row when the reserved-email guard rejects",
+      );
+
+      // Defense (2): manually plant a poisoned viewer row at the reserved
+      // email (simulating an attacker who bypassed the register guard via
+      // some other write path) and prove ensureSystemUser refuses to
+      // trust it.
+      const poison = await db
+        .insert(usersTable)
+        .values({
+          email: "system@mtos.local",
+          name: "Poisoned",
+          role: "viewer",
+          // Properly-formatted hash so we exercise the role check, not
+          // the verifyPassword path.
+          password_hash:
+            "abcdef0123456789abcdef0123456789:" + "0".repeat(128),
+        })
+        .returning({ id: usersTable.id });
+      poisonRowId = poison[0]?.id ?? null;
+      placedPoisonRow = true;
+
+      let threw = false;
+      try {
+        await ensureSystemUser();
+      } catch (err) {
+        threw = true;
+        assert.match(
+          (err as Error).message,
+          /role=viewer/,
+          `ensureSystemUser must mention the rejected role in its error, got: ${(err as Error).message}`,
+        );
+      }
+      assert.equal(
+        threw,
+        true,
+        "ensureSystemUser MUST throw when the existing row at the reserved email is non-admin",
+      );
+
+      // And the poisoned row must NOT have inherited ownership of any
+      // case (the backfill should not even have been allowed to run).
+      if (poisonRowId !== null) {
+        const owned = await db.execute(
+          sql`SELECT id FROM cases WHERE created_by_user_id = ${poisonRowId}`,
+        );
+        assert.equal(
+          queryRows(owned).length,
+          0,
+          "poisoned viewer row must not own any cases after the failed ensureSystemUser",
+        );
+      }
+    } finally {
+      // Tear the poison row down.
+      if (placedPoisonRow && poisonRowId !== null) {
+        await db.execute(sql`DELETE FROM mtos_users WHERE id = ${poisonRowId}`).catch(() => {});
+      }
+      // Re-create a real system user via the now-clean path so the
+      // earlier smoke test's invariants (NOT NULL on created_by_user_id)
+      // remain satisfied.
+      const restoredId = await ensureSystemUser();
+      // Re-attach any previously orphaned cases to the restored system user.
+      if (priorReassigned.length > 0) {
+        for (const r of priorReassigned) {
+          await db
+            .execute(sql`UPDATE cases SET created_by_user_id = ${restoredId} WHERE id = ${r.id}`)
+            .catch(() => {});
+        }
+      }
+      // Restore NOT NULL if we dropped it.
+      if (priorRow) {
+        await db
+          .execute(sql`ALTER TABLE cases ALTER COLUMN created_by_user_id SET NOT NULL`)
+          .catch(() => {});
+      }
+    }
+  });
+
+  // Pin both legs of the login-DoS fix: ensureSystemUser stores a valid
+  // salt:hash, and verifyPassword fails closed on malformed input. A
+  // login as system@mtos.local must always cleanly 401, never 5xx.
+  test("login attempt as the system backfill user returns 401 (no crash from malformed hash)", async () => {
+    // Make sure the system user actually exists before we probe login;
+    // otherwise we'd just be testing the "unknown email" path which
+    // returns 401 unconditionally and would mask any real regression.
+    await ensureSystemUser();
+
+    const resp = await probe("POST", "/api/auth/login", {
+      body: { email: "system@mtos.local", password: "obviously-wrong-password-1!" },
+    });
+
+    assert.equal(
+      resp.status,
+      401,
+      `login as system user must return 401, got ${resp.status} (body: ${JSON.stringify(resp.body)}). ` +
+        `If this is 500 the password_hash format is wrong and verifyPassword crashed.`,
+    );
   });
 });

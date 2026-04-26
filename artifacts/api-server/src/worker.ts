@@ -15,6 +15,7 @@ import { preprocessFaxBuffer, base64ToBuffer, detectMimeType } from "./lib/ocr-p
 import { extractOcrData } from "./lib/ai-ocr";
 import { withErrorFallback, createLoopGuard, DEFAULT_LIMITS } from "./lib/error-fallback";
 import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail } from "./lib/workflow-handlers";
+import { ensureSystemUser } from "./lib/case-ownership-backfill";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -79,13 +80,15 @@ async function processJob(job: {
       );
     }
     // RBAC ownership: the API enqueues `created_by_user_id` from req.user.id.
-    // Null/undefined is accepted so legacy queue rows do not dead-letter;
-    // owner-less cases are visible only to admin/attorney via the route-layer
-    // ownership filter.
-    const ownerUserId =
-      typeof created_by_user_id === "number" && Number.isInteger(created_by_user_id) && created_by_user_id > 0
-        ? created_by_user_id
-        : null;
+    // Post-Task #22 the column is NOT NULL, so we can no longer accept a
+    // null/undefined value without dead-lettering. Instead we fall back to
+    // the designated "system" backfill user — same identity Task #22's
+    // historical-row backfill used. That keeps queued rows from older API
+    // builds (and dev-mode requests where req.user.id is 0) processable
+    // without leaking those rows to a real viewer.
+    const isRealUserId =
+      typeof created_by_user_id === "number" && Number.isInteger(created_by_user_id) && created_by_user_id > 0;
+    const ownerUserId = isRealUserId ? created_by_user_id : await ensureSystemUser();
     await db
       .insert(casesTable)
       .values({
