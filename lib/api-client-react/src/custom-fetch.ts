@@ -17,6 +17,19 @@ const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 
 let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
+let _onUnauthorized: OnUnauthorized | null = null;
+
+/**
+ * Hook invoked once when a request gets back a 401. The hook is expected to
+ * attempt a token refresh; if it returns a non-null string, the original
+ * request is retried exactly once with the new bearer. If it returns `null`,
+ * the original 401 propagates as an `ApiError` to the caller.
+ *
+ * Used by the web app to share a single-flight refresh manager between
+ * generated React Query hooks (which call `customFetch` directly) and the
+ * higher-level `apiFetch` / `apiFetchRaw` wrappers.
+ */
+export type OnUnauthorized = () => Promise<string | null>;
 
 /**
  * Set a base URL that is prepended to every relative request URL
@@ -42,6 +55,18 @@ export function setBaseUrl(url: string | null): void {
  */
 export function setAuthTokenGetter(getter: AuthTokenGetter | null): void {
   _authTokenGetter = getter;
+}
+
+/**
+ * Register a hook that runs whenever any request returns 401. The hook should
+ * attempt to refresh credentials and resolve to the new bearer token (or
+ * `null` on failure). When a token is returned, `customFetch` retries the
+ * original request exactly once with the fresh bearer.
+ *
+ * Pass `null` to clear.
+ */
+export function setOnUnauthorized(fn: OnUnauthorized | null): void {
+  _onUnauthorized = fn;
 }
 
 function isRequest(input: RequestInfo | URL): input is Request {
@@ -360,7 +385,17 @@ export async function customFetch<T = unknown>(
 
   const requestInfo = { method, url: resolveUrl(input) };
 
-  const response = await fetch(input, { ...init, method, headers });
+  let response = await fetch(input, { ...init, method, headers });
+
+  // One-shot 401 → refresh + retry. Any further 401 propagates as ApiError.
+  if (response.status === 401 && _onUnauthorized) {
+    const newToken = await _onUnauthorized();
+    if (newToken) {
+      const retryHeaders = new Headers(headers);
+      retryHeaders.set("authorization", `Bearer ${newToken}`);
+      response = await fetch(input, { ...init, method, headers: retryHeaders });
+    }
+  }
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);

@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AlertTriangle, TrendingUp, TrendingDown, Minus, RefreshCw, Settings, ExternalLink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface PortfolioRow {
   tort_id: string;
@@ -55,7 +56,7 @@ export default function DecisionEnginePage() {
   const { data, isLoading, error } = useQuery<PortfolioSummary>({
     queryKey: ["decision-engine", "portfolio"],
     queryFn: async () => {
-      const res = await fetch("/api/decision-engine/portfolio", { credentials: "include" });
+      const res = await apiFetchRaw("/api/decision-engine/portfolio", { credentials: "include" });
       if (!res.ok) throw new Error(`portfolio failed: ${res.status}`);
       return res.json();
     },
@@ -63,7 +64,7 @@ export default function DecisionEnginePage() {
 
   const recomputeAll = useMutation({
     mutationFn: async () => {
-      const res = await fetch("/api/decision-engine/recompute-all", { method: "POST", credentials: "include" });
+      const res = await apiFetchRaw("/api/decision-engine/recompute-all", { method: "POST", credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },

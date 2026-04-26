@@ -15,6 +15,7 @@ import {
   Printer, ScanText, MapPin, ShieldCheck, UserCheck, CreditCard, Database,
   Calendar as CalendarIcon, Briefcase, TrendingUp, Bot, Globe, Zap, Shield,
 } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface Preset {
   provider: string;
@@ -114,8 +115,8 @@ export default function Integrations() {
     setLoading(true);
     try {
       const [presetsRes, integrationsRes] = await Promise.all([
-        fetch("/api/integrations/presets"),
-        fetch("/api/integrations"),
+        apiFetchRaw("/api/integrations/presets"),
+        apiFetchRaw("/api/integrations"),
       ]);
       setPresets(await presetsRes.json());
       setIntegrations(await integrationsRes.json());
@@ -185,7 +186,7 @@ export default function Integrations() {
     const body = isCustom
       ? formData
       : { ...formData, type: selectedPreset?.type, provider: selectedPreset?.provider };
-    const res = await fetch("/api/integrations", {
+    const res = await apiFetchRaw("/api/integrations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -202,7 +203,7 @@ export default function Integrations() {
 
   const testIntegration = async (id: number) => {
     setTesting(id);
-    const res = await fetch(`/api/integrations/${id}/test`, { method: "POST" });
+    const res = await apiFetchRaw(`/api/integrations/${id}/test`, { method: "POST" });
     const data = await res.json();
     toast({
       title: data.success ? "Connection verified" : "Connection failed",
@@ -215,7 +216,7 @@ export default function Integrations() {
 
   const syncIntegration = async (id: number) => {
     setSyncing(id);
-    const res = await fetch(`/api/integrations/${id}/sync`, { method: "POST" });
+    const res = await apiFetchRaw(`/api/integrations/${id}/sync`, { method: "POST" });
     const data = await res.json();
     toast({ title: "Sync complete", description: `${data.records_synced} records (${data.direction})` });
     setSyncing(null);
@@ -224,7 +225,7 @@ export default function Integrations() {
 
   const deleteIntegration = async (id: number) => {
     if (!confirm("Disconnect this integration?")) return;
-    await fetch(`/api/integrations/${id}`, { method: "DELETE" });
+    await apiFetchRaw(`/api/integrations/${id}`, { method: "DELETE" });
     toast({ title: "Disconnected" });
     fetchData();
   };

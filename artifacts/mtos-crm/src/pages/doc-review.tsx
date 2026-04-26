@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { AlertTriangle, CheckCircle, XCircle, FileSearch, Search } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface FieldComparison {
   field: string;
@@ -28,7 +29,7 @@ export default function DocReview() {
   const loadLead = async () => {
     if (!leadId) return;
     try {
-      const res = await fetch(`/api/leads/${leadId}`);
+      const res = await apiFetchRaw(`/api/leads/${leadId}`);
       if (!res.ok) throw new Error("Lead not found");
       setLeadData(await res.json());
     } catch {
@@ -39,7 +40,7 @@ export default function DocReview() {
   const loadOcr = async () => {
     if (!faxId) return;
     try {
-      const res = await fetch(`/api/ocr/results/${faxId}`);
+      const res = await apiFetchRaw(`/api/ocr/results/${faxId}`);
       if (!res.ok) throw new Error("OCR result not found");
       setOcrData(await res.json());
     } catch {
@@ -51,7 +52,7 @@ export default function DocReview() {
     if (!faxId) return;
     setAnalyzing(true);
     try {
-      const res = await fetch(`/api/ocr/ai-fields/result/${faxId}`, { method: "POST" });
+      const res = await apiFetchRaw(`/api/ocr/ai-fields/result/${faxId}`, { method: "POST" });
       if (!res.ok) throw new Error("Analysis failed");
       setAiFields(await res.json());
     } catch {

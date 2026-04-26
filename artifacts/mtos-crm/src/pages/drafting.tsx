@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, Download, Sparkles, Copy } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface Template {
   id: string;
@@ -37,14 +38,14 @@ export default function Drafting() {
   const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   useEffect(() => {
-    fetch("/api/drafting/templates").then(r => r.json()).then(setTemplates).catch(() => {});
+    apiFetchRaw("/api/drafting/templates").then(r => r.json()).then(setTemplates).catch(() => {});
   }, []);
 
   const generateDraft = async () => {
     if (!selectedTemplate) { toast({ title: "Select a template", variant: "destructive" }); return; }
     setGenerating(true);
     try {
-      const res = await fetch("/api/drafting/generate", {
+      const res = await apiFetchRaw("/api/drafting/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -70,7 +71,7 @@ export default function Drafting() {
     if (!selectedTemplate) return;
     setDownloadingPdf(true);
     try {
-      const res = await fetch("/api/drafting/generate-pdf", {
+      const res = await apiFetchRaw("/api/drafting/generate-pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

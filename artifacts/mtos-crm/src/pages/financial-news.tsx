@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { TrendingUp, ExternalLink, RefreshCw, Search, Clock, DollarSign } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface Article {
   title: string;
@@ -44,7 +45,7 @@ export default function FinancialNews() {
   const fetchNews = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/news/financial");
+      const res = await apiFetchRaw("/api/news/financial");
       if (!res.ok) throw new Error("Failed");
       setArticles(await res.json());
     } catch {

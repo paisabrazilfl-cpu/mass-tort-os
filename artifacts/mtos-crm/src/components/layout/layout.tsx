@@ -1,19 +1,38 @@
-import { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Sidebar } from "./sidebar";
+import { SidebarNav } from "./sidebar-nav";
+import { TopBar } from "./top-bar";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 interface LayoutProps {
   children: ReactNode;
 }
 
 export function Layout({ children }: LayoutProps) {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-background">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-          {children}
-        </div>
-      </main>
+
+      <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <SheetContent side="left" className="w-72 bg-sidebar p-0 md:hidden">
+          <SheetHeader className="border-b border-sidebar-border px-4 py-3">
+            <SheetTitle className="text-sidebar-foreground">MTOS</SheetTitle>
+            <SheetDescription className="sr-only">Primary navigation</SheetDescription>
+          </SheetHeader>
+          <SidebarNav onNavigate={() => setSidebarOpen(false)} />
+        </SheetContent>
+      </Sheet>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar onOpenSidebar={() => setSidebarOpen(true)} />
+        <main id="main" className="flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+            {children}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

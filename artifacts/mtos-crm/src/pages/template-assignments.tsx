@@ -4,6 +4,8 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Grid3x3 } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Template { id: number; name: string; template_type: string; active: boolean }
 interface Buyer { id: number; name: string }
@@ -30,10 +32,10 @@ export default function TemplateAssignmentsPage() {
     setLoading(true);
     try {
       const [tRes, bRes, aRes, fRes] = await Promise.all([
-        fetch("/api/document-templates"),
-        fetch("/api/buyers"),
-        fetch("/api/document-templates/assignments/all"),
-        fetch("/api/forms/config"),
+        apiFetchRaw("/api/document-templates"),
+        apiFetchRaw("/api/buyers"),
+        apiFetchRaw("/api/document-templates/assignments/all"),
+        apiFetchRaw("/api/forms/config"),
       ]);
       setTemplates(await tRes.json());
       setBuyers(await bRes.json());
@@ -76,7 +78,7 @@ export default function TemplateAssignmentsPage() {
     const key = `${templateId}|${tortId}|${selectedBuyer ?? "global"}`;
     setSavingKey(key);
     try {
-      const res = await fetch("/api/document-templates/assignments", {
+      const res = await apiFetchRaw("/api/document-templates/assignments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -145,7 +147,11 @@ export default function TemplateAssignmentsPage() {
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {loading ? (
-            <p className="text-muted-foreground">Loading…</p>
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
           ) : templates.length === 0 || torts.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {templates.length === 0 ? "No templates configured. " : ""}

@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, FileSpreadsheet, CheckCircle2, XCircle, AlertTriangle, Copy, RefreshCw, ArrowRight, ChevronDown, ChevronUp } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface ImportBatch {
   id: number;
@@ -59,7 +60,7 @@ export default function LeadImport() {
 
   const fetchBatches = useCallback(async () => {
     try {
-      const res = await fetch("/api/lead-import/batches");
+      const res = await apiFetchRaw("/api/lead-import/batches");
       if (res.ok) setBatches(await res.json());
     } catch {}
   }, []);
@@ -88,7 +89,7 @@ export default function LeadImport() {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/lead-import/preview", {
+      const res = await apiFetchRaw("/api/lead-import/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ csv_data: text }),
@@ -113,7 +114,7 @@ export default function LeadImport() {
   const handleExecuteImport = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/lead-import/execute", {
+      const res = await apiFetchRaw("/api/lead-import/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -143,7 +144,7 @@ export default function LeadImport() {
   const pollBatchStatus = async (batchId: number) => {
     const poll = async () => {
       try {
-        const res = await fetch(`/api/lead-import/batches/${batchId}`);
+        const res = await apiFetchRaw(`/api/lead-import/batches/${batchId}`);
         if (!res.ok) return;
         const data = await res.json();
         const { rows, ...batch } = data;
@@ -163,7 +164,7 @@ export default function LeadImport() {
 
   const handleViewBatch = async (batchId: number) => {
     try {
-      const res = await fetch(`/api/lead-import/batches/${batchId}`);
+      const res = await apiFetchRaw(`/api/lead-import/batches/${batchId}`);
       if (!res.ok) return;
       const data = await res.json();
       const { rows, ...batch } = data;

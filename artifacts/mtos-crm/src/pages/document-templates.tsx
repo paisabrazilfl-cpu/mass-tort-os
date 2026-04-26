@@ -10,6 +10,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, Plus, Pencil, Trash2, Upload, Eye } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Template {
   id: number;
@@ -49,7 +51,7 @@ export default function DocumentTemplatesPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/document-templates");
+      const res = await apiFetchRaw("/api/document-templates");
       setTemplates(await res.json());
     } finally {
       setLoading(false);
@@ -66,7 +68,7 @@ export default function DocumentTemplatesPage() {
     try {
       const buffer = await file.arrayBuffer();
       const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-      const res = await fetch("/api/document-templates/upload", {
+      const res = await apiFetchRaw("/api/document-templates/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileName: file.name, base64 }),
@@ -99,7 +101,7 @@ export default function DocumentTemplatesPage() {
     }
     const isEdit = typeof editing.id === "number";
     const url = isEdit ? `/api/document-templates/${editing.id}` : "/api/document-templates";
-    const res = await fetch(url, {
+    const res = await apiFetchRaw(url, {
       method: isEdit ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(editing),
@@ -117,7 +119,7 @@ export default function DocumentTemplatesPage() {
 
   const remove = async (id: number) => {
     if (!confirm("Delete this template? Existing envelopes are not affected.")) return;
-    const res = await fetch(`/api/document-templates/${id}`, { method: "DELETE" });
+    const res = await apiFetchRaw(`/api/document-templates/${id}`, { method: "DELETE" });
     if (!res.ok) {
       toast({ title: "Delete failed", variant: "destructive" });
       return;
@@ -144,7 +146,11 @@ export default function DocumentTemplatesPage() {
         <CardHeader><CardTitle>All Templates ({templates.length})</CardTitle></CardHeader>
         <CardContent>
           {loading ? (
-            <p className="text-muted-foreground">Loading…</p>
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
           ) : templates.length === 0 ? (
             <p className="text-sm text-muted-foreground">No templates yet. Add a HIPAA, Affidavit, and Retainer to get started.</p>
           ) : (

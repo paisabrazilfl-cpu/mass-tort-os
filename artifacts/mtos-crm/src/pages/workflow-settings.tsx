@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Settings, Save, AlertTriangle } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface ProviderOption { id: number; name: string; provider: string; adapter_implemented: boolean }
 interface ProviderOptions { esign: ProviderOption[]; fax: ProviderOption[]; email: ProviderOption[] }
@@ -57,8 +59,8 @@ export default function WorkflowSettingsPage() {
     (async () => {
       try {
         const [sRes, oRes] = await Promise.all([
-          fetch("/api/workflow-settings/global"),
-          fetch("/api/workflow-settings/_options/providers"),
+          apiFetchRaw("/api/workflow-settings/global"),
+          apiFetchRaw("/api/workflow-settings/_options/providers"),
         ]);
         if (sRes.ok) {
           const row = await sRes.json();
@@ -74,7 +76,7 @@ export default function WorkflowSettingsPage() {
   const save = async () => {
     setSaving(true);
     try {
-      const res = await fetch("/api/workflow-settings", {
+      const res = await apiFetchRaw("/api/workflow-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(s),
@@ -116,7 +118,13 @@ export default function WorkflowSettingsPage() {
     </div>
   );
 
-  if (loading) return <div className="p-6">Loading…</div>;
+  if (loading) return (
+    <div className="p-6 space-y-3">
+      <Skeleton className="h-8 w-64" />
+      <Skeleton className="h-32 w-full" />
+      <Skeleton className="h-32 w-full" />
+    </div>
+  );
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">

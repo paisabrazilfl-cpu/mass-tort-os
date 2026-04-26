@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { TrendingUp, TrendingDown, Minus, AlertTriangle, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface ConvexityCardProps {
   leadId: number;
@@ -80,7 +81,7 @@ export function ConvexityCard(props: ConvexityCardProps) {
 
   const recompute = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`/api/decision-engine/leads/${props.leadId}/recompute`, {
+      const res = await apiFetchRaw(`/api/decision-engine/leads/${props.leadId}/recompute`, {
         method: "POST",
         credentials: "include",
       });

@@ -1,10 +1,19 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
+import { QueryCache, QueryClient, QueryClientProvider, MutationCache } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ApiError } from "@workspace/api-client-react";
 import NotFound from "@/pages/not-found";
 
 import { Layout } from "@/components/layout/layout";
+import { RouteErrorBoundary } from "@/components/layout/route-error-boundary";
+import { RequireAuth } from "@/components/auth/require-auth";
+import { AuthProvider } from "@/contexts/auth-context";
+import { toast } from "@/hooks/use-toast";
+import { describeError } from "@/lib/api-fetch";
+
+import LoginPage from "@/pages/login";
+import LoginMfaPage from "@/pages/login-mfa";
 import Dashboard from "@/pages/dashboard";
 import Pipeline from "@/pages/pipeline";
 import Leads from "@/pages/leads";
@@ -38,59 +47,105 @@ import DocumentTemplatesPage from "@/pages/document-templates";
 import TemplateAssignmentsPage from "@/pages/template-assignments";
 import WorkflowSettingsPage from "@/pages/workflow-settings";
 
-const queryClient = new QueryClient();
+// Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
+// 401s are handled separately by api-fetch's auth-failure callback.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 30_000 },
+    mutations: { retry: 0 },
+  },
+  queryCache: new QueryCache({
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 401) return;
+      toast({
+        title: "Couldn't load data",
+        description: describeError(err),
+        variant: "destructive",
+      });
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 401) return;
+      toast({
+        title: "Action failed",
+        description: describeError(err),
+        variant: "destructive",
+      });
+    },
+  }),
+});
+
+function AuthedRoutes() {
+  const [location] = useLocation();
+  return (
+    <Layout>
+      <RouteErrorBoundary resetKey={location}>
+        <Switch>
+          <Route path="/" component={Dashboard} />
+          <Route path="/pipeline" component={Pipeline} />
+          <Route path="/leads" component={Leads} />
+          <Route path="/leads/new" component={LeadIntake} />
+          <Route path="/leads/:id" component={LeadDetail} />
+          <Route path="/paralegals" component={Paralegals} />
+          <Route path="/documents" component={Documents} />
+          <Route path="/ocr-inbox" component={OcrInbox} />
+          <Route path="/npi-lookup" component={NpiLookup} />
+          <Route path="/review-queue" component={ReviewQueue} />
+          <Route path="/cases" component={Cases} />
+          <Route path="/cases/new" component={CaseNew} />
+          <Route path="/cases/:id" component={CaseDetail} />
+          <Route path="/analytics" component={Analytics} />
+          <Route path="/compliance" component={Compliance} />
+          <Route path="/form-engine" component={FormEngine} />
+          <Route path="/vendors" component={Vendors} />
+          <Route path="/security" component={Security} />
+          <Route path="/doc-review" component={DocReview} />
+          <Route path="/timeline" component={Timeline} />
+          <Route path="/drafting" component={Drafting} />
+          <Route path="/predictive" component={Predictive} />
+          <Route path="/integrations" component={IntegrationsPage} />
+          <Route path="/news" component={News} />
+          <Route path="/financial-news" component={FinancialNews} />
+          <Route path="/lead-import" component={LeadImport} />
+          <Route path="/decision-engine" component={DecisionEnginePage} />
+          <Route path="/decision-engine/settings" component={DecisionEngineSettings} />
+          <Route path="/buyers" component={BuyersPage} />
+          <Route path="/document-templates" component={DocumentTemplatesPage} />
+          <Route path="/template-assignments" component={TemplateAssignmentsPage} />
+          <Route path="/workflow-settings" component={WorkflowSettingsPage} />
+          <Route component={NotFound} />
+        </Switch>
+      </RouteErrorBoundary>
+    </Layout>
+  );
+}
 
 function Router() {
   return (
-    <Layout>
-      <Switch>
-        <Route path="/" component={Dashboard} />
-        <Route path="/pipeline" component={Pipeline} />
-        <Route path="/leads" component={Leads} />
-        <Route path="/leads/new" component={LeadIntake} />
-        <Route path="/leads/:id" component={LeadDetail} />
-        <Route path="/paralegals" component={Paralegals} />
-        <Route path="/documents" component={Documents} />
-        <Route path="/ocr-inbox" component={OcrInbox} />
-        <Route path="/npi-lookup" component={NpiLookup} />
-        <Route path="/review-queue" component={ReviewQueue} />
-        <Route path="/cases" component={Cases} />
-        <Route path="/cases/new" component={CaseNew} />
-        <Route path="/cases/:id" component={CaseDetail} />
-        <Route path="/analytics" component={Analytics} />
-        <Route path="/compliance" component={Compliance} />
-        <Route path="/form-engine" component={FormEngine} />
-        <Route path="/vendors" component={Vendors} />
-        <Route path="/security" component={Security} />
-        <Route path="/doc-review" component={DocReview} />
-        <Route path="/timeline" component={Timeline} />
-        <Route path="/drafting" component={Drafting} />
-        <Route path="/predictive" component={Predictive} />
-        <Route path="/integrations" component={IntegrationsPage} />
-        <Route path="/news" component={News} />
-        <Route path="/financial-news" component={FinancialNews} />
-        <Route path="/lead-import" component={LeadImport} />
-        <Route path="/decision-engine" component={DecisionEnginePage} />
-        <Route path="/decision-engine/settings" component={DecisionEngineSettings} />
-        <Route path="/buyers" component={BuyersPage} />
-        <Route path="/document-templates" component={DocumentTemplatesPage} />
-        <Route path="/template-assignments" component={TemplateAssignmentsPage} />
-        <Route path="/workflow-settings" component={WorkflowSettingsPage} />
-        <Route component={NotFound} />
-      </Switch>
-    </Layout>
+    <Switch>
+      <Route path="/login" component={LoginPage} />
+      <Route path="/login/mfa" component={LoginMfaPage} />
+      <Route>
+        <RequireAuth>
+          <AuthedRoutes />
+        </RequireAuth>
+      </Route>
+    </Switch>
   );
 }
 
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Router />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
+      <AuthProvider>
+        <TooltipProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+            <Router />
+          </WouterRouter>
+          <Toaster />
+        </TooltipProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

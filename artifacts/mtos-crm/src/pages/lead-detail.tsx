@@ -17,6 +17,7 @@ import {
   AlertTriangle, Download, Brain, Save, RefreshCw, Shield, User,
   MapPin, Phone, Mail, Building2, Stethoscope, Scale, Activity, Zap
 } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 import { EnvelopeTimeline } from "@/components/envelope-timeline";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
@@ -151,7 +152,7 @@ export default function LeadDetail() {
   const handleSaveNotes = async () => {
     setSavingNotes(true);
     try {
-      const res = await fetch(`/api/leads/${leadId}/notes`, {
+      const res = await apiFetchRaw(`/api/leads/${leadId}/notes`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notes: notes || "" }),
@@ -172,7 +173,7 @@ export default function LeadDetail() {
     const maxRetries = 3;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const res = await fetch(`/api/leads/${leadId}/intelligence`, {
+        const res = await apiFetchRaw(`/api/leads/${leadId}/intelligence`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         });
@@ -199,7 +200,7 @@ export default function LeadDetail() {
   const fetchLensScore = useCallback(async () => {
     setLensLoading(true);
     try {
-      const res = await fetch(`/api/analytics/predictive/lead/${leadId}`);
+      const res = await apiFetchRaw(`/api/analytics/predictive/lead/${leadId}`);
       if (res.ok) {
         setLensScore(await res.json());
       }

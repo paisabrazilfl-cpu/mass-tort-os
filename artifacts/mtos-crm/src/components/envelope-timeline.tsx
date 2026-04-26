@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { CheckCircle2, Clock, Eye, FileSignature, Send, XCircle, AlertTriangle, Inbox, RefreshCw } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface EnvelopeEvent { type: string; at: string }
 interface Envelope {
@@ -75,9 +76,9 @@ export function EnvelopeTimeline({ leadId }: { leadId: number }) {
     setRefreshing(true);
     try {
       const [eRes, fRes, tRes] = await Promise.all([
-        fetch(`/api/leads/${leadId}/envelopes`),
-        fetch(`/api/leads/${leadId}/fax-results`),
-        fetch(`/api/document-templates`),
+        apiFetchRaw(`/api/leads/${leadId}/envelopes`),
+        apiFetchRaw(`/api/leads/${leadId}/fax-results`),
+        apiFetchRaw(`/api/document-templates`),
       ]);
       if (eRes.ok) setEnvelopes(await eRes.json());
       if (fRes.ok) setFaxes(await fRes.json());
@@ -95,7 +96,7 @@ export function EnvelopeTimeline({ leadId }: { leadId: number }) {
   useEffect(() => { load(); }, [leadId]);
 
   const simulate = async (externalId: string) => {
-    const res = await fetch("/api/webhooks/_test/envelope-signed", {
+    const res = await apiFetchRaw("/api/webhooks/_test/envelope-signed", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ external_envelope_id: externalId }),

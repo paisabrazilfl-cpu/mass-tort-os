@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { TrendingUp, TrendingDown, Search, RefreshCw, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface PredictiveScore {
   lead_id: number;
@@ -52,9 +53,9 @@ export default function Predictive() {
     setLoading(true);
     try {
       const [batchRes, tortRes, modelRes] = await Promise.all([
-        fetch("/api/analytics/predictive/batch?limit=25"),
-        fetch("/api/analytics/predictive/by-tort"),
-        fetch("/api/analytics/predictive/model"),
+        apiFetchRaw("/api/analytics/predictive/batch?limit=25"),
+        apiFetchRaw("/api/analytics/predictive/by-tort"),
+        apiFetchRaw("/api/analytics/predictive/model"),
       ]);
       setBatchScores(await batchRes.json());
       setTortPredictions(await tortRes.json());
@@ -72,7 +73,7 @@ export default function Predictive() {
     if (!searchId) return;
     setSearching(true);
     try {
-      const res = await fetch(`/api/analytics/predictive/lead/${searchId}`);
+      const res = await apiFetchRaw(`/api/analytics/predictive/lead/${searchId}`);
       if (!res.ok) throw new Error("Not found");
       setSingleScore(await res.json());
     } catch {

@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Shield, ShieldAlert, ShieldOff, ShieldCheck, Ban, Brain, RefreshCw, Trash2 } from "lucide-react";
 import { format } from "date-fns";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface SecurityAlert {
   id: number;
@@ -78,9 +79,9 @@ export default function Security() {
   const fetchData = useCallback(async () => {
     try {
       const [statsRes, alertsRes, blockedRes] = await Promise.all([
-        fetch("/api/security/stats"),
-        fetch("/api/security/alerts?limit=50"),
-        fetch("/api/security/blocked-ips"),
+        apiFetchRaw("/api/security/stats"),
+        apiFetchRaw("/api/security/alerts?limit=50"),
+        apiFetchRaw("/api/security/blocked-ips"),
       ]);
       setStats(await statsRes.json());
       setAlerts(await alertsRes.json());
@@ -102,7 +103,7 @@ export default function Security() {
   const handleBlockIp = async () => {
     if (!blockIp || !blockReason) return;
     try {
-      await fetch("/api/security/block-ip", {
+      await apiFetchRaw("/api/security/block-ip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ip: blockIp, reason: blockReason, duration_hours: parseInt(blockDuration) }),
@@ -119,7 +120,7 @@ export default function Security() {
 
   const handleUnblockIp = async (ip: string) => {
     try {
-      await fetch(`/api/security/blocked-ips/${encodeURIComponent(ip)}`, { method: "DELETE" });
+      await apiFetchRaw(`/api/security/blocked-ips/${encodeURIComponent(ip)}`, { method: "DELETE" });
       toast({ title: "IP unblocked" });
       fetchData();
     } catch {
@@ -129,7 +130,7 @@ export default function Security() {
 
   const handleDismiss = async (id: number) => {
     try {
-      await fetch(`/api/security/alerts/${id}/dismiss`, { method: "PATCH" });
+      await apiFetchRaw(`/api/security/alerts/${id}/dismiss`, { method: "PATCH" });
       fetchData();
     } catch {
       toast({ title: "Failed to dismiss alert", variant: "destructive" });
@@ -139,7 +140,7 @@ export default function Security() {
   const handleAiAnalysis = async () => {
     setAnalyzing(true);
     try {
-      const res = await fetch("/api/security/analyze", {
+      const res = await apiFetchRaw("/api/security/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),

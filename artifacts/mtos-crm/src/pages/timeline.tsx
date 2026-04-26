@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { Clock, Search, Calendar, Stethoscope, Shield, FileText, AlertTriangle, User } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface TimelineEvent {
   date: string;
@@ -42,7 +43,7 @@ export default function Timeline() {
     if (!leadId) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/timeline/lead/${leadId}`);
+      const res = await apiFetchRaw(`/api/timeline/lead/${leadId}`);
       if (!res.ok) throw new Error("Failed");
       setTimeline(await res.json());
     } catch {

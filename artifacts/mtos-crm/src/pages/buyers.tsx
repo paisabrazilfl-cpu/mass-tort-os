@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Building2, Plus, Pencil, Trash2 } from "lucide-react";
 
 interface Buyer {
@@ -115,7 +116,11 @@ export default function BuyersPage() {
         <CardHeader><CardTitle>All Buyers ({buyers.length})</CardTitle></CardHeader>
         <CardContent>
           {loading ? (
-            <p className="text-muted-foreground">Loading…</p>
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
           ) : buyers.length === 0 ? (
             <p className="text-sm text-muted-foreground">No buyers yet. Add one to enable per-buyer provider routing.</p>
           ) : (
