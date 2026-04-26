@@ -565,7 +565,13 @@ function FormPreviewDialog({ config }: { config: FormConfig }) {
   const [open, setOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const apiBase = (import.meta.env.VITE_API_URL as string | undefined) || `${window.location.origin}/api`;
-  const previewSrc = `${apiBase.replace(/\/$/, "")}/forms/preview/${config.id}?k=${reloadKey}`;
+  // Preview HTML is served by the public router (forms-public.ts) — the
+  // auth-gated /api/forms/* router intentionally does NOT mount /preview/:tortId
+  // (see artifacts/api-server/src/routes/forms.ts L241-242 and the RBAC
+  // remediation in docs/audits/rbac-remediation-2026-04-26.md §4). Hitting the
+  // old /forms/preview path returns 401 (prod) / 404 (dev with auth bypass) —
+  // both are intentional; the live preview must use /forms-public/preview.
+  const previewSrc = `${apiBase.replace(/\/$/, "")}/forms-public/preview/${config.id}?k=${reloadKey}`;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>

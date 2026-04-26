@@ -256,6 +256,50 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
     assert.equal((r.body as { code?: string }).code, "UNAUTHENTICATED");
   });
 
+  // Regression for the form-engine.tsx preview iframe: it must hit
+  // /api/forms-public/preview/:tortId, NOT /api/forms/preview/:tortId. The
+  // CRM page used the wrong path and the iframe rendered the API's
+  // not_found JSON. This pair of assertions locks in (a) the correct public
+  // path serves preview HTML, and (b) the wrong (auth-gated) path does NOT
+  // serve preview content — so a future "fix" cannot silently re-mount the
+  // preview under /api/forms without also tripping the path-prefix contract
+  // test above.
+  test("GET /api/forms-public/preview/paraquat returns 200 with the preview HTML shell", async () => {
+    if (!booted) throw new Error("app not booted");
+    // No Authorization header — public route must serve unauthenticated.
+    const res = await fetch(`${booted.baseUrl}/api/forms-public/preview/paraquat`);
+    assert.equal(res.status, 200, `expected 200, got ${res.status}`);
+    const ct = res.headers.get("content-type") ?? "";
+    assert.ok(ct.includes("text/html"), `expected HTML content-type, got ${ct}`);
+    const html = await res.text();
+    // Shell markers from forms-public.ts: preview-mode banner + the embed
+    // script tag for the requested tort. Asserting both ensures we got the
+    // actual preview shell rather than e.g. a generic 404 HTML page.
+    assert.ok(html.includes("Preview Mode"), "preview HTML missing 'Preview Mode' banner");
+    assert.ok(
+      html.includes("/api/forms/embed/paraquat"),
+      "preview HTML missing embed script tag for paraquat",
+    );
+  });
+
+  test("GET /api/forms/preview/paraquat does NOT serve preview HTML (must be 401 or 404)", async () => {
+    // The auth-gated /api/forms/* router intentionally has no /preview/:tortId
+    // route (see routes/forms.ts L241-242). Unauthenticated → 401 from
+    // authMiddleware; authenticated (or dev bypass) → 404 from the API
+    // not-found handler. Either is fine — what we forbid is a 200 leaking
+    // preview HTML through a re-added handler.
+    const r = await probe("GET", "/api/forms/preview/paraquat");
+    assert.notEqual(
+      r.status,
+      200,
+      `auth-gated /api/forms/preview/:tortId must not serve preview HTML; got 200`,
+    );
+    assert.ok(
+      r.status === 401 || r.status === 404,
+      `expected 401 or 404 on intentionally-unsupported path, got ${r.status}`,
+    );
+  });
+
   test("public path-prefix contract: every 'public' policy entry resolves under /api/healthz, /api/forms-public/, or /api/webhooks/", () => {
     if (!booted) throw new Error("app not booted");
     // router-label → mounted URL prefix (mirror of routes/index.ts).
