@@ -81,9 +81,14 @@ app.use(idsMiddleware());
 
 app.use("/api", router);
 
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  logger.error({ err: err.message, stack: err.stack }, "Unhandled error");
-  res.status(err.status || 500).json({ error: "Internal server error" });
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = err instanceof Error ? err.message : String(err);
+  const stack = err instanceof Error ? err.stack : undefined;
+  const status = (typeof err === "object" && err !== null && "status" in err && typeof (err as { status: unknown }).status === "number")
+    ? (err as { status: number }).status
+    : 500;
+  logger.error({ err: message, stack }, "Unhandled error");
+  res.status(status).json({ error: "Internal server error" });
 });
 
 export default app;

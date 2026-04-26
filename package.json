@@ -19,8 +19,5 @@
   "devDependencies": {
     "prettier": "^3.8.1",
     "typescript": "~5.9.2"
-  },
-  "dependencies": {
-    "pdfkit": "^0.18.0"
   }
 }

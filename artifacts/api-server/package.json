@@ -15,7 +15,6 @@
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/integrations-anthropic-ai": "workspace:*",
-    "cookie-parser": "^1.4.7",
     "cors": "^2",
     "drizzle-orm": "catalog:",
     "express": "^5",
@@ -29,7 +28,6 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",

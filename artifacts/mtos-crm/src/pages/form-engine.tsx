@@ -645,7 +645,7 @@ function FormEditDialog({ config }: { config: FormConfig }) {
           invalidate();
           toast({ title: "Saved", description: `${config.label} updated.` });
         },
-        onError: (err: any) => toast({ title: "Save failed", description: err?.message || "Update failed", variant: "destructive" }),
+        onError: (err: Error) => toast({ title: "Save failed", description: err?.message || "Update failed", variant: "destructive" }),
       }
     );
   };
@@ -680,7 +680,7 @@ function FormEditDialog({ config }: { config: FormConfig }) {
           setNewField({ key: "", label: "", type: "text", required: false });
           toast({ title: "Field added", description: field.label });
         },
-        onError: (err: any) => toast({ title: "Add failed", description: err?.message || "Failed to add field", variant: "destructive" }),
+        onError: (err: Error) => toast({ title: "Add failed", description: err?.message || "Failed to add field", variant: "destructive" }),
       }
     );
   };
@@ -696,7 +696,7 @@ function FormEditDialog({ config }: { config: FormConfig }) {
           else setCustomFields(prev => prev.filter(f => f.key !== key));
           toast({ title: "Field removed" });
         },
-        onError: (err: any) => toast({ title: "Remove failed", description: err?.message, variant: "destructive" }),
+        onError: (err: Error) => toast({ title: "Remove failed", description: err?.message, variant: "destructive" }),
       }
     );
   };

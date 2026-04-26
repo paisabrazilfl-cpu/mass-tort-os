@@ -42,7 +42,7 @@ interface LensScore {
   factors: Record<string, number>;
 }
 
-function FieldRow({ label, value, sensitive }: { label: string; value: any; sensitive?: boolean }) {
+function FieldRow({ label, value, sensitive }: { label: string; value: unknown; sensitive?: boolean }) {
   const displayVal = value === null || value === undefined || value === "" ? null : String(value);
   return (
     <div className="flex flex-col py-2 border-b border-gray-100 last:border-0">
@@ -184,9 +184,10 @@ export default function LeadDetail() {
         setIntelligence(data);
         setScoringInProgress(false);
         return;
-      } catch (err: any) {
+      } catch (err) {
         if (attempt === maxRetries) {
-          setScoringError(err.message || "Intelligence scoring unavailable after multiple attempts");
+          const message = err instanceof Error ? err.message : "Intelligence scoring unavailable after multiple attempts";
+          setScoringError(message);
           setScoringInProgress(false);
         } else {
           await new Promise(r => setTimeout(r, 1000 * attempt));
