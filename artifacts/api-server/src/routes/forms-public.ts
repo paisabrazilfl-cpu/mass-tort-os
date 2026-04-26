@@ -1,9 +1,26 @@
 import { Router, type IRouter, type Request } from "express";
+import rateLimit from "express-rate-limit";
 import { getFormConfig } from "../lib/form-config-service";
 import { generateEmbedScript } from "./forms";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
+
+// Public, unauthenticated endpoints. Tighter per-IP rate limit than the
+// global 500/15min to make tort-id enumeration / config-scraping expensive.
+const publicFormsRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests" },
+  keyGenerator: (req) =>
+    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+    req.socket.remoteAddress ||
+    "unknown",
+});
+
+router.use(publicFormsRateLimit);
 
 // Strict host pattern: alphanumerics, dot, hyphen, optional :port.
 // Blocks Host-header injection vectors (CR/LF, quotes, angle brackets, spaces).

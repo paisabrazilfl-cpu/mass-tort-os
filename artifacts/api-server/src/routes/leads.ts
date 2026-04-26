@@ -304,7 +304,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
   res.status(201).json(decryptLeadFields(lead));
 });
 
-router.get("/:id", requireRole("viewer"), async (req, res) => {
+router.get("/:id", requireRole("viewer"), auditAction("view_lead"), async (req, res) => {
   const parsed = GetLeadParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });

@@ -59,16 +59,27 @@ export function generateTOTP(secret: string, time?: number): string {
 }
 
 export function verifyTOTP(secret: string, token: string): boolean {
+  if (typeof token !== "string") return false;
+  // Strict: reject anything that isn't 1-6 ASCII digits. No whitespace, no
+  // unicode digits, no leading "+", etc. Padded to 6 for the constant-time
+  // compare against the canonical 6-digit HOTP output.
+  if (!/^\d{1,6}$/.test(token)) return false;
+  const padded = token.padStart(TOTP_DIGITS, "0");
+  const tokenBuf = Buffer.from(padded, "utf8");
+  if (tokenBuf.length !== TOTP_DIGITS) return false;
+
   const now = Math.floor(Date.now() / 1000);
   const secretBuffer = base32Decode(secret);
+  let matched = false;
   for (let i = -TOTP_WINDOW; i <= TOTP_WINDOW; i++) {
     const counter = BigInt(Math.floor(now / TOTP_PERIOD) + i);
     const expected = generateHOTP(secretBuffer, counter);
-    if (crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(token.padStart(TOTP_DIGITS, "0")))) {
-      return true;
+    const expectedBuf = Buffer.from(expected, "utf8");
+    if (expectedBuf.length === tokenBuf.length && crypto.timingSafeEqual(expectedBuf, tokenBuf)) {
+      matched = true;
     }
   }
-  return false;
+  return matched;
 }
 
 export function generateOTPAuthURL(secret: string, email: string, issuer = "MTOS"): string {

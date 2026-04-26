@@ -145,7 +145,7 @@ router.post("/login", authRateLimit, async (req, res) => {
   });
 });
 
-router.post("/refresh", async (req, res) => {
+router.post("/refresh", authRateLimit, async (req, res) => {
   const { refresh_token, user_id } = req.body;
   if (!refresh_token || !user_id) {
     res.status(400).json({ error: "refresh_token and user_id required" });

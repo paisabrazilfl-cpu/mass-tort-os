@@ -4,6 +4,7 @@ import { eq, desc, sql, gte, and, count } from "drizzle-orm";
 import { analyzeThreats } from "../lib/threat-analyzer";
 import { logger } from "../lib/logger";
 import { requireRole } from "../lib/rbac";
+import { auditLog } from "../lib/audit";
 import { getUnacknowledgedNotifications, acknowledgeNotification, dispatchCriticalAlert } from "../lib/security-alerts";
 
 const router = Router();
@@ -128,6 +129,15 @@ router.post("/block-ip", async (req, res) => {
     .returning();
 
   logger.warn({ ip, reason }, "IP manually blocked");
+  await auditLog("security", String(req.user?.id ?? "unknown"), "ip_blocked", {
+    target_ip: ip,
+    reason,
+    duration_hours: duration_hours || 24,
+    actor_email: req.user?.email,
+  }, {
+    ip_address: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
+    user_agent: req.headers["user-agent"],
+  });
   res.json(blocked);
 });
 
@@ -144,6 +154,13 @@ router.delete("/blocked-ips/:ip", async (req, res) => {
   }
 
   logger.info({ ip }, "IP unblocked");
+  await auditLog("security", String(req.user?.id ?? "unknown"), "ip_unblocked", {
+    target_ip: ip,
+    actor_email: req.user?.email,
+  }, {
+    ip_address: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
+    user_agent: req.headers["user-agent"],
+  });
   res.json({ message: "IP unblocked", ip });
 });
 

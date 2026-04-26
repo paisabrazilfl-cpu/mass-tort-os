@@ -260,7 +260,9 @@ router.post("/docusign", async (req, res) => {
 // Dev-only test endpoint to simulate a signed envelope without a real provider callback.
 // HARD-DISABLED in production to prevent unauthenticated state mutation.
 router.post("/_test/envelope-signed", async (req, res) => {
-  if (process.env.NODE_ENV === "production") {
+  // Block in production AND staging — this endpoint mutates DB state without auth or signature.
+  const env = process.env.NODE_ENV;
+  if (env === "production" || env === "staging") {
     res.status(404).json({ error: "not_found" });
     return;
   }
