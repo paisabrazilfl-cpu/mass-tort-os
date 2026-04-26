@@ -12,6 +12,7 @@ import {
 } from "@workspace/api-client-react";
 import type { ReviewQueueItem } from "@workspace/api-client-react";
 
+import { apiFetchRaw } from "@/lib/api-fetch";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -225,8 +226,7 @@ function ReviewQueueRow({ item }: { item: ReviewQueueItem }) {
                       size="sm"
                       onClick={(e) => {
                         e.stopPropagation();
-                        const apiBase = import.meta.env.BASE_URL.replace(/\/$/, "");
-                        fetch(`${apiBase}/api/forms/escalate/fbi`, {
+                        apiFetchRaw(`/api/forms/escalate/fbi`, {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({

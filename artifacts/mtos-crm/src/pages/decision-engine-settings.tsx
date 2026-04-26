@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { Trash2, Plus } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface Settings {
   default_attorney_hourly_cost: number;
@@ -37,7 +38,7 @@ export default function DecisionEngineSettings() {
   const { data: settings } = useQuery<Settings>({
     queryKey: ["decision-engine", "settings"],
     queryFn: async () => {
-      const res = await fetch("/api/decision-engine/settings", { credentials: "include" });
+      const res = await apiFetchRaw("/api/decision-engine/settings");
       if (!res.ok) throw new Error("settings failed");
       return res.json();
     },
@@ -46,7 +47,7 @@ export default function DecisionEngineSettings() {
   const { data: sources = [] } = useQuery<Source[]>({
     queryKey: ["lead-sources"],
     queryFn: async () => {
-      const res = await fetch("/api/lead-sources", { credentials: "include" });
+      const res = await apiFetchRaw("/api/lead-sources");
       if (!res.ok) throw new Error("sources failed");
       return res.json();
     },
@@ -56,8 +57,8 @@ export default function DecisionEngineSettings() {
 
   const saveSettings = useMutation({
     mutationFn: async (body: Settings) => {
-      const res = await fetch("/api/decision-engine/settings", {
-        method: "PUT", credentials: "include",
+      const res = await apiFetchRaw("/api/decision-engine/settings", {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
@@ -70,8 +71,8 @@ export default function DecisionEngineSettings() {
 
   const addSource = useMutation({
     mutationFn: async (body: any) => {
-      const res = await fetch("/api/lead-sources", {
-        method: "POST", credentials: "include",
+      const res = await apiFetchRaw("/api/lead-sources", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
@@ -88,7 +89,7 @@ export default function DecisionEngineSettings() {
 
   const deleteSource = useMutation({
     mutationFn: async (id: number) => {
-      const res = await fetch(`/api/lead-sources/${id}`, { method: "DELETE", credentials: "include" });
+      const res = await apiFetchRaw(`/api/lead-sources/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await res.text());
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["lead-sources"] }); toast({ title: "Source removed" }); },

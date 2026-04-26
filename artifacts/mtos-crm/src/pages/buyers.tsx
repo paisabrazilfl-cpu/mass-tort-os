@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Building2, Plus, Pencil, Trash2 } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface Buyer {
   id: number;
@@ -46,8 +47,8 @@ export default function BuyersPage() {
     setLoading(true);
     try {
       const [bRes, oRes] = await Promise.all([
-        fetch("/api/buyers"),
-        fetch("/api/workflow-settings/_options/providers"),
+        apiFetchRaw("/api/buyers"),
+        apiFetchRaw("/api/workflow-settings/_options/providers"),
       ]);
       setBuyers(await bRes.json());
       if (oRes.ok) setOptions(await oRes.json());
@@ -65,7 +66,7 @@ export default function BuyersPage() {
     const isEdit = typeof editing.id === "number";
     const url = isEdit ? `/api/buyers/${editing.id}` : "/api/buyers";
     const method = isEdit ? "PUT" : "POST";
-    const res = await fetch(url, {
+    const res = await apiFetchRaw(url, {
       method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(editing),
@@ -83,7 +84,7 @@ export default function BuyersPage() {
 
   const remove = async (id: number) => {
     if (!confirm("Delete this buyer? Leads with this buyer will not be deleted.")) return;
-    const res = await fetch(`/api/buyers/${id}`, { method: "DELETE" });
+    const res = await apiFetchRaw(`/api/buyers/${id}`, { method: "DELETE" });
     if (!res.ok) {
       toast({ title: "Delete failed", variant: "destructive" });
       return;
