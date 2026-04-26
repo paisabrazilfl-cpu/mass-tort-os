@@ -4,6 +4,7 @@ import { eq, and, sql, desc } from "drizzle-orm";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { requireRole, auditAction } from "../lib/rbac";
+import { badRequest, notFound } from "../lib/http-errors";
 
 const router = Router();
 
@@ -101,7 +102,7 @@ router.get("/stats", requireRole("paralegal"), async (req, res) => {
 router.patch("/:id", requireRole("attorney"), auditAction("resolve_review_item"), async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid ID" });
+    badRequest(res, "Invalid ID");
     return;
   }
 
@@ -112,13 +113,13 @@ router.patch("/:id", requireRole("attorney"), auditAction("resolve_review_item")
   const resolved_by = req.user?.email || "unknown";
 
   if (!resolution || !["accepted", "rejected", "escalated"].includes(resolution)) {
-    res.status(400).json({ error: "resolution must be one of: accepted, rejected, escalated" });
+    badRequest(res, "resolution must be one of: accepted, rejected, escalated");
     return;
   }
 
   const [existing] = await db.select().from(reviewQueueTable).where(eq(reviewQueueTable.id, id));
   if (!existing) {
-    res.status(404).json({ error: "Review item not found" });
+    notFound(res, "Review item not found");
     return;
   }
 

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, leadsTable, documentsTable } from "@workspace/db";
 import { eq, ilike, and, or, sql, gte, lte, desc } from "drizzle-orm";
+import { badRequest as httpBadRequest, serverError } from "../lib/http-errors";
 import {
   ListLeadsQueryParams,
   CreateLeadBody,
@@ -432,7 +433,7 @@ router.get("/:id", requireRole("viewer"), auditAction("view_lead"), async (req, 
  */
 async function ensureLeadAccess(req: Express.Request, res: import("express").Response, leadId: number): Promise<boolean> {
   if (!Number.isFinite(leadId)) {
-    res.status(400).json({ error: "invalid_id" });
+    httpBadRequest(res, "Invalid lead id");
     return false;
   }
   const [check] = await db
@@ -733,7 +734,7 @@ router.post("/:id/intelligence", requireRole("paralegal", "attorney", "admin"), 
   try {
     const leadId = Number(req.params.id);
     if (isNaN(leadId)) {
-      res.status(400).json({ error: "Invalid lead identifier" });
+      httpBadRequest(res, "Invalid lead identifier");
       return;
     }
 
@@ -760,7 +761,7 @@ router.post("/:id/intelligence", requireRole("paralegal", "attorney", "admin"), 
     res.json(result);
   } catch (err) {
     logger.error({ err: err }, "Lead intelligence scoring encountered an unrecoverable error");
-    res.status(500).json({ error: "Intelligence scoring temporarily unavailable. Please retry." });
+    serverError(res, "Intelligence scoring temporarily unavailable. Please retry.");
   }
 });
 
@@ -768,7 +769,7 @@ router.patch("/:id/notes", requireRole("paralegal", "attorney", "admin"), auditA
   try {
     const leadId = Number(req.params.id);
     if (isNaN(leadId)) {
-      res.status(400).json({ error: "Invalid lead identifier" });
+      httpBadRequest(res, "Invalid lead identifier");
       return;
     }
 
@@ -783,7 +784,7 @@ router.patch("/:id/notes", requireRole("paralegal", "attorney", "admin"), auditA
 
     const { notes } = req.body;
     if (typeof notes !== "string") {
-      res.status(400).json({ error: "Notes must be provided as a text string" });
+      httpBadRequest(res, "Notes must be provided as a text string");
       return;
     }
 
@@ -802,7 +803,7 @@ router.patch("/:id/notes", requireRole("paralegal", "attorney", "admin"), auditA
     res.json({ success: true, updated_at: lead.updated_at });
   } catch (err) {
     logger.error({ err: err }, "Notes update failed");
-    res.status(500).json({ error: "Unable to save notes. Please retry." });
+    serverError(res, "Unable to save notes. Please retry.");
   }
 });
 

@@ -6,6 +6,7 @@ import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
 import { auditLog } from "../lib/audit";
 import crypto from "crypto";
 import { requireRole, auditAction } from "../lib/rbac";
+import { badRequest, notFound } from "../lib/http-errors";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -96,7 +97,7 @@ router.post("/:id/upload", requireRole("paralegal", "attorney", "admin"), auditA
 router.post("/:id/analyze", requireRole("paralegal"), async (req, res) => {
   const case_id = String(req.params.id);
   if (!validateCaseId(case_id)) {
-    res.status(400).json({ error: "Invalid case ID format" });
+    badRequest(res, "Invalid case ID format");
     return;
   }
 
@@ -137,12 +138,12 @@ router.post(
   async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
-      res.status(400).json({ error: "Invalid job id" });
+      badRequest(res, "Invalid job id");
       return;
     }
     const ok = await requeueDeadLetterJob(id);
     if (!ok) {
-      res.status(404).json({ error: "Job not found or not in dead_letter status" });
+      notFound(res, "Job not found or not in dead_letter status");
       return;
     }
     res.json({ ok: true, job_id: id, status: "pending" });
@@ -152,7 +153,7 @@ router.post(
 router.get("/:id", requireRole("viewer"), async (req, res) => {
   const case_id = String(req.params.id);
   if (!validateCaseId(case_id)) {
-    res.status(400).json({ error: "Invalid case ID format" });
+    badRequest(res, "Invalid case ID format");
     return;
   }
 
@@ -163,7 +164,7 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
     .where(eq(casesTable.id, case_id));
 
   if (!caseRow) {
-    res.status(404).json({ error: "Case not found" });
+    notFound(res, "Case not found");
     return;
   }
 

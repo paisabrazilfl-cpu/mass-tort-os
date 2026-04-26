@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware, requireRole } from "../lib/rbac";
+import { badRequest, notFound, serverError } from "../lib/http-errors";
 import {
   buildPortfolioSummary,
   computeAndPersistLeadScore,
@@ -21,7 +22,7 @@ router.get("/portfolio", async (_req, res) => {
     res.json(summary);
   } catch (e) {
     logger.error({ err: e }, "portfolio build failed");
-    res.status(500).json({ error: "portfolio_failed" });
+    serverError(res, "portfolio_failed");
   }
 });
 
@@ -53,12 +54,12 @@ router.put("/settings", async (req, res) => {
 router.post("/leads/:id/recompute", async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
-    res.status(400).json({ error: "invalid_id" });
+    badRequest(res, "invalid_id");
     return;
   }
   const result = await computeAndPersistLeadScore(id);
   if (!result) {
-    res.status(404).json({ error: "lead_or_tort_not_found" });
+    notFound(res, "lead_or_tort_not_found");
     return;
   }
   res.json(result);

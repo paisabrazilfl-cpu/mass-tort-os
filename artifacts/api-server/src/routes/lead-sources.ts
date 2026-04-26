@@ -3,6 +3,7 @@ import { db, leadSourcesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { authMiddleware, requireRole } from "../lib/rbac";
 import { z } from "zod/v4";
+import { badRequest, conflict, notFound } from "../lib/http-errors";
 
 const router = Router();
 router.use(authMiddleware);
@@ -43,7 +44,7 @@ router.post("/", requireRole("admin"), async (req, res) => {
     res.status(201).json(row);
   } catch (e: any) {
     if (String(e?.message || "").includes("duplicate")) {
-      res.status(409).json({ error: "name_taken" });
+      conflict(res, "name_taken", "A lead source with this name already exists");
       return;
     }
     throw e;
@@ -53,7 +54,7 @@ router.post("/", requireRole("admin"), async (req, res) => {
 router.put("/:id", requireRole("admin"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
-    res.status(400).json({ error: "invalid_id" });
+    badRequest(res, "invalid_id");
     return;
   }
   const parsed = sourceSchema.partial().safeParse(req.body);
@@ -75,7 +76,7 @@ router.put("/:id", requireRole("admin"), async (req, res) => {
 
   const [row] = await db.update(leadSourcesTable).set(updates).where(eq(leadSourcesTable.id, id)).returning();
   if (!row) {
-    res.status(404).json({ error: "not_found" });
+    notFound(res, "not_found");
     return;
   }
   res.json(row);
@@ -84,7 +85,7 @@ router.put("/:id", requireRole("admin"), async (req, res) => {
 router.delete("/:id", requireRole("admin"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
-    res.status(400).json({ error: "invalid_id" });
+    badRequest(res, "invalid_id");
     return;
   }
   await db.delete(leadSourcesTable).where(eq(leadSourcesTable.id, id));

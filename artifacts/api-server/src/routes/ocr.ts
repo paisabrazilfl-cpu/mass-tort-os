@@ -10,6 +10,7 @@ import { saveFile } from "../lib/vault";
 import { auditLog } from "../lib/audit";
 import { extractMedicalFields, analyzeDocumentText } from "../lib/ai-fields";
 import { requireRole, auditAction } from "../lib/rbac";
+import { badRequest, notFound, serverError } from "../lib/http-errors";
 
 const router = Router();
 
@@ -26,7 +27,7 @@ router.post("/upload", requireRole("paralegal", "attorney", "admin"), auditActio
   };
 
   if (!file_name || !image_base64) {
-    res.status(400).json({ error: "file_name and image_base64 are required" });
+    badRequest(res, "file_name and image_base64 are required");
     return;
   }
 
@@ -97,7 +98,7 @@ router.get("/results", requireRole("paralegal"), async (_req, res) => {
 router.get("/results/:id", requireRole("paralegal"), async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid ID" });
+    badRequest(res, "Invalid ID");
     return;
   }
 
@@ -107,7 +108,7 @@ router.get("/results/:id", requireRole("paralegal"), async (req, res) => {
     .where(eq(faxResultsTable.id, id));
 
   if (!result) {
-    res.status(404).json({ error: "Not found" });
+    notFound(res, "Not found");
     return;
   }
 
@@ -131,7 +132,7 @@ router.post("/ai-fields", requireRole("paralegal", "attorney", "admin"), auditAc
   const { image_base64, mime_type, text } = req.body;
 
   if (!image_base64 && !text) {
-    res.status(400).json({ error: "image_base64 or text is required" });
+    badRequest(res, "image_base64 or text is required");
     return;
   }
 
@@ -145,7 +146,7 @@ router.post("/ai-fields", requireRole("paralegal", "attorney", "admin"), auditAc
     res.json(result);
   } catch (err) {
     logger.error({ err }, "AIFields extraction failed");
-    res.status(500).json({ error: "AIFields extraction failed" });
+    serverError(res, "AIFields extraction failed");
   }
 });
 
@@ -163,7 +164,7 @@ router.post("/ai-fields/result/:id", requireRole("paralegal", "attorney", "admin
     res.json({ fax_result_id: id, ...fields });
   } catch (err) {
     logger.error({ err }, "AIFields analysis of fax result failed");
-    res.status(500).json({ error: "Analysis failed" });
+    serverError(res, "Analysis failed");
   }
 });
 

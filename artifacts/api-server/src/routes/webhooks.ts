@@ -20,6 +20,7 @@ import { logger } from "../lib/logger";
 import { auditLog } from "../lib/audit";
 import { onEnvelopeSigned } from "../lib/workflow-engine";
 import { getIntegrationCredentialsById } from "./integrations";
+import { badRequest, notFound } from "../lib/http-errors";
 
 const router: ReturnType<typeof Router> = Router();
 
@@ -287,12 +288,12 @@ router.post("/_test/envelope-signed", async (req, res) => {
   // Block in production AND staging — this endpoint mutates DB state without auth or signature.
   const env = process.env.NODE_ENV;
   if (env === "production" || env === "staging") {
-    res.status(404).json({ error: "not_found" });
+    notFound(res, "not_found");
     return;
   }
   const externalId = req.body?.external_envelope_id;
   if (!externalId) {
-    res.status(400).json({ error: "external_envelope_id required" });
+    badRequest(res, "external_envelope_id required");
     return;
   }
   await applyEnvelopeEvent("test", {

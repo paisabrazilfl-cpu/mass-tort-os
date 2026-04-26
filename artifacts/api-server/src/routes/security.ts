@@ -6,6 +6,7 @@ import { logger } from "../lib/logger";
 import { requireRole } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { getUnacknowledgedNotifications, acknowledgeNotification, dispatchCriticalAlert } from "../lib/security-alerts";
+import { badRequest, notFound } from "../lib/http-errors";
 
 const router = Router();
 
@@ -102,7 +103,7 @@ router.get("/blocked-ips", async (_req, res) => {
 router.post("/block-ip", async (req, res) => {
   const { ip, reason, duration_hours } = req.body;
   if (!ip || !reason) {
-    res.status(400).json({ error: "ip and reason are required" });
+    badRequest(res, "ip and reason are required");
     return;
   }
 
@@ -149,7 +150,7 @@ router.delete("/blocked-ips/:ip", async (req, res) => {
     .returning();
 
   if (!unblocked) {
-    res.status(404).json({ error: "IP not found in blocklist" });
+    notFound(res, "IP not found in blocklist");
     return;
   }
 
@@ -200,7 +201,7 @@ router.patch("/alerts/:id/dismiss", async (req, res) => {
     .returning();
 
   if (!alert) {
-    res.status(404).json({ error: "Alert not found" });
+    notFound(res, "Alert not found");
     return;
   }
 
@@ -218,7 +219,7 @@ router.patch("/notifications/:id/acknowledge", async (req, res) => {
   const user = req.user;
   const updated = await acknowledgeNotification(id, user?.email || "admin");
   if (!updated) {
-    res.status(404).json({ error: "Notification not found or already acknowledged" });
+    notFound(res, "Notification not found or already acknowledged");
     return;
   }
   res.json(updated);
@@ -237,7 +238,7 @@ router.post("/test-alert", async (req, res) => {
 router.post("/webhook-config", async (req, res) => {
   const { webhook_url } = req.body;
   if (!webhook_url) {
-    res.status(400).json({ error: "webhook_url is required" });
+    badRequest(res, "webhook_url is required");
     return;
   }
   res.json({

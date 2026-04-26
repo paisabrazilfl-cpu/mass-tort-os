@@ -6,6 +6,7 @@ import { auditLog } from "../lib/audit";
 import { encryptLeadFields, decrypt, hashForLookup } from "../lib/encryption";
 import { runFullConflictCheck } from "../lib/conflict-engine";
 import { logger } from "../lib/logger";
+import { serverError } from "../lib/http-errors";
 
 const router = Router();
 
@@ -256,7 +257,7 @@ router.post("/preview", requireRole("paralegal"), async (req, res) => {
     });
   } catch (err) {
     logger.error({ err }, "CSV preview failed");
-    res.status(500).json({ error: "Failed to preview CSV" });
+    serverError(res, "Failed to preview CSV");
   }
 });
 
@@ -305,7 +306,7 @@ router.post("/execute", requireRole("attorney"), async (req, res) => {
     });
   } catch (err) {
     logger.error({ err }, "Failed to start import");
-    res.status(500).json({ error: "Failed to start import" });
+    serverError(res, "Failed to start import");
   }
 });
 
@@ -479,7 +480,7 @@ router.get("/batches", requireRole("paralegal"), async (_req, res) => {
     res.json(batches);
   } catch (err) {
     logger.error({ err }, "Failed to list import batches");
-    res.status(500).json({ error: "Failed to list batches" });
+    serverError(res, "Failed to list batches");
   }
 });
 
@@ -501,7 +502,7 @@ router.get("/batches/:id", requireRole("paralegal"), async (req, res) => {
     res.json({ ...batch, rows });
   } catch (err) {
     logger.error({ err }, "Failed to get batch details");
-    res.status(500).json({ error: "Failed to get batch details" });
+    serverError(res, "Failed to get batch details");
   }
 });
 
@@ -524,7 +525,7 @@ router.get("/batches/:id/errors", requireRole("paralegal"), async (req, res) => 
     res.json(rows);
   } catch (err) {
     logger.error({ err }, "Failed to get batch errors");
-    res.status(500).json({ error: "Failed to get batch errors" });
+    serverError(res, "Failed to get batch errors");
   }
 });
 
@@ -544,7 +545,7 @@ router.get("/batches/:id/duplicates", requireRole("paralegal"), async (req, res)
     res.json(rows);
   } catch (err) {
     logger.error({ err }, "Failed to get batch duplicates");
-    res.status(500).json({ error: "Failed to get batch duplicates" });
+    serverError(res, "Failed to get batch duplicates");
   }
 });
 

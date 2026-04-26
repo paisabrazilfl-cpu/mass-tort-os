@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { logger } from "../lib/logger";
 import { requireRole } from "../lib/rbac";
+import { badRequest, errorEnvelope, notFound } from "../lib/http-errors";
 
 const router = Router();
 
@@ -88,7 +89,7 @@ router.get("/search", requireRole("paralegal"), async (req, res) => {
 
   const hasSearchCriteria = npi_number || first_name || last_name || city || state || specialty;
   if (!hasSearchCriteria) {
-    res.status(400).json({ error: "At least one search parameter is required" });
+    badRequest(res, "At least one search parameter is required");
     return;
   }
 
@@ -108,7 +109,7 @@ router.get("/search", requireRole("paralegal"), async (req, res) => {
     res.json({ results, result_count });
   } catch (err) {
     logger.error({ err }, "NPI Registry lookup failed");
-    res.status(502).json({ error: "NPI Registry lookup failed" });
+    errorEnvelope(res, 502, "upstream_error", "NPI Registry lookup failed");
   }
 });
 
@@ -116,7 +117,7 @@ router.get("/lookup/:npi", requireRole("paralegal"), async (req, res) => {
   const npi = String(req.params.npi);
 
   if (!/^\d{10}$/.test(npi)) {
-    res.status(400).json({ error: "NPI must be a 10-digit number" });
+    badRequest(res, "NPI must be a 10-digit number");
     return;
   }
 
@@ -131,14 +132,14 @@ router.get("/lookup/:npi", requireRole("paralegal"), async (req, res) => {
     const results = parseNpiResponse(data);
 
     if (results.length === 0) {
-      res.status(404).json({ error: "NPI not found" });
+      notFound(res, "NPI not found");
       return;
     }
 
     res.json(results[0]);
   } catch (err) {
     logger.error({ err }, "NPI lookup failed");
-    res.status(502).json({ error: "NPI Registry lookup failed" });
+    errorEnvelope(res, 502, "upstream_error", "NPI Registry lookup failed");
   }
 });
 

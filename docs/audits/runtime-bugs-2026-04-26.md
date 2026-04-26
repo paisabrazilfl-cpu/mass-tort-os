@@ -242,6 +242,40 @@ Verified:
 - `POST /api/forms/background-check {}` → 400 envelope.
 - `POST /api/forms/npi-verify {}` → 400 envelope.
 
+### 2.13d Project-wide error-envelope sweep across all route files — medium
+**Where:** every file in `artifacts/api-server/src/routes/`.
+**Symptom:** the second architect review confirmed forms.ts/leads.ts/
+paralegals.ts were normalized but pointed out that ~80 legacy
+`{error:"..."}` shapes still existed across other route files
+(analytics, auth, buyers, cases, decision-engine, document-templates,
+documents, forms-public, image-objects, lead-import, lead-sources,
+npi, ocr, review-queue, security, vendors, webhooks). The CRM client
+still had to maintain two error parsers.
+**Fix:**
+- New `lib/http-errors.ts` exports a single envelope helper plus six
+  named helpers (`badRequest`, `unauthorized`, `forbidden`, `notFound`,
+  `conflict`, `unprocessable`, `serverError`).
+- A one-shot mechanical rewrite (`.local/sweep-error-shapes.mjs`,
+  conservative single-line regex) converted 82 legacy `res.status(N)
+  .json({error:"..."})` calls across 18 files to the helpers, and
+  added the imports automatically.
+- 5 non-trivial cases were rewritten by hand: a 423 account-locked
+  response in `auth.ts`, two 409 "name_taken" conflicts in `buyers.ts`
+  and `lead-sources.ts` (now `conflict(res, "name_taken", ...)`), and
+  two 502 NPI-Registry upstream errors in `npi.ts` (now
+  `errorEnvelope(res, 502, "upstream_error", ...)`).
+- `routes/leads.ts` had its own pre-existing local `badRequest` helper
+  with a different signature (taking a ZodError); that one was renamed
+  to import-alias `httpBadRequest` for the string-literal call sites
+  while the local zod-flavored helper kept its name for the schema
+  parse failures.
+Net result: every error response across the API now matches the global
+handler envelope, with the *exception* of the conflict-engine pipeline
+shape and the form-submit pipeline shape which deliberately carry
+extra domain fields (and whose `status` discriminator was already
+fixed in 2.13b/c). 87 total responses normalized in this pass.
+Verified the typecheck stays green and the unit tests still pass.
+
 ### 2.13c Legacy `{error: ...}` envelope across `routes/leads.ts` — medium
 **Where:** 12 instances across `routes/leads.ts` (validation 400s,
 "Lead not found" 404s, "Insufficient permissions" 403s, plus the

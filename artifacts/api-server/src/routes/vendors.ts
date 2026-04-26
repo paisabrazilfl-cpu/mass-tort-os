@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, vendorsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
+import { notFound } from "../lib/http-errors";
 import {
   CreateVendorBody,
   UpdateVendorBody,
@@ -58,7 +59,7 @@ router.get("/:id", requireRole("paralegal"), async (req, res) => {
     .where(eq(vendorsTable.id, parsed.data.id));
 
   if (!vendor) {
-    res.status(404).json({ error: "Vendor not found" });
+    notFound(res, "Vendor not found");
     return;
   }
 
@@ -85,7 +86,7 @@ router.patch("/:id", requireRole("attorney", "admin"), auditAction("update_vendo
     .returning();
 
   if (!vendor) {
-    res.status(404).json({ error: "Vendor not found" });
+    notFound(res, "Vendor not found");
     return;
   }
 
@@ -106,7 +107,7 @@ router.delete("/:id", requireRole("admin"), auditAction("delete_vendor"), async 
     .returning();
 
   if (!vendor) {
-    res.status(404).json({ error: "Vendor not found" });
+    notFound(res, "Vendor not found");
     return;
   }
 

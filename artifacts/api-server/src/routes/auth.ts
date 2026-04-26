@@ -1,6 +1,7 @@
 import { Router } from "express";
 import crypto from "crypto";
 import rateLimit from "express-rate-limit";
+import { errorEnvelope, unauthorized } from "../lib/http-errors";
 import {
   generateToken,
   generateRefreshToken,
@@ -130,14 +131,14 @@ router.post("/login", authRateLimit, async (req, res) => {
 
   const user = await getUserByEmail(email);
   if (!user) {
-    res.status(401).json({ error: "Invalid credentials" });
+    unauthorized(res, "Invalid credentials");
     return;
   }
 
   if (await isAccountLocked(user)) {
     const minutesLeft = Math.ceil((new Date(user.locked_until!).getTime() - Date.now()) / 60000);
     await dispatchCriticalAlert("high", "Login attempt on locked account", `Locked account login attempt: ${email}`, undefined);
-    res.status(423).json({ error: `Account is locked. Try again in ${minutesLeft} minute(s).` });
+    errorEnvelope(res, 423, "account_locked", `Account is locked. Try again in ${minutesLeft} minute(s).`);
     return;
   }
 
@@ -147,7 +148,7 @@ router.post("/login", authRateLimit, async (req, res) => {
       await dispatchCriticalAlert("high", "Account locked after failed attempts", `Account locked: ${email} after ${result.attempts} failed attempts`);
       await auditLog("security", String(user.id), "account_locked", { email, attempts: result.attempts });
     }
-    res.status(401).json({ error: "Invalid credentials" });
+    unauthorized(res, "Invalid credentials");
     return;
   }
 
@@ -164,7 +165,7 @@ router.post("/login", authRateLimit, async (req, res) => {
         await auditLog("security", String(user.id), "account_locked_mfa", { email, attempts: result.attempts });
       }
       await dispatchCriticalAlert("medium", "Failed MFA attempt", `Failed TOTP verification for: ${email}`);
-      res.status(401).json({ error: "Invalid TOTP code" });
+      unauthorized(res, "Invalid TOTP code");
       return;
     }
   }
@@ -194,7 +195,7 @@ router.post("/refresh", authRateLimit, async (req, res) => {
 
   const result = await rotateRefreshToken(refresh_token, user_id);
   if (!result) {
-    res.status(401).json({ error: "Invalid or expired refresh token" });
+    unauthorized(res, "Invalid or expired refresh token");
     return;
   }
 
@@ -252,7 +253,7 @@ router.post("/change-password", authMiddleware, async (req, res) => {
 
   const user = await getUserByEmail(req.user!.email);
   if (!user || !(await verifyPassword(current_password, user.password_hash))) {
-    res.status(401).json({ error: "Current password is incorrect" });
+    unauthorized(res, "Current password is incorrect");
     return;
   }
 
@@ -301,7 +302,7 @@ router.post("/mfa/verify", authMiddleware, async (req, res) => {
 
   const decryptedSecret = decrypt(dbUser.totp_secret);
   if (!verifyTOTP(decryptedSecret, totp_code)) {
-    res.status(401).json({ error: "Invalid TOTP code. Please try again." });
+    unauthorized(res, "Invalid TOTP code. Please try again.");
     return;
   }
 
@@ -326,14 +327,14 @@ router.post("/mfa/disable", authMiddleware, async (req, res) => {
   if (!dbUser.mfa_enabled) { res.status(400).json({ error: "MFA is not enabled" }); return; }
 
   if (!(await verifyPassword(password, dbUser.password_hash))) {
-    res.status(401).json({ error: "Invalid password" });
+    unauthorized(res, "Invalid password");
     return;
   }
 
   if (!dbUser.totp_secret) { res.status(400).json({ error: "MFA setup incomplete" }); return; }
   const decryptedSecret = decrypt(dbUser.totp_secret);
   if (!verifyTOTP(decryptedSecret, totp_code)) {
-    res.status(401).json({ error: "Invalid TOTP code" });
+    unauthorized(res, "Invalid TOTP code");
     return;
   }
 

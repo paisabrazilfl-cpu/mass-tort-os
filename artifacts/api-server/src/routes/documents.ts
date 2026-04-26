@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, documentsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
+import { notFound, serverError } from "../lib/http-errors";
 import {
   ListDocumentsQueryParams,
   CreateDocumentBody,
@@ -90,7 +91,7 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
     .returning();
 
   if (!doc) {
-    res.status(404).json({ error: "Document not found" });
+    notFound(res, "Document not found");
     return;
   }
 
@@ -117,7 +118,7 @@ router.post("/redact", requireRole("paralegal", "attorney", "admin"), auditActio
     const redacted = await redactPdf(pdfBytes, rules || []);
     res.json({ pdf_base64: Buffer.from(redacted).toString("base64"), pages: await getPdfPageCount(redacted) });
   } catch (err: any) {
-    res.status(500).json({ error: "PDF redaction failed" });
+    serverError(res, "PDF redaction failed");
   }
 });
 
@@ -130,7 +131,7 @@ router.post("/highlight", requireRole("paralegal", "attorney", "admin"), async (
     const highlighted = await highlightPdfRegions(pdfBytes, highlights || []);
     res.json({ pdf_base64: Buffer.from(highlighted).toString("base64"), pages: await getPdfPageCount(highlighted) });
   } catch (err: any) {
-    res.status(500).json({ error: "PDF highlighting failed" });
+    serverError(res, "PDF highlighting failed");
   }
 });
 

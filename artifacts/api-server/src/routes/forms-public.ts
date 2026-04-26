@@ -3,6 +3,7 @@ import rateLimit from "express-rate-limit";
 import { getFormConfig } from "../lib/form-config-service";
 import { generateEmbedScript } from "./forms";
 import { logger } from "../lib/logger";
+import { badRequest, notFound, serverError } from "../lib/http-errors";
 
 const router: IRouter = Router();
 
@@ -134,12 +135,12 @@ router.get("/embed/:tortId", async (req, res) => {
   try {
     const baseUrl = resolveBaseUrl(req);
     if (!baseUrl) {
-      res.status(400).json({ error: "Invalid host" });
+      badRequest(res, "Invalid host");
       return;
     }
     const config = await getFormConfig(tortId);
     if (!config || !config.active) {
-      res.status(404).json({ error: "Tort campaign not found" });
+      notFound(res, "Tort campaign not found");
       return;
     }
     const embedScript = generateEmbedScript(
@@ -159,7 +160,7 @@ router.get("/embed/:tortId", async (req, res) => {
     res.send(embedScript);
   } catch (err) {
     logger.error({ err }, "Failed to generate embed script");
-    res.status(500).json({ error: "Failed to generate embed script" });
+    serverError(res, "Failed to generate embed script");
   }
 });
 

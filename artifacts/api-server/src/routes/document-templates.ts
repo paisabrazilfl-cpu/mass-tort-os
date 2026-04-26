@@ -5,6 +5,7 @@ import { authMiddleware, requireRole } from "../lib/rbac";
 import { auditAction } from "../lib/rbac";
 import { z } from "zod/v4";
 import { uploadTemplate, deleteTemplate, downloadTemplate } from "../lib/template-storage";
+import { badRequest, notFound } from "../lib/http-errors";
 
 const router = Router();
 router.use(authMiddleware);
@@ -45,7 +46,7 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
   const id = Number(req.params.id);
   const [row] = await db.select().from(documentTemplatesTable).where(eq(documentTemplatesTable.id, id));
   if (!row) {
-    res.status(404).json({ error: "not_found" });
+    notFound(res, "not_found");
     return;
   }
   res.json(row);
@@ -59,11 +60,11 @@ router.post("/", requireRole("admin"), auditAction("create_template"), async (re
   }
   const data = parsed.data;
   if (data.source === "pdf" && !data.storage_path) {
-    res.status(400).json({ error: "pdf_template_requires_storage_path" });
+    badRequest(res, "pdf_template_requires_storage_path");
     return;
   }
   if (data.source === "ai" && !data.ai_prompt) {
-    res.status(400).json({ error: "ai_template_requires_prompt" });
+    badRequest(res, "ai_template_requires_prompt");
     return;
   }
   const [row] = await db
@@ -87,7 +88,7 @@ router.put("/:id", requireRole("admin"), auditAction("update_template"), async (
     .where(eq(documentTemplatesTable.id, id))
     .returning();
   if (!row) {
-    res.status(404).json({ error: "not_found" });
+    notFound(res, "not_found");
     return;
   }
   res.json(row);
@@ -97,7 +98,7 @@ router.delete("/:id", requireRole("admin"), auditAction("delete_template"), asyn
   const id = Number(req.params.id);
   const [existing] = await db.select().from(documentTemplatesTable).where(eq(documentTemplatesTable.id, id));
   if (!existing) {
-    res.status(404).json({ error: "not_found" });
+    notFound(res, "not_found");
     return;
   }
   if (existing.storage_path) {
@@ -117,17 +118,17 @@ router.delete("/:id", requireRole("admin"), auditAction("delete_template"), asyn
 router.post("/upload", requireRole("admin"), auditAction("upload_template_pdf"), async (req, res) => {
   const { fileName, base64 } = req.body || {};
   if (!fileName || typeof fileName !== "string") {
-    res.status(400).json({ error: "fileName_required" });
+    badRequest(res, "fileName_required");
     return;
   }
   if (!base64 || typeof base64 !== "string") {
-    res.status(400).json({ error: "base64_required" });
+    badRequest(res, "base64_required");
     return;
   }
   try {
     const buf = Buffer.from(base64, "base64");
     if (buf.length === 0) {
-      res.status(400).json({ error: "empty_file" });
+      badRequest(res, "empty_file");
       return;
     }
     if (buf.length > 25 * 1024 * 1024) {
@@ -145,7 +146,7 @@ router.get("/:id/preview", requireRole("viewer"), async (req, res) => {
   const id = Number(req.params.id);
   const [row] = await db.select().from(documentTemplatesTable).where(eq(documentTemplatesTable.id, id));
   if (!row || !row.storage_path) {
-    res.status(404).json({ error: "not_found" });
+    notFound(res, "not_found");
     return;
   }
   try {
@@ -154,7 +155,7 @@ router.get("/:id/preview", requireRole("viewer"), async (req, res) => {
     res.setHeader("Content-Disposition", `inline; filename="${row.name}.pdf"`);
     res.send(buf);
   } catch {
-    res.status(404).json({ error: "file_missing" });
+    notFound(res, "file_missing");
   }
 });
 

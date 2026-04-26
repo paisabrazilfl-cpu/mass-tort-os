@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { authMiddleware, requireRole } from "../lib/rbac";
 import { auditAction } from "../lib/rbac";
 import { z } from "zod/v4";
+import { badRequest, conflict, notFound } from "../lib/http-errors";
 
 const router = Router();
 router.use(authMiddleware);
@@ -33,12 +34,12 @@ router.get("/", requireRole("viewer"), async (_req, res) => {
 router.get("/:id", requireRole("viewer"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
-    res.status(400).json({ error: "invalid_id" });
+    badRequest(res, "invalid_id");
     return;
   }
   const [row] = await db.select().from(buyersTable).where(eq(buyersTable.id, id));
   if (!row) {
-    res.status(404).json({ error: "not_found" });
+    notFound(res, "not_found");
     return;
   }
   res.json(row);
@@ -55,7 +56,7 @@ router.post("/", requireRole("admin"), auditAction("create_buyer"), async (req, 
     res.status(201).json(row);
   } catch (e: any) {
     if (String(e?.message || "").includes("duplicate")) {
-      res.status(409).json({ error: "name_taken" });
+      conflict(res, "name_taken", "A buyer with this name already exists");
       return;
     }
     throw e;
@@ -65,7 +66,7 @@ router.post("/", requireRole("admin"), auditAction("create_buyer"), async (req, 
 router.put("/:id", requireRole("admin"), auditAction("update_buyer"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
-    res.status(400).json({ error: "invalid_id" });
+    badRequest(res, "invalid_id");
     return;
   }
   const parsed = buyerSchema.partial().safeParse(req.body);
@@ -76,7 +77,7 @@ router.put("/:id", requireRole("admin"), auditAction("update_buyer"), async (req
   const updates = { ...parsed.data, updated_at: new Date() } as any;
   const [row] = await db.update(buyersTable).set(updates).where(eq(buyersTable.id, id)).returning();
   if (!row) {
-    res.status(404).json({ error: "not_found" });
+    notFound(res, "not_found");
     return;
   }
   res.json(row);
@@ -85,7 +86,7 @@ router.put("/:id", requireRole("admin"), auditAction("update_buyer"), async (req
 router.delete("/:id", requireRole("admin"), auditAction("delete_buyer"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
-    res.status(400).json({ error: "invalid_id" });
+    badRequest(res, "invalid_id");
     return;
   }
   await db.delete(buyersTable).where(eq(buyersTable.id, id));

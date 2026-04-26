@@ -5,6 +5,7 @@ import { eq, desc, and, sql } from "drizzle-orm";
 import { requireRole } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
+import { serverError } from "../lib/http-errors";
 
 const router = Router();
 
@@ -33,7 +34,7 @@ router.get("/", requireRole("paralegal"), async (req, res) => {
     res.json(results.map(sanitizeForClient));
   } catch (err) {
     logger.error({ err }, "Failed to list image objects");
-    res.status(500).json({ error: "Failed to list image objects" });
+    serverError(res, "Failed to list image objects");
   }
 });
 
@@ -54,7 +55,7 @@ router.get("/stats", requireRole("paralegal"), async (_req, res) => {
     });
   } catch (err) {
     logger.error({ err }, "Failed to get image stats");
-    res.status(500).json({ error: "Failed to get image stats" });
+    serverError(res, "Failed to get image stats");
   }
 });
 
@@ -69,7 +70,7 @@ router.get("/:id", requireRole("paralegal"), async (req, res) => {
     res.json(sanitizeForClient(image));
   } catch (err) {
     logger.error({ err }, "Failed to get image object");
-    res.status(500).json({ error: "Failed to get image object" });
+    serverError(res, "Failed to get image object");
   }
 });
 
@@ -174,7 +175,7 @@ router.post("/", requireRole("paralegal"), async (req, res) => {
     res.status(201).json(sanitizeForClient(image));
   } catch (err) {
     logger.error({ err }, "Failed to create image object");
-    res.status(500).json({ error: "Failed to create image object" });
+    serverError(res, "Failed to create image object");
   }
 });
 
@@ -209,7 +210,7 @@ router.patch("/:id", requireRole("paralegal"), async (req, res) => {
     res.json(sanitizeForClient(updated));
   } catch (err) {
     logger.error({ err }, "Failed to update image object");
-    res.status(500).json({ error: "Failed to update image object" });
+    serverError(res, "Failed to update image object");
   }
 });
 
@@ -242,7 +243,7 @@ router.delete("/:id", requireRole("admin"), async (req, res) => {
     res.json({ success: true, deleted_id: image.id });
   } catch (err) {
     logger.error({ err }, "Failed to delete image object");
-    res.status(500).json({ error: "Failed to delete image object" });
+    serverError(res, "Failed to delete image object");
   }
 });
 
@@ -274,7 +275,7 @@ router.get("/:id/integrity", requireRole("paralegal"), async (req, res) => {
     });
   } catch (err) {
     logger.error({ err }, "Integrity check failed");
-    res.status(500).json({ error: "Integrity check failed" });
+    serverError(res, "Integrity check failed");
   }
 });
 

@@ -3,6 +3,7 @@ import { db, leadsTable, casesTable, analysisTable, faxResultsTable, paralegalsT
 import { sql, eq, gte, and, desc } from "drizzle-orm";
 import { scoreLeadPredictive, getModelStats, getBatchPredictions, getTortPredictions } from "../lib/predictive-scoring";
 import { requireRole } from "../lib/rbac";
+import { notFound } from "../lib/http-errors";
 
 const router = Router();
 
@@ -161,7 +162,7 @@ router.get("/predictive/lead/:id", requireRole("paralegal"), async (req, res) =>
     const score = await scoreLeadPredictive(id);
     res.json(score);
   } catch (err: any) {
-    res.status(404).json({ error: "Lead not found or scoring failed" });
+    notFound(res, "Lead not found or scoring failed");
   }
 });
 
