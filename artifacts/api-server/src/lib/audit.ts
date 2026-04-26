@@ -9,10 +9,26 @@ import { logger } from "./logger";
  * its assertions and reports the file as "Promise resolution still pending".
  * When the test harness sets RBAC_DISABLE_AUDIT=1 we no-op cleanly.
  *
- * Production code never sets this flag and the boot env validator does not
- * check for it, so the only place it can be enabled is the test file itself.
+ * SAFETY: this flag is honoured ONLY when NODE_ENV is NOT one of
+ * `production` / `staging` (i.e., it is gated to dev / test contexts).
+ * If someone accidentally sets RBAC_DISABLE_AUDIT=1 in a deployed
+ * environment, the gate refuses to suppress audit writes and the flag
+ * is a no-op. We log a warning at module-load time so ops can grep
+ * for the misconfiguration.
  */
-const AUDIT_DISABLED = process.env["RBAC_DISABLE_AUDIT"] === "1";
+const NODE_ENV_FOR_AUDIT = process.env["NODE_ENV"];
+const IS_PROD_LIKE_FOR_AUDIT = NODE_ENV_FOR_AUDIT === "production" || NODE_ENV_FOR_AUDIT === "staging";
+const AUDIT_DISABLE_REQUESTED = process.env["RBAC_DISABLE_AUDIT"] === "1";
+const AUDIT_DISABLED = AUDIT_DISABLE_REQUESTED && !IS_PROD_LIKE_FOR_AUDIT;
+if (AUDIT_DISABLE_REQUESTED && IS_PROD_LIKE_FOR_AUDIT) {
+  // Loud, visible warning. Do NOT throw — audit is best-effort and we
+  // don't want a misconfigured env var to take down the whole API. But
+  // we want this to scream in the logs.
+  logger.warn(
+    { node_env: NODE_ENV_FOR_AUDIT },
+    "RBAC_DISABLE_AUDIT=1 is IGNORED in production/staging — audit writes remain enabled",
+  );
+}
 
 export async function auditLog(
   entity_type: string,

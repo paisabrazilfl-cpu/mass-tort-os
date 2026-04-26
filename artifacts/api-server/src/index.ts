@@ -15,17 +15,26 @@ import { workerLoop } from "./worker";
 //
 // `development` is the only mode allowed to skip these — it mirrors the
 // dev-gate in lib/rbac.ts so the two cannot drift apart.
+//
+// Strict semantics: NODE_ENV MUST be the literal string "development" for
+// IS_DEV to be true. We do NOT default unset NODE_ENV to "development" the
+// way a Node convention might suggest — that would cause the startup
+// banner's `dev_mode: true` to disagree with `rbac.ts`'s
+// `IS_DEV = NODE_ENV === "development"` (which evaluates to false for
+// `undefined`), creating a confusing posture-vs-enforcement drift in ops
+// telemetry. Unset / blank NODE_ENV is treated as production-like and
+// forces SESSION_SECRET / ENCRYPTION_KEY / DATABASE_URL to be set.
 // =============================================================================
-const NODE_ENV = process.env["NODE_ENV"] ?? "development";
+const NODE_ENV = process.env["NODE_ENV"];
 const IS_DEV = NODE_ENV === "development";
 
 const REQUIRED_ENV_PROD = ["DATABASE_URL", "SESSION_SECRET", "ENCRYPTION_KEY"] as const;
 if (!IS_DEV) {
   const missing = REQUIRED_ENV_PROD.filter((k) => !process.env[k] || String(process.env[k]).trim() === "");
   if (missing.length > 0) {
-    logger.fatal({ missing, NODE_ENV }, "FATAL: required environment variables missing for non-dev boot");
+    logger.fatal({ missing, node_env: NODE_ENV ?? "(unset)" }, "FATAL: required environment variables missing for non-dev boot");
     throw new Error(
-      `Refusing to boot in NODE_ENV="${NODE_ENV}" without: ${missing.join(", ")}. Set these in deployment secrets.`,
+      `Refusing to boot in NODE_ENV="${NODE_ENV ?? ""}" without: ${missing.join(", ")}. Set these in deployment secrets.`,
     );
   }
 }
@@ -55,7 +64,7 @@ app.listen(port, async (err) => {
   logger.info(
     {
       port,
-      node_env: NODE_ENV,
+      node_env: NODE_ENV ?? "(unset)",
       dev_mode: IS_DEV,
       has_session_secret: Boolean(process.env["SESSION_SECRET"]),
       has_encryption_key: Boolean(process.env["ENCRYPTION_KEY"]),

@@ -334,8 +334,17 @@ metadata before sending the canonical envelope.
 | `leads.ts` notes endpoint | `lead_ownership_denied` | `lead_id`, `owner_user_id`, `assigned_to` |
 
 Audit log writes are best-effort and never throw into the denial path;
-`RBAC_DISABLE_AUDIT=1` disables them in unit tests so test runs do not
+`RBAC_DISABLE_AUDIT=1` disables audit writes in unit tests so test runs do not
 require a database connection.
+
+**Production safety guard (4th-pass review fix):** `RBAC_DISABLE_AUDIT=1`
+is now honoured **only** when `NODE_ENV` is NOT `production` and NOT
+`staging`. In a production-like deployment the flag is silently ignored
+and a `WARN`-level "RBAC_DISABLE_AUDIT=1 is IGNORED in production/staging
+— audit writes remain enabled" line is logged at module load so an SOC
+reviewer can grep for the misconfiguration. This closes the prior risk
+that an accidentally-set env var could suppress audit trails in a
+deployed environment.
 
 ---
 
@@ -351,6 +360,18 @@ any of these are missing:
 A startup banner logs `node_env`, `dev_mode`, and a presence flag (never the
 value) for each required secret, so a misconfigured deployment is visible in
 the first log line.
+
+**Strict NODE_ENV semantics (4th-pass review fix):** `index.ts` no
+longer defaults unset `NODE_ENV` to `"development"` (previously
+`process.env["NODE_ENV"] ?? "development"`). It now mirrors `lib/rbac.ts`
+exactly — `IS_DEV` is true ONLY when `NODE_ENV === "development"`, and
+unset / blank `NODE_ENV` is treated as production-like (so the
+required-env validator runs and the boot will fail fast unless
+`SESSION_SECRET` / `ENCRYPTION_KEY` / `DATABASE_URL` are present). This
+guarantees the startup banner's `dev_mode` flag and the actual auth
+enforcement in `rbac.ts` cannot disagree under any environment shape.
+Banner now prints `node_env: "(unset)"` rather than a misleading
+`"development"` if the variable is missing entirely.
 
 ---
 
