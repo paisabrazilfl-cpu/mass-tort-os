@@ -242,6 +242,23 @@ Verified:
 - `POST /api/forms/background-check {}` → 400 envelope.
 - `POST /api/forms/npi-verify {}` → 400 envelope.
 
+### 2.13e Final stragglers in `routes/leads.ts` — medium
+**Where:** `routes/leads.ts` POST `/` (hospital-fields and required-
+fields 422 branches) and PATCH `/:id` (params + body parse failures).
+**Symptom:** the third architect review flagged that two 422 pipeline
+responses still used legacy keys (`status:"INVALID_LEAD"`,
+`error_code:"..."`) and the PATCH route emitted bare
+`{error: paramsParsed.error.message}` shapes.
+**Fix:**
+- Both 422 responses now emit `{status:"error", code, message,
+  details:{missing_fields}}` while keeping the domain `action:"REJECT"`
+  and `missing_fields` fields the intake page reads.
+- PATCH `/:id` param + body parse failures now use the local
+  `badRequest(res, error)` helper that returns the canonical envelope
+  with `details:error.flatten()`.
+Verified: `PATCH /api/leads/abc → 400 envelope`, `PATCH /api/leads/1
+{name:12345} → 400 envelope with field-level details`.
+
 ### 2.13d Project-wide error-envelope sweep across all route files — medium
 **Where:** every file in `artifacts/api-server/src/routes/`.
 **Symptom:** the second architect review confirmed forms.ts/leads.ts/

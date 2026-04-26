@@ -241,12 +241,18 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
       missing_fields: hospitalMissing,
       output_state: "REJECT",
     });
+    // Pipeline-style 422: keep the domain fields (`action`,
+    // `missing_fields`) that the intake page reads, but emit the canonical
+    // envelope (`status:"error"`, `code`, `message`, `details`) so the
+    // generic client error parser handles it uniformly. The previous
+    // `status:"INVALID_LEAD"` clashed with the envelope discriminator.
     res.status(422).json({
-      status: "INVALID_LEAD",
-      error_code: "HOSPITAL_REQUIRED_FIELDS_MISSING",
+      status: "error",
+      code: "hospital_required_fields_missing",
+      message: `Hospital fields are required: ${hospitalMissing.join(", ")}`,
+      details: { missing_fields: hospitalMissing },
       action: "REJECT",
       missing_fields: hospitalMissing,
-      error: `Hospital fields are required: ${hospitalMissing.join(", ")}`,
     });
     return;
   }
@@ -278,11 +284,12 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
 
   if (requiredFieldErrors.length > 0) {
     res.status(422).json({
-      status: "INVALID_LEAD",
-      error_code: "REQUIRED_FIELDS_MISSING",
+      status: "error",
+      code: "required_fields_missing",
+      message: `Required fields missing: ${requiredFieldErrors.join(", ")}`,
+      details: { missing_fields: requiredFieldErrors },
       action: "REJECT",
       missing_fields: requiredFieldErrors,
-      error: `Required fields missing: ${requiredFieldErrors.join(", ")}`,
     });
     return;
   }
@@ -495,7 +502,7 @@ router.get("/:id/fax-results", requireRole("viewer"), async (req, res) => {
 router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction("update_lead"), async (req, res) => {
   const paramsParsed = UpdateLeadParams.safeParse({ id: Number(req.params.id) });
   if (!paramsParsed.success) {
-    res.status(400).json({ error: paramsParsed.error.message });
+    badRequest(res, paramsParsed.error);
     return;
   }
 
@@ -510,7 +517,7 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
 
   const bodyParsed = UpdateLeadBody.safeParse(req.body);
   if (!bodyParsed.success) {
-    res.status(400).json({ error: bodyParsed.error.message });
+    badRequest(res, bodyParsed.error);
     return;
   }
 
