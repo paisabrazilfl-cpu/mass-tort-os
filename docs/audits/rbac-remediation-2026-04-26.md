@@ -9,7 +9,15 @@ zero "user.id !== 0" god-mode branches remain in code paths.
 on boot (`router`, `method`, `path`, `status` ∈ `public` | `auth-exception` |
 `auth-only` | `role-gated`) so an SOC reviewer can see the full surface in
 one structured log line — no need to spelunk through router code.
-**Test result:** `pnpm --filter @workspace/api-server run test` — **101 / 101 passing**
+**Public allowlist contract (path-prefix):** the unauthenticated surface is
+now exactly `/api/healthz`, `/api/forms-public/*`, and `/api/webhooks/*`.
+The previous mount of `formsPublicRouter` at `/api/forms` (which collided
+with the authenticated `formsRouter`) has been remounted at
+`/api/forms-public` so the allowlist holds at the URL-prefix level, not
+just at the router-label level. The booted-app test suite asserts both
+directions: the three prefixes ARE reachable without a token, and the
+old `/api/forms/preview/*` path is no longer public.
+**Test result:** `pnpm --filter @workspace/api-server run test` — **105 / 105 passing**
 across two files:
 - `src/lib/__tests__/rbac.test.ts` (66 unit tests): 39 RBAC matrix tests +
   3 variadic `requirePermission` tests + 5 token-version revocation
@@ -17,12 +25,16 @@ across two files:
   ownership predicate tests + 1 production-mode subprocess bypass-prevention
   test + 6 boot-time route table validator regression tests [including two
   explicit forge-attempt tests] + 2 dev-mode predicate tests.
-- `src/lib/__tests__/rbac-route-matrix.test.ts` (29 booted-app integration
+- `src/lib/__tests__/rbac-route-matrix.test.ts` (33 booted-app integration
   tests): 4 `validateRouteTable` policy-report assertions (public allowlist
   is exactly `health` / `forms-public` / `webhooks`; auth router exceptions
   are exactly `POST /login` / `/refresh` / `/register`; auth-only allowlist
   matches the documented set; **forms config GETs are role-gated, not
-  auth-only**) + 1 `/api/healthz` reachable-without-auth + 4 unauthenticated
+  auth-only**) + **5 path-prefix contract tests** (`/api/healthz` 2xx
+  unauth; `/api/forms-public/preview-blocker.js` 2xx unauth; `POST
+  /api/webhooks/dropbox-sign` ≠ 401; **`/api/forms/preview/some-tort` IS
+  401** — proves the remount works; every `public` policy entry resolves
+  under one of the three allowed URL prefixes) + 4 unauthenticated
   protected-endpoint denial tests + 20-cell role × route allow/deny matrix
   spanning admin / attorney / paralegal / viewer × `/api/forms/config`,
   `/api/forms/config/:tortId`, `/api/decision-engine/portfolio`,
@@ -199,6 +211,35 @@ No `user.id === 0` or `user.id !== 0` remain in any handler.
   assert it without a DB), and emits `denyForbidden(... "case_ownership_denied" ...)`
   on a miss — both the canonical 403 envelope and an audit-log row.
 
+### `routes/index.ts` — public intake remounted at `/api/forms-public`
+
+Discovered during the third review pass: `formsPublicRouter` was mounted
+at `/forms` (so `/api/forms/preview/:tortId`, `/api/forms/embed/:tortId`,
+`/api/forms/preview-blocker.js` were the public surface), colliding with
+the authenticated `formsRouter` also at `/api/forms`. Express resolved
+this by URL fall-through (the public router won for paths it defined,
+and unrecognised paths fell through to the auth-required router), but
+the public-allowlist contract was being enforced at the **router-label**
+level only — there was no path-prefix guarantee in the validator or
+tests. A reviewer reading routes/index.ts could not tell from the URL
+alone which `/api/forms/...` paths were public.
+
+Fix:
+- `routes/index.ts` line 88 remounts `formsPublicRouter` at
+  `/forms-public`. The full public URLs are now
+  `/api/forms-public/preview/:tortId`, `/api/forms-public/embed/:tortId`,
+  and `/api/forms-public/preview-blocker.js`.
+- The auth-required `formsRouter` keeps its `/forms` mount unchanged.
+- Added 5 path-prefix integration tests (see Section 7) that fetch the
+  three allowed prefixes directly and assert the allowlist-policy entries
+  resolve to URLs under those prefixes only.
+- The dump-route-matrix script + the audit-doc appendix are regenerated
+  from the live tree, so the matrix and the validator can never drift.
+
+**Migration note:** if any external embed loaded `/api/forms/preview/:tortId`
+or `/api/forms/embed/:tortId` directly, those URLs now return 401. Move
+the `<script src>` and `<iframe src>` to `/api/forms-public/...`.
+
 ### `routes/forms.ts` — config GETs no longer auth-only
 
 Discovered during the second review pass: `GET /api/forms/config` and
@@ -337,7 +378,7 @@ exercises the role × route matrix end-to-end.
 | Dev gate | `IS_DEV` reflects current `NODE_ENV`; **the predicate is FALSE for `production` / `staging` / `test` / unset**; **TRUE only for the literal string `"development"`** (rejects `Development`, `DEVELOPMENT`, `development ` (trailing space), ` development` (leading space), `dev`, `develop`) |
 | **`validateRouteTable`** (boot-time) | rejects authenticated route with no gate; accepts authenticated + gated; **a contributor-named `requireRole` noop CANNOT bypass the validator**; `requirePermission` satisfies the gate; **a `Symbol.for()` router stamp CANNOT impersonate `markPublic`**; missing `authMiddleware` fails even with a gate present |
 
-### `rbac-route-matrix.test.ts` (29 booted-app integration tests)
+### `rbac-route-matrix.test.ts` (33 booted-app integration tests)
 
 This file boots the real express app on an ephemeral port, inserts one
 ephemeral `mtos_users` row per role (`rbac-matrix-<role>-<ts>@mtos.test`),
@@ -347,7 +388,7 @@ deletes the rows in `after()` and force-drops keep-alive sockets.
 | Group | Cases |
 | --- | --- |
 | Public allowlist (policy report) | only routers `health` / `forms-public` / `webhooks` are stamped public; auth router exceptions are exactly `POST /login` / `/refresh` / `/register`; `auth-only` allowlist matches the documented set with no drift; **forms config GETs are role-gated, not auth-only** |
-| Public reachability | `GET /api/healthz` returns 200 with `{status:"ok"}` and no Authorization header |
+| **Path-prefix contract (NEW)** | (1) `GET /api/healthz` returns 2xx unauth; (2) `GET /api/forms-public/preview-blocker.js` returns 2xx unauth; (3) `POST /api/webhooks/dropbox-sign` does NOT 401 (sig verify happens inside the handler — public stamp holds at path level); (4) **`GET /api/forms/preview/some-tort` returns 401** — the OLD public path is now auth-only, proving the remount worked; (5) every `public` policy entry resolves under one of `/api/healthz`, `/api/forms-public/`, or `/api/webhooks/`. |
 | Unauth denial | `GET /api/leads`, `/api/cases`, `/api/forms/config`, `/api/decision-engine/portfolio` all return `401 UNAUTHENTICATED` without a token |
 | Role × route matrix | 5 routes × 4 roles = 20 cells. Allow/deny expectation per cell: `GET /api/forms/config` (attorney+); `GET /api/forms/config/:tortId` (attorney+, 404 acceptable); `GET /api/decision-engine/portfolio` (attorney+); `PUT /api/decision-engine/settings` (admin only, 400 acceptable for empty body); `GET /api/auth/me` (any authenticated). On `deny` the test asserts both `status === 403` AND `body.code === "FORBIDDEN"`. |
 
@@ -468,6 +509,8 @@ Boot-time count: **157 checked / 10 public / 147 protected / 0 unprotected.**
 
 | Router | Method | Path | Auth | Gate | Public | Auth-only | Login-exception |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|
+| Router | Method | Path | Auth | Gate | Public | Auth-only | Login-exception |
+|---|---|---|:-:|:-:|:-:|:-:|:-:|
 | analytics | GET | `/api/analytics/conversion-funnel` | ✓ | ✓ |  |  |  |
 | analytics | GET | `/api/analytics/overview` | ✓ | ✓ |  |  |  |
 | analytics | GET | `/api/analytics/paralegal-leaderboard` | ✓ | ✓ |  |  |  |
@@ -537,9 +580,9 @@ Boot-time count: **157 checked / 10 public / 147 protected / 0 unprotected.**
 | forms | GET | `/api/forms/categories` | ✓ |  |  | ✓ |  |
 | forms | DELETE | `/api/forms/config/:tortId/fields/:key` | ✓ | ✓ |  |  |  |
 | forms | POST | `/api/forms/config/:tortId/fields` | ✓ | ✓ |  |  |  |
-| forms | GET | `/api/forms/config/:tortId` | ✓ |  |  | ✓ |  |
+| forms | GET | `/api/forms/config/:tortId` | ✓ | ✓ |  |  |  |
 | forms | PUT | `/api/forms/config/:tortId` | ✓ | ✓ |  |  |  |
-| forms | GET | `/api/forms/config` | ✓ |  |  | ✓ |  |
+| forms | GET | `/api/forms/config` | ✓ | ✓ |  |  |  |
 | forms | POST | `/api/forms/escalate/fbi` | ✓ | ✓ |  |  |  |
 | forms | POST | `/api/forms/fraud-check` | ✓ | ✓ |  |  |  |
 | forms | POST | `/api/forms/npi-verify` | ✓ | ✓ |  |  |  |
@@ -625,4 +668,4 @@ Boot-time count: **157 checked / 10 public / 147 protected / 0 unprotected.**
 | workflow-settings | GET | `/api/workflow-settings/:scope` | ✓ | ✓ |  |  |  |
 | workflow-settings | GET | `/api/workflow-settings/` | ✓ | ✓ |  |  |  |
 | workflow-settings | PUT | `/api/workflow-settings/` | ✓ | ✓ |  |  |  |
-
+Total rows: 157

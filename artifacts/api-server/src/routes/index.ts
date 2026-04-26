@@ -78,7 +78,11 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use("/auth", authRouter);
-router.use("/forms", formsPublicRouter);
+// Public intake surface lives at /api/forms-public/* — explicitly separated
+// from the authenticated /api/forms/* router so the public allowlist contract
+// (`/api/healthz`, `/api/forms-public/*`, `/api/webhooks/*`) holds at the
+// path-prefix level, not just at the router-label level.
+router.use("/forms-public", formsPublicRouter);
 // Provider webhooks must be PUBLIC (callbacks have no Bearer token).
 // Each handler verifies provider signatures internally and always returns 200.
 router.use("/webhooks", webhooksRouter);

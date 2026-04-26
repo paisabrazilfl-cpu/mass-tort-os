@@ -239,11 +239,68 @@ describe("public allowlist (validateRouteTable policy)", () => {
 // 2. Public endpoints reachable WITHOUT auth
 // =============================================================================
 
-describe("public endpoints reachable unauthenticated", () => {
+describe("public endpoints reachable unauthenticated (path-prefix contract)", () => {
+  // Path-prefix allowlist enforcement: the contract is that ONLY these
+  // three URL prefixes may be reachable without a Bearer token. We assert
+  // both directions: the prefixes ARE reachable, and a sibling auth path
+  // is NOT.
   test("GET /api/healthz returns 2xx with no Authorization header", async () => {
     const r = await probe("GET", "/api/healthz");
     assert.ok(r.status >= 200 && r.status < 300, `expected 2xx, got ${r.status}`);
     assert.equal((r.body as { status?: string }).status, "ok");
+  });
+
+  test("GET /api/forms-public/preview-blocker.js returns 2xx with no Authorization header", async () => {
+    const r = await probe("GET", "/api/forms-public/preview-blocker.js");
+    assert.ok(r.status >= 200 && r.status < 300, `expected 2xx, got ${r.status}`);
+  });
+
+  test("POST /api/webhooks/dropbox-sign does NOT 401 (real public webhook endpoint)", async () => {
+    // Each provider webhook verifies its own signature internally and
+    // returns 200 even on bad sig (so providers don't disable the
+    // webhook). What matters here is that we never see 401 — the public
+    // stamp must hold at the path-prefix level, not just the label level.
+    const r = await probe("POST", "/api/webhooks/dropbox-sign", {});
+    assert.notEqual(r.status, 401, `expected non-401 for public webhook prefix, got ${r.status}`);
+    if ((r.body as { code?: string }).code) {
+      assert.notEqual((r.body as { code?: string }).code, "UNAUTHENTICATED");
+    }
+  });
+
+  test("GET /api/forms/preview/some-tort returns 401 (the OLD public path is now auth-only — proves remount worked)", async () => {
+    // Regression: formsPublicRouter previously lived at /api/forms,
+    // colliding with the authenticated formsRouter and weakening the
+    // public-allowlist contract. After remount to /api/forms-public,
+    // /api/forms/preview/* must fall through to authMiddleware.
+    const r = await probe("GET", "/api/forms/preview/some-tort");
+    assert.equal(r.status, 401, `expected 401 on old public path, got ${r.status}`);
+    assert.equal((r.body as { code?: string }).code, "UNAUTHENTICATED");
+  });
+
+  test("public path-prefix contract: every 'public' policy entry resolves under /api/healthz, /api/forms-public/, or /api/webhooks/", () => {
+    if (!booted) throw new Error("app not booted");
+    // Map router-label → mounted URL prefix. Single source of truth: the
+    // mount table in routes/index.ts. If anyone changes the mount, this
+    // assertion fails until the allowlist is updated in lockstep.
+    const ROUTER_PREFIX: Record<string, string> = {
+      health: "/api",
+      "forms-public": "/api/forms-public",
+      webhooks: "/api/webhooks",
+    };
+    const ALLOWED_PUBLIC_PREFIXES = ["/api/healthz", "/api/forms-public/", "/api/webhooks/"];
+    for (const p of booted.policy) {
+      if (p.status !== "public") continue;
+      const prefix = ROUTER_PREFIX[p.router];
+      assert.ok(prefix !== undefined, `public route on unknown router ${p.router}`);
+      const full = `${prefix}${p.path === "/" ? "" : p.path}`;
+      const ok = ALLOWED_PUBLIC_PREFIXES.some((pre) =>
+        pre.endsWith("/") ? full.startsWith(pre) || full === pre.slice(0, -1) : full === pre || full.startsWith(`${pre}/`),
+      );
+      assert.ok(
+        ok,
+        `public route ${p.method} ${full} not under allowed prefixes ${ALLOWED_PUBLIC_PREFIXES.join(", ")}`,
+      );
+    }
   });
 });
 
