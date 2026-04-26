@@ -11,19 +11,6 @@ import {
   __internal_markGateMiddleware as markGateMiddleware,
 } from "./route-protection";
 
-/**
- * Single source of truth for RBAC.
- *
- * Hard rules:
- *  1. Dev auth bypass fires ONLY when NODE_ENV === "development".
- *  2. SESSION_SECRET is required in production/staging; the dev fallback is
- *     only reachable when NODE_ENV === "development".
- *  3. Per-row ownership bypass goes through {@link canBypassOwnership} — no
- *     `user.id !== 0` god-mode special-case.
- *  4. Every 401/403 path emits the canonical envelope and writes an
- *     audit_log row through {@link auditDenial}.
- */
-
 const NODE_ENV = process.env.NODE_ENV;
 const IS_DEV = NODE_ENV === "development";
 const IS_PROD_LIKE = NODE_ENV === "production" || NODE_ENV === "staging";
@@ -39,12 +26,6 @@ const JWT_SECRET = (() => {
   return secret || "mtos-dev-secret";
 })();
 
-/**
- * drizzle-orm/node-postgres' `db.execute()` resolves to a pg `QueryResult`
- * whose row array lives on `.rows`. The few callsites in this file that
- * speak raw SQL go through this helper so we don't sprinkle `as any`
- * casts at every single one.
- */
 interface PgQueryResultLike<T> {
   rows: T[];
 }
@@ -79,11 +60,7 @@ declare global {
   }
 }
 
-/**
- * Strict ranking. Higher number = more privilege. requireRole() and
- * canBypassOwnership() consume this — we deliberately do NOT also keep an
- * "exact role list" branch (an old dual implementation used to drift).
- */
+// Higher number = more privilege.
 const ROLE_HIERARCHY: Record<UserRole, number> = {
   admin: 100,
   attorney: 75,
@@ -95,12 +72,6 @@ const ROLE_HIERARCHY: Record<UserRole, number> = {
 // Permission catalogue
 // =============================================================================
 
-/**
- * Fine-grained capabilities. A handler that needs a specific power should
- * call {@link requirePermission} with the constant from this enum instead of
- * naming a role directly — that way reassigning a permission is a one-line
- * change in {@link ROLE_PERMISSIONS}.
- */
 export const Permission = {
   // Lead lifecycle
   LEAD_VIEW_ANY: "lead:view:any",
@@ -155,13 +126,9 @@ export const Permission = {
 
 export type Permission = (typeof Permission)[keyof typeof Permission];
 
-/**
- * Role → permission set. THE single place this mapping is declared.
- *
- * Inheritance is not implicit — admin gets every permission explicitly so a
- * new permission added below cannot accidentally land in admin's bag without
- * a code review touching this map.
- */
+// Role → permission set. Admin gets every permission explicitly (no implicit
+// inheritance) so new permissions cannot land in admin's bag without an
+// explicit edit to this map.
 export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
   admin: new Set<Permission>(Object.values(Permission)),
   attorney: new Set<Permission>([
@@ -220,15 +187,8 @@ export function hasPermission(user: AuthUser | undefined | null, permission: Per
   return perms ? perms.has(permission) : false;
 }
 
-/**
- * Returns true iff the caller may bypass per-row ownership checks (e.g.
- * read leads they did not create / are not assigned to).
- *
- * This REPLACES every `user.id !== 0` check that used to sprinkle the routes
- * — that pattern was a dev-mode escape hatch that incorrectly granted
- * ownership-bypass to the synthetic `id=0` dev user but to no real account.
- * Bypass authority now flows from role only.
- */
+// Returns true iff the caller may read/write rows they don't own (e.g. leads
+// they did not create or aren't assigned to). Bypass flows from role only.
 export function canBypassOwnership(user: AuthUser | undefined | null): boolean {
   if (!user) return false;
   return user.role === "admin" || user.role === "attorney";
@@ -328,21 +288,9 @@ export function verifyToken(token: string): (AuthUser & { tv?: number }) | null 
   }
 }
 
-/**
- * Pure helper extracted so the token-version revocation check is unit-testable
- * without mocking the database. The contract:
- *
- *   - If the token doesn't carry a `tv` claim (legacy tokens issued before
- *     token_version was added), we don't revoke — the caller must rely on
- *     normal JWT expiry.
- *   - If the token's `tv` is strictly less than the current DB value, the
- *     token was issued before a `revokeAllUserTokens(userId)` call bumped
- *     the user's version, so it must be rejected as revoked.
- *   - Equal values pass — that's the normal case for live tokens.
- *
- * This is exercised end-to-end at runtime by `_authMiddleware`, and asserted
- * directly by the role × route test matrix.
- */
+// Token is revoked iff its `tv` claim is strictly less than the user's current
+// `token_version`. Legacy tokens without `tv` are not revoked here (rely on
+// JWT expiry).
 export function isTokenVersionRevoked(decodedTv: number | undefined, currentDbTv: number | undefined): boolean {
   if (typeof decodedTv !== "number") return false;
   const current = currentDbTv ?? 0;
@@ -353,11 +301,8 @@ export function isTokenVersionRevoked(decodedTv: number | undefined, currentDbTv
 // authMiddleware
 // =============================================================================
 
-/**
- * Global authentication. Fails closed in prod/staging/test/anything-not-dev.
- * The dev bypass fires only when NODE_ENV === "development" AND no
- * Authorization header is present — token-bearing requests always verify.
- */
+// Fails closed for any non-development NODE_ENV. Dev bypass fires only when
+// NODE_ENV === "development" AND no Authorization header is present.
 async function _authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
@@ -396,8 +341,7 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
       return;
     }
   } catch {
-    // Fail closed: a DB outage during token-version check must NOT silently
-    // grant access — return 503 so the client can retry.
+    // Fail closed on DB outage during token-version check.
     logger.error("Token version check failed — denying request (fail-closed)");
     res.status(503).json({
       status: "error",
@@ -417,10 +361,8 @@ export const authMiddleware = markAuthMiddleware(_authMiddleware);
 // requireRole / requirePermission
 // =============================================================================
 
-/**
- * Requires the caller hold one of `roles` or a higher role per
- * {@link ROLE_HIERARCHY}. Pass the LOWEST role that is acceptable.
- */
+// Pass the LOWEST role that is acceptable; higher roles per ROLE_HIERARCHY
+// are also admitted.
 export function requireRole(...roles: UserRole[]) {
   if (roles.length === 0) {
     throw new Error("requireRole called with no roles — refusing to mount a deny-all middleware");
@@ -444,11 +386,7 @@ export function requireRole(...roles: UserRole[]) {
   }, { kind: "role", values: [minLabel] });
 }
 
-/**
- * Permission-gated middleware. Variadic — the gate accepts iff the caller
- * holds AT LEAST ONE of the listed permissions (any-of). Passing zero
- * permissions throws at mount time so misconfiguration surfaces at boot.
- */
+// Any-of: passes iff the caller holds at least one of `permissions`.
 export function requirePermission(...permissions: Permission[]) {
   if (permissions.length === 0) {
     throw new Error("requirePermission called with no permissions — refusing to mount a deny-all middleware");
@@ -473,40 +411,19 @@ export function requirePermission(...permissions: Permission[]) {
 // Audit & user CRUD
 // =============================================================================
 
-/**
- * Options accepted by {@link auditDenial}. Every denial path in this module
- * funnels through that helper so the SOC audit trail is uniform.
- */
 interface AuditDenialOpts {
-  /** Roles the gate required (any-of). Empty for unauth/missing-token paths. */
   required_roles?: readonly UserRole[];
-  /** Permissions the gate required (any-of). Empty for unauth/missing-token paths. */
   required_permissions?: readonly Permission[];
-  /** Decoded JWT for paths where req.user has not been populated yet
-   *  (user_account_not_found / token_revoked). */
+  // Used for paths where req.user isn't populated yet (e.g. token_revoked).
   decoded?: { id: number; email: string; role: UserRole };
-  /** Per-route ownership metadata (case_id, lead_id, owner_user_id, …). */
+  // Per-route ownership metadata (case_id, lead_id, owner_user_id, …).
   extra?: Record<string, unknown>;
 }
 
-/**
- * Canonical 401/403 audit-log writer.
- *
- * EVERY denial — anonymous, missing token, expired token, revoked token,
- * insufficient role, missing permission, ownership violation — produces an
- * audit_log row with the same payload shape:
- *
- *   {
- *     reason, path, method,
- *     user_id, user_email, user_role,    // null when unknown
- *     required_roles[], required_permissions[],   // empty arrays default
- *     ip_address, user_agent,
- *     ...extra (per-route ownership metadata)
- *   }
- *
- * The shape is documented in docs/audits/rbac-remediation-2026-04-26.md §5.
- * Fire-and-forget; audit failures must NEVER turn a 401 into a 500.
- */
+// Canonical 401/403 audit writer. Every denial in this module funnels through
+// here. Payload shape is documented in
+// docs/audits/rbac-remediation-2026-04-26.md §5. Fire-and-forget — audit
+// failures must never turn a 401 into a 500.
 function auditDenial(req: Request, reason: string, opts: AuditDenialOpts = {}): void {
   const u = req.user;
   const userId = u?.id ?? opts.decoded?.id ?? null;

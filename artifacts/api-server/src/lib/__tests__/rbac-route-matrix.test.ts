@@ -1,7 +1,5 @@
-// Booted-app role × route access matrix. Spins up the real express app on
-// an ephemeral port, mints a JWT per role, and asserts the actual HTTP
-// outcome for routes that span every trust boundary the validator
-// recognises (public, auth-exception, auth-only, role-gated).
+// Booted-app role × route access matrix: real express app on an ephemeral
+// port, JWT per role, asserts HTTP outcome across every trust boundary.
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -16,13 +14,10 @@ import {
   type RoutePolicyEntry,
 } from "../route-protection.js";
 
-// Audit writes are disabled here so the role-matrix probe doesn't pollute
-// audit_log. rbac.test.ts already asserts the denial+audit-row path.
+// Audit writes off — rbac.test.ts covers the denial+audit-row path.
 process.env["RBAC_DISABLE_AUDIT"] = "1";
 
-// -----------------------------------------------------------------------------
-// Typed helpers — keep the test free of `as any` escapes.
-// -----------------------------------------------------------------------------
+// Typed helpers (no `as any`).
 
 /** drizzle-orm/node-postgres returns a pg `QueryResult`-shaped object. */
 interface PgQueryResult<T> { rows: T[] }
@@ -50,9 +45,7 @@ function closeAllConnections(server: import("node:http").Server): void {
   if (typeof fn === "function") fn.call(server);
 }
 
-// -----------------------------------------------------------------------------
 // Boot the app + capture validateRouteTable's policy report.
-// -----------------------------------------------------------------------------
 
 interface BootedApp {
   baseUrl: string;
@@ -165,15 +158,7 @@ async function probe(
   return { status: res.status, body };
 }
 
-// =============================================================================
-// 1. Public allowlist enforcement
-//
-// Architect requirement: "only `/api/health/*`, `/api/forms-public/*`,
-// `/api/webhooks/*` are unauthenticated" plus the auth-router exception list
-// (login/refresh/register). The validator's policy report is the single
-// source of truth — we assert against it directly so any future drift fails
-// the build.
-// =============================================================================
+// 1. Public allowlist enforcement (asserts against validateRouteTable's policy).
 
 describe("public allowlist (validateRouteTable policy)", () => {
   test("only health / forms-public / webhooks routers are stamped 'public'", () => {
@@ -207,9 +192,7 @@ describe("public allowlist (validateRouteTable policy)", () => {
         `route ${p.method} ${p.path} has unknown status ${p.status}`,
       );
     }
-    // The architect cares specifically about no "auth-only" leaks where
-    // the route should have been role-gated. The auth-only set is a known
-    // small allowlist; cross-check it against the policy.
+    // Cross-check the auth-only allowlist against the policy report.
     const authOnly = booted.policy.filter((p) => p.status === "auth-only").map((p) => `${p.router} ${p.method} ${p.path}`).sort();
     const expectedAuthOnly = [
       "auth GET /me",
@@ -234,15 +217,9 @@ describe("public allowlist (validateRouteTable policy)", () => {
   });
 });
 
-// =============================================================================
-// 2. Public endpoints reachable WITHOUT auth
-// =============================================================================
+// 2. Public endpoints reachable without auth (path-prefix contract).
 
 describe("public endpoints reachable unauthenticated (path-prefix contract)", () => {
-  // Path-prefix allowlist enforcement: the contract is that ONLY these
-  // three URL prefixes may be reachable without a Bearer token. We assert
-  // both directions: the prefixes ARE reachable, and a sibling auth path
-  // is NOT.
   test("GET /api/healthz returns 2xx with no Authorization header", async () => {
     const r = await probe("GET", "/api/healthz");
     assert.ok(r.status >= 200 && r.status < 300, `expected 2xx, got ${r.status}`);
@@ -267,10 +244,8 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
   });
 
   test("GET /api/forms/preview/some-tort returns 401 (the OLD public path is now auth-only — proves remount worked)", async () => {
-    // Regression: formsPublicRouter previously lived at /api/forms,
-    // colliding with the authenticated formsRouter and weakening the
-    // public-allowlist contract. After remount to /api/forms-public,
-    // /api/forms/preview/* must fall through to authMiddleware.
+    // Post-remount of formsPublicRouter to /api/forms-public, the old
+    // /api/forms/preview/* path must now hit authMiddleware.
     const r = await probe("GET", "/api/forms/preview/some-tort");
     assert.equal(r.status, 401, `expected 401 on old public path, got ${r.status}`);
     assert.equal((r.body as { code?: string }).code, "UNAUTHENTICATED");
@@ -278,9 +253,7 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
 
   test("public path-prefix contract: every 'public' policy entry resolves under /api/healthz, /api/forms-public/, or /api/webhooks/", () => {
     if (!booted) throw new Error("app not booted");
-    // Map router-label → mounted URL prefix. Single source of truth: the
-    // mount table in routes/index.ts. If anyone changes the mount, this
-    // assertion fails until the allowlist is updated in lockstep.
+    // router-label → mounted URL prefix (mirror of routes/index.ts).
     const ROUTER_PREFIX: Record<string, string> = {
       health: "/api",
       "forms-public": "/api/forms-public",
@@ -303,9 +276,7 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
   });
 });
 
-// =============================================================================
-// 3. Protected endpoint denies unauthenticated requests
-// =============================================================================
+// 3. Protected endpoints deny unauthenticated requests.
 
 describe("protected endpoints deny unauthenticated requests", () => {
   for (const path of ["/api/leads", "/api/cases", "/api/forms/config", "/api/decision-engine/portfolio"]) {
@@ -317,25 +288,7 @@ describe("protected endpoints deny unauthenticated requests", () => {
   }
 });
 
-// =============================================================================
-// 4. Role × route allow/deny matrix
-//
-// We pick representative READ endpoints across the gating spectrum so the
-// test is fast and deterministic without depending on per-row fixtures:
-//
-//   - GET /api/forms/config            → attorney+   (NEW gate from this task)
-//   - GET /api/decision-engine/portfolio → attorney+ (read/write split)
-//   - PUT /api/decision-engine/settings  → admin only
-//   - GET /api/cases                    → all authenticated roles
-//                                          (viewers see their own; that's
-//                                          row-level scoping, not a 403)
-//   - GET /api/leads                    → all authenticated roles
-//                                          (lead read perm spans roles)
-//   - GET /api/paralegals               → admin / attorney / paralegal
-//                                          (no viewer)
-//   - GET /api/dashboard/stats          → all authenticated
-//   - GET /api/auth/me                  → auth-only (any authenticated role)
-// =============================================================================
+// 4. Role × route allow/deny matrix.
 
 interface MatrixRow {
   method: "GET" | "PUT" | "POST" | "DELETE" | "PATCH";
@@ -424,34 +377,24 @@ describe("token revocation via DB token_version bump (HTTP path)", () => {
     if (typeof id !== "number") throw new Error("failed to insert revocation probe user");
 
     try {
-      // Mint a token at token_version=0. authMiddleware embeds tv=0 in the
-      // JWT — that's the value the runtime check compares against the DB
-      // row.
       const token = generateToken({ id, email, name: "Revocation Probe", role: "attorney" });
 
-      // Sanity check: pre-bump, the token works.
+      // Pre-bump: token works.
       const before = await probe("GET", "/api/auth/me", { token });
       assert.equal(before.status, 200, `pre-bump GET /api/auth/me must be 200, got ${before.status} (${JSON.stringify(before.body).slice(0, 200)})`);
 
-      // Bump token_version in the DB. This is what `POST /api/auth/logout`
-      // (logout-all-sessions), password reset, and MFA enrol all do.
+      // Bump token_version (mirrors logout-all / password-reset / MFA enrol).
       await db.execute(sql`UPDATE mtos_users SET token_version = token_version + 1 WHERE id = ${id}`);
 
-      // Re-issue the SAME token. authMiddleware should now reject it
-      // because its `tv` claim is stale relative to the DB row.
       const after = await probe("GET", "/api/auth/me", { token });
       assert.equal(after.status, 401, `post-bump GET /api/auth/me must be 401, got ${after.status} (${JSON.stringify(after.body).slice(0, 200)})`);
-      // Normalised envelope assertion: the 401 must carry a
-      // machine-readable code so the CRM can route the user back to login
-      // (rather than treating it as a generic "auth not present" failure).
       const code = (after.body as { code?: string }).code;
       assert.ok(
         code === "TOKEN_REVOKED" || code === "UNAUTHENTICATED",
         `expected code TOKEN_REVOKED or UNAUTHENTICATED, got ${String(code)}`,
       );
 
-      // A second identical request must remain rejected — there is no
-      // accidental cache that "warms" the stale token back into validity.
+      // Second identical request must remain rejected.
       const after2 = await probe("GET", "/api/auth/me", { token });
       assert.equal(after2.status, 401, "second post-bump request must remain 401");
     } finally {

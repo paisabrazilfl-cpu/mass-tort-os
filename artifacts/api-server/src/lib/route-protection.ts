@@ -1,16 +1,12 @@
 import type { IRouter, Router } from "express";
 import { logger } from "./logger";
 
-/**
- * Boot-time route table validator. Refuses to start the process if any
- * non-public handler is missing a `requireRole` / `requirePermission` gate.
- * For each terminal route, asserts `(hasAuth && hasGate)` unless the
- * router is `markPublic(...)` or the route is in `AUTH_ROUTE_EXCEPTIONS`
- * or `AUTH_ONLY_ROUTES`.
- */
+// Boot-time route validator: refuses to start if any non-public handler is
+// missing a requireRole/requirePermission gate. For each terminal route,
+// asserts (hasAuth && hasGate) unless the router is markPublic(...) or the
+// route is in AUTH_ROUTE_EXCEPTIONS or AUTH_ONLY_ROUTES.
 
-// Module-local symbols (NOT registered via Symbol.for) so only this file can
-// stamp or read them — the trust boundary is the import surface.
+// Module-local (not Symbol.for) so only this file can stamp/read.
 const PUBLIC_ROUTER_FLAG: unique symbol = Symbol("route-protection/public");
 const ROUTER_LABEL_FLAG: unique symbol = Symbol("route-protection/label");
 const AUTH_MIDDLEWARE_FLAG: unique symbol = Symbol("route-protection/auth");
@@ -35,8 +31,7 @@ function markGateMiddleware<F extends (...args: unknown[]) => unknown>(fn: F, me
   return fn;
 }
 
-// Re-exported under names that only lib/rbac.ts is supposed to import. If a
-// new file pulls these in, the import path itself flags it in code review.
+// Re-exported with __internal_ names so only lib/rbac.ts imports them.
 export { markAuthMiddleware as __internal_markAuthMiddleware };
 export { markGateMiddleware as __internal_markGateMiddleware };
 
@@ -57,10 +52,8 @@ export function labelRouter<R extends IRouter>(router: R, label: string): R {
   return router;
 }
 
-// Express Router instances are CALLABLE functions (typeof === "function")
-// that carry mounted properties — so we accept both "function" and "object".
-// Otherwise our markPublic() / labelRouter() symbols are silently invisible
-// and every router shows up as the inherited "(root)" label.
+// Express routers are callable (typeof === "function") with mounted props,
+// so accept both "function" and "object".
 function isExpressRouterLike(router: unknown): boolean {
   return router != null && (typeof router === "object" || typeof router === "function");
 }
@@ -78,26 +71,16 @@ function routerLabel(router: unknown, fallback: string): string {
   return fallback;
 }
 
-// Symbol-based detection only — no Function.name fallback (a contributor
-// could otherwise defeat the validator by naming a noop "requireRole").
-
-/**
- * Auth-router routes that are deliberately unauthenticated. Matched
- * `${METHOD} ${path}` exactly so new login-adjacent endpoints aren't
- * accidentally exempt.
- */
+// Auth-router routes that are deliberately unauthenticated. Exact
+// `${METHOD} ${path}` match.
 const AUTH_ROUTE_EXCEPTIONS = new Set([
   "POST /login",
   "POST /refresh",
   "POST /register",
 ]);
 
-/**
- * Authenticated routes that legitimately do not need a role gate (caller's
- * own account or pure stateless utility). Keys are
- * `${routerLabel} ${METHOD} ${path}`; an SOC review can grep this set to
- * enumerate every "auth-only" exception.
- */
+// Authenticated routes that legitimately do not need a role gate (caller's
+// own account or pure stateless utility). Keys: `${routerLabel} ${METHOD} ${path}`.
 const AUTH_ONLY_ROUTES = new Set([
   // auth router — self-service on caller's own account.
   "auth POST /logout",
@@ -119,35 +102,28 @@ interface RouteIssue {
   reason: string;
 }
 
-/**
- * Per-route authorisation decision emitted at boot. Statuses:
- *   - "public"          — router tagged `markPublic(...)`. No auth.
- *   - "auth-exception"  — auth-router exception (login/refresh/register).
- *   - "auth-only"       — authenticated; explicitly allowlisted in
- *                         AUTH_ONLY_ROUTES (self-service / pure utility).
- *   - "role-gated"      — authenticated AND gated by requireRole /
- *                         requirePermission. Default for every protected
- *                         handler.
- */
+// Per-route authorisation decision emitted at boot. Statuses:
+//   public         — router tagged markPublic(...)
+//   auth-exception — auth-router exception (login/refresh/register)
+//   auth-only      — authenticated; allowlisted in AUTH_ONLY_ROUTES
+//   role-gated     — authenticated AND requireRole/requirePermission gated
 export interface RoutePolicyEntry {
   router: string;
   method: string;
   path: string;
   status: "public" | "auth-exception" | "auth-only" | "role-gated";
-  /** Required roles collected from every `requireRole` gate in the chain. */
   requiredRoles?: string[];
-  /** Required permissions collected from every `requirePermission` gate in
-   *  the chain. Within one gate: any-of. Across gates: and. */
+  // Within one gate: any-of. Across gates: and.
   requiredPermissions?: string[];
 }
 
+// Express layer shape — fields differ between v4 and v5.
+//   v5: layer.slash (boolean), layer.match(path) → boolean
+//   v4: layer.regexp.fast_slash, layer.regexp.test(path)
 interface ExpressLayer {
   name?: string;
-  // Express 5 marks unscoped (`router.use(fn)`) layers with `slash = true`.
-  // Express 4 marked them with `regexp.fast_slash = true`.
   slash?: boolean;
   regexp?: RegExp & { fast_slash?: boolean };
-  // Express 5: layer.match(path) → boolean. Express 4: regexp.test(path).
   match?: (path: string) => boolean;
   handle?: unknown;
   route?: {
@@ -161,9 +137,8 @@ interface ExpressRouterLike {
   stack?: ExpressLayer[];
 }
 
-// A path-scoped middleware contribution accumulated while walking a router's
-// declaration order. Only applies to sibling routes whose path the layer's
-// matcher accepts (mirrors Express's runtime semantics).
+// Path-scoped middleware contribution applied only to sibling routes whose
+// path the layer's matcher accepts.
 interface ScopedContribution {
   matches: (path: string) => boolean;
   hasAuth: boolean;
@@ -172,11 +147,8 @@ interface ScopedContribution {
   requiredPermissions: string[];
 }
 
-// True for `router.use(handler)` (no path argument). Express 5 exposes a
-// boolean `slash` flag on the layer; Express 4 exposes `regexp.fast_slash`
-// (or the canonical source `^\/?(?=\/|$)`). When neither shape is present
-// we conservatively treat the layer as scoped — falsely classifying it as
-// unscoped would over-credit unrelated sibling routes.
+// True for `router.use(handler)` (no path argument). When neither v4 nor v5
+// shape is present, conservatively return false (treat as scoped).
 function isUnscopedLayer(layer: ExpressLayer): boolean {
   if (typeof layer.slash === "boolean") return layer.slash;
   const re = layer.regexp;
@@ -185,8 +157,6 @@ function isUnscopedLayer(layer: ExpressLayer): boolean {
   return re.source === "^\\/?(?=\\/|$)";
 }
 
-// Build the path-match predicate for a path-scoped layer. Prefer Express 5's
-// `layer.match(path)` when present; fall back to the v4 regexp.
 function pathMatcherFor(layer: ExpressLayer): ((path: string) => boolean) | undefined {
   if (typeof layer.match === "function") {
     const fn = layer.match.bind(layer);
@@ -231,13 +201,10 @@ function classifyHandlerNames(handlers: Array<{ handle?: unknown }>): {
   return { hasAuth, hasGate, requiredRoles, requiredPermissions };
 }
 
-// Walk a router's `stack` in declaration order, accumulating auth/gate/role/
-// perm state. Unscoped middleware (`router.use(handler)`) is promoted to
+// Walk router.stack in declaration order. Unscoped middleware is promoted to
 // inherited state for every subsequent sibling and sub-router. Path-scoped
-// middleware (`router.use("/admin", handler)`) is recorded as a scoped
-// contribution that only applies to siblings whose path the layer's regexp
-// matches — siblings that don't match are NOT credited with that layer's
-// auth/gate. Sub-routers do NOT inherit scoped contributions (conservative).
+// middleware applies only to siblings whose path matches; sub-routers do
+// NOT inherit scoped contributions (conservative).
 function walkRouter(
   router: ExpressRouterLike,
   inherited: {
@@ -342,9 +309,8 @@ function walkRouter(
       continue;
     }
 
-    // Non-route layer: middleware OR mounted sub-router. Express routers are
-    // callable (typeof "function") with a `.stack` array; plain middleware
-    // never carries `.stack`.
+    // Non-route layer: middleware OR mounted sub-router. Routers are callable
+    // with a `.stack` array; plain middleware has no `.stack`.
     const handle = layer.handle as ExpressRouterLike | undefined;
     const isSubRouter =
       handle != null &&
@@ -371,11 +337,6 @@ function walkRouter(
       continue;
     }
 
-    // Plain middleware on this router. Unscoped layers (`router.use(fn)`)
-    // promote to inherited state for every subsequent sibling AND every
-    // sub-router. Path-scoped layers (`router.use("/admin", fn)`) become a
-    // scoped contribution that only applies to siblings whose path matches
-    // the layer's regexp.
     const layerHasAuth = hasFlag(handle, AUTH_MIDDLEWARE_FLAG);
     const layerHasGate = hasFlag(handle, GATE_MIDDLEWARE_FLAG);
     if (!layerHasAuth && !layerHasGate) continue;
@@ -405,10 +366,7 @@ function walkRouter(
   }
 }
 
-/**
- * Walk the parent router (the one returned by routes/index.ts) and validate
- * every leaf route. Throws on any violation.
- */
+// Validates every leaf route under `parent`. Throws on any violation.
 export function validateRouteTable(parent: Router): {
   checked: number;
   public: number;
@@ -455,13 +413,9 @@ export function validateRouteTable(parent: Router): {
 
 export type ProtectedRouter = Router;
 
-/**
- * Inspect a single express handle (middleware or sub-router) and report
- * which trust-boundary stamps it carries. Consumed by
- * `scripts/dump-route-matrix.ts` so the audit-doc matrix is computed
- * against the same symbol identities `validateRouteTable` checks (no
- * string-name drift).
- */
+// Reports which trust-boundary stamps a handle carries. Consumed by
+// scripts/dump-route-matrix.ts so the audit-doc matrix uses the same symbol
+// identities the validator checks.
 export function __internal_inspectLayer(handle: unknown): {
   hasAuthStamp: boolean;
   hasGateStamp: boolean;

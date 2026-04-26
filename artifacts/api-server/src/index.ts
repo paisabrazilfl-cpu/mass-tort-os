@@ -3,21 +3,17 @@ import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
 import { workerLoop } from "./worker";
 
-// Boot env validation. Fail fast in non-dev when SESSION_SECRET /
-// ENCRYPTION_KEY / DATABASE_URL are missing so the container restart loop
-// alerts ops instead of running half-broken. IS_DEV mirrors lib/rbac.ts:
-// only the literal string "development" enables dev-mode. Unset / blank
-// NODE_ENV is treated as production-like.
 const NODE_ENV = process.env["NODE_ENV"];
 const IS_DEV = NODE_ENV === "development";
+const IS_PROD_LIKE = NODE_ENV === "production" || NODE_ENV === "staging";
 
 const REQUIRED_ENV_PROD = ["DATABASE_URL", "SESSION_SECRET", "ENCRYPTION_KEY"] as const;
-if (!IS_DEV) {
+if (IS_PROD_LIKE) {
   const missing = REQUIRED_ENV_PROD.filter((k) => !process.env[k] || String(process.env[k]).trim() === "");
   if (missing.length > 0) {
-    logger.fatal({ missing, node_env: NODE_ENV ?? "(unset)" }, "FATAL: required environment variables missing for non-dev boot");
+    logger.fatal({ missing, node_env: NODE_ENV }, "FATAL: required environment variables missing");
     throw new Error(
-      `Refusing to boot in NODE_ENV="${NODE_ENV ?? ""}" without: ${missing.join(", ")}. Set these in deployment secrets.`,
+      `Refusing to boot in NODE_ENV="${NODE_ENV}" without: ${missing.join(", ")}. Set these in deployment secrets.`,
     );
   }
 }

@@ -1,7 +1,5 @@
-// Disable audit-log writes BEFORE importing rbac.ts so the audit module
-// reads the flag at import time and short-circuits its inserts. Without
-// this, every denial test queues a pg insert and the test process hangs
-// waiting for the connection pool to drain.
+// Disable audit writes before importing rbac.ts so audit module reads the
+// flag at import time and skips pg inserts.
 process.env["RBAC_DISABLE_AUDIT"] = "1";
 
 import { test, describe, after } from "node:test";
@@ -9,8 +7,6 @@ import assert from "node:assert/strict";
 import express from "express";
 import { pool } from "@workspace/db";
 
-// Close the shared pg pool when the test file finishes — otherwise the
-// drizzle-managed connection pool keeps the event loop alive.
 after(async () => {
   await pool.end();
 });
@@ -28,13 +24,8 @@ import {
 } from "../rbac.js";
 import { isCaseVisibleToUser } from "../../routes/cases.js";
 
-// =============================================================================
-// Tiny in-memory request/response stand-ins. We avoid spinning up a full
-// supertest harness so this file stays a pure unit test — no DB, no server.
-// Each helper mirrors only the bits of express the rbac middleware actually
-// touches: status(), json(), set headers, ip, get(), and the user attachment.
-// =============================================================================
-
+// In-memory request/response stand-ins covering only the express bits the
+// rbac middleware touches.
 interface FakeRes {
   statusCode: number;
   body: unknown;
@@ -60,9 +51,8 @@ function makeRes(): FakeRes {
 }
 
 function makeReq(overrides: Partial<express.Request> = {}): express.Request {
-  // `socket` is touched by the audit-denial logger; supply a stub so the
-  // middleware doesn't throw on `socket.remoteAddress` when no real
-  // connection exists.
+  // socket is read by the audit logger; stub it to avoid a throw when
+  // there's no real connection.
   return {
     method: "GET",
     originalUrl: "/api/test",
@@ -95,8 +85,7 @@ function runMiddleware(
       if (err) nextErr = err;
       done();
     }) as express.NextFunction;
-    // Hook res.json() so the deny path (which ends the response without
-    // calling next) also resolves the promise.
+    // Hook res.json so the deny path also resolves the promise.
     const origJson = res.json.bind(res);
     res.json = (b: unknown) => {
       const r = origJson(b);
@@ -104,8 +93,7 @@ function runMiddleware(
       return r;
     };
     Promise.resolve(mw(req, res as unknown as express.Response, next)).then(() => {
-      // Final fallback: if the middleware exited cleanly without calling
-      // next() or res.json(), still resolve so the test doesn't hang.
+      // Fallback if the mw exited without calling next() or res.json().
       done();
     });
   });
@@ -124,10 +112,6 @@ describe("ROLE_PERMISSIONS catalogue", () => {
   });
 
   test("attorney has any-scope lead/case views (not own-scope)", () => {
-    // attorney bypasses ownership, so the catalogue grants the wider
-    // *_VIEW_ANY perm rather than the narrow *_VIEW_OWN. The own-scope
-    // perm is for paralegal/viewer; canBypassOwnership() is what gives
-    // attorney/admin access regardless.
     assert.equal(ROLE_PERMISSIONS.attorney.has(Permission.LEAD_VIEW_ANY), true);
     assert.equal(ROLE_PERMISSIONS.attorney.has(Permission.CASE_VIEW_ANY), true);
   });
@@ -209,8 +193,6 @@ describe("canBypassOwnership()", () => {
     assert.equal(canBypassOwnership(undefined), false);
   });
   test("user.id===0 (dev synthetic) does NOT grant god mode by itself", () => {
-    // The whole point of removing user.id !== 0 — a `viewer` with id 0 must
-    // not bypass ownership just because of the magic id.
     assert.equal(canBypassOwnership({ id: 0, role: "viewer" }), false);
     assert.equal(canBypassOwnership({ id: 0, role: "paralegal" }), false);
   });
@@ -224,8 +206,7 @@ describe("requireRole hierarchy", () => {
   const roles = ["viewer", "paralegal", "attorney", "admin"] as const;
   type Role = typeof roles[number];
 
-  // Map: when requireRole(min) is invoked, which roles should be allowed?
-  // attorney threshold ⇒ attorney + admin allowed; viewer/paralegal denied.
+  // requireRole(min) → roles allowed (hierarchy-only).
   const expected: Record<Role, Role[]> = {
     viewer:    ["viewer", "paralegal", "attorney", "admin"],
     paralegal: ["paralegal", "attorney", "admin"],
@@ -266,9 +247,6 @@ describe("requireRole hierarchy", () => {
   });
 
   test("multiple acceptable roles still go through hierarchy (highest wins)", async () => {
-    // requireRole("paralegal","admin") must accept anyone >= paralegal, NOT
-    // require an exact role match. This is the documented hierarchy-only
-    // semantic in lib/rbac.ts.
     const req = makeReq();
     (req as unknown as { user: unknown }).user = { id: 1, role: "attorney" };
     const res = makeRes();
@@ -317,12 +295,7 @@ describe("requirePermission()", () => {
     assert.equal((res.body as { code: string }).code, "UNAUTHENTICATED");
   });
 
-  // Variadic contract: requirePermission(...perms) is any-of so callers
-  // can express e.g. "may view own OR view any".
-
   test("variadic: passes when role grants ANY one of the listed perms (any-of)", async () => {
-    // viewer has LEAD_VIEW_OWN but not LEAD_VIEW_ANY. The any-of gate must
-    // accept them when EITHER perm is acceptable.
     const req = makeReq();
     (req as unknown as { user: unknown }).user = { id: 1, role: "viewer" };
     const res = makeRes();
@@ -389,24 +362,16 @@ describe("authMiddleware", () => {
   });
 });
 
-// =============================================================================
-// Internal: dev-mode flag is strictly NODE_ENV === "development"
-// =============================================================================
+// Dev-mode flag: strictly NODE_ENV === "development".
 
 describe("dev gate (IS_DEV)", () => {
   test("the exported IS_DEV reflects the current NODE_ENV", () => {
-    // We don't mutate NODE_ENV here — the test just asserts the contract.
-    // The boot validator in src/index.ts also reads NODE_ENV directly.
     const expected = process.env["NODE_ENV"] === "development";
     assert.equal(__rbacInternal.isDev(), expected);
   });
 
-  // The dev gate constant in rbac.ts (`IS_DEV`) is captured at module
-  // import time, so we cannot toggle process.env inside an existing test —
-  // we'd just be reading the cached value. Instead, we re-execute the
-  // gate's exact check in isolation against every problematic env shape.
-  // This also documents the canonical predicate used at boot and in the
-  // SESSION_SECRET fallback in lib/rbac.ts:39-40.
+  // IS_DEV is captured at import time, so re-execute the predicate in
+  // isolation against problematic env shapes.
   test("dev-mode predicate is FALSE for production / staging / test / unset", () => {
     const isDevPredicate = (env: string | undefined) => env === "development";
     for (const value of ["production", "staging", "test", undefined]) {
@@ -421,9 +386,7 @@ describe("dev gate (IS_DEV)", () => {
   test("dev-mode predicate is TRUE only for the exact string 'development'", () => {
     const isDevPredicate = (env: string | undefined) => env === "development";
     assert.equal(isDevPredicate("development"), true);
-    // Casing/whitespace/aliases MUST NOT enable the bypass — protects
-    // against a mis-set deployment env var (e.g. NODE_ENV=Development on
-    // Windows) accidentally turning on the dev auth shim.
+    // Casing/whitespace/aliases must not enable the bypass.
     for (const value of ["Development", "DEVELOPMENT", "development ", " development", "dev", "develop"]) {
       assert.equal(
         isDevPredicate(value),
@@ -434,14 +397,7 @@ describe("dev gate (IS_DEV)", () => {
   });
 });
 
-// =============================================================================
-// Route-table validator regression. These tests construct minimal Express
-// router trees and assert the boot-time validator's behaviour: it MUST throw
-// on any leaf route that is missing either authMiddleware or a role gate, and
-// it MUST accept routes that pass through requireRole/requirePermission. They
-// also assert that a plainly-named "requireRole" function CANNOT impersonate
-// a real gate — symbol detection is the only signal.
-// =============================================================================
+// validateRouteTable: boot-time gate-presence regression.
 
 describe("validateRouteTable (boot-time)", () => {
   test("rejects an authenticated route with no role/permission gate", async () => {
@@ -452,7 +408,6 @@ describe("validateRouteTable (boot-time)", () => {
     const parent = Router();
     const child = labelRouter(Router(), "test-bad");
     child.use(authMiddleware);
-    // No requireRole/requirePermission. The validator MUST flag this.
     child.get("/leak", (_req, res) => res.json({ ok: true }));
     parent.use("/test-bad", child);
 
@@ -478,8 +433,6 @@ describe("validateRouteTable (boot-time)", () => {
   });
 
   test("a contributor-named requireRole noop CANNOT bypass the validator", async () => {
-    // Forging attempt: define a middleware named 'requireRole' that does
-    // nothing. With the symbol-based validator this MUST still fail.
     const { validateRouteTable, labelRouter } = await import("../route-protection.js");
     const Router = (await import("express")).Router;
 
@@ -511,17 +464,12 @@ describe("validateRouteTable (boot-time)", () => {
   });
 
   test("a Symbol.for() router stamp CANNOT impersonate markPublic", async () => {
-    // Forging attempt: a contributor in another module computes the same
-    // string the validator USED to use for its public flag and stamps an
-    // ungated router as public. Because the public flag is now a
-    // module-LOCAL Symbol(), the well-known string yields a different
-    // symbol identity, so the validator must STILL flag the route.
     const { validateRouteTable, labelRouter } = await import("../route-protection.js");
     const Router = (await import("express")).Router;
 
     const parent = Router();
     const child = labelRouter(Router(), "test-fakepub");
-    // Old key string, used by the previous Symbol.for() implementation.
+    // Old well-known key from the previous Symbol.for() implementation.
     const fakeKey = Symbol.for("@workspace/api-server/route-protection/public");
     (child as unknown as Record<symbol, unknown>)[fakeKey] = true;
     child.use(authMiddleware);
@@ -551,10 +499,6 @@ describe("validateRouteTable (boot-time)", () => {
   });
 
   test("path-scoped middleware does NOT authorize sibling paths in the same router", async () => {
-    // router.use("/admin", requireRole("admin")) must only credit
-    // routes whose path starts with /admin. A sibling like /public
-    // on the same router must still fail validation because the
-    // gate's regexp does not match its path.
     const { validateRouteTable, labelRouter } = await import("../route-protection.js");
     const Router = (await import("express")).Router;
 
@@ -574,10 +518,6 @@ describe("validateRouteTable (boot-time)", () => {
   });
 
   test("path-scoped middleware DOES authorize sibling paths whose path matches", async () => {
-    // The complement of the previous test: when both routes are under
-    // /admin, the path-scoped requireRole must satisfy the gate check
-    // for both — proving the validator's path matching works in both
-    // directions.
     const { validateRouteTable, labelRouter } = await import("../route-protection.js");
     const Router = (await import("express")).Router;
 
@@ -599,14 +539,7 @@ describe("validateRouteTable (boot-time)", () => {
   });
 });
 
-// =============================================================================
-// Token revocation — pure helper
-//
-// The end-to-end "DB token_version mismatch ⇒ 401" path requires a live pg
-// connection, which intentionally lives outside this unit-test file. The
-// comparison logic ITSELF is factored into `isTokenVersionRevoked()` so we
-// can assert every interesting boundary here without mocking drizzle.
-// =============================================================================
+// Token revocation — pure helper boundaries (no DB).
 
 describe("isTokenVersionRevoked()", () => {
   test("legacy token without tv claim is never revoked (rely on JWT expiry)", () => {
@@ -620,15 +553,11 @@ describe("isTokenVersionRevoked()", () => {
   });
 
   test("token tv strictly less than DB tv ⇒ revoked", () => {
-    // After revokeAllUserTokens(uid) the DB tv is bumped; any token with an
-    // older tv must be rejected.
     assert.equal(isTokenVersionRevoked(0, 1), true);
     assert.equal(isTokenVersionRevoked(2, 5), true);
   });
 
   test("token tv greater than DB tv passes (DB is the floor)", () => {
-    // Defensive: a stale read from the DB shouldn't reject a freshly issued
-    // token whose tv is ahead of the cached row.
     assert.equal(isTokenVersionRevoked(5, 3), false);
   });
 
@@ -638,18 +567,12 @@ describe("isTokenVersionRevoked()", () => {
   });
 });
 
-// =============================================================================
-// Expired-token denial via authMiddleware. We can exercise this without a
-// DB because verifyToken() returns null on an expired JWT *before* the
-// middleware reaches the token-version DB lookup.
-// =============================================================================
+// authMiddleware: expired-token rejection (no DB needed — verifyToken
+// returns null on expiry before the token-version lookup).
 
 describe("authMiddleware — expired token", () => {
   test("rejects an expired Bearer token with UNAUTHENTICATED + audit reason", async () => {
-    // Build a token that is already expired. generateToken() uses the
-    // module's JWT_SECRET so the signature itself is valid — only the
-    // expiry will trip the verifier.
-    // jsonwebtoken is a CJS module; dynamic import returns { default: { sign, verify, ... } }
+    // jsonwebtoken is CJS; dynamic import returns { default: { sign, verify } }.
     const jwtMod = await import("jsonwebtoken");
     const jwt = (jwtMod as unknown as { default: typeof jwtMod }).default ?? jwtMod;
     const secret = process.env["SESSION_SECRET"] ?? "mtos-dev-secret";
@@ -666,18 +589,12 @@ describe("authMiddleware — expired token", () => {
     const body = res.body as { code: string; message: string };
     assert.equal(body.code, "UNAUTHENTICATED");
     assert.match(body.message, /invalid or expired/i);
-    // No req.user must be attached on the failure path.
     assert.equal((req as unknown as { user: unknown }).user, undefined);
   });
 
   test("freshly issued token is NOT rejected by signature/expiry checks", async () => {
-    // We can't assert the middleware reaches `next()` without a DB (the
-    // token-version row lookup runs after signature verification), but we
-    // CAN assert the failure code is no longer the expired/invalid one
-    // when the token is well-formed. The DB call will fail-closed with
-    // either a 401 ("user_account_not_found") or 503 ("AUTH_UNAVAILABLE")
-    // — both acceptable; the contract here is "valid signature ⇒ NOT
-    // invalid_or_expired_token".
+    // Without a DB the token-version lookup fails closed, but the message
+    // must not be invalid_or_expired_token for a well-formed signature.
     const fresh = generateToken({ id: 999, email: "fresh@mtos.local", name: "Fresh", role: "admin" });
     const req = makeReq({ headers: { authorization: `Bearer ${fresh}` } });
     const res = makeRes();
@@ -689,10 +606,7 @@ describe("authMiddleware — expired token", () => {
   });
 });
 
-// =============================================================================
-// Cases viewer ownership — pure predicate. Mirrors GET /api/cases and
-// GET /api/cases/:id semantics without spinning up the DB.
-// =============================================================================
+// Case visibility predicate — mirrors /api/cases without the DB.
 
 describe("isCaseVisibleToUser()", () => {
   const otherUser = { id: 7, role: "viewer" as const };
@@ -733,17 +647,8 @@ describe("isCaseVisibleToUser()", () => {
   });
 });
 
-// =============================================================================
-// Production-mode bypass prevention.
-//
-// `IS_DEV` in lib/rbac.ts is captured at module-import time, so we cannot
-// flip it inside this process. Instead we spawn a child node that sets
-// `NODE_ENV=production` BEFORE importing rbac, then asserts the
-// authMiddleware refuses an unauthenticated request — i.e. no dev shim
-// engages. Guards against the prior bug where the dev bypass fired
-// under `NODE_ENV !== "production"` (staging, test, and unset all
-// silently bypassed auth).
-// =============================================================================
+// IS_DEV is captured at import time, so spawn a child with NODE_ENV=production
+// to verify the dev-shim is not engaged outside development.
 
 describe("production NODE_ENV refuses the dev-mode bypass", () => {
   test("authMiddleware denies unauthenticated requests under NODE_ENV=production", async () => {
@@ -751,14 +656,8 @@ describe("production NODE_ENV refuses the dev-mode bypass", () => {
     const path = await import("node:path");
     const apiServerRoot = path.resolve(import.meta.dirname, "../../..");
 
-    // The child runs an inline tsx program: set NODE_ENV via env, import
-    // rbac, exercise the middleware against a stub request/response, and
-    // print a one-line JSON verdict on stdout.
-    //
-    // We cannot let the child touch the real DB, so the request is
-    // unauthenticated (no Bearer header). In dev mode this is the path
-    // that engages the synthetic admin user; in any non-dev env it must
-    // emit 401 + UNAUTHENTICATED with no req.user attached.
+    // Inline tsx program: set NODE_ENV=production, import rbac, run the
+    // middleware against a stub req/res, print a one-line JSON verdict.
     const program = `
       import("./src/lib/rbac.ts").then(async ({ authMiddleware }) => {
         const req = { headers: {}, path: "/x", method: "GET", socket: { remoteAddress: "127.0.0.1" }, get: () => undefined, ip: "127.0.0.1" };
@@ -788,9 +687,7 @@ describe("production NODE_ENV refuses the dev-mode bypass", () => {
         env: {
           ...process.env,
           NODE_ENV: "production",
-          // SESSION_SECRET is REQUIRED in non-dev — provide a stable test
-          // value so the rbac module loads. The middleware behaviour we're
-          // testing (refusing the bypass) is independent of the secret.
+          // SESSION_SECRET is required in non-dev so the module loads.
           SESSION_SECRET: process.env["SESSION_SECRET"] ?? "test-only-secret-not-real",
           RBAC_DISABLE_AUDIT: "1",
         },

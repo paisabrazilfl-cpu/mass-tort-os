@@ -17,7 +17,7 @@ with the authenticated `formsRouter`) has been remounted at
 just at the router-label level. The booted-app test suite asserts both
 directions: the three prefixes ARE reachable without a token, and the
 old `/api/forms/preview/*` path is no longer public.
-**Test result:** `pnpm --filter @workspace/api-server run test` — **105 / 105 passing**
+**Test result:** `pnpm --filter @workspace/api-server run test` — **109 / 109 passing**
 across two files:
 - `src/lib/__tests__/rbac.test.ts` (66 unit tests): 39 RBAC matrix tests +
   3 variadic `requirePermission` tests + 5 token-version revocation
