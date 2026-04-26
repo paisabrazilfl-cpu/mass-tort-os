@@ -53,7 +53,15 @@ const serverError = (res: Response, message: string) =>
 
 const router = Router();
 
-router.get("/config", async (_req, res) => {
+// GET /config and GET /config/:tortId expose admin-tunable tort campaign
+// configuration (rules, valid_diagnoses, custom_fields, settlement bands,
+// MDL status). The PUT/POST/DELETE on the same path require admin; the
+// reads are gated to attorney+ to match the decision-engine read/write
+// split — viewers and paralegals have no legitimate need to inspect the
+// config matrix and the data is operational rather than per-lead. The
+// public intake form goes through `/api/forms-public/preview/:tortId`,
+// which is its own (rate-limited, public) router.
+router.get("/config", authMiddleware, requireRole("attorney"), async (_req, res) => {
   try {
     const all = await getAllFormConfigs();
     const configs = all.map(c => ({
@@ -80,7 +88,7 @@ router.get("/config", async (_req, res) => {
   }
 });
 
-router.get("/config/:tortId", async (req, res) => {
+router.get("/config/:tortId", authMiddleware, requireRole("attorney"), async (req, res) => {
   try {
     const config = await getFormConfig(String(req.params.tortId));
     if (!config) {

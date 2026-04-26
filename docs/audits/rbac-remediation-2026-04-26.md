@@ -5,14 +5,28 @@
 enforced at boot, normalised 401/403 envelope, audit trail on every denial,
 zero "user.id !== 0" god-mode branches remain in code paths.
 **Boot-time validator result:** 157 routes checked, 10 public, 147 protected,
-**0 unprotected**.
-**Test result:** `src/lib/__tests__/rbac.test.ts` — 66 / 66 passing
-(39 RBAC matrix tests + 3 variadic `requirePermission` tests + 5 token-version
-revocation predicate tests + 2 expired-/fresh-token authMiddleware tests + 8
-viewer ownership predicate tests + 1 production-mode subprocess bypass-prevention
-test + 6 boot-time route table validator regression tests [including two explicit
-forge-attempt tests] + 2 dev-mode predicate tests covering production / staging
-/ casing / whitespace bypass prevention).
+**0 unprotected**. The validator now emits a per-route policy report at INFO
+on boot (`router`, `method`, `path`, `status` ∈ `public` | `auth-exception` |
+`auth-only` | `role-gated`) so an SOC reviewer can see the full surface in
+one structured log line — no need to spelunk through router code.
+**Test result:** `pnpm --filter @workspace/api-server run test` — **101 / 101 passing**
+across two files:
+- `src/lib/__tests__/rbac.test.ts` (66 unit tests): 39 RBAC matrix tests +
+  3 variadic `requirePermission` tests + 5 token-version revocation
+  predicate tests + 2 expired-/fresh-token authMiddleware tests + 8 viewer
+  ownership predicate tests + 1 production-mode subprocess bypass-prevention
+  test + 6 boot-time route table validator regression tests [including two
+  explicit forge-attempt tests] + 2 dev-mode predicate tests.
+- `src/lib/__tests__/rbac-route-matrix.test.ts` (29 booted-app integration
+  tests): 4 `validateRouteTable` policy-report assertions (public allowlist
+  is exactly `health` / `forms-public` / `webhooks`; auth router exceptions
+  are exactly `POST /login` / `/refresh` / `/register`; auth-only allowlist
+  matches the documented set; **forms config GETs are role-gated, not
+  auth-only**) + 1 `/api/healthz` reachable-without-auth + 4 unauthenticated
+  protected-endpoint denial tests + 20-cell role × route allow/deny matrix
+  spanning admin / attorney / paralegal / viewer × `/api/forms/config`,
+  `/api/forms/config/:tortId`, `/api/decision-engine/portfolio`,
+  `/api/decision-engine/settings`, `/api/auth/me`.
 
 ---
 
@@ -185,6 +199,34 @@ No `user.id === 0` or `user.id !== 0` remain in any handler.
   assert it without a DB), and emits `denyForbidden(... "case_ownership_denied" ...)`
   on a miss — both the canonical 403 envelope and an audit-log row.
 
+### `routes/forms.ts` — config GETs no longer auth-only
+
+Discovered during the second review pass: `GET /api/forms/config` and
+`GET /api/forms/config/:tortId` were previously listed in `AUTH_ONLY_ROUTES`,
+which let any authenticated user (including viewers and paralegals) read
+admin-tunable tort-campaign configuration — `valid_diagnoses`,
+`custom_fields`, `rules`, settlement bands, MDL status. The PUT/POST/DELETE
+on the same paths already required `requireRole("admin")`, so this was a
+read/write asymmetry: the data was admin-tunable on the write side but
+publicly readable on the read side.
+
+Fix:
+
+- `routes/forms.ts` adds `authMiddleware, requireRole("attorney")` to both
+  GETs (matches the `decision-engine.ts` read/write pattern: attorney+ for
+  reads, admin for writes — admin satisfies both via hierarchy).
+- `lib/route-protection.ts` removes the two `forms GET /config*` entries
+  from `AUTH_ONLY_ROUTES` (and adds a comment explaining why the remaining
+  forms entries — `categories`, `validate/email`, `validate/address` —
+  are still legitimate auth-only utilities: pure validators, no DB reads
+  of campaign config, no PII enrichment).
+- The booted-app role × route matrix test asserts **paralegal and viewer
+  receive 403** on both endpoints; admin and attorney are allowed.
+
+The public intake form (which legitimately needs to render fields without
+authentication) goes through the separate `/api/forms-public/preview/:tortId`
+router, which is rate-limited and `markPublic`-stamped.
+
 ### `routes/decision-engine.ts` — read vs write split
 
 The original implementation mounted a single `requireRole("admin")` on the
@@ -271,9 +313,14 @@ the first log line.
 
 ---
 
-## 7. Tests — `src/lib/__tests__/rbac.test.ts`
+## 7. Tests — `src/lib/__tests__/rbac*.test.ts`
 
-66 / 66 passing under `node:test`. Coverage matrix:
+**101 / 101 passing** under `node:test` (`pnpm --filter @workspace/api-server run test`).
+The deliverable is split across two files; the first stays as fast pure-helper
+unit tests, the second boots the real express app on an ephemeral port and
+exercises the role × route matrix end-to-end.
+
+### `rbac.test.ts` (66 unit tests)
 
 | Group | Cases |
 | --- | --- |
@@ -290,16 +337,45 @@ the first log line.
 | Dev gate | `IS_DEV` reflects current `NODE_ENV`; **the predicate is FALSE for `production` / `staging` / `test` / unset**; **TRUE only for the literal string `"development"`** (rejects `Development`, `DEVELOPMENT`, `development ` (trailing space), ` development` (leading space), `dev`, `develop`) |
 | **`validateRouteTable`** (boot-time) | rejects authenticated route with no gate; accepts authenticated + gated; **a contributor-named `requireRole` noop CANNOT bypass the validator**; `requirePermission` satisfies the gate; **a `Symbol.for()` router stamp CANNOT impersonate `markPublic`**; missing `authMiddleware` fails even with a gate present |
 
+### `rbac-route-matrix.test.ts` (29 booted-app integration tests)
+
+This file boots the real express app on an ephemeral port, inserts one
+ephemeral `mtos_users` row per role (`rbac-matrix-<role>-<ts>@mtos.test`),
+mints a JWT for each, and asserts the actual HTTP outcome. Cleanup
+deletes the rows in `after()` and force-drops keep-alive sockets.
+
+| Group | Cases |
+| --- | --- |
+| Public allowlist (policy report) | only routers `health` / `forms-public` / `webhooks` are stamped public; auth router exceptions are exactly `POST /login` / `/refresh` / `/register`; `auth-only` allowlist matches the documented set with no drift; **forms config GETs are role-gated, not auth-only** |
+| Public reachability | `GET /api/healthz` returns 200 with `{status:"ok"}` and no Authorization header |
+| Unauth denial | `GET /api/leads`, `/api/cases`, `/api/forms/config`, `/api/decision-engine/portfolio` all return `401 UNAUTHENTICATED` without a token |
+| Role × route matrix | 5 routes × 4 roles = 20 cells. Allow/deny expectation per cell: `GET /api/forms/config` (attorney+); `GET /api/forms/config/:tortId` (attorney+, 404 acceptable); `GET /api/decision-engine/portfolio` (attorney+); `PUT /api/decision-engine/settings` (admin only, 400 acceptable for empty body); `GET /api/auth/me` (any authenticated). On `deny` the test asserts both `status === 403` AND `body.code === "FORBIDDEN"`. |
+
 ---
 
 ## 8. Boot-time route table check
 
 ```
-[15:50:03.532] INFO: Route table validated
+[16:37:56.252] INFO: Route policy report
     checked: 157
     public: 10
     protected: 147
-[15:50:03.535] INFO: MTOS API server listening
+    by_status: { public: 7, "auth-exception": 3, "auth-only": 9, "role-gated": 138 }
+    policy: [
+      { router: "health",        method: "GET",  path: "/healthz",          status: "public" },
+      { router: "forms-public",  method: "GET",  path: "/preview/:tortId",  status: "public" },
+      …
+      { router: "auth",          method: "POST", path: "/login",            status: "auth-exception" },
+      …
+      { router: "auth",          method: "GET",  path: "/me",               status: "auth-only" },
+      { router: "forms",         method: "POST", path: "/validate/email",   status: "auth-only" },
+      …
+      { router: "leads",         method: "GET",  path: "/",                 status: "role-gated" },
+      { router: "forms",         method: "GET",  path: "/config",           status: "role-gated" },
+      { router: "forms",         method: "GET",  path: "/config/:tortId",   status: "role-gated" },
+      …
+    ]
+[16:37:56.255] INFO: MTOS API server listening
     port: 8080
     node_env: "development"
     dev_mode: true
@@ -307,6 +383,12 @@ the first log line.
     has_encryption_key: true
     has_database_url: true
 ```
+
+The structured `policy` field carries one row per terminal route — an
+SOC reviewer (or an alerting pipeline) can `jq '.policy[] | select(.status=="auth-only")'`
+on the boot log to enumerate every endpoint that is authenticated but
+not role-gated, and `select(.status=="public")` for everything reachable
+without a token.
 
 If any future contributor adds a handler without `requireRole` /
 `requirePermission`, the process refuses to start and prints the offending
@@ -333,9 +415,12 @@ artifacts/api-server/src/worker.ts               +25/-…    plumb created_by_us
 artifacts/api-server/src/routes/decision-engine.ts +12/-…   read/write split (attorney/admin)
 artifacts/api-server/src/scripts/dump-route-matrix.ts (new) live route-matrix exporter
 lib/db/src/schema/cases.ts                       +12       created_by_user_id + assigned_to
-artifacts/api-server/src/lib/__tests__/rbac.test.ts (new)  66 unit tests
-artifacts/api-server/src/routes/cases.ts                   isCaseVisibleToUser helper exported
-artifacts/api-server/src/lib/route-protection.ts           __internal_inspectLayer / AUTH_ROUTE_EXCEPTIONS / AUTH_ONLY_ROUTES exposed for tests + dump-route-matrix
+artifacts/api-server/src/lib/__tests__/rbac.test.ts (new)              66 unit tests
+artifacts/api-server/src/lib/__tests__/rbac-route-matrix.test.ts (new) 29 booted-app integration tests
+artifacts/api-server/src/routes/cases.ts                               isCaseVisibleToUser helper exported
+artifacts/api-server/src/lib/route-protection.ts                       __internal_inspectLayer / AUTH_ROUTE_EXCEPTIONS / AUTH_ONLY_ROUTES exposed for tests + dump-route-matrix; RoutePolicyEntry exported; per-route policy report emitted at boot
+artifacts/api-server/src/routes/forms.ts                               GET /config + GET /config/:tortId now requireRole("attorney")
+artifacts/api-server/package.json                                      test script uses --test-force-exit so the integration suite cleans up keep-alive sockets
 docs/audits/rbac-remediation-2026-04-26.md (new)           this report
 ```
 

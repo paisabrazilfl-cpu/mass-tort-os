@@ -140,8 +140,11 @@ const AUTH_ONLY_ROUTES = new Set([
   "auth POST /mfa/verify",
   "auth POST /mfa/disable",
   "auth GET /me",
-  "forms GET /config",
-  "forms GET /config/:tortId",
+  // Forms router pure utilities: no DB reads of campaign config, no PII
+  // enrichment, no writes — just static enums and validators that any
+  // authenticated user can legitimately call from a form-builder UI.
+  // (`forms GET /config` and `forms GET /config/:tortId` are now gated to
+  // attorney+ — see `routes/forms.ts`.)
   "forms GET /categories",
   "forms POST /validate/email",
   "forms POST /validate/address",
@@ -152,6 +155,31 @@ interface RouteIssue {
   method: string;
   path: string;
   reason: string;
+}
+
+/**
+ * Per-route authorisation decision recorded by the validator. Emitted at
+ * boot so an SOC reviewer can see, in one place, EVERY route the process
+ * exposes and which trust boundary applies. The four statuses are:
+ *
+ *   - "public"          — mounted under a router stamped `markPublic(...)`.
+ *                         No auth required (rate-limit lives elsewhere).
+ *   - "auth-exception"  — a deliberate per-route exception on the auth
+ *                         router (login / refresh / register). Unauthenticated
+ *                         on purpose; tracked so adding a new login-adjacent
+ *                         endpoint requires explicit AUTH_ROUTE_EXCEPTIONS opt-in.
+ *   - "auth-only"       — authenticated, no role gate. Allowed only for
+ *                         entries explicitly listed in AUTH_ONLY_ROUTES
+ *                         (self-service & pure utility endpoints).
+ *   - "role-gated"      — authenticated AND gated by `requireRole` /
+ *                         `requirePermission`. The default for every new
+ *                         protected handler.
+ */
+export interface RoutePolicyEntry {
+  router: string;
+  method: string;
+  path: string;
+  status: "public" | "auth-exception" | "auth-only" | "role-gated";
 }
 
 interface ExpressLayer {
@@ -194,6 +222,7 @@ function walkRouter(
   inherited: { hasAuth: boolean; hasGate: boolean; isPublic: boolean; label: string },
   issues: RouteIssue[],
   counters: { checked: number; public: number; protected: number },
+  policy: RoutePolicyEntry[],
 ): void {
   const stack = router.stack ?? [];
   let { hasAuth, hasGate } = inherited;
@@ -204,16 +233,19 @@ function walkRouter(
       const route = layer.route;
       for (const method of Object.keys(route.methods)) {
         counters.checked++;
+        const M = method.toUpperCase();
         if (inherited.isPublic) {
           counters.public++;
+          policy.push({ router: inherited.label, method: M, path: route.path, status: "public" });
           continue;
         }
         // auth-router exception list (login/refresh/register)
         if (
           inherited.label === "auth" &&
-          AUTH_ROUTE_EXCEPTIONS.has(`${method.toUpperCase()} ${route.path}`)
+          AUTH_ROUTE_EXCEPTIONS.has(`${M} ${route.path}`)
         ) {
           counters.public++;
+          policy.push({ router: inherited.label, method: M, path: route.path, status: "auth-exception" });
           continue;
         }
         const perRoute = classifyHandlerNames(route.stack);
@@ -222,7 +254,7 @@ function walkRouter(
         if (!finalAuth) {
           issues.push({
             router: inherited.label,
-            method: method.toUpperCase(),
+            method: M,
             path: route.path,
             reason: "no authMiddleware in chain",
           });
@@ -230,19 +262,21 @@ function walkRouter(
         }
         if (!finalGate) {
           // Authenticated-only allowance for self-service / utility endpoints.
-          if (AUTH_ONLY_ROUTES.has(`${inherited.label} ${method.toUpperCase()} ${route.path}`)) {
+          if (AUTH_ONLY_ROUTES.has(`${inherited.label} ${M} ${route.path}`)) {
             counters.protected++;
+            policy.push({ router: inherited.label, method: M, path: route.path, status: "auth-only" });
             continue;
           }
           issues.push({
             router: inherited.label,
-            method: method.toUpperCase(),
+            method: M,
             path: route.path,
             reason: "no requireRole/requirePermission gate",
           });
           continue;
         }
         counters.protected++;
+        policy.push({ router: inherited.label, method: M, path: route.path, status: "role-gated" });
       }
       continue;
     }
@@ -265,6 +299,7 @@ function walkRouter(
         { hasAuth, hasGate, isPublic: subPublic, label: subLabel },
         issues,
         counters,
+        policy,
       );
       continue;
     }
@@ -280,15 +315,22 @@ function walkRouter(
  * Walk the parent router (the one returned by routes/index.ts) and validate
  * every leaf route. Throws on any violation.
  */
-export function validateRouteTable(parent: Router): { checked: number; public: number; protected: number } {
+export function validateRouteTable(parent: Router): {
+  checked: number;
+  public: number;
+  protected: number;
+  policy: RoutePolicyEntry[];
+} {
   const issues: RouteIssue[] = [];
   const counters = { checked: 0, public: 0, protected: 0 };
+  const policy: RoutePolicyEntry[] = [];
 
   walkRouter(
     parent as unknown as ExpressRouterLike,
     { hasAuth: false, hasGate: false, isPublic: false, label: "(root)" },
     issues,
     counters,
+    policy,
   );
 
   if (issues.length > 0) {
@@ -298,8 +340,25 @@ export function validateRouteTable(parent: Router): { checked: number; public: n
     throw new Error(msg);
   }
 
-  logger.info(counters, "Route table validated");
-  return counters;
+  // Per-route policy report. Emitted at info so SOC review can grep one
+  // log line per route; the structured `policy` field carries the full
+  // table for tooling (alerting, drift detection, etc.).
+  const byStatus = policy.reduce(
+    (acc, p) => {
+      acc[p.status] = (acc[p.status] ?? 0) + 1;
+      return acc;
+    },
+    {} as Record<RoutePolicyEntry["status"], number>,
+  );
+  logger.info(
+    {
+      ...counters,
+      by_status: byStatus,
+      policy,
+    },
+    "Route policy report",
+  );
+  return { ...counters, policy };
 }
 
 export type ProtectedRouter = Router;

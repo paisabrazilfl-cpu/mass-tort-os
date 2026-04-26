@@ -9,7 +9,7 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "worker": "node --enable-source-maps ./dist/worker.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/lib/__tests__/*.test.ts"
+    "test": "node --import tsx --test --test-force-exit --test-timeout=30000 src/lib/__tests__/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
