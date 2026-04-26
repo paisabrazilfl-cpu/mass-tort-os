@@ -4,8 +4,12 @@
 **Outcome:** Production-grade RBAC. Single source of truth, deny-by-default routing
 enforced at boot, normalised 401/403 envelope, audit trail on every denial,
 zero "user.id !== 0" god-mode branches remain in code paths.
-**Boot-time validator result:** 157 routes checked, 10 public, 147 protected,
-**0 unprotected**. The validator now emits a per-route policy report at INFO
+**Boot-time validator result:** every mounted route is either public, an
+auth-router exception, auth-only, or role-gated; the live `checked / public
+/ protected / unprotected` counts are kept in lock-step with the route
+tree by the `rbac-route-matrix` CI gate (see Section 11 for the headline
+counts and the per-route breakdown). The validator now emits a per-route
+policy report at INFO
 on boot (`router`, `method`, `path`, `status` ∈ `public` | `auth-exception` |
 `auth-only` | `role-gated`) so an SOC reviewer can see the full surface in
 one structured log line — no need to spelunk through router code.
@@ -88,7 +92,7 @@ terminal route satisfies **(authenticated AND role-gated)** unless the
 containing router is explicitly marked public or the specific route is
 declared as a self-service / utility endpoint.
 
-### Public routers (10 routes)
+### Public routers
 
 | Router | Reason |
 | --- | --- |

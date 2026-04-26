@@ -43,12 +43,12 @@ outputType = "console"
 name = "rbac-test"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts src/lib/__tests__/rbac-route-matrix.test.ts"
-
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts src/lib/__tests__/rbac-route-matrix.test.ts src/lib/__tests__/rbac-route-matrix-headline.test.ts"
 
 [[workflows.workflow]]
 name = "rbac-route-matrix"

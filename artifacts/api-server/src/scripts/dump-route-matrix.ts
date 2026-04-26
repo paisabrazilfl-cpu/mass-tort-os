@@ -18,11 +18,13 @@
  * sets or symbol-detection helpers — that drift is exactly what the previous
  * iteration of this file got dinged for in code review.
  */
+import type { Router } from "express";
 import routesIndex from "../routes/index";
 import {
   __internal_inspectLayer,
   __internal_AUTH_ROUTE_EXCEPTIONS,
   __internal_AUTH_ONLY_ROUTES,
+  validateRouteTable,
 } from "../lib/route-protection";
 
 interface Row {
@@ -173,5 +175,16 @@ for (const r of rows) {
     } | ${r.authOnly ? "✓" : ""} | ${r.authException ? "✓" : ""} | ${rolesCol} | ${permsCol} | ${audited} |`,
   );
 }
+// Authoritative count line — sourced from validateRouteTable, the same
+// boot-time validator app.ts runs. Emitted to stderr in a fixed prose
+// format so scripts/check-rbac-route-matrix.sh can diff it against the
+// "Boot-time count: ..." headline in the audit doc and fail CI when the
+// hand-edited prose drifts from the live counts. The pino logger that
+// validateRouteTable writes to is silenced by LOG_LEVEL=silent in the
+// caller; that keeps stdout (the markdown table) untouched.
+const counts = validateRouteTable(routesIndex as unknown as Router);
+const unprotected = counts.checked - counts.public - counts.protected;
+const countLine = `Boot-time count: **${counts.checked} checked / ${counts.public} public / ${counts.protected} protected / ${unprotected} unprotected.**`;
+console.error(countLine);
 console.error(`Total rows: ${rows.length}`);
 process.exit(0);
