@@ -629,7 +629,7 @@ describe("authMiddleware — expired token", () => {
     // token-version row lookup runs after signature verification), but we
     // CAN assert the failure code is no longer the expired/invalid one
     // when the token is well-formed. The DB call will fail-closed with
-    // either a 401 ("user_account_not_found") or 503 ("auth_unavailable")
+    // either a 401 ("user_account_not_found") or 503 ("AUTH_UNAVAILABLE")
     // — both acceptable; the contract here is "valid signature ⇒ NOT
     // invalid_or_expired_token".
     const fresh = generateToken({ id: 999, email: "fresh@mtos.local", name: "Fresh", role: "admin" });

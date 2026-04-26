@@ -401,7 +401,7 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
     logger.error("Token version check failed — denying request (fail-closed)");
     res.status(503).json({
       status: "error",
-      code: "auth_unavailable",
+      code: "AUTH_UNAVAILABLE",
       message: "Authentication service temporarily unavailable",
     });
     return;

@@ -113,8 +113,6 @@ auth POST /mfa/setup             ← enrol own MFA
 auth POST /mfa/verify            ← verify own MFA
 auth POST /mfa/disable           ← disable own MFA
 auth GET  /me                    ← read own profile
-forms GET  /config               ← form-builder config (read-only)
-forms GET  /config/:tortId       ← form-builder config per tort (read-only)
 forms GET  /categories           ← form category enum
 forms POST /validate/email       ← syntactic email validation (no DB write, no PII)
 forms POST /validate/address     ← syntactic address validation (no DB write, no PII)
