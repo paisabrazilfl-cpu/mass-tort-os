@@ -300,6 +300,54 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
     );
   });
 
+  // Regression for the form-engine.tsx Copy-Embed button: it must write a
+  // <script src="…/api/forms-public/embed/<id>"> snippet to the clipboard,
+  // NOT "/api/forms/embed/<id>". External sites that paste the snippet have
+  // no auth cookie, so a snippet pointing at the auth-gated /api/forms/*
+  // router 401s in production (404 in dev with bypass). This pair of
+  // assertions locks in (a) the public embed path serves the JS unauth, and
+  // (b) the auth-gated path does NOT serve embed JS — so a future "fix"
+  // cannot silently re-mount the embed handler under /api/forms.
+  test("GET /api/forms-public/embed/paraquat returns 200 with the embed JavaScript (no auth)", async () => {
+    if (!booted) throw new Error("app not booted");
+    // No Authorization header — public route must serve unauthenticated.
+    const res = await fetch(`${booted.baseUrl}/api/forms-public/embed/paraquat`);
+    assert.equal(res.status, 200, `expected 200, got ${res.status}`);
+    const ct = res.headers.get("content-type") ?? "";
+    assert.ok(
+      ct.includes("application/javascript"),
+      `expected application/javascript content-type, got ${ct}`,
+    );
+    const body = await res.text();
+    // Markers from generateEmbedScript() in routes/forms.ts: the IIFE
+    // header `(function(){` plus the API base var `var API="…/api/forms";`
+    // plus the requested tort id literal. Asserting all three ensures we
+    // got the actual embed payload rather than e.g. a generic 404 HTML
+    // page or a different tort's script.
+    assert.ok(body.startsWith("(function(){"), "embed JS missing IIFE header");
+    assert.ok(body.includes('var API='), "embed JS missing API base declaration");
+    assert.ok(body.includes('TORT_ID="paraquat"'), "embed JS missing paraquat tort id");
+  });
+
+  test("GET /api/forms/embed/paraquat does NOT serve embed JavaScript (must be 401 or 404)", async () => {
+    // The auth-gated /api/forms/* router intentionally has no /embed/:tortId
+    // route (see routes/forms.ts L241-243). Unauthenticated → 401 from
+    // authMiddleware; authenticated (or dev bypass) → 404 from the API
+    // not-found handler. Either is fine — what we forbid is a 200 leaking
+    // the embed payload through a re-added handler that would silently
+    // bypass the public router's CORS / cache-control / rate-limit posture.
+    const r = await probe("GET", "/api/forms/embed/paraquat");
+    assert.notEqual(
+      r.status,
+      200,
+      `auth-gated /api/forms/embed/:tortId must not serve embed JavaScript; got 200`,
+    );
+    assert.ok(
+      r.status === 401 || r.status === 404,
+      `expected 401 or 404 on intentionally-unsupported path, got ${r.status}`,
+    );
+  });
+
   test("public path-prefix contract: every 'public' policy entry resolves under /api/healthz, /api/forms-public/, or /api/webhooks/", () => {
     if (!booted) throw new Error("app not booted");
     // router-label → mounted URL prefix (mirror of routes/index.ts).

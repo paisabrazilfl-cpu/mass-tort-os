@@ -97,7 +97,14 @@ export default function FormEngine() {
 
   // Handlers
   const handleCopyEmbed = (configId: string) => {
-    const code = `<script src="${window.location.origin}/api/forms/embed/${configId}"></script>\n<div id="mtos-form"></div>`;
+    // Embed JS is served by the public router (forms-public.ts) — the
+    // auth-gated /api/forms/* router intentionally does NOT mount
+    // /embed/:tortId (see artifacts/api-server/src/routes/forms.ts L241-243
+    // and the RBAC remediation in docs/audits/rbac-remediation-2026-04-26.md
+    // §4). Pasting a snippet pointing at /api/forms/embed/* on a third-party
+    // site would 401 in production / 404 in dev with auth bypass — both are
+    // intentional. External embeds MUST use /api/forms-public/embed.
+    const code = `<script src="${window.location.origin}/api/forms-public/embed/${configId}"></script>\n<div id="mtos-form"></div>`;
     navigator.clipboard.writeText(code);
     toast({
       title: "Copied to clipboard",
