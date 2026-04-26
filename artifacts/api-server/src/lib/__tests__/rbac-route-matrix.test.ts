@@ -25,6 +25,7 @@
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { db, pool } from "@workspace/db";
 import { sql } from "drizzle-orm";
@@ -404,4 +405,148 @@ describe("role × route allow/deny matrix", () => {
       });
     }
   }
+});
+
+// =============================================================================
+// 5. Token revocation via DB token_version bump (full HTTP round-trip)
+//
+// 4th-pass code-review fix: prove end-to-end that bumping
+// `mtos_users.token_version` causes the next request that carries an
+// already-minted JWT (with the OLD `tv` claim) to be denied with 401 by
+// authMiddleware. This is the path real session invalidation runs through
+// (logout-all, password reset, MFA enrol). The unit test
+// `isTokenVersionRevoked()` covers the predicate; this one covers the
+// runtime express path that actually serves users.
+// =============================================================================
+
+describe("token revocation via DB token_version bump (HTTP path)", () => {
+  test("bumping mtos_users.token_version causes a previously-valid token to be denied 401", async () => {
+    const TS_REV = Date.now();
+    const email = `rbac-revocation-${TS_REV}@mtos.test`;
+    const inserted = await db.execute(sql`
+      INSERT INTO mtos_users (email, name, role, password_hash, token_version)
+      VALUES (${email}, ${"Revocation Probe"}, ${"attorney"}, ${"$2b$10$test.placeholder.hash.not.usable"}, 0)
+      RETURNING id
+    `);
+    const id = (inserted.rows as Array<{ id: number }>)[0]?.id;
+    if (typeof id !== "number") throw new Error("failed to insert revocation probe user");
+
+    try {
+      // Mint a token at token_version=0. authMiddleware embeds tv=0 in the
+      // JWT — that's the value the runtime check compares against the DB
+      // row.
+      const token = generateToken({ id, email, name: "Revocation Probe", role: "attorney" });
+
+      // Sanity check: pre-bump, the token works.
+      const before = await probe("GET", "/api/auth/me", { token });
+      assert.equal(before.status, 200, `pre-bump GET /api/auth/me must be 200, got ${before.status} (${JSON.stringify(before.body).slice(0, 200)})`);
+
+      // Bump token_version in the DB. This is what `POST /api/auth/logout`
+      // (logout-all-sessions), password reset, and MFA enrol all do.
+      await db.execute(sql`UPDATE mtos_users SET token_version = token_version + 1 WHERE id = ${id}`);
+
+      // Re-issue the SAME token. authMiddleware should now reject it
+      // because its `tv` claim is stale relative to the DB row.
+      const after = await probe("GET", "/api/auth/me", { token });
+      assert.equal(after.status, 401, `post-bump GET /api/auth/me must be 401, got ${after.status} (${JSON.stringify(after.body).slice(0, 200)})`);
+      // Normalised envelope assertion: the 401 must carry a
+      // machine-readable code so the CRM can route the user back to login
+      // (rather than treating it as a generic "auth not present" failure).
+      const code = (after.body as { code?: string }).code;
+      assert.ok(
+        code === "TOKEN_REVOKED" || code === "UNAUTHENTICATED",
+        `expected code TOKEN_REVOKED or UNAUTHENTICATED, got ${String(code)}`,
+      );
+
+      // A second identical request must remain rejected — there is no
+      // accidental cache that "warms" the stale token back into validity.
+      const after2 = await probe("GET", "/api/auth/me", { token });
+      assert.equal(after2.status, 401, "second post-bump request must remain 401");
+    } finally {
+      await db.execute(sql`DELETE FROM mtos_users WHERE id = ${id}`);
+    }
+  });
+});
+
+// =============================================================================
+// 6. Viewer ownership filter on cases endpoints (full HTTP round-trip)
+//
+// 4th-pass code-review fix: the unit test exercises
+// `isCaseVisibleToUser()` against literal row stand-ins. THIS test inserts
+// real rows into `cases` (one owned by the viewer probe user, one owned
+// by a different user) and asserts:
+//
+//   - GET /api/cases as the viewer returns ONLY the owned row.
+//   - GET /api/cases as an attorney returns BOTH rows (no per-row scope).
+//   - GET /api/cases/:id of the unowned row, as the viewer, returns 403
+//     with the documented `case_ownership_denied`-class envelope.
+//   - GET /api/cases/:id of the owned row, as the viewer, returns 200.
+// =============================================================================
+
+describe("viewer ownership filter on cases endpoints (HTTP path)", () => {
+  // Need a stable second user-id for the "unowned" case. The matrix's
+  // attorney probe user is a fine owner; we read its id off the
+  // ephemeralUsers list we already populate in `before`.
+  function uuid(): string { return crypto.randomUUID(); }
+
+  test("GET /api/cases as viewer returns ONLY rows the viewer owns or is assigned to; GET /:id of an unowned row is 403; attorney sees both", async () => {
+    const viewer = ephemeralUsers.find((u) => u.role === "viewer");
+    const attorney = ephemeralUsers.find((u) => u.role === "attorney");
+    if (!viewer || !attorney) throw new Error("ephemeral viewer/attorney not initialised");
+
+    const ownedId = uuid();
+    const unownedId = uuid();
+    const assignedId = uuid();
+    try {
+      // 1. Owned row — viewer is created_by_user_id.
+      await db.execute(sql`
+        INSERT INTO cases (id, data, status, created_by_user_id, assigned_to)
+        VALUES (${ownedId}, ${"{}"}::jsonb, ${"open"}, ${viewer.id}, NULL)
+      `);
+      // 2. Unowned row — created by attorney, no assignee.
+      await db.execute(sql`
+        INSERT INTO cases (id, data, status, created_by_user_id, assigned_to)
+        VALUES (${unownedId}, ${"{}"}::jsonb, ${"open"}, ${attorney.id}, NULL)
+      `);
+      // 3. Assigned-to-viewer row — created by attorney, viewer assigned.
+      await db.execute(sql`
+        INSERT INTO cases (id, data, status, created_by_user_id, assigned_to)
+        VALUES (${assignedId}, ${"{}"}::jsonb, ${"open"}, ${attorney.id}, ${viewer.id})
+      `);
+
+      // GET /api/cases as viewer — must return ownedId AND assignedId, NOT unownedId.
+      const list = await probe("GET", "/api/cases", { token: viewer.token });
+      assert.equal(list.status, 200, `viewer GET /api/cases must be 200, got ${list.status}`);
+      const ids = ((list.body as Array<{ id: string }>) ?? []).map((r) => r.id);
+      assert.ok(ids.includes(ownedId), `viewer must see owned case ${ownedId} in list, got ${JSON.stringify(ids)}`);
+      assert.ok(ids.includes(assignedId), `viewer must see assigned case ${assignedId} in list, got ${JSON.stringify(ids)}`);
+      assert.ok(!ids.includes(unownedId), `viewer MUST NOT see unowned case ${unownedId} in list — leak`);
+
+      // GET /api/cases/:owned as viewer — must be 200.
+      const owned = await probe("GET", `/api/cases/${ownedId}`, { token: viewer.token });
+      assert.equal(owned.status, 200, `viewer GET owned case must be 200, got ${owned.status}`);
+
+      // GET /api/cases/:assigned as viewer — must be 200.
+      const assigned = await probe("GET", `/api/cases/${assignedId}`, { token: viewer.token });
+      assert.equal(assigned.status, 200, `viewer GET assigned case must be 200, got ${assigned.status}`);
+
+      // GET /api/cases/:unowned as viewer — must be 403 (the audit doc
+      // commits to 403 over 404 here so the CRM can render a clear
+      // "no access" banner; case ids are opaque UUIDs so existence-leak
+      // is low-value).
+      const unowned = await probe("GET", `/api/cases/${unownedId}`, { token: viewer.token });
+      assert.equal(unowned.status, 403, `viewer GET unowned case must be 403, got ${unowned.status} (${JSON.stringify(unowned.body).slice(0, 200)})`);
+      assert.equal((unowned.body as { code?: string }).code, "FORBIDDEN");
+
+      // Cross-check: attorney role has no per-row scope and sees BOTH
+      // owned and unowned cases in the list (paralegal+ are caseload-wide).
+      const attorneyList = await probe("GET", "/api/cases", { token: attorney.token });
+      assert.equal(attorneyList.status, 200, `attorney GET /api/cases must be 200, got ${attorneyList.status}`);
+      const attorneyIds = ((attorneyList.body as Array<{ id: string }>) ?? []).map((r) => r.id);
+      assert.ok(attorneyIds.includes(ownedId), "attorney must see ownedId");
+      assert.ok(attorneyIds.includes(unownedId), "attorney must see unownedId — paralegal+ are caseload-wide");
+    } finally {
+      await db.execute(sql`DELETE FROM cases WHERE id IN (${ownedId}, ${unownedId}, ${assignedId})`);
+    }
+  });
 });

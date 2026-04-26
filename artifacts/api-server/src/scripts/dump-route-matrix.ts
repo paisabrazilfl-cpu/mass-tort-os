@@ -34,6 +34,12 @@ interface Row {
   isPublic: boolean;
   authOnly: boolean;
   authException: boolean;
+  // Effective required role / permission for the route, collected from
+  // every gate in the chain (inherited + per-route). The boot-time
+  // validator is the authority here — see RoutePolicyEntry in
+  // route-protection.ts.
+  requiredRoles: string[];
+  requiredPermissions: string[];
 }
 
 function mountPathFromRegexp(regexp: RegExp | undefined): string {
@@ -55,8 +61,14 @@ function walk(
   hasAuth: boolean,
   hasGate: boolean,
   isPublic: boolean,
+  inheritedRoles: string[],
+  inheritedPerms: string[],
 ): void {
   if (!router?.stack) return;
+  // Mutable copies so siblings within the same router inherit gates
+  // declared earlier in declaration order.
+  const carriedRoles = [...inheritedRoles];
+  const carriedPerms = [...inheritedPerms];
   for (const layer of router.stack as Array<Record<string, unknown>>) {
     const route = layer["route"] as
       | { path: string; methods: Record<string, boolean>; stack: Array<{ handle?: unknown }> }
@@ -66,10 +78,14 @@ function walk(
       for (const method of methods) {
         let h = hasAuth;
         let g = hasGate;
+        const roles = [...carriedRoles];
+        const perms = [...carriedPerms];
         for (const sub of route.stack) {
           const stamps = __internal_inspectLayer(sub.handle);
           if (stamps.hasAuthStamp) h = true;
           if (stamps.hasGateStamp) g = true;
+          if (stamps.gateMetadata?.kind === "role") roles.push(...stamps.gateMetadata.values);
+          if (stamps.gateMetadata?.kind === "permission") perms.push(...stamps.gateMetadata.values);
         }
         const fullPath = (mountPath + route.path).replace(/\/+/g, "/");
         rows.push({
@@ -82,6 +98,8 @@ function walk(
           authException:
             label === "auth" && __internal_AUTH_ROUTE_EXCEPTIONS.has(`${method} ${route.path}`),
           authOnly: __internal_AUTH_ONLY_ROUTES.has(`${label} ${method} ${route.path}`),
+          requiredRoles: roles,
+          requiredPermissions: perms,
         });
       }
       continue;
@@ -106,35 +124,57 @@ function walk(
         hasAuth,
         hasGate,
         childPublic,
+        carriedRoles,
+        carriedPerms,
       );
       continue;
     }
 
     const stamps = __internal_inspectLayer(handle);
     if (stamps.hasAuthStamp) hasAuth = true;
-    if (stamps.hasGateStamp) hasGate = true;
+    if (stamps.hasGateStamp) {
+      hasGate = true;
+      if (stamps.gateMetadata?.kind === "role") carriedRoles.push(...stamps.gateMetadata.values);
+      if (stamps.gateMetadata?.kind === "permission") carriedPerms.push(...stamps.gateMetadata.values);
+    }
   }
 }
 
 // `routesIndex` is the parent express Router that gets mounted at /api in
 // src/index.ts. Walk it directly so we don't have to deal with express's
 // outer "(root)" layer wrapper that varies between express 4 and 5.
-walk(routesIndex as unknown as { stack?: unknown[] }, "/api", "(root)", false, false, false);
+walk(routesIndex as unknown as { stack?: unknown[] }, "/api", "(root)", false, false, false, [], []);
 
 rows.sort((a, b) => (a.router + a.path + a.method).localeCompare(b.router + b.path + b.method));
 
-console.log("| Router | Method | Path | Auth | Gate | Public | Auth-only | Login-exception |");
-console.log("|---|---|---|:-:|:-:|:-:|:-:|:-:|");
+// Audit doc requirement (4th-pass code review): the matrix MUST surface,
+// per route, the EFFECTIVE required role and permission(s), whether the
+// route writes an audit row on denial, and whether it sits on the public
+// allowlist. The "Audited" column is true for every authenticated route —
+// the auditDenial() hook in lib/rbac.ts fires from BOTH requireRole AND
+// requirePermission, so any role-gated or auth-only route logs denials.
+// Public routes (no auth gate at all) cannot produce a denial event by
+// definition and so are marked "—".
+console.log(
+  "| Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |",
+);
+console.log("|---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|");
+function uniq(xs: string[]): string[] { return Array.from(new Set(xs)); }
 for (const r of rows) {
-  // The express mount-regexp parser above only captures the OUTER /api
-  // segment reliably — splice in the router label so the path column reads
-  // as "/api/<router>/<route>" which matches what an HTTP client sees.
   const displayPath =
     r.router === "(root)" ? r.path : r.path.replace(/^\/api/, `/api/${r.router}`).replace(/\/+/g, "/");
+  const reqRoles = uniq(r.requiredRoles);
+  const reqPerms = uniq(r.requiredPermissions);
+  const rolesCol = reqRoles.length > 0 ? reqRoles.map((x) => `\`${x}\``).join(", ") : "—";
+  const permsCol = reqPerms.length > 0 ? reqPerms.map((x) => `\`${x}\``).join(", ") : "—";
+  // Auditable iff the request can reach the auth or gate middleware
+  // (which is where the auditDenial hook lives). Public routes bypass
+  // both, so they are marked "—".
+  const audited = r.isPublic ? "—" : "✓";
   console.log(
     `| ${r.router} | ${r.method} | \`${displayPath}\` | ${r.hasAuth ? "✓" : ""} | ${r.hasGate ? "✓" : ""} | ${
       r.isPublic ? "✓" : ""
-    } | ${r.authOnly ? "✓" : ""} | ${r.authException ? "✓" : ""} |`,
+    } | ${r.authOnly ? "✓" : ""} | ${r.authException ? "✓" : ""} | ${rolesCol} | ${permsCol} | ${audited} |`,
   );
 }
 console.error(`Total rows: ${rows.length}`);

@@ -377,7 +377,7 @@ Banner now prints `node_env: "(unset)"` rather than a misleading
 
 ## 7. Tests — `src/lib/__tests__/rbac*.test.ts`
 
-**101 / 101 passing** under `node:test` (`pnpm --filter @workspace/api-server run test`).
+**107 / 107 passing** under `node:test` (`pnpm --filter @workspace/api-server run test`).
 The deliverable is split across two files; the first stays as fast pure-helper
 unit tests, the second boots the real express app on an ephemeral port and
 exercises the role × route matrix end-to-end.
@@ -399,7 +399,7 @@ exercises the role × route matrix end-to-end.
 | Dev gate | `IS_DEV` reflects current `NODE_ENV`; **the predicate is FALSE for `production` / `staging` / `test` / unset**; **TRUE only for the literal string `"development"`** (rejects `Development`, `DEVELOPMENT`, `development ` (trailing space), ` development` (leading space), `dev`, `develop`) |
 | **`validateRouteTable`** (boot-time) | rejects authenticated route with no gate; accepts authenticated + gated; **a contributor-named `requireRole` noop CANNOT bypass the validator**; `requirePermission` satisfies the gate; **a `Symbol.for()` router stamp CANNOT impersonate `markPublic`**; missing `authMiddleware` fails even with a gate present |
 
-### `rbac-route-matrix.test.ts` (33 booted-app integration tests)
+### `rbac-route-matrix.test.ts` (33 booted-app + 2 NEW HTTP integration tests = 35 total)
 
 This file boots the real express app on an ephemeral port, inserts one
 ephemeral `mtos_users` row per role (`rbac-matrix-<role>-<ts>@mtos.test`),
@@ -409,13 +409,25 @@ deletes the rows in `after()` and force-drops keep-alive sockets.
 | Group | Cases |
 | --- | --- |
 | Public allowlist (policy report) | only routers `health` / `forms-public` / `webhooks` are stamped public; auth router exceptions are exactly `POST /login` / `/refresh` / `/register`; `auth-only` allowlist matches the documented set with no drift; **forms config GETs are role-gated, not auth-only** |
-| **Path-prefix contract (NEW)** | (1) `GET /api/healthz` returns 2xx unauth; (2) `GET /api/forms-public/preview-blocker.js` returns 2xx unauth; (3) `POST /api/webhooks/dropbox-sign` does NOT 401 (sig verify happens inside the handler — public stamp holds at path level); (4) **`GET /api/forms/preview/some-tort` returns 401** — the OLD public path is now auth-only, proving the remount worked; (5) every `public` policy entry resolves under one of `/api/healthz`, `/api/forms-public/`, or `/api/webhooks/`. |
+| **Path-prefix contract** | (1) `GET /api/healthz` returns 2xx unauth; (2) `GET /api/forms-public/preview-blocker.js` returns 2xx unauth; (3) `POST /api/webhooks/dropbox-sign` does NOT 401 (sig verify happens inside the handler — public stamp holds at path level); (4) **`GET /api/forms/preview/some-tort` returns 401** — the OLD public path is now auth-only, proving the remount worked; (5) every `public` policy entry resolves under one of `/api/healthz`, `/api/forms-public/`, or `/api/webhooks/`. |
 | Unauth denial | `GET /api/leads`, `/api/cases`, `/api/forms/config`, `/api/decision-engine/portfolio` all return `401 UNAUTHENTICATED` without a token |
 | Role × route matrix | 5 routes × 4 roles = 20 cells. Allow/deny expectation per cell: `GET /api/forms/config` (attorney+); `GET /api/forms/config/:tortId` (attorney+, 404 acceptable); `GET /api/decision-engine/portfolio` (attorney+); `PUT /api/decision-engine/settings` (admin only, 400 acceptable for empty body); `GET /api/auth/me` (any authenticated). On `deny` the test asserts both `status === 403` AND `body.code === "FORBIDDEN"`. |
+| **Token revocation via DB token_version bump (NEW — 4th-pass code-review fix)** | Inserts an ephemeral attorney user, mints a JWT at `tv=0`, asserts `GET /api/auth/me` returns **200**. Then issues `UPDATE mtos_users SET token_version = token_version + 1 WHERE id = ?` — the same SQL the logout-all / password-reset / MFA-enrol paths run. Re-uses the SAME token: now asserts `GET /api/auth/me` returns **401** with envelope code `TOKEN_REVOKED` or `UNAUTHENTICATED`. A second identical request remains rejected — proves no accidental cache "warms" the stale token back into validity. Closes the previous gap that only the pure `isTokenVersionRevoked()` predicate was covered. |
+| **Viewer ownership filter on `/api/cases` (NEW — 4th-pass code-review fix)** | Inserts three real `cases` rows: (a) `created_by_user_id = viewer.id`, (b) `created_by_user_id = attorney.id` (no assignee), (c) `created_by_user_id = attorney.id, assigned_to = viewer.id`. `GET /api/cases` as the viewer must return rows (a) and (c) and **must not** return row (b) — leak detection. `GET /api/cases/:id` of row (a) → 200; row (c) → 200; row (b) → **403 + `code:"FORBIDDEN"`**. Cross-check: `GET /api/cases` as the attorney returns BOTH (a) and (b) — paralegal+ are caseload-wide. Closes the gap that `isCaseVisibleToUser()` was unit-tested but the actual express handler was not. |
 
 ---
 
 ## 8. Boot-time route table check
+
+Each `RoutePolicyEntry` in the `policy` array now carries (in addition
+to `router` / `method` / `path` / `status`) the **effective required
+role** and **effective required permissions** for the route, collected
+from every `requireRole(...)` and `requirePermission(...)` gate the
+chain mounted. The metadata is stamped on the gate middleware itself
+(by `markGateMiddleware` in `route-protection.ts`) so the boot validator
+and the audit-doc dumper read it from the same source of truth as the
+runtime check — drift between "what the validator says is required" and
+"what the runtime actually enforces" is structurally impossible.
 
 ```
 [16:37:56.252] INFO: Route policy report
@@ -432,9 +444,16 @@ deletes the rows in `after()` and force-drops keep-alive sockets.
       { router: "auth",          method: "GET",  path: "/me",               status: "auth-only" },
       { router: "forms",         method: "POST", path: "/validate/email",   status: "auth-only" },
       …
-      { router: "leads",         method: "GET",  path: "/",                 status: "role-gated" },
-      { router: "forms",         method: "GET",  path: "/config",           status: "role-gated" },
-      { router: "forms",         method: "GET",  path: "/config/:tortId",   status: "role-gated" },
+      { router: "leads",         method: "GET",  path: "/",                 status: "role-gated",
+        requiredRoles: ["viewer"] },
+      { router: "forms",         method: "GET",  path: "/config",           status: "role-gated",
+        requiredRoles: ["attorney"] },
+      { router: "forms",         method: "GET",  path: "/config/:tortId",   status: "role-gated",
+        requiredRoles: ["attorney"] },
+      { router: "decision-engine", method: "PUT", path: "/settings",        status: "role-gated",
+        requiredRoles: ["admin"] },
+      { router: "leads",         method: "POST", path: "/:id/qualify",     status: "role-gated",
+        requiredPermissions: ["lead:qualify"] },
       …
     ]
 [16:37:56.255] INFO: MTOS API server listening
@@ -447,10 +466,12 @@ deletes the rows in `after()` and force-drops keep-alive sockets.
 ```
 
 The structured `policy` field carries one row per terminal route — an
-SOC reviewer (or an alerting pipeline) can `jq '.policy[] | select(.status=="auth-only")'`
-on the boot log to enumerate every endpoint that is authenticated but
-not role-gated, and `select(.status=="public")` for everything reachable
-without a token.
+SOC reviewer (or an alerting pipeline) can
+`jq '.policy[] | select(.status=="auth-only")'` on the boot log to
+enumerate every endpoint that is authenticated but not role-gated,
+`select(.status=="public")` for everything reachable without a token,
+and `select(.requiredRoles | index("admin"))` for every admin-only
+endpoint.
 
 If any future contributor adds a handler without `requireRole` /
 `requirePermission`, the process refuses to start and prints the offending
@@ -528,165 +549,186 @@ applies. A route is healthy iff one of the following is true:
 
 Boot-time count: **157 checked / 10 public / 147 protected / 0 unprotected.**
 
-| Router | Method | Path | Auth | Gate | Public | Auth-only | Login-exception |
-|---|---|---|:-:|:-:|:-:|:-:|:-:|
-| Router | Method | Path | Auth | Gate | Public | Auth-only | Login-exception |
-|---|---|---|:-:|:-:|:-:|:-:|:-:|
-| analytics | GET | `/api/analytics/conversion-funnel` | ✓ | ✓ |  |  |  |
-| analytics | GET | `/api/analytics/overview` | ✓ | ✓ |  |  |  |
-| analytics | GET | `/api/analytics/paralegal-leaderboard` | ✓ | ✓ |  |  |  |
-| analytics | GET | `/api/analytics/pipeline-trend` | ✓ | ✓ |  |  |  |
-| analytics | GET | `/api/analytics/predictive/batch` | ✓ | ✓ |  |  |  |
-| analytics | GET | `/api/analytics/predictive/by-tort` | ✓ | ✓ |  |  |  |
-| analytics | GET | `/api/analytics/predictive/lead/:id` | ✓ | ✓ |  |  |  |
-| analytics | GET | `/api/analytics/predictive/model` | ✓ | ✓ |  |  |  |
-| analytics | GET | `/api/analytics/tort-breakdown` | ✓ | ✓ |  |  |  |
-| auth | POST | `/api/auth/change-password` | ✓ |  |  | ✓ |  |
-| auth | POST | `/api/auth/login` |  |  |  |  | ✓ |
-| auth | POST | `/api/auth/logout` | ✓ |  |  | ✓ |  |
-| auth | GET | `/api/auth/me` | ✓ |  |  | ✓ |  |
-| auth | POST | `/api/auth/mfa/disable` | ✓ |  |  | ✓ |  |
-| auth | POST | `/api/auth/mfa/setup` | ✓ |  |  | ✓ |  |
-| auth | POST | `/api/auth/mfa/verify` | ✓ |  |  | ✓ |  |
-| auth | POST | `/api/auth/refresh` |  |  |  |  | ✓ |
-| auth | POST | `/api/auth/register` |  |  |  |  | ✓ |
-| auth | GET | `/api/auth/users` | ✓ | ✓ |  |  |  |
-| buyers | DELETE | `/api/buyers/:id` | ✓ | ✓ |  |  |  |
-| buyers | GET | `/api/buyers/:id` | ✓ | ✓ |  |  |  |
-| buyers | PUT | `/api/buyers/:id` | ✓ | ✓ |  |  |  |
-| buyers | GET | `/api/buyers/` | ✓ | ✓ |  |  |  |
-| buyers | POST | `/api/buyers/` | ✓ | ✓ |  |  |  |
-| cases | POST | `/api/cases/:id/analyze` | ✓ | ✓ |  |  |  |
-| cases | POST | `/api/cases/:id/upload` | ✓ | ✓ |  |  |  |
-| cases | GET | `/api/cases/:id` | ✓ | ✓ |  |  |  |
-| cases | GET | `/api/cases/` | ✓ | ✓ |  |  |  |
-| cases | POST | `/api/cases/` | ✓ | ✓ |  |  |  |
-| cases | POST | `/api/cases/worker/jobs/:id/requeue` | ✓ | ✓ |  |  |  |
-| cases | GET | `/api/cases/worker/queue-stats` | ✓ | ✓ |  |  |  |
-| compliance | GET | `/api/compliance/audit-summary` | ✓ | ✓ |  |  |  |
-| compliance | GET | `/api/compliance/audit-trail` | ✓ | ✓ |  |  |  |
-| dashboard | GET | `/api/dashboard/pipeline` | ✓ | ✓ |  |  |  |
-| dashboard | GET | `/api/dashboard/recent-activity` | ✓ | ✓ |  |  |  |
-| dashboard | GET | `/api/dashboard/stats` | ✓ | ✓ |  |  |  |
-| decision-engine | POST | `/api/decision-engine/leads/:id/recompute` | ✓ | ✓ |  |  |  |
-| decision-engine | GET | `/api/decision-engine/portfolio` | ✓ | ✓ |  |  |  |
-| decision-engine | POST | `/api/decision-engine/recompute-all` | ✓ | ✓ |  |  |  |
-| decision-engine | GET | `/api/decision-engine/settings` | ✓ | ✓ |  |  |  |
-| decision-engine | PUT | `/api/decision-engine/settings` | ✓ | ✓ |  |  |  |
-| document-templates | GET | `/api/document-templates/:id/preview` | ✓ | ✓ |  |  |  |
-| document-templates | DELETE | `/api/document-templates/:id` | ✓ | ✓ |  |  |  |
-| document-templates | GET | `/api/document-templates/:id` | ✓ | ✓ |  |  |  |
-| document-templates | PUT | `/api/document-templates/:id` | ✓ | ✓ |  |  |  |
-| document-templates | DELETE | `/api/document-templates/assignments/:id` | ✓ | ✓ |  |  |  |
-| document-templates | GET | `/api/document-templates/assignments/all` | ✓ | ✓ |  |  |  |
-| document-templates | GET | `/api/document-templates/assignments/by-template/:templateId` | ✓ | ✓ |  |  |  |
-| document-templates | POST | `/api/document-templates/assignments` | ✓ | ✓ |  |  |  |
-| document-templates | GET | `/api/document-templates/` | ✓ | ✓ |  |  |  |
-| document-templates | POST | `/api/document-templates/` | ✓ | ✓ |  |  |  |
-| document-templates | POST | `/api/document-templates/upload` | ✓ | ✓ |  |  |  |
-| documents | DELETE | `/api/documents/:id` | ✓ | ✓ |  |  |  |
-| documents | PATCH | `/api/documents/:id` | ✓ | ✓ |  |  |  |
-| documents | GET | `/api/documents/` | ✓ | ✓ |  |  |  |
-| documents | POST | `/api/documents/highlight` | ✓ | ✓ |  |  |  |
-| documents | POST | `/api/documents/` | ✓ | ✓ |  |  |  |
-| documents | POST | `/api/documents/redact` | ✓ | ✓ |  |  |  |
-| drafting | POST | `/api/drafting/generate-pdf` | ✓ | ✓ |  |  |  |
-| drafting | POST | `/api/drafting/generate` | ✓ | ✓ |  |  |  |
-| drafting | GET | `/api/drafting/templates` | ✓ | ✓ |  |  |  |
-| forms-public | GET | `/api/forms-public/embed/:tortId` |  |  | ✓ |  |  |
-| forms-public | GET | `/api/forms-public/preview-blocker.js` |  |  | ✓ |  |  |
-| forms-public | GET | `/api/forms-public/preview/:tortId` |  |  | ✓ |  |  |
-| forms | POST | `/api/forms/background-check/lead/:id` | ✓ | ✓ |  |  |  |
-| forms | POST | `/api/forms/background-check` | ✓ | ✓ |  |  |  |
-| forms | GET | `/api/forms/categories` | ✓ |  |  | ✓ |  |
-| forms | DELETE | `/api/forms/config/:tortId/fields/:key` | ✓ | ✓ |  |  |  |
-| forms | POST | `/api/forms/config/:tortId/fields` | ✓ | ✓ |  |  |  |
-| forms | GET | `/api/forms/config/:tortId` | ✓ | ✓ |  |  |  |
-| forms | PUT | `/api/forms/config/:tortId` | ✓ | ✓ |  |  |  |
-| forms | GET | `/api/forms/config` | ✓ | ✓ |  |  |  |
-| forms | POST | `/api/forms/escalate/fbi` | ✓ | ✓ |  |  |  |
-| forms | POST | `/api/forms/fraud-check` | ✓ | ✓ |  |  |  |
-| forms | POST | `/api/forms/npi-verify` | ✓ | ✓ |  |  |  |
-| forms | POST | `/api/forms/submit` | ✓ | ✓ |  |  |  |
-| forms | POST | `/api/forms/validate/address` | ✓ |  |  | ✓ |  |
-| forms | POST | `/api/forms/validate/email` | ✓ |  |  | ✓ |  |
-| health | GET | `/api/health/healthz` |  |  | ✓ |  |  |
-| image-objects | GET | `/api/image-objects/:id/integrity` | ✓ | ✓ |  |  |  |
-| image-objects | DELETE | `/api/image-objects/:id` | ✓ | ✓ |  |  |  |
-| image-objects | GET | `/api/image-objects/:id` | ✓ | ✓ |  |  |  |
-| image-objects | PATCH | `/api/image-objects/:id` | ✓ | ✓ |  |  |  |
-| image-objects | GET | `/api/image-objects/` | ✓ | ✓ |  |  |  |
-| image-objects | POST | `/api/image-objects/` | ✓ | ✓ |  |  |  |
-| image-objects | GET | `/api/image-objects/stats` | ✓ | ✓ |  |  |  |
-| integrations | POST | `/api/integrations/:id/sync` | ✓ | ✓ |  |  |  |
-| integrations | POST | `/api/integrations/:id/test` | ✓ | ✓ |  |  |  |
-| integrations | DELETE | `/api/integrations/:id` | ✓ | ✓ |  |  |  |
-| integrations | GET | `/api/integrations/:id` | ✓ | ✓ |  |  |  |
-| integrations | PATCH | `/api/integrations/:id` | ✓ | ✓ |  |  |  |
-| integrations | GET | `/api/integrations/categories` | ✓ | ✓ |  |  |  |
-| integrations | GET | `/api/integrations/` | ✓ | ✓ |  |  |  |
-| integrations | POST | `/api/integrations/` | ✓ | ✓ |  |  |  |
-| integrations | GET | `/api/integrations/presets` | ✓ | ✓ |  |  |  |
-| lead-import | GET | `/api/lead-import/batches/:id/duplicates` | ✓ | ✓ |  |  |  |
-| lead-import | GET | `/api/lead-import/batches/:id/errors` | ✓ | ✓ |  |  |  |
-| lead-import | GET | `/api/lead-import/batches/:id` | ✓ | ✓ |  |  |  |
-| lead-import | GET | `/api/lead-import/batches` | ✓ | ✓ |  |  |  |
-| lead-import | POST | `/api/lead-import/execute` | ✓ | ✓ |  |  |  |
-| lead-import | POST | `/api/lead-import/preview` | ✓ | ✓ |  |  |  |
-| lead-sources | DELETE | `/api/lead-sources/:id` | ✓ | ✓ |  |  |  |
-| lead-sources | PUT | `/api/lead-sources/:id` | ✓ | ✓ |  |  |  |
-| lead-sources | GET | `/api/lead-sources/` | ✓ | ✓ |  |  |  |
-| lead-sources | POST | `/api/lead-sources/` | ✓ | ✓ |  |  |  |
-| leads | GET | `/api/leads/:id/envelopes` | ✓ | ✓ |  |  |  |
-| leads | GET | `/api/leads/:id/fax-results` | ✓ | ✓ |  |  |  |
-| leads | POST | `/api/leads/:id/intelligence` | ✓ | ✓ |  |  |  |
-| leads | PATCH | `/api/leads/:id/notes` | ✓ | ✓ |  |  |  |
-| leads | POST | `/api/leads/:id/qualify` | ✓ | ✓ |  |  |  |
-| leads | DELETE | `/api/leads/:id` | ✓ | ✓ |  |  |  |
-| leads | GET | `/api/leads/:id` | ✓ | ✓ |  |  |  |
-| leads | PATCH | `/api/leads/:id` | ✓ | ✓ |  |  |  |
-| leads | GET | `/api/leads/export` | ✓ | ✓ |  |  |  |
-| leads | GET | `/api/leads/` | ✓ | ✓ |  |  |  |
-| leads | POST | `/api/leads/` | ✓ | ✓ |  |  |  |
-| news | GET | `/api/news/financial` | ✓ | ✓ |  |  |  |
-| news | GET | `/api/news/mass-tort` | ✓ | ✓ |  |  |  |
-| npi | GET | `/api/npi/lookup/:npi` | ✓ | ✓ |  |  |  |
-| npi | GET | `/api/npi/search` | ✓ | ✓ |  |  |  |
-| ocr | POST | `/api/ocr/ai-fields/result/:id` | ✓ | ✓ |  |  |  |
-| ocr | POST | `/api/ocr/ai-fields` | ✓ | ✓ |  |  |  |
-| ocr | GET | `/api/ocr/queue-stats` | ✓ | ✓ |  |  |  |
-| ocr | GET | `/api/ocr/results/:id` | ✓ | ✓ |  |  |  |
-| ocr | GET | `/api/ocr/results` | ✓ | ✓ |  |  |  |
-| ocr | POST | `/api/ocr/upload` | ✓ | ✓ |  |  |  |
-| paralegals | GET | `/api/paralegals/:id/performance` | ✓ | ✓ |  |  |  |
-| paralegals | GET | `/api/paralegals/:id` | ✓ | ✓ |  |  |  |
-| paralegals | GET | `/api/paralegals/` | ✓ | ✓ |  |  |  |
-| paralegals | POST | `/api/paralegals/` | ✓ | ✓ |  |  |  |
-| review-queue | PATCH | `/api/review-queue/:id` | ✓ | ✓ |  |  |  |
-| review-queue | GET | `/api/review-queue/` | ✓ | ✓ |  |  |  |
-| review-queue | GET | `/api/review-queue/stats` | ✓ | ✓ |  |  |  |
-| security | PATCH | `/api/security/alerts/:id/dismiss` | ✓ | ✓ |  |  |  |
-| security | GET | `/api/security/alerts` | ✓ | ✓ |  |  |  |
-| security | POST | `/api/security/analyze` | ✓ | ✓ |  |  |  |
-| security | POST | `/api/security/block-ip` | ✓ | ✓ |  |  |  |
-| security | DELETE | `/api/security/blocked-ips/:ip` | ✓ | ✓ |  |  |  |
-| security | GET | `/api/security/blocked-ips` | ✓ | ✓ |  |  |  |
-| security | PATCH | `/api/security/notifications/:id/acknowledge` | ✓ | ✓ |  |  |  |
-| security | GET | `/api/security/notifications` | ✓ | ✓ |  |  |  |
-| security | GET | `/api/security/stats` | ✓ | ✓ |  |  |  |
-| security | POST | `/api/security/test-alert` | ✓ | ✓ |  |  |  |
-| security | POST | `/api/security/webhook-config` | ✓ | ✓ |  |  |  |
-| timeline | GET | `/api/timeline/lead/:id` | ✓ | ✓ |  |  |  |
-| vendors | DELETE | `/api/vendors/:id` | ✓ | ✓ |  |  |  |
-| vendors | GET | `/api/vendors/:id` | ✓ | ✓ |  |  |  |
-| vendors | PATCH | `/api/vendors/:id` | ✓ | ✓ |  |  |  |
-| vendors | GET | `/api/vendors/` | ✓ | ✓ |  |  |  |
-| vendors | POST | `/api/vendors/` | ✓ | ✓ |  |  |  |
-| webhooks | POST | `/api/webhooks/_test/envelope-signed` |  |  | ✓ |  |  |
-| webhooks | POST | `/api/webhooks/docusign` |  |  | ✓ |  |  |
-| webhooks | POST | `/api/webhooks/dropbox-sign` |  |  | ✓ |  |  |
-| workflow-settings | GET | `/api/workflow-settings/_options/providers` | ✓ | ✓ |  |  |  |
-| workflow-settings | GET | `/api/workflow-settings/:scope` | ✓ | ✓ |  |  |  |
-| workflow-settings | GET | `/api/workflow-settings/` | ✓ | ✓ |  |  |  |
-| workflow-settings | PUT | `/api/workflow-settings/` | ✓ | ✓ |  |  |  |
-Total rows: 157
+**Column legend (4th-pass code-review fix — full per-route policy):**
+
+- **Auth** / **Gate** — symbol stamps the validator detected on the layer
+  chain. `Gate` includes both `requireRole` and `requirePermission`.
+- **Public allowlist?** — route is mounted under a router stamped
+  `markPublic(...)`. No auth required.
+- **Auth-only allowlist?** — route is on the `AUTH_ONLY_ROUTES` allow-list
+  in `route-protection.ts` (self-service / pure utility endpoints).
+- **Login-exception** — route is on `AUTH_ROUTE_EXCEPTIONS` (login /
+  refresh / register on the auth router).
+- **Required role** — the LOWEST role label that satisfies every
+  `requireRole(...)` gate in the chain (hierarchy semantics: a gate of
+  `requireRole("paralegal")` shows `paralegal` and admits paralegal,
+  attorney, admin). Read directly from the gate's metadata stamp; the
+  same value the runtime check enforces.
+- **Required permission(s)** — the union of every `requirePermission(...)`
+  gate's permission list. Within one gate the semantics are "any of"; if
+  multiple gates appear on a route, all must be satisfied.
+- **Audited on denial?** — `✓` for any non-public route. The denial
+  audit hook lives in both `requireRole` and `requirePermission` (see
+  `auditDenial` in `lib/rbac.ts`); public routes never reach an auth or
+  gate middleware so cannot produce a denial event.
+
+| Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
+|---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
+| analytics | GET | `/api/analytics/conversion-funnel` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| analytics | GET | `/api/analytics/overview` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| analytics | GET | `/api/analytics/paralegal-leaderboard` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| analytics | GET | `/api/analytics/pipeline-trend` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| analytics | GET | `/api/analytics/predictive/batch` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| analytics | GET | `/api/analytics/predictive/by-tort` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| analytics | GET | `/api/analytics/predictive/lead/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| analytics | GET | `/api/analytics/predictive/model` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| analytics | GET | `/api/analytics/tort-breakdown` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| auth | POST | `/api/auth/change-password` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| auth | POST | `/api/auth/login` |  |  |  |  | ✓ | — | — | ✓ |
+| auth | POST | `/api/auth/logout` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| auth | GET | `/api/auth/me` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| auth | POST | `/api/auth/mfa/disable` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| auth | POST | `/api/auth/mfa/setup` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| auth | POST | `/api/auth/mfa/verify` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| auth | POST | `/api/auth/refresh` |  |  |  |  | ✓ | — | — | ✓ |
+| auth | POST | `/api/auth/register` |  |  |  |  | ✓ | — | — | ✓ |
+| auth | GET | `/api/auth/users` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| buyers | DELETE | `/api/buyers/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| buyers | GET | `/api/buyers/:id` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| buyers | PUT | `/api/buyers/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| buyers | GET | `/api/buyers/` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| buyers | POST | `/api/buyers/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| cases | POST | `/api/cases/:id/analyze` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| cases | POST | `/api/cases/:id/upload` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| cases | GET | `/api/cases/:id` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| cases | GET | `/api/cases/` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| cases | POST | `/api/cases/` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| cases | POST | `/api/cases/worker/jobs/:id/requeue` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| cases | GET | `/api/cases/worker/queue-stats` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| compliance | GET | `/api/compliance/audit-summary` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| compliance | GET | `/api/compliance/audit-trail` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| dashboard | GET | `/api/dashboard/pipeline` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| dashboard | GET | `/api/dashboard/recent-activity` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| dashboard | GET | `/api/dashboard/stats` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| decision-engine | POST | `/api/decision-engine/leads/:id/recompute` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| decision-engine | GET | `/api/decision-engine/portfolio` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| decision-engine | POST | `/api/decision-engine/recompute-all` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| decision-engine | GET | `/api/decision-engine/settings` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| decision-engine | PUT | `/api/decision-engine/settings` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| document-templates | GET | `/api/document-templates/:id/preview` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| document-templates | DELETE | `/api/document-templates/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| document-templates | GET | `/api/document-templates/:id` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| document-templates | PUT | `/api/document-templates/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| document-templates | DELETE | `/api/document-templates/assignments/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| document-templates | GET | `/api/document-templates/assignments/all` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| document-templates | GET | `/api/document-templates/assignments/by-template/:templateId` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| document-templates | POST | `/api/document-templates/assignments` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| document-templates | GET | `/api/document-templates/` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| document-templates | POST | `/api/document-templates/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| document-templates | POST | `/api/document-templates/upload` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| documents | DELETE | `/api/documents/:id` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| documents | PATCH | `/api/documents/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| documents | GET | `/api/documents/` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| documents | POST | `/api/documents/highlight` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| documents | POST | `/api/documents/` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| documents | POST | `/api/documents/redact` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| drafting | POST | `/api/drafting/generate-pdf` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| drafting | POST | `/api/drafting/generate` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| drafting | GET | `/api/drafting/templates` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| forms-public | GET | `/api/forms-public/embed/:tortId` |  |  | ✓ |  |  | — | — | — |
+| forms-public | GET | `/api/forms-public/preview-blocker.js` |  |  | ✓ |  |  | — | — | — |
+| forms-public | GET | `/api/forms-public/preview/:tortId` |  |  | ✓ |  |  | — | — | — |
+| forms | POST | `/api/forms/background-check/lead/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| forms | POST | `/api/forms/background-check` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| forms | GET | `/api/forms/categories` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| forms | DELETE | `/api/forms/config/:tortId/fields/:key` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| forms | POST | `/api/forms/config/:tortId/fields` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| forms | GET | `/api/forms/config/:tortId` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| forms | PUT | `/api/forms/config/:tortId` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| forms | GET | `/api/forms/config` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| forms | POST | `/api/forms/escalate/fbi` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| forms | POST | `/api/forms/fraud-check` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| forms | POST | `/api/forms/npi-verify` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| forms | POST | `/api/forms/submit` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| forms | POST | `/api/forms/validate/address` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| forms | POST | `/api/forms/validate/email` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| health | GET | `/api/health/healthz` |  |  | ✓ |  |  | — | — | — |
+| image-objects | GET | `/api/image-objects/:id/integrity` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| image-objects | DELETE | `/api/image-objects/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| image-objects | GET | `/api/image-objects/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| image-objects | PATCH | `/api/image-objects/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| image-objects | GET | `/api/image-objects/` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| image-objects | POST | `/api/image-objects/` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| image-objects | GET | `/api/image-objects/stats` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| integrations | POST | `/api/integrations/:id/sync` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| integrations | POST | `/api/integrations/:id/test` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| integrations | DELETE | `/api/integrations/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| integrations | GET | `/api/integrations/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| integrations | PATCH | `/api/integrations/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| integrations | GET | `/api/integrations/categories` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| integrations | GET | `/api/integrations/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| integrations | POST | `/api/integrations/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| integrations | GET | `/api/integrations/presets` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| lead-import | GET | `/api/lead-import/batches/:id/duplicates` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| lead-import | GET | `/api/lead-import/batches/:id/errors` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| lead-import | GET | `/api/lead-import/batches/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| lead-import | GET | `/api/lead-import/batches` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| lead-import | POST | `/api/lead-import/execute` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| lead-import | POST | `/api/lead-import/preview` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| lead-sources | DELETE | `/api/lead-sources/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| lead-sources | PUT | `/api/lead-sources/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| lead-sources | GET | `/api/lead-sources/` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| lead-sources | POST | `/api/lead-sources/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| leads | GET | `/api/leads/:id/envelopes` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| leads | GET | `/api/leads/:id/fax-results` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| leads | POST | `/api/leads/:id/intelligence` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| leads | PATCH | `/api/leads/:id/notes` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| leads | POST | `/api/leads/:id/qualify` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| leads | DELETE | `/api/leads/:id` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| leads | GET | `/api/leads/:id` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| leads | PATCH | `/api/leads/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| leads | GET | `/api/leads/export` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| leads | GET | `/api/leads/` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| leads | POST | `/api/leads/` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| news | GET | `/api/news/financial` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| news | GET | `/api/news/mass-tort` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| npi | GET | `/api/npi/lookup/:npi` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| npi | GET | `/api/npi/search` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| ocr | POST | `/api/ocr/ai-fields/result/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| ocr | POST | `/api/ocr/ai-fields` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| ocr | GET | `/api/ocr/queue-stats` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| ocr | GET | `/api/ocr/results/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| ocr | GET | `/api/ocr/results` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| ocr | POST | `/api/ocr/upload` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| paralegals | GET | `/api/paralegals/:id/performance` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| paralegals | GET | `/api/paralegals/:id` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| paralegals | GET | `/api/paralegals/` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| paralegals | POST | `/api/paralegals/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| review-queue | PATCH | `/api/review-queue/:id` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| review-queue | GET | `/api/review-queue/` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| review-queue | GET | `/api/review-queue/stats` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| security | PATCH | `/api/security/alerts/:id/dismiss` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| security | GET | `/api/security/alerts` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| security | POST | `/api/security/analyze` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| security | POST | `/api/security/block-ip` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| security | DELETE | `/api/security/blocked-ips/:ip` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| security | GET | `/api/security/blocked-ips` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| security | PATCH | `/api/security/notifications/:id/acknowledge` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| security | GET | `/api/security/notifications` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| security | GET | `/api/security/stats` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| security | POST | `/api/security/test-alert` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| security | POST | `/api/security/webhook-config` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| timeline | GET | `/api/timeline/lead/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| vendors | DELETE | `/api/vendors/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| vendors | GET | `/api/vendors/:id` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| vendors | PATCH | `/api/vendors/:id` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| vendors | GET | `/api/vendors/` | ✓ | ✓ |  |  |  | `paralegal` | — | ✓ |
+| vendors | POST | `/api/vendors/` | ✓ | ✓ |  |  |  | `attorney` | — | ✓ |
+| webhooks | POST | `/api/webhooks/_test/envelope-signed` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/docusign` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/dropbox-sign` |  |  | ✓ |  |  | — | — | — |
+| workflow-settings | GET | `/api/workflow-settings/_options/providers` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| workflow-settings | GET | `/api/workflow-settings/:scope` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| workflow-settings | GET | `/api/workflow-settings/` | ✓ | ✓ |  |  |  | `viewer` | — | ✓ |
+| workflow-settings | PUT | `/api/workflow-settings/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+

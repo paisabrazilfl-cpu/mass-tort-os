@@ -433,6 +433,11 @@ export function requireRole(...roles: UserRole[]) {
   // Stamped with GATE_MIDDLEWARE_FLAG so the boot-time route table validator
   // (lib/route-protection.ts) can identify this as a role gate even after
   // bundling renames inner functions. Function.name alone is unreliable.
+  // Also stamped with GATE_METADATA so the boot-time policy report can
+  // surface the EFFECTIVE required role(s) per route. We carry the LOWEST
+  // role label that is acceptable (the minimum-required role per
+  // hierarchy semantics) — same as the runtime check.
+  const minLabel = (Object.keys(ROLE_HIERARCHY) as UserRole[]).find(r => ROLE_HIERARCHY[r] === minRequired) ?? roles[0];
   return markGateMiddleware(function requireRole(req: Request, res: Response, next: NextFunction): void {
     const user = req.user;
     if (!user) {
@@ -451,7 +456,7 @@ export function requireRole(...roles: UserRole[]) {
       user_id: user.id,
     });
     sendForbidden(res, "Insufficient permissions");
-  });
+  }, { kind: "role", values: [minLabel] });
 }
 
 /**
@@ -472,6 +477,9 @@ export function requirePermission(...permissions: Permission[]) {
     throw new Error("requirePermission called with no permissions — refusing to mount a deny-all middleware");
   }
   // Stamped with GATE_MIDDLEWARE_FLAG — see requireRole above for rationale.
+  // Also stamped with GATE_METADATA carrying the full any-of permission set
+  // so the boot policy report and audit doc matrix can render the
+  // capability requirements per route.
   return markGateMiddleware(function requirePermission(req: Request, res: Response, next: NextFunction): void {
     const user = req.user;
     if (!user) {
@@ -489,7 +497,7 @@ export function requirePermission(...permissions: Permission[]) {
       user_id: user.id,
     });
     sendForbidden(res, "Insufficient permissions");
-  });
+  }, { kind: "permission", values: permissions });
 }
 
 // =============================================================================

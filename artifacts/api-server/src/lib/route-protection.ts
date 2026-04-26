@@ -46,14 +46,29 @@ const ROUTER_LABEL_FLAG: unique symbol = Symbol("route-protection/label");
 // a passing validation.
 const AUTH_MIDDLEWARE_FLAG: unique symbol = Symbol("route-protection/auth");
 const GATE_MIDDLEWARE_FLAG: unique symbol = Symbol("route-protection/gate");
+// Stamp carrying the EFFECTIVE required role/permission metadata for a
+// gate middleware so the boot-time route-policy report can render it
+// alongside the route. Shape: { kind: "role" | "permission", values: string[] }.
+// The validator collects metadata from every gate in a route's chain (so a
+// route protected by both `requireRole("admin")` AND
+// `requirePermission(LEAD_VIEW_ANY)` shows up with both columns populated).
+const GATE_METADATA_FLAG: unique symbol = Symbol("route-protection/gate-metadata");
+
+export interface GateMetadata {
+  kind: "role" | "permission";
+  values: readonly string[];
+}
 
 function markAuthMiddleware<F extends (...args: unknown[]) => unknown>(fn: F): F {
   (fn as unknown as Record<symbol, unknown>)[AUTH_MIDDLEWARE_FLAG] = true;
   return fn;
 }
 
-function markGateMiddleware<F extends (...args: unknown[]) => unknown>(fn: F): F {
+function markGateMiddleware<F extends (...args: unknown[]) => unknown>(fn: F, meta?: GateMetadata): F {
   (fn as unknown as Record<symbol, unknown>)[GATE_MIDDLEWARE_FLAG] = true;
+  if (meta) {
+    (fn as unknown as Record<symbol, unknown>)[GATE_METADATA_FLAG] = meta;
+  }
   return fn;
 }
 
@@ -180,6 +195,21 @@ export interface RoutePolicyEntry {
   method: string;
   path: string;
   status: "public" | "auth-exception" | "auth-only" | "role-gated";
+  /**
+   * Effective required roles for the route, collected from every
+   * `requireRole(...)` gate in the chain. Empty for non-role-gated routes.
+   * Multiple entries mean the route mounts multiple role gates and all
+   * must be satisfied.
+   */
+  requiredRoles?: string[];
+  /**
+   * Effective required permissions for the route, collected from every
+   * `requirePermission(...)` gate in the chain. Within a single gate the
+   * semantics are "any of these permissions" (the gate accepts the caller
+   * iff they hold at least one); across multiple gates the semantics are
+   * "and", since express runs them in sequence.
+   */
+  requiredPermissions?: string[];
 }
 
 interface ExpressLayer {
@@ -197,14 +227,38 @@ interface ExpressRouterLike {
   stack?: ExpressLayer[];
 }
 
-function classifyHandlerNames(handlers: Array<{ handle?: unknown }>): { hasAuth: boolean; hasGate: boolean } {
+function readGateMetadata(handle: unknown): GateMetadata | undefined {
+  if (handle == null) return undefined;
+  if (typeof handle !== "function" && typeof handle !== "object") return undefined;
+  const v = (handle as Record<symbol, unknown>)[GATE_METADATA_FLAG];
+  if (!v || typeof v !== "object") return undefined;
+  const meta = v as Partial<GateMetadata>;
+  if ((meta.kind === "role" || meta.kind === "permission") && Array.isArray(meta.values)) {
+    return { kind: meta.kind, values: meta.values.map(String) };
+  }
+  return undefined;
+}
+
+function classifyHandlerNames(handlers: Array<{ handle?: unknown }>): {
+  hasAuth: boolean;
+  hasGate: boolean;
+  requiredRoles: string[];
+  requiredPermissions: string[];
+} {
   let hasAuth = false;
   let hasGate = false;
+  const requiredRoles: string[] = [];
+  const requiredPermissions: string[] = [];
   for (const h of handlers) {
     if (hasFlag(h.handle, AUTH_MIDDLEWARE_FLAG)) hasAuth = true;
-    if (hasFlag(h.handle, GATE_MIDDLEWARE_FLAG)) hasGate = true;
+    if (hasFlag(h.handle, GATE_MIDDLEWARE_FLAG)) {
+      hasGate = true;
+      const meta = readGateMetadata(h.handle);
+      if (meta?.kind === "role") requiredRoles.push(...meta.values);
+      if (meta?.kind === "permission") requiredPermissions.push(...meta.values);
+    }
   }
-  return { hasAuth, hasGate };
+  return { hasAuth, hasGate, requiredRoles, requiredPermissions };
 }
 
 /**
@@ -219,13 +273,22 @@ function classifyHandlerNames(handlers: Array<{ handle?: unknown }>): { hasAuth:
  */
 function walkRouter(
   router: ExpressRouterLike,
-  inherited: { hasAuth: boolean; hasGate: boolean; isPublic: boolean; label: string },
+  inherited: {
+    hasAuth: boolean;
+    hasGate: boolean;
+    isPublic: boolean;
+    label: string;
+    requiredRoles: string[];
+    requiredPermissions: string[];
+  },
   issues: RouteIssue[],
   counters: { checked: number; public: number; protected: number },
   policy: RoutePolicyEntry[],
 ): void {
   const stack = router.stack ?? [];
   let { hasAuth, hasGate } = inherited;
+  const inheritedRoles = [...inherited.requiredRoles];
+  const inheritedPerms = [...inherited.requiredPermissions];
 
   for (const layer of stack) {
     if (layer.route) {
@@ -251,6 +314,8 @@ function walkRouter(
         const perRoute = classifyHandlerNames(route.stack);
         const finalAuth = hasAuth || perRoute.hasAuth;
         const finalGate = hasGate || perRoute.hasGate;
+        const finalRoles = [...inheritedRoles, ...perRoute.requiredRoles];
+        const finalPerms = [...inheritedPerms, ...perRoute.requiredPermissions];
         if (!finalAuth) {
           issues.push({
             router: inherited.label,
@@ -276,7 +341,14 @@ function walkRouter(
           continue;
         }
         counters.protected++;
-        policy.push({ router: inherited.label, method: M, path: route.path, status: "role-gated" });
+        policy.push({
+          router: inherited.label,
+          method: M,
+          path: route.path,
+          status: "role-gated",
+          ...(finalRoles.length > 0 ? { requiredRoles: finalRoles } : {}),
+          ...(finalPerms.length > 0 ? { requiredPermissions: finalPerms } : {}),
+        });
       }
       continue;
     }
@@ -296,7 +368,14 @@ function walkRouter(
       const subPublic = inherited.isPublic || isPublicRouter(handle);
       walkRouter(
         handle as ExpressRouterLike,
-        { hasAuth, hasGate, isPublic: subPublic, label: subLabel },
+        {
+          hasAuth,
+          hasGate,
+          isPublic: subPublic,
+          label: subLabel,
+          requiredRoles: inheritedRoles,
+          requiredPermissions: inheritedPerms,
+        },
         issues,
         counters,
         policy,
@@ -307,7 +386,12 @@ function walkRouter(
     // Plain middleware on this router. Update inherited state for downstream
     // siblings — express applies layers in declaration order.
     if (hasFlag(handle, AUTH_MIDDLEWARE_FLAG)) hasAuth = true;
-    if (hasFlag(handle, GATE_MIDDLEWARE_FLAG)) hasGate = true;
+    if (hasFlag(handle, GATE_MIDDLEWARE_FLAG)) {
+      hasGate = true;
+      const meta = readGateMetadata(handle);
+      if (meta?.kind === "role") inheritedRoles.push(...meta.values);
+      if (meta?.kind === "permission") inheritedPerms.push(...meta.values);
+    }
   }
 }
 
@@ -327,7 +411,7 @@ export function validateRouteTable(parent: Router): {
 
   walkRouter(
     parent as unknown as ExpressRouterLike,
-    { hasAuth: false, hasGate: false, isPublic: false, label: "(root)" },
+    { hasAuth: false, hasGate: false, isPublic: false, label: "(root)", requiredRoles: [], requiredPermissions: [] },
     issues,
     counters,
     policy,
@@ -384,18 +468,22 @@ export function __internal_inspectLayer(handle: unknown): {
   hasGateStamp: boolean;
   isPublicRouter: boolean;
   routerLabel: string | undefined;
+  gateMetadata?: GateMetadata;
 } {
   if (handle == null || (typeof handle !== "function" && typeof handle !== "object")) {
     return { hasAuthStamp: false, hasGateStamp: false, isPublicRouter: false, routerLabel: undefined };
   }
   const bag = handle as Record<symbol, unknown>;
   const label = bag[ROUTER_LABEL_FLAG];
-  return {
+  const out: ReturnType<typeof __internal_inspectLayer> = {
     hasAuthStamp: Boolean(bag[AUTH_MIDDLEWARE_FLAG]),
     hasGateStamp: Boolean(bag[GATE_MIDDLEWARE_FLAG]),
     isPublicRouter: Boolean(bag[PUBLIC_ROUTER_FLAG]),
     routerLabel: typeof label === "string" ? label : undefined,
   };
+  const meta = readGateMetadata(handle);
+  if (meta) out.gateMetadata = meta;
+  return out;
 }
 
 /**
