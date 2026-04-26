@@ -22,8 +22,11 @@ import {
   requireRole,
   canBypassOwnership,
   authMiddleware,
+  generateToken,
+  isTokenVersionRevoked,
   __rbacInternal,
 } from "../rbac.js";
+import { isCaseVisibleToUser } from "../../routes/cases.js";
 
 // =============================================================================
 // Tiny in-memory request/response stand-ins. We avoid spinning up a full
@@ -313,6 +316,45 @@ describe("requirePermission()", () => {
     assert.equal(res.statusCode, 401);
     assert.equal((res.body as { code: string }).code, "UNAUTHENTICATED");
   });
+
+  // ---------------------------------------------------------------------------
+  // Variadic contract — task #10 explicitly requires `requirePermission(...perms)`
+  // with any-of semantics so callers can express "may view own OR view any".
+  // ---------------------------------------------------------------------------
+
+  test("variadic: passes when role grants ANY one of the listed perms (any-of)", async () => {
+    // viewer has LEAD_VIEW_OWN but not LEAD_VIEW_ANY. The any-of gate must
+    // accept them when EITHER perm is acceptable.
+    const req = makeReq();
+    (req as unknown as { user: unknown }).user = { id: 1, role: "viewer" };
+    const res = makeRes();
+    const { nextCalled } = await runMiddleware(
+      requirePermission(Permission.LEAD_VIEW_ANY, Permission.LEAD_VIEW_OWN),
+      req,
+      res,
+    );
+    assert.equal(nextCalled, true, "viewer with LEAD_VIEW_OWN should pass any-of gate");
+  });
+
+  test("variadic: denies when role grants NONE of the listed perms", async () => {
+    const req = makeReq();
+    (req as unknown as { user: unknown }).user = { id: 1, role: "viewer" };
+    const res = makeRes();
+    const { nextCalled } = await runMiddleware(
+      requirePermission(Permission.LEAD_DELETE, Permission.LEAD_EXPORT),
+      req,
+      res,
+    );
+    assert.equal(nextCalled, false);
+    assert.equal(res.statusCode, 403);
+  });
+
+  test("variadic: zero perms throws at mount time (deny-all guard)", () => {
+    assert.throws(
+      () => requirePermission(),
+      /refusing to mount a deny-all middleware/,
+    );
+  });
 });
 
 // =============================================================================
@@ -508,5 +550,223 @@ describe("validateRouteTable (boot-time)", () => {
       () => validateRouteTable(parent),
       /no authMiddleware in chain/,
     );
+  });
+});
+
+// =============================================================================
+// Token revocation — pure helper
+//
+// The end-to-end "DB token_version mismatch ⇒ 401" path requires a live pg
+// connection, which intentionally lives outside this unit-test file. The
+// comparison logic ITSELF is factored into `isTokenVersionRevoked()` so we
+// can assert every interesting boundary here without mocking drizzle.
+// =============================================================================
+
+describe("isTokenVersionRevoked()", () => {
+  test("legacy token without tv claim is never revoked (rely on JWT expiry)", () => {
+    assert.equal(isTokenVersionRevoked(undefined, 0), false);
+    assert.equal(isTokenVersionRevoked(undefined, 5), false);
+  });
+
+  test("matching tv passes through", () => {
+    assert.equal(isTokenVersionRevoked(0, 0), false);
+    assert.equal(isTokenVersionRevoked(3, 3), false);
+  });
+
+  test("token tv strictly less than DB tv ⇒ revoked", () => {
+    // After revokeAllUserTokens(uid) the DB tv is bumped; any token with an
+    // older tv must be rejected.
+    assert.equal(isTokenVersionRevoked(0, 1), true);
+    assert.equal(isTokenVersionRevoked(2, 5), true);
+  });
+
+  test("token tv greater than DB tv passes (DB is the floor)", () => {
+    // Defensive: a stale read from the DB shouldn't reject a freshly issued
+    // token whose tv is ahead of the cached row.
+    assert.equal(isTokenVersionRevoked(5, 3), false);
+  });
+
+  test("nullish DB tv treated as 0", () => {
+    assert.equal(isTokenVersionRevoked(0, undefined), false);
+    assert.equal(isTokenVersionRevoked(1, undefined), false);
+  });
+});
+
+// =============================================================================
+// Expired-token denial via authMiddleware. We can exercise this without a
+// DB because verifyToken() returns null on an expired JWT *before* the
+// middleware reaches the token-version DB lookup.
+// =============================================================================
+
+describe("authMiddleware — expired token", () => {
+  test("rejects an expired Bearer token with UNAUTHENTICATED + audit reason", async () => {
+    // Build a token that is already expired. generateToken() uses the
+    // module's JWT_SECRET so the signature itself is valid — only the
+    // expiry will trip the verifier.
+    // jsonwebtoken is a CJS module; dynamic import returns { default: { sign, verify, ... } }
+    const jwtMod = await import("jsonwebtoken");
+    const jwt = (jwtMod as unknown as { default: typeof jwtMod }).default ?? jwtMod;
+    const secret = process.env["SESSION_SECRET"] ?? "mtos-dev-secret";
+    const expired = jwt.sign(
+      { id: 99, email: "expired@mtos.local", name: "Expired", role: "admin", tv: 0 },
+      secret,
+      { expiresIn: "-1s" },
+    );
+    const req = makeReq({ headers: { authorization: `Bearer ${expired}` } });
+    const res = makeRes();
+    const { nextCalled } = await runMiddleware(authMiddleware, req, res);
+    assert.equal(nextCalled, false);
+    assert.equal(res.statusCode, 401);
+    const body = res.body as { code: string; message: string };
+    assert.equal(body.code, "UNAUTHENTICATED");
+    assert.match(body.message, /invalid or expired/i);
+    // No req.user must be attached on the failure path.
+    assert.equal((req as unknown as { user: unknown }).user, undefined);
+  });
+
+  test("freshly issued token is NOT rejected by signature/expiry checks", async () => {
+    // We can't assert the middleware reaches `next()` without a DB (the
+    // token-version row lookup runs after signature verification), but we
+    // CAN assert the failure code is no longer the expired/invalid one
+    // when the token is well-formed. The DB call will fail-closed with
+    // either a 401 ("user_account_not_found") or 503 ("auth_unavailable")
+    // — both acceptable; the contract here is "valid signature ⇒ NOT
+    // invalid_or_expired_token".
+    const fresh = generateToken({ id: 999, email: "fresh@mtos.local", name: "Fresh", role: "admin" });
+    const req = makeReq({ headers: { authorization: `Bearer ${fresh}` } });
+    const res = makeRes();
+    await runMiddleware(authMiddleware, req, res);
+    if (res.statusCode === 401) {
+      const body = res.body as { message: string };
+      assert.doesNotMatch(body.message, /invalid or expired/i);
+    }
+  });
+});
+
+// =============================================================================
+// Cases viewer ownership — pure predicate. Mirrors GET /api/cases and
+// GET /api/cases/:id semantics without spinning up the DB.
+// =============================================================================
+
+describe("isCaseVisibleToUser()", () => {
+  const otherUser = { id: 7, role: "viewer" as const };
+  const ownedRow = { created_by_user_id: 7, assigned_to: null };
+  const assignedRow = { created_by_user_id: 99, assigned_to: 7 };
+  const foreignRow = { created_by_user_id: 99, assigned_to: 42 };
+  const orphanRow = { created_by_user_id: null, assigned_to: null };
+
+  test("viewer sees rows they own", () => {
+    assert.equal(isCaseVisibleToUser(otherUser, ownedRow), true);
+  });
+  test("viewer sees rows they are assigned to (but did not create)", () => {
+    assert.equal(isCaseVisibleToUser(otherUser, assignedRow), true);
+  });
+  test("viewer cannot see rows they neither own nor are assigned to", () => {
+    assert.equal(isCaseVisibleToUser(otherUser, foreignRow), false);
+  });
+  test("viewer cannot see orphan rows (both ownership cols null)", () => {
+    assert.equal(isCaseVisibleToUser(otherUser, orphanRow), false);
+  });
+
+  for (const role of ["paralegal", "attorney", "admin"] as const) {
+    test(`${role} sees every row regardless of ownership (no per-row scope)`, () => {
+      const u = { id: 1, role };
+      assert.equal(isCaseVisibleToUser(u, ownedRow), true);
+      assert.equal(isCaseVisibleToUser(u, assignedRow), true);
+      assert.equal(isCaseVisibleToUser(u, foreignRow), true);
+      assert.equal(isCaseVisibleToUser(u, orphanRow), true);
+    });
+  }
+
+  test("viewer with id=0 (dev synthetic) does not match orphan rows", () => {
+    // Regression for the god-mode removal: id=0 must not magically own
+    // rows whose nullable owner column happens to be null. The strict
+    // equality on null guards against `0 === null` JS coercion bugs.
+    const dev = { id: 0, role: "viewer" as const };
+    assert.equal(isCaseVisibleToUser(dev, orphanRow), false);
+  });
+});
+
+// =============================================================================
+// Production-mode bypass prevention.
+//
+// `IS_DEV` in lib/rbac.ts is captured at module-import time, so we cannot
+// flip it inside this process. Instead we spawn a child node that sets
+// `NODE_ENV=production` BEFORE importing rbac, then asserts the
+// authMiddleware refuses an unauthenticated request — i.e. no dev shim
+// engages. This is the single most important regression for task #10:
+// the previous bug was a dev bypass active under `NODE_ENV !== "production"`,
+// which silently fired on staging, on test, and when the var was unset.
+// =============================================================================
+
+describe("production NODE_ENV refuses the dev-mode bypass", () => {
+  test("authMiddleware denies unauthenticated requests under NODE_ENV=production", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const path = await import("node:path");
+    const apiServerRoot = path.resolve(import.meta.dirname, "../../..");
+
+    // The child runs an inline tsx program: set NODE_ENV via env, import
+    // rbac, exercise the middleware against a stub request/response, and
+    // print a one-line JSON verdict on stdout.
+    //
+    // We cannot let the child touch the real DB, so the request is
+    // unauthenticated (no Bearer header). In dev mode this is the path
+    // that engages the synthetic admin user; in any non-dev env it must
+    // emit 401 + UNAUTHENTICATED with no req.user attached.
+    const program = `
+      import("./src/lib/rbac.ts").then(async ({ authMiddleware }) => {
+        const req = { headers: {}, path: "/x", method: "GET", socket: { remoteAddress: "127.0.0.1" }, get: () => undefined, ip: "127.0.0.1" };
+        let status = 0; let body;
+        const headers = {};
+        const res = {
+          status(n) { status = n; return this; },
+          json(b) { body = b; return this; },
+          setHeader(k, v) { headers[k.toLowerCase()] = v; },
+          getHeader(k) { return headers[k.toLowerCase()]; },
+        };
+        await new Promise((resolve) => {
+          const next = () => resolve();
+          const r = authMiddleware(req, res, next);
+          if (r && typeof r.then === "function") r.then(() => resolve());
+          else if (status !== 0) resolve();
+        });
+        // eslint-disable-next-line no-console
+        console.log(JSON.stringify({ status, code: body && body.code, hasUser: req.user !== undefined, role: req.user && req.user.role }));
+      }).catch((e) => { console.error("CHILD_ERR:" + (e && e.message ? e.message : String(e))); process.exit(2); });
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "-e", program],
+      {
+        cwd: apiServerRoot,
+        env: {
+          ...process.env,
+          NODE_ENV: "production",
+          // SESSION_SECRET is REQUIRED in non-dev — provide a stable test
+          // value so the rbac module loads. The middleware behaviour we're
+          // testing (refusing the bypass) is independent of the secret.
+          SESSION_SECRET: process.env["SESSION_SECRET"] ?? "test-only-secret-not-real",
+          RBAC_DISABLE_AUDIT: "1",
+        },
+        encoding: "utf-8",
+        timeout: 30_000,
+      },
+    );
+    if (result.status !== 0) {
+      throw new Error(
+        `child exited ${result.status}; stderr: ${result.stderr?.toString().slice(0, 500)}; stdout: ${result.stdout?.toString().slice(0, 500)}`,
+      );
+    }
+    const lastLine = (result.stdout ?? "").trim().split(/\n/).filter(Boolean).pop() ?? "";
+    let verdict: { status: number; code: string; hasUser: boolean; role?: string };
+    try {
+      verdict = JSON.parse(lastLine);
+    } catch (_e) {
+      throw new Error(`could not parse child verdict: ${lastLine}`);
+    }
+    assert.equal(verdict.status, 401, "production must return 401 for unauth request");
+    assert.equal(verdict.code, "UNAUTHENTICATED");
+    assert.equal(verdict.hasUser, false, "production must NOT attach a synthetic dev user");
+    assert.equal(verdict.role, undefined);
   });
 });

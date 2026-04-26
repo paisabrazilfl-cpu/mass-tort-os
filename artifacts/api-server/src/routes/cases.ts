@@ -5,8 +5,30 @@ import { CreateCaseBody, UploadCaseFileBody } from "@workspace/api-zod";
 import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
 import { auditLog } from "../lib/audit";
 import crypto from "crypto";
+import type { AuthUser } from "../lib/rbac";
 import { requireRole, auditAction, denyForbidden } from "../lib/rbac";
 import { badRequest, notFound, forbidden } from "../lib/http-errors";
+
+/**
+ * Cases viewer-ownership predicate, factored out so the role × route test
+ * matrix in `src/lib/__tests__/rbac.test.ts` can assert "this case is
+ * visible to user X" without standing up a real database.
+ *
+ * Returns `true` when the given user is permitted to see the given case
+ * row. Mirror this in {@link viewerCasesListPredicate} (the SQL-level
+ * version) when changing semantics — they MUST agree.
+ *
+ * Rule: only the `viewer` role is per-row scoped. Paralegals and above see
+ * the entire intake queue; viewers see only cases they OWN
+ * (`created_by_user_id`) or are explicitly ASSIGNED TO (`assigned_to`).
+ */
+export function isCaseVisibleToUser(
+  user: Pick<AuthUser, "id" | "role">,
+  row: { created_by_user_id: number | null; assigned_to: number | null },
+): boolean {
+  if (user.role !== "viewer") return true;
+  return row.created_by_user_id === user.id || row.assigned_to === user.id;
+}
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -207,11 +229,7 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
   // We emit 403 (not 404) so the CRM can show a clear "no access" banner;
   // case ids are opaque UUIDs so existence-leak is low-value.
   const user = req.user!;
-  if (
-    user.role === "viewer" &&
-    caseRow.created_by_user_id !== user.id &&
-    caseRow.assigned_to !== user.id
-  ) {
+  if (!isCaseVisibleToUser(user, caseRow)) {
     denyForbidden(req, res, "case_ownership_denied", "Insufficient permissions", {
       case_id,
       owner_user_id: caseRow.created_by_user_id,

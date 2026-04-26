@@ -6,10 +6,13 @@ enforced at boot, normalised 401/403 envelope, audit trail on every denial,
 zero "user.id !== 0" god-mode branches remain in code paths.
 **Boot-time validator result:** 157 routes checked, 10 public, 147 protected,
 **0 unprotected**.
-**Test result:** `src/lib/__tests__/rbac.test.ts` — 47 / 47 passing
-(39 RBAC matrix tests + 6 boot-time route table validator regression tests
-[including two explicit forge-attempt tests] + 2 dev-mode predicate tests
-covering production / staging / casing / whitespace bypass prevention).
+**Test result:** `src/lib/__tests__/rbac.test.ts` — 66 / 66 passing
+(39 RBAC matrix tests + 3 variadic `requirePermission` tests + 5 token-version
+revocation predicate tests + 2 expired-/fresh-token authMiddleware tests + 8
+viewer ownership predicate tests + 1 production-mode subprocess bypass-prevention
+test + 6 boot-time route table validator regression tests [including two explicit
+forge-attempt tests] + 2 dev-mode predicate tests covering production / staging
+/ casing / whitespace bypass prevention).
 
 ---
 
@@ -30,7 +33,7 @@ The refactored `lib/rbac.ts` is now the only file that defines:
 | `ROLE_PERMISSIONS` | Declarative role → Permission set. **Only place** new capabilities get wired. |
 | `hasPermission(user, perm)` | Pure predicate. |
 | `requireRole(...roles)` | Hierarchy-only middleware. Throws at boot if called with no roles (refuses to mount a deny-all). |
-| `requirePermission(perm)` | Permission-gated middleware (preferred for new handlers). |
+| `requirePermission(...perms)` | Variadic permission-gated middleware (preferred for new handlers). Accepts the caller iff their role grants AT LEAST ONE of the listed permissions; throws at mount time when called with zero perms. |
 | `canBypassOwnership(user)` | Replaces `user.id !== 0` god-mode. Returns true only for `admin` and `attorney`. |
 | `authMiddleware` | Unchanged contract; tightened so dev bypass fires **only** when `NODE_ENV === "development"` (never on `undefined`, never on `"test"`, never in staging/production). |
 
@@ -161,21 +164,26 @@ No `user.id === 0` or `user.id !== 0` remain in any handler.
 
 ### `routes/cases.ts` — viewer ownership
 
-- Added `created_by_user_id` integer column to `cases` schema (db push completed).
-- `worker.ts` now plumbs `created_by_user_id` through the `create_case`
-  payload so background-job-created cases attribute the original requester.
-- `GET /` filters by `created_by_user_id` for non-bypass roles.
-- `GET /:id` calls `denyForbidden(... "case_ownership_denied" ...)` when a
-  non-bypass role requests a case they don't own — both the canonical
-  envelope and an audit-log row are emitted.
-- **Note on owner-or-assigned semantics:** the `cases` table only carries
-  `created_by_user_id`; there is no `assigned_to` column equivalent to
-  `leads.assigned_to`. The viewer ownership check is therefore strict
-  owner-only by schema. Adding case assignment is tracked separately as
-  follow-up work (Task #11 candidate); when that column lands, the filter
-  on `GET /` and the predicate in `GET /:id` should be widened to
-  `created_by_user_id === user.id || assigned_to === user.id` to match
-  the leads convention.
+- Added two integer columns to `cases` (db push completed):
+  - `created_by_user_id` — the user who originated the intake. `worker.ts`
+    plumbs this through the `create_case` job payload so background-job
+    creations still attribute the original requester. Dev-mode synthetic
+    user (`id === 0`) stores NULL so dev-only rows never leak into a real
+    viewer's filtered list.
+  - `assigned_to` — the user the case is currently assigned to (nullable,
+    no FK enforced — see follow-up #22 for the back-fill / FK plan).
+- The viewer ownership check is the **owner-or-assigned** rule:
+  `created_by_user_id === user.id OR assigned_to === user.id`.
+- The check is gated **only** on `user.role === "viewer"` — paralegals and
+  attorneys (and admins) see the full intake queue. This was tightened
+  after the first review pass: the filter previously engaged for any
+  non-bypass role and over-blocked paralegals.
+- `GET /` applies the rule as a SQL `where(or(eq(...), eq(...)))` clause
+  for viewers, and an unfiltered list for paralegal+.
+- `GET /:id` applies the same rule via `isCaseVisibleToUser(user, row)`
+  (exported from `routes/cases.ts` so the role × route test matrix can
+  assert it without a DB), and emits `denyForbidden(... "case_ownership_denied" ...)`
+  on a miss — both the canonical 403 envelope and an audit-log row.
 
 ### `routes/decision-engine.ts` — read vs write split
 
@@ -235,7 +243,7 @@ metadata before sending the canonical envelope.
 
 | Site | Reason | Metadata |
 | --- | --- | --- |
-| `cases.ts` GET `/:id` | `case_ownership_denied` | `case_id`, `owner_user_id` |
+| `cases.ts` GET `/:id` | `case_ownership_denied` | `case_id`, `owner_user_id`, `assigned_to` |
 | `leads.ts` GET `/:id` | `lead_ownership_denied` | `lead_id`, `owner_user_id`, `assigned_to` |
 | `leads.ts` `ensureLeadAccess` (envelopes/fax-results) | `lead_ownership_denied` | `lead_id`, `owner_user_id`, `assigned_to` |
 | `leads.ts` PATCH `/:id` | `lead_ownership_denied` | `lead_id`, `owner_user_id`, `assigned_to` |
@@ -265,7 +273,7 @@ the first log line.
 
 ## 7. Tests — `src/lib/__tests__/rbac.test.ts`
 
-47 / 47 passing under `node:test`. Coverage matrix:
+66 / 66 passing under `node:test`. Coverage matrix:
 
 | Group | Cases |
 | --- | --- |
@@ -273,8 +281,12 @@ the first log line.
 | `hasPermission` | per-role allow/deny for every `Permission` |
 | `canBypassOwnership` | admin / attorney true; paralegal / viewer false |
 | `requireRole` hierarchy | every (required role × actual role) cell of the 4×4 matrix; multi-role lists; missing user → 401 |
-| `requirePermission` | allow / deny / missing user → 401 |
-| `authMiddleware` | no header → 401; malformed Bearer → 401; envelope shape `{status, code, message}` |
+| `requirePermission` | allow / deny / missing user → 401; **variadic any-of semantics** (passes when role grants ANY listed perm, denies when role grants NONE); **zero-arg call throws at mount** (deny-all guard) |
+| `authMiddleware` no/malformed token | no header → 401; malformed Bearer → 401; envelope shape `{status, code, message}` |
+| `authMiddleware` **expired token** | a JWT signed with the live `SESSION_SECRET` and `expiresIn:"-1s"` is rejected with `401 UNAUTHENTICATED` and `req.user` is never attached; a freshly issued well-formed token does NOT trip the expired-token branch |
+| `isTokenVersionRevoked` (pure helper) | legacy token without `tv` claim is never revoked; matching tv passes; token tv strictly less than DB tv ⇒ revoked; token tv greater than DB tv passes; nullish DB tv treated as 0 |
+| `isCaseVisibleToUser` (cases viewer ownership) | viewer sees rows they own; viewer sees rows they are assigned to; viewer denied when neither owner nor assignee; viewer denied on orphan rows; paralegal / attorney / admin always visible regardless of ownership cols; `id=0` dev synthetic does NOT match orphan rows (regression for the god-mode removal) |
+| **Production-mode bypass prevention** (subprocess) | `IS_DEV` is captured at module-import time, so a child `node` is spawned with `NODE_ENV=production`; the child imports `rbac.ts` and exercises `authMiddleware` against an unauthenticated request — asserts the response is `401 UNAUTHENTICATED` and `req.user` is `undefined` (no synthetic admin attached). Closes the original "dev bypass under `NODE_ENV !== production`" regression. |
 | Dev gate | `IS_DEV` reflects current `NODE_ENV`; **the predicate is FALSE for `production` / `staging` / `test` / unset**; **TRUE only for the literal string `"development"`** (rejects `Development`, `DEVELOPMENT`, `development ` (trailing space), ` development` (leading space), `dev`, `develop`) |
 | **`validateRouteTable`** (boot-time) | rejects authenticated route with no gate; accepts authenticated + gated; **a contributor-named `requireRole` noop CANNOT bypass the validator**; `requirePermission` satisfies the gate; **a `Symbol.for()` router stamp CANNOT impersonate `markPublic`**; missing `authMiddleware` fails even with a gate present |
 
@@ -321,7 +333,9 @@ artifacts/api-server/src/worker.ts               +25/-…    plumb created_by_us
 artifacts/api-server/src/routes/decision-engine.ts +12/-…   read/write split (attorney/admin)
 artifacts/api-server/src/scripts/dump-route-matrix.ts (new) live route-matrix exporter
 lib/db/src/schema/cases.ts                       +12       created_by_user_id + assigned_to
-artifacts/api-server/src/lib/__tests__/rbac.test.ts (new)  47 unit tests
+artifacts/api-server/src/lib/__tests__/rbac.test.ts (new)  66 unit tests
+artifacts/api-server/src/routes/cases.ts                   isCaseVisibleToUser helper exported
+artifacts/api-server/src/lib/route-protection.ts           __internal_inspectLayer / AUTH_ROUTE_EXCEPTIONS / AUTH_ONLY_ROUTES exposed for tests + dump-route-matrix
 docs/audits/rbac-remediation-2026-04-26.md (new)           this report
 ```
 

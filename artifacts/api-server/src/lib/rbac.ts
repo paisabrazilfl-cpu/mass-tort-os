@@ -324,6 +324,27 @@ export function verifyToken(token: string): (AuthUser & { tv?: number }) | null 
   }
 }
 
+/**
+ * Pure helper extracted so the token-version revocation check is unit-testable
+ * without mocking the database. The contract:
+ *
+ *   - If the token doesn't carry a `tv` claim (legacy tokens issued before
+ *     token_version was added), we don't revoke — the caller must rely on
+ *     normal JWT expiry.
+ *   - If the token's `tv` is strictly less than the current DB value, the
+ *     token was issued before a `revokeAllUserTokens(userId)` call bumped
+ *     the user's version, so it must be rejected as revoked.
+ *   - Equal values pass — that's the normal case for live tokens.
+ *
+ * This is exercised end-to-end at runtime by `_authMiddleware`, and asserted
+ * directly by the role × route test matrix.
+ */
+export function isTokenVersionRevoked(decodedTv: number | undefined, currentDbTv: number | undefined): boolean {
+  if (typeof decodedTv !== "number") return false;
+  const current = currentDbTv ?? 0;
+  return decodedTv < current;
+}
+
 // =============================================================================
 // authMiddleware
 // =============================================================================
@@ -367,7 +388,7 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
       sendUnauthorized(res, "User account not found");
       return;
     }
-    if (typeof decoded.tv === "number" && decoded.tv < (row.token_version ?? 0)) {
+    if (isTokenVersionRevoked(decoded.tv, row.token_version)) {
       auditDenial(req, "token_revoked", { user_id: decoded.id });
       sendUnauthorized(res, "Token has been revoked");
       return;
@@ -437,22 +458,33 @@ export function requireRole(...roles: UserRole[]) {
  * Permission-gated middleware. Prefer this over {@link requireRole} for
  * NEW handlers — it lets us reassign which role gets a capability without
  * touching every route file.
+ *
+ * Variadic: pass one or more {@link Permission} values; the gate accepts the
+ * caller iff their role grants AT LEAST ONE of the listed permissions
+ * (any-of). This matches typical "the caller may do X *or* Y" route usage
+ * (e.g. `requirePermission(LEAD_VIEW_OWN, LEAD_VIEW_ANY)` for a list endpoint
+ * that filters by ownership downstream). Passing zero permissions throws at
+ * mount time — refusing to install a deny-all middleware that would only
+ * surface the misconfiguration at runtime.
  */
-export function requirePermission(permission: Permission) {
+export function requirePermission(...permissions: Permission[]) {
+  if (permissions.length === 0) {
+    throw new Error("requirePermission called with no permissions — refusing to mount a deny-all middleware");
+  }
   // Stamped with GATE_MIDDLEWARE_FLAG — see requireRole above for rationale.
   return markGateMiddleware(function requirePermission(req: Request, res: Response, next: NextFunction): void {
     const user = req.user;
     if (!user) {
-      auditDenial(req, "unauthenticated_permission_check", { required_permission: permission });
+      auditDenial(req, "unauthenticated_permission_check", { required_permissions: permissions });
       sendUnauthorized(res, "Authentication required");
       return;
     }
-    if (hasPermission(user, permission)) {
+    if (permissions.some((p) => hasPermission(user, p))) {
       next();
       return;
     }
     auditDenial(req, "missing_permission", {
-      required_permission: permission,
+      required_permissions: permissions,
       user_role: user.role,
       user_id: user.id,
     });
