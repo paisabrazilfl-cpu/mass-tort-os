@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, casesTable, analysisTable, caseDocumentsTable, auditLogTable } from "@workspace/db";
 import { eq, sql, desc } from "drizzle-orm";
+import { CreateCaseBody, UploadCaseFileBody } from "@workspace/api-zod";
 import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
 import { auditLog } from "../lib/audit";
 import crypto from "crypto";
@@ -12,10 +13,25 @@ function validateCaseId(id: string): boolean {
   return UUID_REGEX.test(id);
 }
 
+// Reasonable upload-payload caps so a malicious caller can't enqueue a
+// gigabyte-sized base64 blob and force the worker to OOM. The express
+// global limit is 55mb; we cap the document content payload at 25mb of
+// base64 (~18.75mb decoded) which fits any realistic medical PDF.
+const MAX_FILE_NAME_LEN = 255;
+const MAX_CONTENT_BASE64_BYTES = 25 * 1024 * 1024;
+
 const router = Router();
 
 router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("create_case"), async (req, res) => {
-  const data = req.body as Record<string, unknown>;
+  // CreateCaseBody is `record<string, unknown>` in OpenAPI — we still want
+  // to reject non-objects (arrays, primitives, null) so the worker never sees
+  // garbage that would dead-letter post-enqueue.
+  const parsed = CreateCaseBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ status: "error", code: "validation_failed", message: "Body must be a JSON object", details: parsed.error.flatten() });
+    return;
+  }
+  const data = parsed.data;
   const case_id = crypto.randomUUID();
 
   const job_id = await enqueueJob("create_case", { case_id, data });
@@ -31,18 +47,31 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
 router.post("/:id/upload", requireRole("paralegal", "attorney", "admin"), auditAction("upload_case_file"), async (req, res) => {
   const case_id = String(req.params.id);
   if (!validateCaseId(case_id)) {
-    res.status(400).json({ error: "Invalid case ID format" });
+    res.status(400).json({ status: "error", code: "invalid_case_id", message: "Invalid case ID format (expected UUID)" });
     return;
   }
 
-  const { file_name, content, content_type } = req.body as {
-    file_name: string;
-    content: string;
-    content_type?: string;
-  };
+  const parsed = UploadCaseFileBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ status: "error", code: "validation_failed", message: "Invalid request body", details: parsed.error.flatten() });
+    return;
+  }
+  const { file_name, content, content_type } = parsed.data;
 
-  if (!file_name || !content) {
-    res.status(400).json({ error: "file_name and content are required" });
+  if (file_name.length > MAX_FILE_NAME_LEN) {
+    res.status(400).json({ status: "error", code: "file_name_too_long", message: `file_name max length is ${MAX_FILE_NAME_LEN}` });
+    return;
+  }
+  // Reject path-traversal in file_name early. We only ever use the basename
+  // server-side but a stored audit/log line containing "../etc/passwd" would
+  // be misleading and the saveFile() implementation in worker has no
+  // additional guard if a future change wires `file_name` into a path.
+  if (file_name.includes("/") || file_name.includes("\\") || file_name.includes("..")) {
+    res.status(400).json({ status: "error", code: "invalid_file_name", message: "file_name must not contain path separators or '..'" });
+    return;
+  }
+  if (content.length > MAX_CONTENT_BASE64_BYTES) {
+    res.status(413).json({ status: "error", code: "payload_too_large", message: `content base64 size exceeds ${MAX_CONTENT_BASE64_BYTES} bytes` });
     return;
   }
 
@@ -50,7 +79,10 @@ router.post("/:id/upload", requireRole("paralegal", "attorney", "admin"), auditA
     case_id,
     file_name,
     content,
-    content_type,
+    // The worker treats a missing content_type as "let the OCR/MIME sniffer
+    // decide". Drizzle's payload column is jsonb so undefined drops the key
+    // (preferred) — coercing to null was a TS mismatch and added noise.
+    content_type: content_type ?? undefined,
   });
 
   await auditLog("case", case_id, "file_upload_queued", { file_name }, {

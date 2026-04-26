@@ -31,12 +31,23 @@ router.get("/", requireRole("paralegal"), async (req, res) => {
     ? await db.select().from(reviewQueueTable).where(and(...conditions)).orderBy(desc(reviewQueueTable.created_at)).limit(cappedLimit)
     : await db.select().from(reviewQueueTable).orderBy(desc(reviewQueueTable.created_at)).limit(cappedLimit);
 
+  // Defensive: `details` is jsonb so a legacy or hand-edited row could store a
+  // primitive (string/number) or an array instead of a plain object. The
+  // previous code assumed object shape and would crash with
+  //   "TypeError: Cannot destructure property 'original_input' of 'details'"
+  // when `details` was a non-null primitive. Guard explicitly.
   const sanitized = items.map((item) => {
-    const details = item.details as Record<string, unknown> | null;
-    if (details) {
-      const { original_input, ...safe } = details;
+    const details = item.details;
+    if (
+      details &&
+      typeof details === "object" &&
+      !Array.isArray(details)
+    ) {
+      const { original_input, ...safe } = details as Record<string, unknown>;
       return { ...item, details: safe };
     }
+    // Non-object details (legacy, primitive, or array): expose as-is so the
+    // operator can still see the bad value rather than silently dropping it.
     return item;
   });
 

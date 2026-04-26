@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { db, paralegalsTable, leadsTable } from "@workspace/db";
 import { eq, sql, desc } from "drizzle-orm";
+import {
+  CreateParalegalBody,
+  GetParalegalParams,
+  GetParalegalPerformanceParams,
+} from "@workspace/api-zod";
 import { decryptLeadArray } from "../lib/encryption";
 import { requireRole, auditAction } from "../lib/rbac";
 
@@ -15,17 +20,42 @@ router.get("/", requireRole("attorney"), async (_req, res) => {
 });
 
 router.post("/", requireRole("admin"), auditAction("create_paralegal"), async (req, res) => {
-  const { name, email, role } = req.body;
-  if (!name) {
-    res.status(400).json({ error: "name is required" });
+  // Zod validation up front: catches missing/wrong-type fields before they
+  // hit the encrypted insert path. Mirrors the pattern used in leads.ts.
+  const parsed = CreateParalegalBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ status: "error", code: "validation_failed", message: "Invalid request body", details: parsed.error.flatten() });
     return;
   }
-  const [p] = await db.insert(paralegalsTable).values({ name, email, role }).returning();
+  const { name, email, role } = parsed.data;
+  // role has NOT NULL + default("Paralegal") in the schema, so passing
+  // undefined lets the DB default apply. email is nullable, so an explicit
+  // null is fine when the client omits it.
+  const [p] = await db
+    .insert(paralegalsTable)
+    .values({
+      name,
+      email: email ?? null,
+      role: role ?? undefined,
+    })
+    .returning();
   res.status(201).json(p);
 });
 
 router.get("/:id", requireRole("attorney"), async (req, res) => {
-  const id = parseInt(String(req.params.id), 10);
+  // GetParalegalParams uses zod.coerce.number() which safely converts the
+  // string param to int and rejects garbage like "abc" with a parse error
+  // instead of producing NaN.
+  const parsed = GetParalegalParams.safeParse({ id: req.params.id });
+  if (!parsed.success) {
+    res.status(400).json({ status: "error", code: "invalid_id", message: "Paralegal id must be a positive integer" });
+    return;
+  }
+  const id = parsed.data.id;
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ status: "error", code: "invalid_id", message: "Paralegal id must be a positive integer" });
+    return;
+  }
   const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
   if (!p) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -51,7 +81,16 @@ router.get("/:id", requireRole("attorney"), async (req, res) => {
 });
 
 router.get("/:id/performance", requireRole("attorney"), async (req, res) => {
-  const id = parseInt(String(req.params.id), 10);
+  const parsed = GetParalegalPerformanceParams.safeParse({ id: req.params.id });
+  if (!parsed.success) {
+    res.status(400).json({ status: "error", code: "invalid_id", message: "Paralegal id must be a positive integer" });
+    return;
+  }
+  const id = parsed.data.id;
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ status: "error", code: "invalid_id", message: "Paralegal id must be a positive integer" });
+    return;
+  }
   const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
   if (!p) { res.status(404).json({ error: "Not found" }); return; }
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, leadsTable, documentsTable } from "@workspace/db";
-import { eq, ilike, and, or, sql, gte, lte } from "drizzle-orm";
+import { eq, ilike, and, or, sql, gte, lte, desc } from "drizzle-orm";
 import {
   ListLeadsQueryParams,
   CreateLeadBody,
@@ -47,8 +47,19 @@ function buildLeadFilters(data: {
   if (data.vendor_id) conditions.push(eq(leadsTable.vendor_id, data.vendor_id));
   if (data.law_firm) conditions.push(ilike(leadsTable.law_firm, `%${data.law_firm}%`));
   if (data.client_id) conditions.push(eq(leadsTable.client_id, data.client_id));
-  if (data.date_from) conditions.push(gte(leadsTable.created_at, new Date(data.date_from)));
-  if (data.date_to) conditions.push(lte(leadsTable.created_at, new Date(data.date_to)));
+  // Date filters: the OpenAPI-generated zod schema only validates that these
+  // are strings (not valid ISO dates), so `new Date("garbage")` silently
+  // produced an Invalid Date that drizzle's timestamp mapper later threw
+  // `RangeError: Invalid time value` on — surfaced as a 500 to the client.
+  // We now skip invalid dates instead of crashing the whole list query.
+  if (data.date_from) {
+    const d = new Date(data.date_from);
+    if (!Number.isNaN(d.getTime())) conditions.push(gte(leadsTable.created_at, d));
+  }
+  if (data.date_to) {
+    const d = new Date(data.date_to);
+    if (!Number.isNaN(d.getTime())) conditions.push(lte(leadsTable.created_at, d));
+  }
   if (data.lead_id) conditions.push(eq(leadsTable.id, data.lead_id));
   if (data.source) conditions.push(eq(leadsTable.source, data.source));
   return conditions;
@@ -56,10 +67,28 @@ function buildLeadFilters(data: {
 
 const router = Router();
 
+// Unified error envelope helpers — match the shape used by routes/auth.ts
+// and the global handler in app.ts so the CRM client has ONE error contract:
+//   { status: "error", code: <stable_string>, message: <human>, details?: ... }
+function badRequest(res: import("express").Response, parseError: { flatten: () => unknown }, message = "Invalid request body") {
+  res.status(400).json({
+    status: "error",
+    code: "validation_failed",
+    message,
+    details: parseError.flatten(),
+  });
+}
+function notFound(res: import("express").Response, what = "Lead not found") {
+  res.status(404).json({ status: "error", code: "not_found", message: what });
+}
+function forbidden(res: import("express").Response, message = "Insufficient permissions") {
+  res.status(403).json({ status: "error", code: "forbidden", message });
+}
+
 router.get("/export", requireRole("attorney", "admin"), auditAction("export_leads"), async (req, res) => {
   const parsed = ExportLeadsQueryParams.safeParse(req.query);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, parsed.error);
     return;
   }
 
@@ -70,8 +99,8 @@ router.get("/export", requireRole("attorney", "admin"), auditAction("export_lead
   const conditions = buildLeadFilters(parsed.data);
   const leads =
     conditions.length > 0
-      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(sql`${leadsTable.created_at} DESC`).limit(EXPORT_HARD_CAP)
-      : await db.select().from(leadsTable).orderBy(sql`${leadsTable.created_at} DESC`).limit(EXPORT_HARD_CAP);
+      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(desc(leadsTable.created_at)).limit(EXPORT_HARD_CAP)
+      : await db.select().from(leadsTable).orderBy(desc(leadsTable.created_at)).limit(EXPORT_HARD_CAP);
 
   if (leads.length === 0) {
     res.status(200).type("text/csv").send("No leads found");
@@ -121,7 +150,7 @@ router.get("/export", requireRole("attorney", "admin"), auditAction("export_lead
 router.get("/", requireRole("viewer"), async (req, res) => {
   const parsed = ListLeadsQueryParams.safeParse(req.query);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, parsed.error);
     return;
   }
 
@@ -145,8 +174,8 @@ router.get("/", requireRole("viewer"), async (req, res) => {
 
   const leads =
     conditions.length > 0
-      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(sql`${leadsTable.created_at} DESC`).limit(limit).offset(offset)
-      : await db.select().from(leadsTable).orderBy(sql`${leadsTable.created_at} DESC`).limit(limit).offset(offset);
+      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(desc(leadsTable.created_at)).limit(limit).offset(offset)
+      : await db.select().from(leadsTable).orderBy(desc(leadsTable.created_at)).limit(limit).offset(offset);
 
   res.json(decryptLeadArray(leads));
 });
@@ -154,7 +183,7 @@ router.get("/", requireRole("viewer"), async (req, res) => {
 router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("create_lead"), async (req, res) => {
   const parsed = CreateLeadBody.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, parsed.error);
     return;
   }
 
@@ -227,8 +256,14 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
 
   if (conflictCheck.has_conflict) {
     if (conflictCheck.output_state === "REJECT") {
+      // Conflict-engine pipeline response. We keep the `output_state` /
+      // `conflict_type` / `failsafe_mode` fields the CRM intake page reads
+      // (see `pages/lead-intake.tsx`) and add the unified envelope keys on
+      // top so the generic 4xx handler in the client also recognises it.
       res.status(422).json({
-        error: "Lead rejected by conflict detection",
+        status: "error",
+        code: "conflict_rejected",
+        message: "Lead rejected by conflict detection",
         output_state: "REJECT",
         conflict_type: conflictCheck.conflict_type,
         failsafe_mode: conflictCheck.failsafe_mode,
@@ -268,7 +303,14 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
               eqOp(reviewQueueTable.source_module, "lead_ingestion")
             )
           );
-      } catch (_) {}
+      } catch (rqErr) {
+        // Non-blocking: lead is already inserted. Log so an operator can
+        // reconcile the orphan review_queue row instead of swallowing.
+        logger.warn(
+          { err: rqErr, leadId: lead.id },
+          "Failed to backfill review_queue.entity_id after lead insert (orphan row may exist)",
+        );
+      }
 
       // Decision Engine — score even review-required leads (banner + portfolio rollup).
       computeAndPersistLeadScore(lead.id).catch(() => {});
@@ -318,7 +360,7 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
 router.get("/:id", requireRole("viewer"), auditAction("view_lead"), async (req, res) => {
   const parsed = GetLeadParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, parsed.error);
     return;
   }
 
@@ -328,14 +370,14 @@ router.get("/:id", requireRole("viewer"), auditAction("view_lead"), async (req, 
     .where(eq(leadsTable.id, parsed.data.id));
 
   if (!lead) {
-    res.status(404).json({ error: "Lead not found" });
+    notFound(res);
     return;
   }
 
   const user = req.user!;
   if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
     if (lead.created_by_user_id !== user.id && lead.assigned_to !== user.id) {
-      res.status(403).json({ error: "Insufficient permissions" });
+      forbidden(res);
       return;
     }
   }
@@ -361,13 +403,13 @@ async function ensureLeadAccess(req: Express.Request, res: import("express").Res
     .from(leadsTable)
     .where(eq(leadsTable.id, leadId));
   if (!check) {
-    res.status(404).json({ error: "Lead not found" });
+    notFound(res);
     return false;
   }
   const user = (req as { user?: { id: number; role: string } }).user;
   if (user && user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
     if (check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
-      res.status(403).json({ error: "Insufficient permissions" });
+      forbidden(res);
       return false;
     }
   }
@@ -389,14 +431,21 @@ router.get("/:id/envelopes", requireRole("viewer"), async (req, res) => {
 
 router.get("/:id/fax-results", requireRole("viewer"), async (req, res) => {
   const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ status: "error", code: "validation_failed", message: "Invalid lead id" });
+    return;
+  }
   if (!(await ensureLeadAccess(req, res, id))) return;
   const { faxResultsTable } = await import("@workspace/db");
   const { desc, like } = await import("drizzle-orm");
-  // fax_results has no lead_id column; we tag source_file with `_lead_${id}_` when enqueued.
+  const { buildFaxResultsLikePattern } = await import("../lib/fax-results-matcher.js");
+  // fax_results has no lead_id column. The worker tags `source_file` with
+  // `med_records_request_lead_${id}_env_${envelope_id}.pdf` — the helper
+  // centralises that contract and prevents prefix-collision bugs (lead 1 vs 12).
   const rows = await db
     .select()
     .from(faxResultsTable)
-    .where(like(faxResultsTable.source_file, `%_lead_${id}_%`))
+    .where(like(faxResultsTable.source_file, buildFaxResultsLikePattern(id)))
     .orderBy(desc(faxResultsTable.created_at));
   res.json(rows);
 });
@@ -412,7 +461,7 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
   if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
     const [check] = await db.select({ created_by_user_id: leadsTable.created_by_user_id, assigned_to: leadsTable.assigned_to }).from(leadsTable).where(eq(leadsTable.id, paramsParsed.data.id));
     if (check && check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
-      res.status(403).json({ error: "Insufficient permissions" });
+      forbidden(res);
       return;
     }
   }
@@ -488,7 +537,7 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
     .returning();
 
   if (!lead) {
-    res.status(404).json({ error: "Lead not found" });
+    notFound(res);
     return;
   }
 
@@ -535,7 +584,7 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
 router.delete("/:id", requireRole("attorney", "admin"), auditAction("delete_lead"), async (req, res) => {
   const parsed = DeleteLeadParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, parsed.error);
     return;
   }
 
@@ -546,7 +595,7 @@ router.delete("/:id", requireRole("attorney", "admin"), auditAction("delete_lead
 router.post("/:id/qualify", requireRole("paralegal", "attorney", "admin"), auditAction("qualify_lead"), async (req, res) => {
   const parsed = QualifyLeadParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, parsed.error);
     return;
   }
 
@@ -556,23 +605,28 @@ router.post("/:id/qualify", requireRole("paralegal", "attorney", "admin"), audit
     .where(eq(leadsTable.id, parsed.data.id));
 
   if (!lead) {
-    res.status(404).json({ error: "Lead not found" });
+    notFound(res);
     return;
   }
 
   const user = req.user!;
   if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
     if (lead.created_by_user_id !== user.id && lead.assigned_to !== user.id) {
-      res.status(403).json({ error: "Insufficient permissions" });
+      forbidden(res);
       return;
     }
   }
 
   if (lead.status === "review_required") {
+    // Pipeline response — same dual-shape pattern as the conflict-engine 422
+    // above. Note: `lead_status` (not `status`) carries the lead's lifecycle
+    // state so we don't collide with the envelope's `status: "error"` key.
     res.status(409).json({
-      error: "Lead is pending manual review and cannot be auto-qualified",
+      status: "error",
+      code: "review_required",
+      message: "Lead is pending manual review and cannot be auto-qualified",
       lead_id: lead.id,
-      status: "review_required",
+      lead_status: "review_required",
       output_state: "REVIEW_REQUIRED",
     });
     return;
@@ -644,7 +698,7 @@ router.post("/:id/intelligence", requireRole("paralegal", "attorney", "admin"), 
 
     const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
     if (!lead) {
-      res.status(404).json({ error: "Lead record not found" });
+      notFound(res, "Lead record not found");
       return;
     }
 
@@ -681,7 +735,7 @@ router.patch("/:id/notes", requireRole("paralegal", "attorney", "admin"), auditA
     if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
       const [check] = await db.select({ created_by_user_id: leadsTable.created_by_user_id, assigned_to: leadsTable.assigned_to }).from(leadsTable).where(eq(leadsTable.id, leadId));
       if (check && check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
-        res.status(403).json({ error: "Insufficient permissions" });
+        forbidden(res);
         return;
       }
     }
@@ -700,7 +754,7 @@ router.patch("/:id/notes", requireRole("paralegal", "attorney", "admin"), auditA
       .returning();
 
     if (!lead) {
-      res.status(404).json({ error: "Lead record not found" });
+      notFound(res, "Lead record not found");
       return;
     }
 

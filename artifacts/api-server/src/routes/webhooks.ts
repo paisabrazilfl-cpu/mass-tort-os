@@ -200,9 +200,33 @@ router.post("/docusign", async (req, res) => {
         res.status(200).json({ ok: true, note: "missing_signature" });
         return;
       }
-      const bodyStr = JSON.stringify(req.body);
-      const expected = crypto.createHmac("sha256", hmacSecret).update(bodyStr).digest("base64");
-      if (expected !== provided) {
+      // CRITICAL: HMAC must run against the EXACT bytes the provider signed.
+      // `JSON.stringify(req.body)` re-serializes after parsing, which reorders
+      // keys and changes whitespace — that silently breaks signature checks
+      // even on legitimate callbacks. We capture `rawBody` in app.ts via the
+      // express.json verify hook for /api/webhooks/* and use it here.
+      const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+      if (!rawBody || rawBody.length === 0) {
+        // Fallback for the (rare) case where body-parser ran but didn't capture
+        // raw bytes (e.g. the raw-body capture was misconfigured upstream).
+        // Logging a hard warning lets ops detect a bad deploy rather than
+        // silently letting bad signatures through.
+        logger.error(
+          { provider: "docusign" },
+          "DocuSign webhook: rawBody not captured — signature verification cannot be trusted; refusing state mutation",
+        );
+        res.status(200).json({ ok: true, note: "raw_body_unavailable" });
+        return;
+      }
+      const expected = crypto.createHmac("sha256", hmacSecret).update(rawBody).digest("base64");
+      // Constant-time compare to defeat timing attacks. Both must be the same length
+      // for timingSafeEqual; if not, the signature is automatically wrong.
+      const expectedBuf = Buffer.from(expected, "utf8");
+      const providedBuf = Buffer.from(provided, "utf8");
+      const sigOk =
+        expectedBuf.length === providedBuf.length &&
+        crypto.timingSafeEqual(expectedBuf, providedBuf);
+      if (!sigOk) {
         logger.warn({ provider: "docusign" }, "DocuSign webhook signature mismatch — refusing state mutation");
         res.status(200).json({ ok: true, note: "bad_signature" });
         return;

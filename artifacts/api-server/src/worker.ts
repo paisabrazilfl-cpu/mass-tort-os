@@ -18,41 +18,96 @@ import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEm
 
 const POLL_INTERVAL_MS = 2000;
 
+// UUID v4-ish format we issue from `crypto.randomUUID()` (cases.ts route).
+// Anything else in `case_id` is a bug or hostile input — we refuse to process it
+// instead of letting it loop through the retry policy.
+const CASE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Marker thrown by job handlers for payloads that can never succeed
+ * (null/undefined IDs, schema-violating shapes, path-traversal attempts,
+ *  empty payloads, etc).  The worker loop catches this and dead-letters
+ *  the job IMMEDIATELY instead of burning all 5 retries.
+ */
+class NonRetryableJobError extends Error {
+  readonly nonRetryable = true as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "NonRetryableJobError";
+  }
+}
+
+function assertCaseId(case_id: unknown): asserts case_id is string {
+  if (typeof case_id !== "string" || case_id.length === 0) {
+    throw new NonRetryableJobError(
+      `Invalid payload: case_id is required and must be a string (got ${typeof case_id})`,
+    );
+  }
+  if (!CASE_ID_RE.test(case_id)) {
+    throw new NonRetryableJobError(
+      `Invalid payload: case_id "${case_id}" is not a valid UUID — refusing to process (potential injection / poison-pill)`,
+    );
+  }
+}
+
 async function processJob(job: {
   id: number;
   job_type: string;
   payload: unknown;
 }) {
+  // Defensive: claimNextJob enforces NOT NULL but a hand-edited / legacy row
+  // could still land here with `payload: null` or a JSON literal `null`.
+  // Treat anything that isn't a plain object as a poison pill.
+  if (!job.payload || typeof job.payload !== "object" || Array.isArray(job.payload)) {
+    throw new NonRetryableJobError(
+      `Invalid payload: expected object, got ${Array.isArray(job.payload) ? "array" : typeof job.payload}`,
+    );
+  }
   const payload = job.payload as Record<string, unknown>;
   logger.info({ job_id: job.id, job_type: job.job_type }, "Processing job");
 
   if (job.job_type === "create_case") {
-    const { case_id, data } = payload as { case_id: string; data: Record<string, unknown> };
+    const { case_id, data } = payload as { case_id: unknown; data: unknown };
+    assertCaseId(case_id);
+    if (data !== undefined && data !== null && (typeof data !== "object" || Array.isArray(data))) {
+      throw new NonRetryableJobError(
+        `Invalid payload: data must be an object or null (got ${Array.isArray(data) ? "array" : typeof data})`,
+      );
+    }
     await db
       .insert(casesTable)
-      .values({ id: case_id, data, status: "open" })
+      .values({ id: case_id, data: (data as Record<string, unknown>) ?? {}, status: "open" })
       .onConflictDoNothing();
-    await auditLog("case", case_id, "created", { data });
+    await auditLog("case", case_id, "created", { data: data ?? {} });
     logger.info({ case_id }, "Case created");
   } else if (job.job_type === "ingest_file") {
     const { case_id, file_name, content, content_type } = payload as {
-      case_id: string;
-      file_name: string;
-      content: string;
-      content_type?: string;
+      case_id: unknown;
+      file_name: unknown;
+      content: unknown;
+      content_type?: unknown;
     };
+    assertCaseId(case_id);
+    if (typeof file_name !== "string" || file_name.length === 0) {
+      throw new NonRetryableJobError("Invalid payload: file_name is required");
+    }
+    if (typeof content !== "string" || content.length === 0) {
+      throw new NonRetryableJobError("Invalid payload: content is required");
+    }
+    const ct = typeof content_type === "string" ? content_type : "text/plain";
     const { path, hash, sizeBytes } = await saveFile(case_id, content, file_name);
     await db.insert(caseDocumentsTable).values({
       case_id,
       path,
       file_hash: hash,
       file_name,
-      content_type: content_type ?? "text/plain",
+      content_type: ct,
     });
     await auditLog("case_document", case_id, "file_ingested", { file_name, hash, sizeBytes });
     logger.info({ case_id, path, sizeBytes }, "File ingested to vault");
   } else if (job.job_type === "analyze_case") {
-    const { case_id } = payload as { case_id: string };
+    const { case_id } = payload as { case_id: unknown };
+    assertCaseId(case_id);
 
     const docs = await db
       .select()
@@ -265,16 +320,45 @@ export async function workerLoop(): Promise<void> {
           await markJobDone(job.id as number);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          // Default policy: every thrown error is *potentially* transient
-          // (network blip, vendor 5xx, transient DB error). Workflow
-          // handlers explicitly swallow non-retryable provider failures
-          // and return normally, so anything that bubbles up here is
-          // already screened. The bounded MAX_RETRIES + exponential
-          // backoff in markJobFailed prevents a poison-pill job from
-          // looping forever; once retries are exhausted it lands in
-          // `dead_letter` for human attention.
-          logger.error({ err, job_id: job.id }, "Job processing failed — markJobFailed will retry or dead-letter");
-          await markJobFailed(job.id as number, msg, { retryable: true });
+          // Poison-pill detection: payloads that violate basic shape contracts
+          // (null IDs, malformed UUIDs, missing required fields, raw `null`
+          // payload) are dead-lettered immediately so we don't burn 5 retries
+          // on a job that can never succeed. Validation errors thrown via
+          // `NonRetryableJobError` carry the `nonRetryable: true` marker;
+          // everything else is treated as potentially transient.
+          const isNonRetryable =
+            err !== null &&
+            typeof err === "object" &&
+            (err as { nonRetryable?: boolean }).nonRetryable === true;
+          if (isNonRetryable) {
+            logger.error(
+              { err, job_id: job.id, job_type: job.job_type },
+              "Job rejected as non-retryable poison pill — moving to dead_letter immediately",
+            );
+            // Structured audit so an admin can see WHY it was rejected without
+            // tailing logs. entity_type=job_queue keeps it out of entity-specific
+            // audit trails.
+            try {
+              await auditLog("job_queue", String(job.id), "poison_pill_rejected", {
+                job_type: job.job_type,
+                error: msg,
+                severity: "high",
+              });
+            } catch (auditErr) {
+              logger.error({ err: auditErr, job_id: job.id }, "Failed to audit poison-pill rejection");
+            }
+            await markJobFailed(job.id as number, msg, { retryable: false });
+          } else {
+            // Default policy: every other thrown error is *potentially* transient
+            // (network blip, vendor 5xx, transient DB error). Workflow handlers
+            // explicitly swallow non-retryable provider failures and return
+            // normally, so anything that bubbles up here is already screened.
+            // MAX_RETRIES + exponential backoff in markJobFailed prevents a
+            // poison-pill from looping forever; once retries are exhausted it
+            // lands in `dead_letter` for human attention.
+            logger.error({ err, job_id: job.id }, "Job processing failed — markJobFailed will retry or dead-letter");
+            await markJobFailed(job.id as number, msg, { retryable: true });
+          }
         }
       }
     } catch (err) {

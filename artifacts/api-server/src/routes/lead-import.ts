@@ -411,7 +411,28 @@ async function processImportBatch(
         raw_data: rows[i],
         error_message: err.message || "Unknown error during import",
         processed_at: new Date(),
-      }).catch(() => {});
+      }).catch(async (insertErr) => {
+        // Last-ditch — even the error row insert failed. We surface this in
+        // THREE places so a non-technical operator can't miss it:
+        //   1. logger.warn for the pino stream / console
+        //   2. audit_log row so it shows up in the in-app Audit timeline
+        //   3. the in-memory errorCount keeps incrementing below
+        logger.warn(
+          { err: insertErr, original_err: err?.message, batch_id: batchId, row: rowNum },
+          "Failed to record import error row",
+        );
+        try {
+          await auditLog("import_batch", String(batchId), "error_row_write_failed", {
+            row: rowNum,
+            insert_error: insertErr instanceof Error ? insertErr.message : String(insertErr),
+            original_error: err?.message ?? "unknown",
+            severity: "high",
+          });
+        } catch (auditErr) {
+          // Audit log itself is best-effort — never let it abort the batch.
+          logger.warn({ err: auditErr, batch_id: batchId }, "audit_log write failed for error_row_write_failed");
+        }
+      });
       errorCount++;
     }
 

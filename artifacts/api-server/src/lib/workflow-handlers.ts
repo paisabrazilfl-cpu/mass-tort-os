@@ -19,6 +19,7 @@ import { getFaxAdapter } from "./fax";
 import { getEmailAdapter } from "./email/sendgrid";
 import { downloadTemplate } from "./template-storage";
 import { decryptLeadFields } from "./encryption";
+import { FAX_SOURCE_FILE_TEMPLATE } from "./fax-results-matcher";
 
 interface SendEsignPacketPayload {
   lead_id: number;
@@ -356,11 +357,28 @@ export async function handleSendEsignPacket(payload: SendEsignPacketPayload): Pr
       code: outcome.code,
       message: outcome.message,
       retryable: outcome.retryable,
+      severity: outcome.retryable ? "medium" : "high",
+      lead_id,
+      template_id,
     });
     if (outcome.retryable) {
       throw new Error(`Provider transient error: ${outcome.message}`);
     }
-    // Non-retryable: do NOT throw — let the worker mark the job done so it doesn't keep retrying.
+    // Non-retryable: do NOT throw — letting the worker mark the job done
+    // prevents an endless retry loop on a permanent failure (bad creds,
+    // invalid signer email, etc). But it MUST be loud — otherwise the
+    // workflow silently stalls and operators have no idea.
+    logger.error(
+      {
+        envelope_id: envelope.id,
+        lead_id,
+        template_id,
+        provider: resolved.provider,
+        code: outcome.code,
+        message: outcome.message,
+      },
+      "E-sign provider returned NON-RETRYABLE failure — envelope marked error, audit recorded, workflow halted",
+    );
     return;
   }
 
@@ -433,7 +451,10 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
   const [faxRow] = await db
     .insert(faxResultsTable)
     .values({
-      source_file: `med_records_request_lead_${lead_id}_env_${envelope_id}.pdf`,
+      // Single source of truth for the source_file convention. The read API
+      // (`/api/leads/:id/fax-results`) parses against this same template via
+      // `buildFaxResultsLikePattern`, so producer/consumer can never drift.
+      source_file: FAX_SOURCE_FILE_TEMPLATE(lead_id, envelope_id),
       vault_path: "outbound:med_records_request",
       status: "processing",
     })

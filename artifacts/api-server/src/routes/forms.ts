@@ -151,11 +151,18 @@ router.post(
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to add field";
       if (msg.includes("already exists")) {
-        res.status(409).json({ error: msg });
+        // 4xx — safe to surface a domain-level message to the client.
+        res.status(409).json({ status: "error", code: "field_already_exists", message: msg });
         return;
       }
+      // 5xx — DO NOT echo err.message; it can carry SQL fragments, file paths,
+      // or PII. Log the real error server-side, return a generic envelope.
       logger.error({ err }, "Failed to add custom field");
-      res.status(500).json({ error: msg });
+      res.status(500).json({
+        status: "error",
+        code: "internal_error",
+        message: "Failed to add custom field",
+      });
     }
   }
 );
@@ -602,7 +609,14 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
               eq(reviewQueueTable.source_module, "form_engine")
             )
           );
-      } catch (_) {}
+      } catch (rqErr) {
+        // Non-blocking: lead row already inserted. Log so an operator can
+        // reconcile orphan review_queue rows instead of swallowing.
+        logger.warn(
+          { err: rqErr, leadId: lead.id },
+          "Failed to backfill review_queue.entity_id after form submission",
+        );
+      }
     }
 
     await auditLog("lead", String(lead.id), "form_submission", {

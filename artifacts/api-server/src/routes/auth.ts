@@ -22,9 +22,50 @@ import { generateSecret, verifyTOTP, generateOTPAuthURL } from "../lib/totp";
 import { encrypt, decrypt } from "../lib/encryption";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { z } from "zod";
 import { dispatchCriticalAlert } from "../lib/security-alerts";
 
 const router = Router();
+
+// Inline zod schemas for auth payloads. The api-zod package does not currently
+// generate schemas for /auth/* (operations are tagged "auth" but body schemas
+// are too loose to be useful). Validating up front prevents undefined/non-string
+// inputs from reaching scrypt() / crypto.timingSafeEqual() and crashing
+// the request thread.
+const LoginBody = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  password: z.string().min(1).max(1024),
+  totp_code: z.string().regex(/^\d{6}$/).optional(),
+});
+const RefreshBody = z.object({
+  refresh_token: z.string().min(1).max(1024),
+  user_id: z.coerce.number().int().positive(),
+});
+const RegisterBody = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  password: z.string().min(1).max(1024),
+  name: z.string().trim().min(1).max(200),
+});
+const ChangePasswordBody = z.object({
+  current_password: z.string().min(1).max(1024),
+  new_password: z.string().min(1).max(1024),
+});
+const TotpCodeBody = z.object({
+  totp_code: z.string().regex(/^\d{6}$/),
+});
+const MfaDisableBody = z.object({
+  password: z.string().min(1).max(1024),
+  totp_code: z.string().regex(/^\d{6}$/),
+});
+
+function badRequest(res: import("express").Response, parseError: z.ZodError, message = "Invalid request body") {
+  res.status(400).json({
+    status: "error",
+    code: "validation_failed",
+    message,
+    details: parseError.flatten(),
+  });
+}
 
 const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -83,8 +124,9 @@ async function verifyPassword(password: string, stored: string): Promise<boolean
 }
 
 router.post("/login", authRateLimit, async (req, res) => {
-  const { email, password, totp_code } = req.body;
-  if (!email || !password) { res.status(400).json({ error: "Email and password required" }); return; }
+  const parsed = LoginBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "Email and password required"); return; }
+  const { email, password, totp_code } = parsed.data;
 
   const user = await getUserByEmail(email);
   if (!user) {
@@ -146,11 +188,9 @@ router.post("/login", authRateLimit, async (req, res) => {
 });
 
 router.post("/refresh", authRateLimit, async (req, res) => {
-  const { refresh_token, user_id } = req.body;
-  if (!refresh_token || !user_id) {
-    res.status(400).json({ error: "refresh_token and user_id required" });
-    return;
-  }
+  const parsed = RefreshBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "refresh_token and user_id required"); return; }
+  const { refresh_token, user_id } = parsed.data;
 
   const result = await rotateRefreshToken(refresh_token, user_id);
   if (!result) {
@@ -175,8 +215,9 @@ router.post("/logout", authMiddleware, async (req, res) => {
 });
 
 router.post("/register", authRateLimit, async (req, res) => {
-  const { email, password, name } = req.body;
-  if (!email || !password || !name) { res.status(400).json({ error: "Email, password, and name required" }); return; }
+  const parsed = RegisterBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "Email, password, and name required"); return; }
+  const { email, password, name } = parsed.data;
 
   const passwordError = validatePasswordComplexity(password);
   if (passwordError) { res.status(400).json({ error: passwordError }); return; }
@@ -202,11 +243,9 @@ router.post("/register", authRateLimit, async (req, res) => {
 });
 
 router.post("/change-password", authMiddleware, async (req, res) => {
-  const { current_password, new_password } = req.body;
-  if (!current_password || !new_password) {
-    res.status(400).json({ error: "current_password and new_password required" });
-    return;
-  }
+  const parsed = ChangePasswordBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "current_password and new_password required"); return; }
+  const { current_password, new_password } = parsed.data;
 
   const passwordError = validatePasswordComplexity(new_password);
   if (passwordError) { res.status(400).json({ error: passwordError }); return; }
@@ -252,8 +291,9 @@ router.post("/mfa/setup", authMiddleware, async (req, res) => {
 });
 
 router.post("/mfa/verify", authMiddleware, async (req, res) => {
-  const { totp_code } = req.body;
-  if (!totp_code) { res.status(400).json({ error: "totp_code required" }); return; }
+  const parsed = TotpCodeBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "totp_code required (6 digits)"); return; }
+  const { totp_code } = parsed.data;
 
   const user = req.user!;
   const dbUser = await getUserByEmail(user.email);
@@ -276,8 +316,9 @@ router.post("/mfa/verify", authMiddleware, async (req, res) => {
 });
 
 router.post("/mfa/disable", authMiddleware, async (req, res) => {
-  const { totp_code, password } = req.body;
-  if (!password || !totp_code) { res.status(400).json({ error: "Password and TOTP code required to disable MFA" }); return; }
+  const parsed = MfaDisableBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "Password and TOTP code required to disable MFA"); return; }
+  const { totp_code, password } = parsed.data;
 
   const user = req.user!;
   const dbUser = await getUserByEmail(user.email);
