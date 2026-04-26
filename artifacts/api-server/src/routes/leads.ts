@@ -20,6 +20,16 @@ import { requireRole, auditAction } from "../lib/rbac";
 import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 
+// Thrown by buildLeadFilters when a date query param parses to Invalid Date.
+// Caught at each route call site and converted to a 400 with a structured
+// `details.field` so the CRM client can highlight the offending input.
+class BadDateFilterError extends Error {
+  constructor(public field: "date_from" | "date_to", public value: string) {
+    super(`Invalid ${field}: ${value}`);
+    this.name = "BadDateFilterError";
+  }
+}
+
 function buildLeadFilters(data: {
   status?: string;
   tort_type?: string;
@@ -50,15 +60,18 @@ function buildLeadFilters(data: {
   // Date filters: the OpenAPI-generated zod schema only validates that these
   // are strings (not valid ISO dates), so `new Date("garbage")` silently
   // produced an Invalid Date that drizzle's timestamp mapper later threw
-  // `RangeError: Invalid time value` on — surfaced as a 500 to the client.
-  // We now skip invalid dates instead of crashing the whole list query.
+  // `RangeError: Invalid time value` on — surfaced as a 500. We now reject
+  // garbage dates with a clean 400 instead via the BadDateFilterError below,
+  // matching the project-wide "malformed input → structured 400" policy.
   if (data.date_from) {
     const d = new Date(data.date_from);
-    if (!Number.isNaN(d.getTime())) conditions.push(gte(leadsTable.created_at, d));
+    if (Number.isNaN(d.getTime())) throw new BadDateFilterError("date_from", data.date_from);
+    conditions.push(gte(leadsTable.created_at, d));
   }
   if (data.date_to) {
     const d = new Date(data.date_to);
-    if (!Number.isNaN(d.getTime())) conditions.push(lte(leadsTable.created_at, d));
+    if (Number.isNaN(d.getTime())) throw new BadDateFilterError("date_to", data.date_to);
+    conditions.push(lte(leadsTable.created_at, d));
   }
   if (data.lead_id) conditions.push(eq(leadsTable.id, data.lead_id));
   if (data.source) conditions.push(eq(leadsTable.source, data.source));
@@ -96,7 +109,21 @@ router.get("/export", requireRole("attorney", "admin"), auditAction("export_lead
   // and OOM the API container. 50k is generous for a CRM export; clients that
   // need more should paginate.
   const EXPORT_HARD_CAP = 50_000;
-  const conditions = buildLeadFilters(parsed.data);
+  let conditions;
+  try {
+    conditions = buildLeadFilters(parsed.data);
+  } catch (err) {
+    if (err instanceof BadDateFilterError) {
+      res.status(400).json({
+        status: "error",
+        code: "invalid_date_filter",
+        message: err.message,
+        details: { field: err.field, value: err.value },
+      });
+      return;
+    }
+    throw err;
+  }
   const leads =
     conditions.length > 0
       ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(desc(leadsTable.created_at)).limit(EXPORT_HARD_CAP)
@@ -161,7 +188,21 @@ router.get("/", requireRole("viewer"), async (req, res) => {
   const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 50, 1), 500);
   const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
 
-  const conditions = buildLeadFilters(parsed.data);
+  let conditions;
+  try {
+    conditions = buildLeadFilters(parsed.data);
+  } catch (err) {
+    if (err instanceof BadDateFilterError) {
+      res.status(400).json({
+        status: "error",
+        code: "invalid_date_filter",
+        message: err.message,
+        details: { field: err.field, value: err.value },
+      });
+      return;
+    }
+    throw err;
+  }
   const user = req.user!;
   if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
     conditions.push(

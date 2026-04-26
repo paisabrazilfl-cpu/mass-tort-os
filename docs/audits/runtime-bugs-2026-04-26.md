@@ -128,16 +128,21 @@ generic to avoid leaking SQL fragments or internal paths. A new
 falling through to Express's default HTML 404 page.
 
 ### 2.10a `RangeError: Invalid time value` on bad date filter — high
-**Where:** `routes/leads.ts` `buildLeadFilters()` (was lines 50-51, now 53-65).
+**Where:** `routes/leads.ts` `buildLeadFilters()`.
 **Symptom:** the OpenAPI-generated `ExportLeadsQueryParams` only validates
 that `date_from` / `date_to` are *strings*, not valid ISO timestamps.
 A request like `?date_from=garbage` produced `new Date("garbage")` →
 Invalid Date → drizzle's `PgTimestamp.mapToDriverValue` threw inside
 `Date.toISOString()` and the entire export / list query 500'd.
-**Fix:** validate the parsed date with `Number.isNaN(d.getTime())` and
-silently drop the filter when it's invalid (the export is now resilient
-instead of crashing). Smoke-tested:
-`GET /api/leads/export?date_from=garbage` → 200 with full CSV.
+**Fix:** `buildLeadFilters` now throws a typed `BadDateFilterError` when
+`Number.isNaN(d.getTime())`. Both call sites (GET `/api/leads/export`
+and GET `/api/leads`) catch it and return a structured 400:
+`{status:"error", code:"invalid_date_filter", message, details:{field,
+value}}`. This matches the project-wide "malformed input → clean 400,
+never silent fallback" policy. Smoke-tested:
+- `GET /api/leads/export?date_from=garbage` → 400 envelope.
+- `GET /api/leads?date_from=garbage` → 400 envelope.
+- `GET /api/leads/export` (no filter) → 200 CSV.
 
 ### 2.10b `fax_results` lookup used a prefix-collision-prone `LIKE` pattern — medium
 **Where:** `routes/leads.ts` GET `/:id/fax-results`.
@@ -185,7 +190,59 @@ the insert error, and the original import error — surfacing it in the
 in-app Audit timeline. The audit insert is itself wrapped in a
 try/catch so it can never abort the batch.
 
-### 2.13 Legacy `{error: ...}` envelope across `routes/leads.ts` — medium
+### 2.13a `routes/paralegals.ts` accepted malformed email and arbitrary role — high
+**Where:** `routes/paralegals.ts` POST `/`.
+**Symptom:** the OpenAPI-generated `CreateParalegalBody` only types
+`email` as `string | null` and `role` as `string | null` — no email
+format check, no role enum. The DB would happily store
+`"email":"not-an-email"` and `"role":"<script>"`, leaking malformed PII
+into downstream notification flows and breaking the role-based
+filtering on the dashboard.
+**Fix:** added a stricter handwritten `CreateParalegalSchema` in the
+route file using `z.string().email().max(255).nullish()` for email and
+`z.enum(["Paralegal","Senior Paralegal","Lead Paralegal","Intake
+Specialist","Case Manager"])` for role. Bad payloads now 400 with
+`details.fieldErrors` listing the offending fields. Verified:
+- `{name:"Test", email:"not-an-email", role:"Paralegal"}` → 400
+  `details.fieldErrors.email`.
+- `{name:"Test", email:"a@b.com", role:"<script>"}` → 400
+  `details.fieldErrors.role` listing the allowed enum.
+- `{name:"Audit Test", email:"audit.test@example.com", role:"Senior
+  Paralegal"}` → 201.
+Also normalized two leftover `{error:"Not found"}` 404s in this same
+file to the unified envelope.
+
+### 2.13b `routes/forms.ts` end-to-end envelope normalization — high
+**Where:** `routes/forms.ts` — every error response in the file.
+**Symptom:** the architect code review flagged that forms.ts still had
+~20 legacy `{error:"..."}` shapes plus pipeline-style responses
+(`{status:"REJECTED", errors, action, pipeline, failed_step}` and
+`{status:"ERROR", ...}`) on the `/submit` endpoint. The CRM had to
+maintain two parsers and the pipeline `status` field collided with the
+unified envelope's `status:"error"` discriminator.
+**Fix:**
+- Added `errorEnvelope` + `badRequest`/`notFound`/`conflict`/
+  `unprocessable`/`serverError` helpers at the top of the file (same
+  shape as the global handler in app.ts).
+- Bulk-replaced all 19 `{error:"..."}` responses across the config,
+  custom-fields, background-check, NPI, fraud, and FBI-escalation
+  routes.
+- The four pipeline responses on POST `/submit` (schema-validation
+  reject, schema-validation crash, pre-tort reject, arbiter reject,
+  CRM-storage crash) now carry the unified envelope keys
+  (`status:"error"`, `code`, `message`) AND keep `pipeline`, `errors`,
+  `failed_step`, `action`, plus a new lowercase `outcome:"rejected"|
+  "error"` field replacing the previous uppercase `status:"REJECTED"|
+  "ERROR"`. The intake page reads `pipeline`/`failed_step` to render
+  which step failed; those fields are unchanged.
+Verified:
+- `GET /api/forms/config/nonexistent_tort` → 404 envelope.
+- `POST /api/forms/submit {}` → 422 envelope with `outcome:"rejected"`,
+  `failed_step:"SCHEMA_VALIDATION"`, full `pipeline[]` preserved.
+- `POST /api/forms/background-check {}` → 400 envelope.
+- `POST /api/forms/npi-verify {}` → 400 envelope.
+
+### 2.13c Legacy `{error: ...}` envelope across `routes/leads.ts` — medium
 **Where:** 12 instances across `routes/leads.ts` (validation 400s,
 "Lead not found" 404s, "Insufficient permissions" 403s, plus the
 two conflict-engine pipeline responses at 422 and 409).
@@ -229,12 +286,22 @@ Worth recording so the next audit doesn't re-investigate them:
   - `POST /api/auth/login {}` → `400 {code:"validation_failed", details:{...}}`
   - `POST /api/auth/refresh {"foo":"bar"}` → `400` with field-level details
   - `GET /api/this-route-does-not-exist` → `404 {code:"not_found"}`
-  - `GET /api/leads/export?date_from=garbage` → `200` with CSV
+  - `GET /api/leads/export?date_from=garbage` → `400` envelope
     (previously 500 — see 2.10a)
+  - `GET /api/leads?date_from=garbage` → `400` envelope.
   - `GET /api/leads/export` → `200` with CSV.
+  - `POST /api/paralegals {email:"not-an-email"}` → `400` with
+    field-level details (see 2.13a).
+  - `POST /api/paralegals {role:"<script>"}` → `400` listing the
+    allowed enum.
+  - `POST /api/paralegals` (valid) → `201`.
+  - `POST /api/forms/submit {}` → `422` envelope with `outcome` +
+    pipeline preserved (see 2.13b).
+  - `GET /api/forms/config/nonexistent_tort` → `404` envelope.
 
-Architect code review pass identified four follow-ups, all addressed in
-the same commit (2.10a, 2.11, 2.12, 2.13 above).
+Two architect code review passes identified seven follow-ups total
+(2.10a, 2.11, 2.12, 2.13a, 2.13b, 2.13c, plus the producer/consumer
+template-share noted in 2.10b) — all addressed in the same commit.
 
 ---
 

@@ -23,6 +23,33 @@ import {
   type CustomField,
 } from "../lib/form-config-service";
 import { customFieldSchema } from "@workspace/db";
+import type { Response } from "express";
+
+// Unified error envelope helpers — keep responses identical in shape to the
+// global handler in app.ts so the CRM client only has one parser to maintain.
+// `details` is reserved for structured field-level info (e.g. zod issues),
+// never for raw err.message — see app.ts policy.
+function errorEnvelope(
+  res: Response,
+  status: number,
+  code: string,
+  message: string,
+  details?: unknown,
+): void {
+  const body: Record<string, unknown> = { status: "error", code, message };
+  if (details !== undefined) body.details = details;
+  res.status(status).json(body);
+}
+const badRequest = (res: Response, message: string, details?: unknown) =>
+  errorEnvelope(res, 400, "bad_request", message, details);
+const notFound = (res: Response, message: string) =>
+  errorEnvelope(res, 404, "not_found", message);
+const conflict = (res: Response, code: string, message: string) =>
+  errorEnvelope(res, 409, code, message);
+const unprocessable = (res: Response, message: string, details?: unknown) =>
+  errorEnvelope(res, 422, "unprocessable", message, details);
+const serverError = (res: Response, message: string) =>
+  errorEnvelope(res, 500, "internal_error", message);
 
 const router = Router();
 
@@ -49,7 +76,7 @@ router.get("/config", async (_req, res) => {
     res.json({ tort_campaigns: configs });
   } catch (err) {
     logger.error({ err }, "Failed to load form configs");
-    res.status(500).json({ error: "Failed to load form configurations" });
+    serverError(res, "Failed to load form configurations");
   }
 });
 
@@ -57,7 +84,7 @@ router.get("/config/:tortId", async (req, res) => {
   try {
     const config = await getFormConfig(String(req.params.tortId));
     if (!config) {
-      res.status(404).json({ error: "Tort campaign not found" });
+      notFound(res, "Tort campaign not found");
       return;
     }
     res.json({
@@ -79,7 +106,7 @@ router.get("/config/:tortId", async (req, res) => {
     });
   } catch (err) {
     logger.error({ err }, "Failed to load form config");
-    res.status(500).json({ error: "Failed to load form configuration" });
+    serverError(res, "Failed to load form configuration");
   }
 });
 
@@ -93,20 +120,20 @@ router.put(
       const { label, valid_diagnoses, exposure_fields, extra_fields, custom_fields, rules, rejection_conditions, required_exposure, intro_text, active, avg_settlement_low, avg_settlement_high, mdl_status, sol_months } = req.body ?? {};
       if (custom_fields !== undefined) {
         if (!Array.isArray(custom_fields)) {
-          res.status(400).json({ error: "custom_fields must be an array" });
+          badRequest(res, "custom_fields must be an array");
           return;
         }
         for (const f of custom_fields) {
           const parsed = customFieldSchema.safeParse(f);
           if (!parsed.success) {
-            res.status(400).json({ error: "Invalid custom field", details: parsed.error.issues });
+            badRequest(res, "Invalid custom field", parsed.error.issues);
             return;
           }
         }
         const keys = new Set<string>();
         for (const f of custom_fields as CustomField[]) {
           if (keys.has(f.key)) {
-            res.status(400).json({ error: `Duplicate field key: ${f.key}` });
+            badRequest(res, `Duplicate field key: ${f.key}`);
             return;
           }
           keys.add(f.key);
@@ -118,13 +145,13 @@ router.put(
         avg_settlement_low, avg_settlement_high, mdl_status, sol_months,
       }, userId);
       if (!updated) {
-        res.status(404).json({ error: "Tort campaign not found" });
+        notFound(res, "Tort campaign not found");
         return;
       }
       res.json(updated);
     } catch (err) {
       logger.error({ err }, "Failed to update form config");
-      res.status(500).json({ error: "Failed to update form configuration" });
+      serverError(res, "Failed to update form configuration");
     }
   }
 );
@@ -138,13 +165,13 @@ router.post(
     try {
       const parsed = customFieldSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ error: "Invalid custom field", details: parsed.error.issues });
+        badRequest(res, "Invalid custom field", parsed.error.issues);
         return;
       }
       const userId = req.user?.id ?? 0;
       const updated = await addCustomField(String(req.params.tortId), parsed.data as CustomField, userId);
       if (!updated) {
-        res.status(404).json({ error: "Tort campaign not found" });
+        notFound(res, "Tort campaign not found");
         return;
       }
       res.json(updated);
@@ -177,13 +204,13 @@ router.delete(
       const userId = req.user?.id ?? 0;
       const updated = await removeCustomField(String(req.params.tortId), String(req.params.key), userId);
       if (!updated) {
-        res.status(404).json({ error: "Tort campaign not found" });
+        notFound(res, "Tort campaign not found");
         return;
       }
       res.json(updated);
     } catch (err) {
       logger.error({ err }, "Failed to remove custom field");
-      res.status(500).json({ error: "Failed to remove custom field" });
+      serverError(res, "Failed to remove custom field");
     }
   }
 );
@@ -267,8 +294,18 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
     if (step1.errors.length > 0) {
       step1.status = "failed";
       pipeline.push(step1);
+      // Pipeline responses keep `pipeline`, `errors`, `failed_step`, and
+      // `action` for the CRM intake page (which reads them to render which
+      // step failed and which CTA to show), but now ALSO carry the unified
+      // envelope keys (`status:"error"`, `code`, `message`) so the generic
+      // client error parser handles them uniformly. The previous uppercase
+      // `status:"REJECTED"` clashed with the envelope discriminator and was
+      // moved to `outcome:"rejected"`.
       res.status(422).json({
-        status: "REJECTED",
+        status: "error",
+        code: "validation_rejected",
+        message: "Lead failed schema validation",
+        outcome: "rejected",
         errors: step1.errors,
         action: "FIX_AND_RESUBMIT",
         pipeline,
@@ -281,7 +318,16 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
     step1.errors.push("SCHEMA_VALIDATION_ERROR");
     pipeline.push(step1);
     logger.error({ err }, "Schema validation error");
-    res.status(500).json({ status: "ERROR", errors: ["SCHEMA_VALIDATION_ERROR"], action: "RETRY", pipeline, failed_step: "SCHEMA_VALIDATION" });
+    res.status(500).json({
+      status: "error",
+      code: "internal_error",
+      message: "Schema validation crashed",
+      outcome: "error",
+      errors: ["SCHEMA_VALIDATION_ERROR"],
+      action: "RETRY",
+      pipeline,
+      failed_step: "SCHEMA_VALIDATION",
+    });
     return;
   }
   pipeline.push(step1);
@@ -352,7 +398,10 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
   const preErrors = pipeline.filter(s => s.status === "failed" || s.status === "error").flatMap(s => s.errors);
   if (preErrors.length > 0) {
     res.status(422).json({
-      status: "REJECTED",
+      status: "error",
+      code: "validation_rejected",
+      message: "Lead failed pre-tort validation",
+      outcome: "rejected",
       errors: preErrors,
       action: "FIX_AND_RESUBMIT",
       pipeline,
@@ -513,7 +562,10 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
     pipeline.push({ name: "FINAL_ARBITER", status: "failed", errors: [arbiterResult.reason], data: { decision: arbiterResult.decision, deciding_engine: arbiterResult.deciding_engine } });
 
     res.status(422).json({
-      status: "REJECTED",
+      status: "error",
+      code: "arbiter_rejected",
+      message: arbiterResult.reason,
+      outcome: "rejected",
       errors: [arbiterResult.reason],
       action: "REJECTED",
       pipeline,
@@ -670,7 +722,10 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
     pipeline.push(step10);
     logger.error({ err }, "Form submission insert failed");
     res.status(500).json({
-      status: "ERROR",
+      status: "error",
+      code: "internal_error",
+      message: "Failed to persist lead to CRM",
+      outcome: "error",
       errors: ["INTERNAL_ERROR"],
       action: "RETRY",
       pipeline,
@@ -682,7 +737,7 @@ router.post("/submit", requireRole("paralegal", "attorney", "admin"), auditActio
 router.post("/background-check", requireRole("paralegal"), async (req, res) => {
   const { first_name, last_name, state, date_of_birth } = req.body;
   if (!first_name || !last_name) {
-    res.status(400).json({ error: "first_name and last_name are required" });
+    badRequest(res, "first_name and last_name are required");
     return;
   }
 
@@ -691,26 +746,26 @@ router.post("/background-check", requireRole("paralegal"), async (req, res) => {
     res.json(result);
   } catch (err) {
     logger.error({ err }, "Background check failed");
-    res.status(500).json({ error: "Background check failed", status: "error" });
+    serverError(res, "Background check failed");
   }
 });
 
 router.post("/background-check/lead/:id", requireRole("paralegal"), async (req, res) => {
   const leadId = Number(req.params.id);
   if (isNaN(leadId)) {
-    res.status(400).json({ error: "Invalid lead ID" });
+    badRequest(res, "Invalid lead ID");
     return;
   }
 
   try {
     const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
     if (!lead) {
-      res.status(404).json({ error: "Lead not found" });
+      notFound(res, "Lead not found");
       return;
     }
 
     if (!lead.first_name || !lead.last_name) {
-      res.status(422).json({ error: "Lead missing first_name or last_name" });
+      unprocessable(res, "Lead missing first_name or last_name");
       return;
     }
 
@@ -738,14 +793,14 @@ router.post("/background-check/lead/:id", requireRole("paralegal"), async (req, 
     res.json(result);
   } catch (err) {
     logger.error({ err }, "Lead background check failed");
-    res.status(500).json({ error: "Background check failed", status: "error" });
+    serverError(res, "Background check failed");
   }
 });
 
 router.post("/npi-verify", requireRole("paralegal"), async (req, res) => {
   const { physician_first_name, physician_last_name, diagnosis } = req.body;
   if (!physician_first_name || !physician_last_name || !diagnosis) {
-    res.status(400).json({ error: "physician_first_name, physician_last_name, and diagnosis are required" });
+    badRequest(res, "physician_first_name, physician_last_name, and diagnosis are required");
     return;
   }
 
@@ -754,14 +809,14 @@ router.post("/npi-verify", requireRole("paralegal"), async (req, res) => {
     res.json(result);
   } catch (err) {
     logger.error({ err }, "NPI verify failed");
-    res.status(500).json({ error: "NPI verification failed" });
+    serverError(res, "NPI verification failed");
   }
 });
 
 router.post("/fraud-check", requireRole("paralegal"), async (req, res) => {
   const { lead_data, tort_type, diagnosis, physician_first_name, physician_last_name } = req.body;
   if (!diagnosis || !tort_type) {
-    res.status(400).json({ error: "tort_type and diagnosis are required" });
+    badRequest(res, "tort_type and diagnosis are required");
     return;
   }
 
@@ -790,14 +845,14 @@ router.post("/fraud-check", requireRole("paralegal"), async (req, res) => {
     res.json({ tort_validation: tortValidation, fraud_result: fraudResult });
   } catch (err) {
     logger.error({ err }, "Fraud check failed");
-    res.status(500).json({ error: "Fraud check failed" });
+    serverError(res, "Fraud check failed");
   }
 });
 
 router.post("/escalate/fbi", requireRole("attorney", "admin"), auditAction("escalate_fbi"), async (req, res) => {
   const { lead_id, reason, fraud_indicators } = req.body;
   if (!lead_id || !reason) {
-    res.status(400).json({ error: "lead_id and reason are required" });
+    badRequest(res, "lead_id and reason are required");
     return;
   }
 
@@ -812,12 +867,12 @@ router.post("/escalate/fbi", requireRole("attorney", "admin"), auditAction("esca
     if (lead_id !== "manual") {
       const leadId = Number(lead_id);
       if (isNaN(leadId)) {
-        res.status(400).json({ error: "Invalid lead_id — must be a number or 'manual'" });
+        badRequest(res, "Invalid lead_id — must be a number or 'manual'");
         return;
       }
       const [existing] = await db.select({ id: leadsTable.id }).from(leadsTable).where(eq(leadsTable.id, leadId));
       if (!existing) {
-        res.status(404).json({ error: "Lead not found" });
+        notFound(res, "Lead not found");
         return;
       }
       await db
@@ -838,7 +893,7 @@ router.post("/escalate/fbi", requireRole("attorney", "admin"), auditAction("esca
     });
   } catch (err) {
     logger.error({ err }, "FBI escalation logging failed");
-    res.status(500).json({ error: "Escalation logging failed" });
+    serverError(res, "Escalation logging failed");
   }
 });
 

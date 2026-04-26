@@ -1,15 +1,35 @@
 import { Router } from "express";
 import { db, paralegalsTable, leadsTable } from "@workspace/db";
 import { eq, sql, desc } from "drizzle-orm";
+import { z } from "zod";
 import {
-  CreateParalegalBody,
   GetParalegalParams,
   GetParalegalPerformanceParams,
 } from "@workspace/api-zod";
+
+// Stricter than the generated CreateParalegalBody (which only enforces
+// `string | null`): this validates email format and constrains role to a
+// small operator-facing enum. The DB column is varchar(100) NOT NULL with a
+// default of "Paralegal", so the enum stays a closed list — admins can ask
+// for new roles to be added explicitly. Anything outside this set 400s with
+// `details` listing the bad field, instead of silently writing garbage.
+const PARALEGAL_ROLES = [
+  "Paralegal",
+  "Senior Paralegal",
+  "Lead Paralegal",
+  "Intake Specialist",
+  "Case Manager",
+] as const;
+const CreateParalegalSchema = z.object({
+  name: z.string().min(1, "name is required").max(255),
+  email: z.string().email("must be a valid email").max(255).nullish(),
+  role: z.enum(PARALEGAL_ROLES).optional(),
+});
 import { decryptLeadArray } from "../lib/encryption";
 import { requireRole, auditAction } from "../lib/rbac";
 
 const router = Router();
+
 
 router.get("/", requireRole("attorney"), async (_req, res) => {
   const paralegals = await db
@@ -20,11 +40,19 @@ router.get("/", requireRole("attorney"), async (_req, res) => {
 });
 
 router.post("/", requireRole("admin"), auditAction("create_paralegal"), async (req, res) => {
-  // Zod validation up front: catches missing/wrong-type fields before they
-  // hit the encrypted insert path. Mirrors the pattern used in leads.ts.
-  const parsed = CreateParalegalBody.safeParse(req.body);
+  // CreateParalegalSchema (above) is stricter than the OpenAPI-generated
+  // CreateParalegalBody: it enforces that `email` is a valid RFC-compliant
+  // address (or null/omitted) and that `role` is one of a small operator
+  // facing enum, not arbitrary free text. Without this guard the DB would
+  // happily store `"role": "<script>"` or `"email": "not-an-email"`.
+  const parsed = CreateParalegalSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ status: "error", code: "validation_failed", message: "Invalid request body", details: parsed.error.flatten() });
+    res.status(400).json({
+      status: "error",
+      code: "validation_failed",
+      message: "Invalid request body",
+      details: parsed.error.flatten(),
+    });
     return;
   }
   const { name, email, role } = parsed.data;
@@ -57,7 +85,7 @@ router.get("/:id", requireRole("attorney"), async (req, res) => {
     return;
   }
   const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
-  if (!p) { res.status(404).json({ error: "Not found" }); return; }
+  if (!p) { res.status(404).json({ status: "error", code: "not_found", message: "Paralegal not found" }); return; }
 
   const leads = await db
     .select()
@@ -92,7 +120,7 @@ router.get("/:id/performance", requireRole("attorney"), async (req, res) => {
     return;
   }
   const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
-  if (!p) { res.status(404).json({ error: "Not found" }); return; }
+  if (!p) { res.status(404).json({ status: "error", code: "not_found", message: "Paralegal not found" }); return; }
 
   const leads = await db
     .select({
