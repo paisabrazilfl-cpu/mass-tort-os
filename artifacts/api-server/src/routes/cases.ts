@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { db, casesTable, analysisTable, caseDocumentsTable, auditLogTable } from "@workspace/db";
-import { eq, sql, desc } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { CreateCaseBody, UploadCaseFileBody } from "@workspace/api-zod";
 import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
 import { auditLog } from "../lib/audit";
 import crypto from "crypto";
-import { requireRole, auditAction } from "../lib/rbac";
-import { badRequest, notFound } from "../lib/http-errors";
+import { requireRole, auditAction, canBypassOwnership, denyForbidden } from "../lib/rbac";
+import { badRequest, notFound, forbidden } from "../lib/http-errors";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -35,9 +35,17 @@ router.post("/", requireRole("paralegal", "attorney", "admin"), auditAction("cre
   const data = parsed.data;
   const case_id = crypto.randomUUID();
 
-  const job_id = await enqueueJob("create_case", { case_id, data });
+  // Carry the creator's id into the worker so the new row gets a non-null
+  // `created_by_user_id`, which is what the viewer-ownership filter on
+  // GET / and GET /:id reads. The dev-mode synthetic user is `id=0`; we
+  // store null in that case so dev-only cases never leak into a real
+  // viewer's filtered list.
+  const created_by_user_id =
+    req.user && req.user.id > 0 ? req.user.id : null;
 
-  await auditLog("case", case_id, "intake_submitted", { data }, {
+  const job_id = await enqueueJob("create_case", { case_id, data, created_by_user_id });
+
+  await auditLog("case", case_id, "intake_submitted", { data, created_by_user_id }, {
     ip_address: req.ip,
     user_agent: req.get("user-agent"),
   });
@@ -112,12 +120,25 @@ router.post("/:id/analyze", requireRole("paralegal"), async (req, res) => {
 });
 
 router.get("/", requireRole("viewer"), async (req, res) => {
-  const cases = await db
-    .select()
-    .from(casesTable)
-    .orderBy(desc(casesTable.created_at))
-    .limit(100);
-  res.json(cases);
+  // Ownership filter (Task #10): viewers/paralegals only see cases THEY
+  // created. admin/attorney bypass via canBypassOwnership(). A case row
+  // with created_by_user_id IS NULL is treated as "owner-less" and is only
+  // visible to the bypass set — the filter must use a non-null comparison
+  // so dev-mode rows (id=0) and historical rows do not silently leak.
+  const user = req.user!;
+  const rows = canBypassOwnership(user)
+    ? await db
+        .select()
+        .from(casesTable)
+        .orderBy(desc(casesTable.created_at))
+        .limit(100)
+    : await db
+        .select()
+        .from(casesTable)
+        .where(eq(casesTable.created_by_user_id, user.id))
+        .orderBy(desc(casesTable.created_at))
+        .limit(100);
+  res.json(rows);
 });
 
 // NOTE: worker admin routes are registered BEFORE the parameterized
@@ -165,6 +186,21 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
 
   if (!caseRow) {
     notFound(res, "Case not found");
+    return;
+  }
+
+  // Ownership check (Task #10): same rule as GET /. Returning 404 instead of
+  // 403 here avoids confirming the existence of a case the caller cannot
+  // see — but for the audit trail we still record the denial in rbac.ts via
+  // the dedicated forbidden() path on a dedicated /access endpoint if/when
+  // we add one. For now we emit 403 so the CRM can show a clear "no access"
+  // banner; the case id is opaque (UUID) so existence-leak is low-value.
+  const user = req.user!;
+  if (!canBypassOwnership(user) && caseRow.created_by_user_id !== user.id) {
+    denyForbidden(req, res, "case_ownership_denied", "Insufficient permissions", {
+      case_id,
+      owner_user_id: caseRow.created_by_user_id,
+    });
     return;
   }
 

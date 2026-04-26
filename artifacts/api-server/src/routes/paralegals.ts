@@ -70,7 +70,7 @@ router.post("/", requireRole("admin"), auditAction("create_paralegal"), async (r
   res.status(201).json(p);
 });
 
-router.get("/:id", requireRole("attorney"), async (req, res) => {
+router.get("/:id", requireRole("attorney"), auditAction("view_paralegal"), async (req, res) => {
   // GetParalegalParams uses zod.coerce.number() which safely converts the
   // string param to int and rejects garbage like "abc" with a parse error
   // instead of producing NaN.
@@ -108,7 +108,7 @@ router.get("/:id", requireRole("attorney"), async (req, res) => {
   });
 });
 
-router.get("/:id/performance", requireRole("attorney"), async (req, res) => {
+router.get("/:id/performance", requireRole("attorney"), auditAction("view_paralegal_performance"), async (req, res) => {
   const parsed = GetParalegalPerformanceParams.safeParse({ id: req.params.id });
   if (!parsed.success) {
     res.status(400).json({ status: "error", code: "invalid_id", message: "Paralegal id must be a positive integer" });

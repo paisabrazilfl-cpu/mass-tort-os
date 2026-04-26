@@ -197,7 +197,9 @@ export function idsMiddleware() {
     const blocked = await isBlocked(ip);
     if (blocked) {
       logger.warn({ ip }, "Blocked IP attempted access");
-      res.status(403).json({ error: "Access denied" });
+      // Pre-auth IPS denial — uses the same FORBIDDEN envelope as RBAC
+      // denials so the CRM only has one error shape to handle.
+      res.status(403).json({ status: "error", code: "FORBIDDEN", message: "Access denied" });
       return;
     }
 
@@ -210,7 +212,7 @@ export function idsMiddleware() {
     if (urlThreat) {
       await recordAlert(req, urlThreat);
       if (urlThreat.severity === "critical") {
-        res.status(403).json({ error: "Request blocked by security policy" });
+        res.status(403).json({ status: "error", code: "FORBIDDEN", message: "Request blocked by security policy" });
         return;
       }
     }
@@ -220,7 +222,7 @@ export function idsMiddleware() {
       if (queryThreat) {
         await recordAlert(req, queryThreat);
         if (queryThreat.severity === "critical") {
-          res.status(403).json({ error: "Request blocked by security policy" });
+          res.status(403).json({ status: "error", code: "FORBIDDEN", message: "Request blocked by security policy" });
           return;
         }
       }
@@ -231,7 +233,7 @@ export function idsMiddleware() {
       if (bodyThreat) {
         await recordAlert(req, bodyThreat);
         if (bodyThreat.severity === "critical") {
-          res.status(403).json({ error: "Request blocked by security policy" });
+          res.status(403).json({ status: "error", code: "FORBIDDEN", message: "Request blocked by security policy" });
           return;
         }
       }

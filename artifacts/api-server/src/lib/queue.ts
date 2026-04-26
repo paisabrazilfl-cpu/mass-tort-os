@@ -11,7 +11,7 @@ export type JobType =
   | "send_workflow_email";
 
 export interface JobPayload {
-  create_case: { case_id: string; data: Record<string, unknown> };
+  create_case: { case_id: string; data: Record<string, unknown>; created_by_user_id?: number | null };
   ingest_file: { case_id: string; file_name: string; content: string; content_type?: string };
   analyze_case: { case_id: string };
   send_esign_packet: {

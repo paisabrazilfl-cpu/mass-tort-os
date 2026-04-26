@@ -5,15 +5,55 @@ import { db, refreshTokensTable } from "@workspace/db";
 import { sql, eq, and, lt } from "drizzle-orm";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
+import { unauthorized as sendUnauthorized, forbidden as sendForbidden } from "./http-errors";
+import {
+  __internal_markAuthMiddleware as markAuthMiddleware,
+  __internal_markGateMiddleware as markGateMiddleware,
+} from "./route-protection";
+
+/**
+ * Single source of truth for RBAC.
+ *
+ * Layers:
+ *  - {@link UserRole}     — coarse seat-level role attached to the JWT (admin/attorney/paralegal/viewer).
+ *  - {@link Permission}   — fine-grained capability checked at the handler layer.
+ *  - {@link ROLE_PERMISSIONS} — declarative role → permission mapping. The ONLY place
+ *    where new capabilities should be wired to a role.
+ *  - {@link hasPermission}, {@link requirePermission}, {@link requireRole},
+ *    {@link canBypassOwnership} — express helpers that consume the map above.
+ *
+ * Hard rules enforced here so future contributors cannot regress:
+ *  1. Dev auth bypass fires ONLY when `NODE_ENV === "development"` (not when env is
+ *     unset, not in test, not in staging, not in production). Anything else
+ *     means an unauthenticated request gets a 401 envelope.
+ *  2. SESSION_SECRET is REQUIRED in production AND staging — the boot fails if missing.
+ *     The dev fallback "mtos-dev-secret" is only ever used when NODE_ENV === "development".
+ *  3. Privilege bypass for ownership checks goes through {@link canBypassOwnership}.
+ *     We deliberately do NOT special-case `user.id === 0` ("god mode") anywhere — every
+ *     check must be expressed in terms of role.
+ *  4. All denial paths (401/403) emit the canonical envelope:
+ *       { status: "error", code: "UNAUTHENTICATED" | "FORBIDDEN", message }
+ *     and write an audit_log row so an SOC review can reconstruct who tried what.
+ */
+
+const NODE_ENV = process.env.NODE_ENV;
+const IS_DEV = NODE_ENV === "development";
+const IS_PROD_LIKE = NODE_ENV === "production" || NODE_ENV === "staging";
 
 const JWT_SECRET = (() => {
   const secret = process.env.SESSION_SECRET;
-  const env = process.env.NODE_ENV;
-  if ((env === "production" || env === "staging") && !secret) {
+  if (IS_PROD_LIKE && !secret) {
     throw new Error("FATAL: SESSION_SECRET environment variable is required in production/staging");
+  }
+  if (!secret && !IS_DEV) {
+    // test or any other non-dev/non-prod-like env: still require a secret so unit
+    // tests do not silently exercise the dev fallback path that is supposed to be
+    // unreachable from CI.
+    throw new Error(`FATAL: SESSION_SECRET is required when NODE_ENV="${NODE_ENV ?? ""}" (only NODE_ENV="development" gets the fallback)`);
   }
   return secret || "mtos-dev-secret";
 })();
+
 const ACCESS_TOKEN_EXPIRY = "15m";
 const REFRESH_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -35,12 +75,164 @@ declare global {
   }
 }
 
+/**
+ * Strict ranking. Higher number = more privilege. requireRole() and
+ * canBypassOwnership() consume this — we deliberately do NOT also keep an
+ * "exact role list" branch (an old dual implementation used to drift).
+ */
 const ROLE_HIERARCHY: Record<UserRole, number> = {
   admin: 100,
   attorney: 75,
   paralegal: 50,
   viewer: 25,
 };
+
+// =============================================================================
+// Permission catalogue
+// =============================================================================
+
+/**
+ * Fine-grained capabilities. A handler that needs a specific power should
+ * call {@link requirePermission} with the constant from this enum instead of
+ * naming a role directly — that way reassigning a permission is a one-line
+ * change in {@link ROLE_PERMISSIONS}.
+ */
+export const Permission = {
+  // Lead lifecycle
+  LEAD_VIEW_ANY: "lead:view:any",
+  LEAD_VIEW_OWN: "lead:view:own",
+  LEAD_CREATE: "lead:create",
+  LEAD_UPDATE: "lead:update",
+  LEAD_DELETE: "lead:delete",
+  LEAD_QUALIFY: "lead:qualify",
+  LEAD_EXPORT: "lead:export",
+
+  // Cases
+  CASE_VIEW_ANY: "case:view:any",
+  CASE_VIEW_OWN: "case:view:own",
+  CASE_CREATE: "case:create",
+  CASE_UPLOAD: "case:upload",
+  CASE_ANALYZE: "case:analyze",
+  CASE_WORKER_ADMIN: "case:worker_admin",
+
+  // Paralegals
+  PARALEGAL_VIEW: "paralegal:view",
+  PARALEGAL_MANAGE: "paralegal:manage",
+
+  // Forms
+  FORMS_CONFIG_VIEW_PUBLIC: "forms:config:view:public",
+  FORMS_CONFIG_MANAGE: "forms:config:manage",
+
+  // Decision engine
+  DECISION_ENGINE_MANAGE: "decision_engine:manage",
+
+  // Security & compliance
+  SECURITY_MANAGE: "security:manage",
+  COMPLIANCE_VIEW: "compliance:view",
+
+  // Buyers / vendors / lead-sources / templates / workflow-settings
+  BUYERS_VIEW: "buyers:view",
+  BUYERS_MANAGE: "buyers:manage",
+  VENDORS_VIEW: "vendors:view",
+  VENDORS_MANAGE: "vendors:manage",
+  LEAD_SOURCES_VIEW: "lead_sources:view",
+  LEAD_SOURCES_MANAGE: "lead_sources:manage",
+  TEMPLATES_VIEW: "templates:view",
+  TEMPLATES_MANAGE: "templates:manage",
+  WORKFLOW_SETTINGS_VIEW: "workflow_settings:view",
+  WORKFLOW_SETTINGS_MANAGE: "workflow_settings:manage",
+
+  // Integrations
+  INTEGRATIONS_MANAGE: "integrations:manage",
+
+  // User admin
+  USERS_LIST: "users:list",
+} as const;
+
+export type Permission = (typeof Permission)[keyof typeof Permission];
+
+/**
+ * Role → permission set. THE single place this mapping is declared.
+ *
+ * Inheritance is not implicit — admin gets every permission explicitly so a
+ * new permission added below cannot accidentally land in admin's bag without
+ * a code review touching this map.
+ */
+export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
+  admin: new Set<Permission>(Object.values(Permission)),
+  attorney: new Set<Permission>([
+    Permission.LEAD_VIEW_ANY,
+    Permission.LEAD_CREATE,
+    Permission.LEAD_UPDATE,
+    Permission.LEAD_DELETE,
+    Permission.LEAD_QUALIFY,
+    Permission.LEAD_EXPORT,
+    Permission.CASE_VIEW_ANY,
+    Permission.CASE_CREATE,
+    Permission.CASE_UPLOAD,
+    Permission.CASE_ANALYZE,
+    Permission.PARALEGAL_VIEW,
+    Permission.FORMS_CONFIG_VIEW_PUBLIC,
+    Permission.BUYERS_VIEW,
+    Permission.VENDORS_VIEW,
+    Permission.VENDORS_MANAGE,
+    Permission.LEAD_SOURCES_VIEW,
+    Permission.TEMPLATES_VIEW,
+    Permission.WORKFLOW_SETTINGS_VIEW,
+  ]),
+  paralegal: new Set<Permission>([
+    Permission.LEAD_VIEW_OWN,
+    Permission.LEAD_CREATE,
+    Permission.LEAD_UPDATE,
+    Permission.LEAD_QUALIFY,
+    Permission.CASE_VIEW_OWN,
+    Permission.CASE_CREATE,
+    Permission.CASE_UPLOAD,
+    Permission.CASE_ANALYZE,
+    Permission.FORMS_CONFIG_VIEW_PUBLIC,
+    Permission.VENDORS_VIEW,
+    Permission.LEAD_SOURCES_VIEW,
+    Permission.TEMPLATES_VIEW,
+    Permission.WORKFLOW_SETTINGS_VIEW,
+  ]),
+  viewer: new Set<Permission>([
+    Permission.LEAD_VIEW_OWN,
+    Permission.CASE_VIEW_OWN,
+    Permission.FORMS_CONFIG_VIEW_PUBLIC,
+    Permission.BUYERS_VIEW,
+    Permission.LEAD_SOURCES_VIEW,
+    Permission.TEMPLATES_VIEW,
+    Permission.WORKFLOW_SETTINGS_VIEW,
+  ]),
+};
+
+// =============================================================================
+// Capability helpers
+// =============================================================================
+
+export function hasPermission(user: AuthUser | undefined | null, permission: Permission): boolean {
+  if (!user) return false;
+  const perms = ROLE_PERMISSIONS[user.role];
+  return perms ? perms.has(permission) : false;
+}
+
+/**
+ * Returns true iff the caller may bypass per-row ownership checks (e.g.
+ * read leads they did not create / are not assigned to).
+ *
+ * This REPLACES every `user.id !== 0` check that used to sprinkle the routes
+ * — that pattern was a dev-mode escape hatch that incorrectly granted
+ * ownership-bypass to the synthetic `id=0` dev user but to no real account.
+ * Bypass authority now flows from role only.
+ */
+export function canBypassOwnership(user: AuthUser | undefined | null): boolean {
+  if (!user) return false;
+  return user.role === "admin" || user.role === "attorney";
+}
+
+// =============================================================================
+// Token plumbing (unchanged)
+// =============================================================================
 
 export function generateToken(user: AuthUser): string {
   return jwt.sign(
@@ -132,23 +324,36 @@ export function verifyToken(token: string): (AuthUser & { tv?: number }) | null 
   }
 }
 
-export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
+// =============================================================================
+// authMiddleware
+// =============================================================================
+
+/**
+ * Global authentication. Fails closed in prod/staging/test/anything-not-dev.
+ *
+ * The dev bypass is intentionally narrow: ONLY when `NODE_ENV === "development"`
+ * AND no Authorization header is present. Any token-bearing request must verify
+ * properly even in dev so contributors notice broken token plumbing immediately.
+ */
+async function _authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
-    if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "staging") {
-      logger.warn("Dev-mode auth bypass active — DO NOT use in production");
+    if (IS_DEV) {
+      logger.warn({ path: req.path }, "Dev-mode auth bypass active — DO NOT use in production");
       req.user = { id: 0, email: "dev@mtos.local", name: "Dev Admin", role: "admin" };
       next();
       return;
     }
-    res.status(401).json({ error: "Authentication required" });
+    auditDenial(req, "missing_credentials", undefined);
+    sendUnauthorized(res, "Authentication required");
     return;
   }
 
   const token = authHeader.slice(7);
   const decoded = verifyToken(token);
   if (!decoded) {
-    res.status(401).json({ error: "Invalid or expired token" });
+    auditDenial(req, "invalid_or_expired_token", undefined);
+    sendUnauthorized(res, "Invalid or expired token");
     return;
   }
 
@@ -158,16 +363,24 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     `);
     const row = (Array.isArray(rows) ? rows : (rows as any).rows ?? [])[0] as any;
     if (!row) {
-      res.status(401).json({ error: "User account not found" });
+      auditDenial(req, "user_account_not_found", { user_id: decoded.id });
+      sendUnauthorized(res, "User account not found");
       return;
     }
     if (typeof decoded.tv === "number" && decoded.tv < (row.token_version ?? 0)) {
-      res.status(401).json({ error: "Token has been revoked" });
+      auditDenial(req, "token_revoked", { user_id: decoded.id });
+      sendUnauthorized(res, "Token has been revoked");
       return;
     }
   } catch {
+    // Fail closed: a DB outage during token-version check must NOT silently
+    // grant access. We return 503 so the client can retry.
     logger.error("Token version check failed — denying request (fail-closed)");
-    res.status(503).json({ error: "Authentication service temporarily unavailable" });
+    res.status(503).json({
+      status: "error",
+      code: "auth_unavailable",
+      message: "Authentication service temporarily unavailable",
+    });
     return;
   }
 
@@ -175,35 +388,113 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
   next();
 }
 
+// Stamped with AUTH_MIDDLEWARE_FLAG so the boot-time route table validator
+// recognises this as the auth gate even after bundling rewrites names.
+export const authMiddleware = markAuthMiddleware(_authMiddleware);
+
+// =============================================================================
+// requireRole / requirePermission
+// =============================================================================
+
+/**
+ * Requires the caller hold one of `roles` OR a higher role per
+ * {@link ROLE_HIERARCHY}. Pure hierarchy — no separate "exact match" branch.
+ *
+ * Pass the LOWEST role that is acceptable. e.g. `requireRole("paralegal")`
+ * lets paralegal, attorney, admin through. `requireRole("admin")` lets only
+ * admin through.
+ */
 export function requireRole(...roles: UserRole[]) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  if (roles.length === 0) {
+    throw new Error("requireRole called with no roles — refusing to mount a deny-all middleware");
+  }
+  const minRequired = Math.min(...roles.map(r => ROLE_HIERARCHY[r]));
+  // Stamped with GATE_MIDDLEWARE_FLAG so the boot-time route table validator
+  // (lib/route-protection.ts) can identify this as a role gate even after
+  // bundling renames inner functions. Function.name alone is unreliable.
+  return markGateMiddleware(function requireRole(req: Request, res: Response, next: NextFunction): void {
     const user = req.user;
     if (!user) {
-      res.status(401).json({ error: "Authentication required" });
+      auditDenial(req, "unauthenticated_role_check", { required_roles: roles });
+      sendUnauthorized(res, "Authentication required");
       return;
     }
-
-    if (roles.includes(user.role)) {
-      next();
-      return;
-    }
-
-    const userLevel = ROLE_HIERARCHY[user.role] || 0;
-    const minRequired = Math.min(...roles.map(r => ROLE_HIERARCHY[r] || 0));
+    const userLevel = ROLE_HIERARCHY[user.role] ?? 0;
     if (userLevel >= minRequired) {
       next();
       return;
     }
-
-    auditLog("access_denied", String(user.id), "unauthorized_access", {
+    auditDenial(req, "insufficient_role", {
       required_roles: roles,
       user_role: user.role,
-      path: req.path,
-      method: req.method,
+      user_id: user.id,
     });
+    sendForbidden(res, "Insufficient permissions");
+  });
+}
 
-    res.status(403).json({ error: "Insufficient permissions" });
-  };
+/**
+ * Permission-gated middleware. Prefer this over {@link requireRole} for
+ * NEW handlers — it lets us reassign which role gets a capability without
+ * touching every route file.
+ */
+export function requirePermission(permission: Permission) {
+  // Stamped with GATE_MIDDLEWARE_FLAG — see requireRole above for rationale.
+  return markGateMiddleware(function requirePermission(req: Request, res: Response, next: NextFunction): void {
+    const user = req.user;
+    if (!user) {
+      auditDenial(req, "unauthenticated_permission_check", { required_permission: permission });
+      sendUnauthorized(res, "Authentication required");
+      return;
+    }
+    if (hasPermission(user, permission)) {
+      next();
+      return;
+    }
+    auditDenial(req, "missing_permission", {
+      required_permission: permission,
+      user_role: user.role,
+      user_id: user.id,
+    });
+    sendForbidden(res, "Insufficient permissions");
+  });
+}
+
+// =============================================================================
+// Audit & user CRUD
+// =============================================================================
+
+function auditDenial(req: Request, reason: string, extra: Record<string, unknown> | undefined): void {
+  const userId = req.user?.id;
+  // Fire-and-forget; audit failures must not turn a 401 into a 500.
+  auditLog("access_denied", userId !== undefined ? String(userId) : "anonymous", reason, {
+    path: req.path,
+    method: req.method,
+    ...(extra ?? {}),
+  }, {
+    ip_address: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
+    user_agent: req.headers["user-agent"],
+  }).catch(() => {});
+}
+
+/**
+ * Audited 403 helper for ownership / domain-rule denials inside route
+ * handlers. Centralises the pattern:
+ *   1. write an audit_log row,
+ *   2. send the canonical FORBIDDEN envelope.
+ * Use this anywhere a handler decides "this user is authenticated and has
+ * the right role, but can't see THIS specific resource" — those denials
+ * would otherwise bypass the rbac.ts middleware and leave no audit trail.
+ */
+export function denyForbidden(
+  req: Request,
+  res: Response,
+  reason: string,
+  message = "Insufficient permissions",
+  extra?: Record<string, unknown>,
+): void {
+  auditDenial(req, reason, extra);
+  sendForbidden(res, message);
 }
 
 export function auditAction(action: string) {
@@ -218,7 +509,7 @@ export function auditAction(action: string) {
       }, {
         ip_address: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
         user_agent: req.headers["user-agent"],
-      });
+      }).catch(() => {});
     }
     next();
   };
@@ -302,3 +593,15 @@ export async function cleanupExpiredTokens(): Promise<void> {
     logger.warn("Refresh token cleanup failed");
   }
 }
+
+// =============================================================================
+// Test helpers (exported for the role × route matrix in __tests__/)
+// =============================================================================
+
+/** Internal: read-only view of dev-bypass status for the boot banner & tests. */
+export const __rbacInternal = {
+  isDev: () => IS_DEV,
+  isProdLike: () => IS_PROD_LIKE,
+  jwtSecretIsDevFallback: () => JWT_SECRET === "mtos-dev-secret",
+  roleHierarchy: () => ({ ...ROLE_HIERARCHY }),
+};

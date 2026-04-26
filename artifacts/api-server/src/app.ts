@@ -6,6 +6,7 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { idsMiddleware } from "./lib/ids";
+import { validateRouteTable } from "./lib/route-protection";
 
 const app: Express = express();
 
@@ -93,6 +94,15 @@ app.use(express.urlencoded({ extended: true, limit: "55mb" }));
 app.use(idsMiddleware());
 
 app.use("/api", router);
+
+// Boot-time route table validator (Task #10). Walks the freshly-mounted
+// router and throws if any non-public terminal route is missing
+// authMiddleware or a requireRole/requirePermission gate. This is the
+// deny-by-default backstop — a contributor cannot ship an unprotected
+// handler, even if every other code review and lint rule misses it.
+// Synchronous + at module-load time so the process crashes BEFORE
+// app.listen() ever accepts a connection.
+validateRouteTable(router as unknown as import("express").Router);
 
 // 404 for unknown /api/* routes — without this, Express falls through to
 // the default HTML "Cannot GET /api/foo" page which breaks the CRM client's

@@ -11,6 +11,12 @@ import type { Response } from "express";
  * never for raw `err.message` — the global handler refuses to surface
  * `err.message` on 5xx because it can carry SQL fragments, file paths, or
  * PII. Server-side log the real error via `logger.error` instead.
+ *
+ * Auth codes:
+ *   - 401 → `UNAUTHENTICATED` (caller is not authenticated; missing/invalid/expired token)
+ *   - 403 → `FORBIDDEN` (caller is authenticated but lacks the required role/permission/ownership)
+ * These are SCREAMING_SNAKE per the project's auth contract — the CRM client
+ * branches on `code` to decide between "redirect to /login" and "show 403 page".
  */
 export function errorEnvelope(
   res: Response,
@@ -27,11 +33,11 @@ export function errorEnvelope(
 export const badRequest = (res: Response, message: string, details?: unknown) =>
   errorEnvelope(res, 400, "bad_request", message, details);
 
-export const unauthorized = (res: Response, message = "Unauthorized") =>
-  errorEnvelope(res, 401, "unauthorized", message);
+export const unauthorized = (res: Response, message = "Authentication required") =>
+  errorEnvelope(res, 401, "UNAUTHENTICATED", message);
 
-export const forbidden = (res: Response, message = "Forbidden") =>
-  errorEnvelope(res, 403, "forbidden", message);
+export const forbidden = (res: Response, message = "Insufficient permissions") =>
+  errorEnvelope(res, 403, "FORBIDDEN", message);
 
 export const notFound = (res: Response, message = "Not found") =>
   errorEnvelope(res, 404, "not_found", message);

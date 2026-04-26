@@ -17,7 +17,7 @@ import { withErrorFallback } from "../lib/error-fallback";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { encryptLeadFields, decryptLeadFields, decryptLeadArray } from "../lib/encryption";
-import { requireRole, auditAction } from "../lib/rbac";
+import { requireRole, auditAction, canBypassOwnership, denyForbidden } from "../lib/rbac";
 import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 
@@ -96,7 +96,10 @@ function notFound(res: import("express").Response, what = "Lead not found") {
   res.status(404).json({ status: "error", code: "not_found", message: what });
 }
 function forbidden(res: import("express").Response, message = "Insufficient permissions") {
-  res.status(403).json({ status: "error", code: "forbidden", message });
+  // Normalized envelope (Task #10): code is the SCREAMING_SNAKE_CASE constant
+  // matching lib/http-errors.ts so the CRM can switch on it without
+  // string-matching the human-readable message.
+  res.status(403).json({ status: "error", code: "FORBIDDEN", message });
 }
 
 router.get("/export", requireRole("attorney", "admin"), auditAction("export_leads"), async (req, res) => {
@@ -205,7 +208,11 @@ router.get("/", requireRole("viewer"), async (req, res) => {
     throw err;
   }
   const user = req.user!;
-  if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+  // Ownership filter: only admin/attorney can see every row. Everyone else
+  // (paralegal/viewer) sees leads they created or are assigned to. The check
+  // is expressed via canBypassOwnership() so a future role addition only
+  // needs editing rbac.ts — never the route files.
+  if (!canBypassOwnership(user)) {
     conditions.push(
       or(
         eq(leadsTable.created_by_user_id, user.id),
@@ -424,9 +431,13 @@ router.get("/:id", requireRole("viewer"), auditAction("view_lead"), async (req, 
   }
 
   const user = req.user!;
-  if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+  if (!canBypassOwnership(user)) {
     if (lead.created_by_user_id !== user.id && lead.assigned_to !== user.id) {
-      forbidden(res);
+      denyForbidden(req, res, "lead_ownership_denied", "Insufficient permissions", {
+        lead_id: lead.id,
+        owner_user_id: lead.created_by_user_id,
+        assigned_to: lead.assigned_to,
+      });
       return;
     }
   }
@@ -455,10 +466,14 @@ async function ensureLeadAccess(req: Express.Request, res: import("express").Res
     notFound(res);
     return false;
   }
-  const user = (req as { user?: { id: number; role: string } }).user;
-  if (user && user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+  const user = (req as { user?: import("../lib/rbac").AuthUser }).user;
+  if (user && !canBypassOwnership(user)) {
     if (check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
-      forbidden(res);
+      denyForbidden(req as import("express").Request, res, "lead_ownership_denied", "Insufficient permissions", {
+        lead_id: leadId,
+        owner_user_id: check.created_by_user_id,
+        assigned_to: check.assigned_to,
+      });
       return false;
     }
   }
@@ -507,10 +522,14 @@ router.patch("/:id", requireRole("paralegal", "attorney", "admin"), auditAction(
   }
 
   const user = req.user!;
-  if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+  if (!canBypassOwnership(user)) {
     const [check] = await db.select({ created_by_user_id: leadsTable.created_by_user_id, assigned_to: leadsTable.assigned_to }).from(leadsTable).where(eq(leadsTable.id, paramsParsed.data.id));
     if (check && check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
-      forbidden(res);
+      denyForbidden(req, res, "lead_ownership_denied", "Insufficient permissions", {
+        lead_id: paramsParsed.data.id,
+        owner_user_id: check.created_by_user_id,
+        assigned_to: check.assigned_to,
+      });
       return;
     }
   }
@@ -659,9 +678,13 @@ router.post("/:id/qualify", requireRole("paralegal", "attorney", "admin"), audit
   }
 
   const user = req.user!;
-  if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+  if (!canBypassOwnership(user)) {
     if (lead.created_by_user_id !== user.id && lead.assigned_to !== user.id) {
-      forbidden(res);
+      denyForbidden(req, res, "lead_ownership_denied", "Insufficient permissions", {
+        lead_id: lead.id,
+        owner_user_id: lead.created_by_user_id,
+        assigned_to: lead.assigned_to,
+      });
       return;
     }
   }
@@ -781,10 +804,14 @@ router.patch("/:id/notes", requireRole("paralegal", "attorney", "admin"), auditA
     }
 
     const user = req.user!;
-    if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
+    if (!canBypassOwnership(user)) {
       const [check] = await db.select({ created_by_user_id: leadsTable.created_by_user_id, assigned_to: leadsTable.assigned_to }).from(leadsTable).where(eq(leadsTable.id, leadId));
       if (check && check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
-        forbidden(res);
+        denyForbidden(req, res, "lead_ownership_denied", "Insufficient permissions", {
+          lead_id: leadId,
+          owner_user_id: check.created_by_user_id,
+          assigned_to: check.assigned_to,
+        });
         return;
       }
     }

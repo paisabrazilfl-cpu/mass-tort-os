@@ -3,6 +3,33 @@ import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
 import { workerLoop } from "./worker";
 
+// =============================================================================
+// Boot env validation (Task #10).
+//
+// The single biggest "silent" RBAC vulnerability we've shipped historically is
+// booting production with a dev-shaped environment — a missing SESSION_SECRET
+// lets express-session fall back to a generated key on every restart (logging
+// every user out), and a missing ENCRYPTION_KEY means the integrations
+// credential store can't decrypt tokens. We fail fast on boot so the
+// container restart loop alerts ops instead of running half-broken.
+//
+// `development` is the only mode allowed to skip these — it mirrors the
+// dev-gate in lib/rbac.ts so the two cannot drift apart.
+// =============================================================================
+const NODE_ENV = process.env["NODE_ENV"] ?? "development";
+const IS_DEV = NODE_ENV === "development";
+
+const REQUIRED_ENV_PROD = ["DATABASE_URL", "SESSION_SECRET", "ENCRYPTION_KEY"] as const;
+if (!IS_DEV) {
+  const missing = REQUIRED_ENV_PROD.filter((k) => !process.env[k] || String(process.env[k]).trim() === "");
+  if (missing.length > 0) {
+    logger.fatal({ missing, NODE_ENV }, "FATAL: required environment variables missing for non-dev boot");
+    throw new Error(
+      `Refusing to boot in NODE_ENV="${NODE_ENV}" without: ${missing.join(", ")}. Set these in deployment secrets.`,
+    );
+  }
+}
+
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {
@@ -23,7 +50,19 @@ app.listen(port, async (err) => {
     process.exit(1);
   }
 
-  logger.info({ port }, "Server listening");
+  // Startup banner (Task #10): a single log line that ops can grep for to
+  // confirm which security posture the process actually booted with.
+  logger.info(
+    {
+      port,
+      node_env: NODE_ENV,
+      dev_mode: IS_DEV,
+      has_session_secret: Boolean(process.env["SESSION_SECRET"]),
+      has_encryption_key: Boolean(process.env["ENCRYPTION_KEY"]),
+      has_database_url: Boolean(process.env["DATABASE_URL"]),
+    },
+    "MTOS API server listening",
+  );
 
   // Seed/refresh form configurations from TORT_REGISTRY on boot.
   // Safe: inserts missing rows and refreshes only rows where updated_by IS NULL

@@ -67,19 +67,36 @@ async function processJob(job: {
   logger.info({ job_id: job.id, job_type: job.job_type }, "Processing job");
 
   if (job.job_type === "create_case") {
-    const { case_id, data } = payload as { case_id: unknown; data: unknown };
+    const { case_id, data, created_by_user_id } = payload as {
+      case_id: unknown;
+      data: unknown;
+      created_by_user_id?: unknown;
+    };
     assertCaseId(case_id);
     if (data !== undefined && data !== null && (typeof data !== "object" || Array.isArray(data))) {
       throw new NonRetryableJobError(
         `Invalid payload: data must be an object or null (got ${Array.isArray(data) ? "array" : typeof data})`,
       );
     }
+    // RBAC ownership: the API enqueues `created_by_user_id` from req.user.id
+    // (Task #10). We accept null/undefined so legacy queue rows enqueued
+    // before this column existed do not dead-letter; cases without an owner
+    // are visible only to admin/attorney via the route-layer ownership filter.
+    const ownerUserId =
+      typeof created_by_user_id === "number" && Number.isInteger(created_by_user_id) && created_by_user_id > 0
+        ? created_by_user_id
+        : null;
     await db
       .insert(casesTable)
-      .values({ id: case_id, data: (data as Record<string, unknown>) ?? {}, status: "open" })
+      .values({
+        id: case_id,
+        data: (data as Record<string, unknown>) ?? {},
+        status: "open",
+        created_by_user_id: ownerUserId,
+      })
       .onConflictDoNothing();
-    await auditLog("case", case_id, "created", { data: data ?? {} });
-    logger.info({ case_id }, "Case created");
+    await auditLog("case", case_id, "created", { data: data ?? {}, created_by_user_id: ownerUserId });
+    logger.info({ case_id, created_by_user_id: ownerUserId }, "Case created");
   } else if (job.job_type === "ingest_file") {
     const { case_id, file_name, content, content_type } = payload as {
       case_id: unknown;

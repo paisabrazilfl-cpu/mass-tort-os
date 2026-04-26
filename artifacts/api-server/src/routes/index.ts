@@ -28,6 +28,51 @@ import documentTemplatesRouter from "./document-templates";
 import workflowSettingsRouter from "./workflow-settings";
 import webhooksRouter from "./webhooks";
 import { authMiddleware } from "../lib/rbac";
+import { markPublic, labelRouter } from "../lib/route-protection";
+
+// =============================================================================
+// Router registry — keep this list in declaration order so the boot validator
+// in `src/lib/route-protection.ts` and the audit report stay in sync. Each
+// router is labelled exactly once so error messages from the validator point
+// at a recognisable name. Public routers carry `markPublic()` instead so the
+// validator skips role-gate checks for them — those routers must do their
+// own per-request validation (signature checks, host allowlisting, etc).
+// =============================================================================
+
+// PUBLIC: providers cannot send our session cookie / Bearer token.
+markPublic(healthRouter, "health");
+markPublic(formsPublicRouter, "forms-public");
+markPublic(webhooksRouter, "webhooks");
+// auth router carries a *mix* — login/refresh/register are public, the rest
+// are gated. The validator's AUTH_ROUTE_EXCEPTIONS list whitelists the public
+// three; everything else must include authMiddleware in its handler chain.
+labelRouter(authRouter, "auth");
+
+// PROTECTED routers — labelled for nice validator errors.
+labelRouter(leadsRouter, "leads");
+labelRouter(documentsRouter, "documents");
+labelRouter(dashboardRouter, "dashboard");
+labelRouter(casesRouter, "cases");
+labelRouter(ocrRouter, "ocr");
+labelRouter(paralegalsRouter, "paralegals");
+labelRouter(analyticsRouter, "analytics");
+labelRouter(complianceRouter, "compliance");
+labelRouter(npiRouter, "npi");
+labelRouter(reviewQueueRouter, "review-queue");
+labelRouter(formsRouter, "forms");
+labelRouter(vendorsRouter, "vendors");
+labelRouter(securityRouter, "security");
+labelRouter(timelineRouter, "timeline");
+labelRouter(draftingRouter, "drafting");
+labelRouter(integrationsRouter, "integrations");
+labelRouter(newsRouter, "news");
+labelRouter(imageObjectsRouter, "image-objects");
+labelRouter(leadImportRouter, "lead-import");
+labelRouter(decisionEngineRouter, "decision-engine");
+labelRouter(leadSourcesRouter, "lead-sources");
+labelRouter(buyersRouter, "buyers");
+labelRouter(documentTemplatesRouter, "document-templates");
+labelRouter(workflowSettingsRouter, "workflow-settings");
 
 const router: IRouter = Router();
 
