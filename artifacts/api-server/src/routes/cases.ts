@@ -89,7 +89,12 @@ router.get("/", requireRole("viewer"), async (req, res) => {
 
 router.get("/:id", requireRole("viewer"), async (req, res) => {
   const case_id = String(req.params.id);
+  if (!validateCaseId(case_id)) {
+    res.status(400).json({ error: "Invalid case ID format" });
+    return;
+  }
 
+  // Fetch the case first so we can 404 fast without touching the children.
   const [caseRow] = await db
     .select()
     .from(casesTable)
@@ -100,23 +105,12 @@ router.get("/:id", requireRole("viewer"), async (req, res) => {
     return;
   }
 
-  const docs = await db
-    .select()
-    .from(caseDocumentsTable)
-    .where(eq(caseDocumentsTable.case_id, case_id));
-
-  const analyses = await db
-    .select()
-    .from(analysisTable)
-    .where(eq(analysisTable.case_id, case_id))
-    .orderBy(desc(analysisTable.created_at));
-
-  const auditEntries = await db
-    .select()
-    .from(auditLogTable)
-    .where(eq(auditLogTable.entity_id, case_id))
-    .orderBy(desc(auditLogTable.occurred_at))
-    .limit(50);
+  // Children are independent — fetch in parallel to cut latency ~3×.
+  const [docs, analyses, auditEntries] = await Promise.all([
+    db.select().from(caseDocumentsTable).where(eq(caseDocumentsTable.case_id, case_id)),
+    db.select().from(analysisTable).where(eq(analysisTable.case_id, case_id)).orderBy(desc(analysisTable.created_at)),
+    db.select().from(auditLogTable).where(eq(auditLogTable.entity_id, case_id)).orderBy(desc(auditLogTable.occurred_at)).limit(50),
+  ]);
 
   res.json({
     case: caseRow,

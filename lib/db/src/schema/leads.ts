@@ -9,6 +9,7 @@ import {
   timestamp,
   date,
   jsonb,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -99,7 +100,18 @@ export const leadsTable = pgTable("leads", {
 
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  statusIdx: index("leads_status_idx").on(t.status),
+  tortTypeIdx: index("leads_tort_type_idx").on(t.tort_type),
+  createdAtIdx: index("leads_created_at_idx").on(t.created_at),
+  updatedAtIdx: index("leads_updated_at_idx").on(t.updated_at),
+  vendorIdx: index("leads_vendor_id_idx").on(t.vendor_id),
+  buyerIdx: index("leads_buyer_id_idx").on(t.buyer_id),
+  assignedIdx: index("leads_assigned_to_idx").on(t.assigned_to),
+  createdByIdx: index("leads_created_by_user_id_idx").on(t.created_by_user_id),
+  statusCreatedIdx: index("leads_status_created_at_idx").on(t.status, t.created_at),
+  tortStatusIdx: index("leads_tort_status_idx").on(t.tort_type, t.status),
+}));
 
 export const insertLeadSchema = createInsertSchema(leadsTable).omit({
   id: true,

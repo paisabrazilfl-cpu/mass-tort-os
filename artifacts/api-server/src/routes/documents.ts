@@ -22,9 +22,16 @@ router.get("/", requireRole("viewer"), async (req, res) => {
 
   const { lead_id } = parsed.data;
 
+  // Pagination cap — defaults 50/page, hard ceiling 500. Without this the
+  // endpoint would pull every document row in the system on each call.
+  const rawLimit = Number(req.query.limit ?? 50);
+  const rawOffset = Number(req.query.offset ?? 0);
+  const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 50, 1), 500);
+  const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
+
   const docs = lead_id
-    ? await db.select().from(documentsTable).where(eq(documentsTable.lead_id, lead_id)).orderBy(sql`${documentsTable.created_at} DESC`)
-    : await db.select().from(documentsTable).orderBy(sql`${documentsTable.created_at} DESC`);
+    ? await db.select().from(documentsTable).where(eq(documentsTable.lead_id, lead_id)).orderBy(sql`${documentsTable.created_at} DESC`).limit(limit).offset(offset)
+    : await db.select().from(documentsTable).orderBy(sql`${documentsTable.created_at} DESC`).limit(limit).offset(offset);
 
   res.json(docs);
 });

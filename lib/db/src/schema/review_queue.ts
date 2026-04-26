@@ -6,6 +6,7 @@ import {
   jsonb,
   timestamp,
   integer,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -26,7 +27,11 @@ export const reviewQueueTable = pgTable("review_queue", {
   resolved_at: timestamp("resolved_at"),
   retry_count: integer("retry_count").notNull().default(0),
   created_at: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  resolutionCreatedIdx: index("review_queue_resolution_created_at_idx").on(t.resolution, t.created_at),
+  entityIdx: index("review_queue_entity_idx").on(t.entity_type, t.entity_id),
+  createdAtIdx: index("review_queue_created_at_idx").on(t.created_at),
+}));
 
 export const insertReviewQueueSchema = createInsertSchema(reviewQueueTable).omit({
   id: true,

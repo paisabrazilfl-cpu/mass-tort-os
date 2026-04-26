@@ -6,6 +6,7 @@ import {
   text,
   boolean,
   timestamp,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -23,7 +24,11 @@ export const documentsTable = pgTable("documents", {
   signed_at: timestamp("signed_at"),
   notes: text("notes"),
   created_at: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  leadIdx: index("documents_lead_id_idx").on(t.lead_id),
+  leadCreatedIdx: index("documents_lead_created_at_idx").on(t.lead_id, t.created_at),
+  createdAtIdx: index("documents_created_at_idx").on(t.created_at),
+}));
 
 export const insertDocumentSchema = createInsertSchema(documentsTable).omit({
   id: true,

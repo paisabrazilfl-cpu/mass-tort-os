@@ -7,6 +7,7 @@ import {
   boolean,
   integer,
   jsonb,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -27,7 +28,12 @@ export const securityAlertsTable = pgTable("security_alerts", {
   country: varchar("country", { length: 50 }),
   metadata: jsonb("metadata"),
   created_at: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  createdAtIdx: index("security_alerts_created_at_idx").on(t.created_at),
+  severityCreatedIdx: index("security_alerts_severity_created_at_idx").on(t.severity, t.created_at),
+  typeCreatedIdx: index("security_alerts_type_created_at_idx").on(t.type, t.created_at),
+  statusCreatedIdx: index("security_alerts_status_created_at_idx").on(t.status, t.created_at),
+}));
 
 export const blockedIpsTable = pgTable("blocked_ips", {
   id: serial("id").primaryKey(),

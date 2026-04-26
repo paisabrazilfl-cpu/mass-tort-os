@@ -5,6 +5,7 @@ import {
   text,
   real,
   timestamp,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -24,7 +25,10 @@ export const faxResultsTable = pgTable("fax_results", {
   error: text("error"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   processed_at: timestamp("processed_at"),
-});
+}, (t) => ({
+  createdAtIdx: index("fax_results_created_at_idx").on(t.created_at),
+  statusCreatedIdx: index("fax_results_status_created_at_idx").on(t.status, t.created_at),
+}));
 
 export const insertFaxResultSchema = createInsertSchema(faxResultsTable).omit({
   id: true,

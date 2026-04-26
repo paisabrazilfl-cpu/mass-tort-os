@@ -6,27 +6,29 @@ import { requireRole } from "../lib/rbac";
 const router = Router();
 
 router.get("/audit-trail", requireRole("admin"), async (req, res) => {
-  const limit = parseInt(req.query.limit as string) || 100;
+  // Hard-cap to 1000 rows so an attacker (or a curious admin) can't request
+  // limit=10000000 and OOM the container. Default 100.
+  const rawLimit = parseInt(req.query.limit as string);
+  const limit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100, 1), 1000);
   const entityType = req.query.entity_type == null ? undefined : String(req.query.entity_type);
   const action = req.query.action == null ? undefined : String(req.query.action);
 
-  let query = db
-    .select()
-    .from(auditLogTable)
-    .orderBy(desc(auditLogTable.occurred_at))
-    .limit(limit);
+  // BUG FIX: previously we ran `.limit(N)` against the whole table and then
+  // applied entity_type/action filtering in JS. With a heavy audit log this
+  // routinely returned 0 rows even when matches existed (the top-N most
+  // recent entries simply didn't include the requested type/action).
+  // Push filters into the SQL WHERE clause so the limit is applied AFTER
+  // filtering, and so the new audit_log indexes can be used.
+  const conditions = [];
+  if (entityType) conditions.push(eq(auditLogTable.entity_type, entityType));
+  if (action) conditions.push(eq(auditLogTable.action, action));
 
-  const results = await query;
+  const results =
+    conditions.length > 0
+      ? await db.select().from(auditLogTable).where(and(...conditions)).orderBy(desc(auditLogTable.occurred_at)).limit(limit)
+      : await db.select().from(auditLogTable).orderBy(desc(auditLogTable.occurred_at)).limit(limit);
 
-  let filtered = results;
-  if (entityType) {
-    filtered = filtered.filter(r => r.entity_type === entityType);
-  }
-  if (action) {
-    filtered = filtered.filter(r => r.action === action);
-  }
-
-  res.json(filtered);
+  res.json(results);
 });
 
 router.get("/audit-summary", requireRole("admin"), async (_req, res) => {

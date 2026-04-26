@@ -5,6 +5,7 @@ import {
   jsonb,
   real,
   timestamp,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -20,7 +21,9 @@ export const analysisTable = pgTable("analysis", {
   ai_model: varchar("ai_model", { length: 100 }),
   raw_text_length: real("raw_text_length"),
   created_at: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  caseCreatedIdx: index("analysis_case_created_at_idx").on(t.case_id, t.created_at),
+}));
 
 export const insertAnalysisSchema = createInsertSchema(analysisTable).omit({
   id: true,

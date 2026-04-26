@@ -63,11 +63,15 @@ router.get("/export", requireRole("attorney", "admin"), auditAction("export_lead
     return;
   }
 
+  // Hard cap export size so a single CSV download can't pull the entire table
+  // and OOM the API container. 50k is generous for a CRM export; clients that
+  // need more should paginate.
+  const EXPORT_HARD_CAP = 50_000;
   const conditions = buildLeadFilters(parsed.data);
   const leads =
     conditions.length > 0
-      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(sql`${leadsTable.created_at} DESC`)
-      : await db.select().from(leadsTable).orderBy(sql`${leadsTable.created_at} DESC`);
+      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(sql`${leadsTable.created_at} DESC`).limit(EXPORT_HARD_CAP)
+      : await db.select().from(leadsTable).orderBy(sql`${leadsTable.created_at} DESC`).limit(EXPORT_HARD_CAP);
 
   if (leads.length === 0) {
     res.status(200).type("text/csv").send("No leads found");
@@ -121,6 +125,13 @@ router.get("/", requireRole("viewer"), async (req, res) => {
     return;
   }
 
+  // Pagination — read directly from query so we don't need to bump the OpenAPI
+  // spec for this defensive cap. Defaults: 50 rows per page, hard cap 500.
+  const rawLimit = Number(req.query.limit ?? 50);
+  const rawOffset = Number(req.query.offset ?? 0);
+  const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 50, 1), 500);
+  const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
+
   const conditions = buildLeadFilters(parsed.data);
   const user = req.user!;
   if (user.role !== "admin" && user.role !== "attorney" && user.id !== 0) {
@@ -134,8 +145,8 @@ router.get("/", requireRole("viewer"), async (req, res) => {
 
   const leads =
     conditions.length > 0
-      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(sql`${leadsTable.created_at} DESC`)
-      : await db.select().from(leadsTable).orderBy(sql`${leadsTable.created_at} DESC`);
+      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(sql`${leadsTable.created_at} DESC`).limit(limit).offset(offset)
+      : await db.select().from(leadsTable).orderBy(sql`${leadsTable.created_at} DESC`).limit(limit).offset(offset);
 
   res.json(decryptLeadArray(leads));
 });

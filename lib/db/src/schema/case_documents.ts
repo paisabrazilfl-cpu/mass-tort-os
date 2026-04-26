@@ -5,6 +5,7 @@ import {
   varchar,
   text,
   timestamp,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -21,7 +22,9 @@ export const caseDocumentsTable = pgTable("case_documents", {
   content_type: varchar("content_type", { length: 100 }),
   size_bytes: integer("size_bytes"),
   created_at: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  caseIdx: index("case_documents_case_id_idx").on(t.case_id),
+}));
 
 export const insertCaseDocumentSchema = createInsertSchema(caseDocumentsTable).omit({
   id: true,

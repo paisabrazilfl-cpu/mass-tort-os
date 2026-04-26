@@ -16,9 +16,15 @@ router.get("/", requireRole("paralegal"), async (req, res) => {
   if (severity) conditions.push(eq(reviewQueueTable.severity, severity));
   if (entity_type) conditions.push(eq(reviewQueueTable.entity_type, entity_type));
 
+  // Hard cap to keep this endpoint consistent with the other paginated lists
+  // (default 100, max 500) — without this an attacker could request
+  // ?limit=10000000 and force a massive scan.
+  const rawLimit = Number(limit);
+  const cappedLimit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100, 1), 500);
+
   const items = conditions.length > 0
-    ? await db.select().from(reviewQueueTable).where(and(...conditions)).orderBy(desc(reviewQueueTable.created_at)).limit(Number(limit) || 100)
-    : await db.select().from(reviewQueueTable).orderBy(desc(reviewQueueTable.created_at)).limit(Number(limit) || 100);
+    ? await db.select().from(reviewQueueTable).where(and(...conditions)).orderBy(desc(reviewQueueTable.created_at)).limit(cappedLimit)
+    : await db.select().from(reviewQueueTable).orderBy(desc(reviewQueueTable.created_at)).limit(cappedLimit);
 
   const sanitized = items.map((item) => {
     const details = item.details as Record<string, unknown> | null;
