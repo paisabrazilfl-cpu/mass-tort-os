@@ -45,7 +45,7 @@ if ! diff -u "${EMBEDDED}" "${GENERATED}" > /tmp/rbac-matrix.diff; then
   echo "no longer matches the live route tree. Regenerate it with:" >&2
   echo "" >&2
   echo "  pnpm --filter @workspace/api-server exec tsx \\" >&2
-  echo "    artifacts/api-server/${DUMP_SCRIPT} > /tmp/routes-table.md" >&2
+  echo "    ${DUMP_SCRIPT} > /tmp/routes-table.md" >&2
   echo "" >&2
   echo "then replace the table at the end of the audit doc with the new" >&2
   echo "contents of /tmp/routes-table.md and commit." >&2
