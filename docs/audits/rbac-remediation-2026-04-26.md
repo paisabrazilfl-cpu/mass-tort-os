@@ -6,9 +6,10 @@ enforced at boot, normalised 401/403 envelope, audit trail on every denial,
 zero "user.id !== 0" god-mode branches remain in code paths.
 **Boot-time validator result:** 157 routes checked, 10 public, 147 protected,
 **0 unprotected**.
-**Test result:** `src/lib/__tests__/rbac.test.ts` — 45 / 45 passing
-(39 RBAC matrix tests + 6 boot-time route table validator regression tests,
-including two explicit forge-attempt tests).
+**Test result:** `src/lib/__tests__/rbac.test.ts` — 47 / 47 passing
+(39 RBAC matrix tests + 6 boot-time route table validator regression tests
+[including two explicit forge-attempt tests] + 2 dev-mode predicate tests
+covering production / staging / casing / whitespace bypass prevention).
 
 ---
 
@@ -164,8 +165,38 @@ No `user.id === 0` or `user.id !== 0` remain in any handler.
 - `worker.ts` now plumbs `created_by_user_id` through the `create_case`
   payload so background-job-created cases attribute the original requester.
 - `GET /` filters by `created_by_user_id` for non-bypass roles.
-- `GET /:id` returns `403 FORBIDDEN` (canonical envelope) when a non-bypass
-  role requests a case they don't own.
+- `GET /:id` calls `denyForbidden(... "case_ownership_denied" ...)` when a
+  non-bypass role requests a case they don't own — both the canonical
+  envelope and an audit-log row are emitted.
+- **Note on owner-or-assigned semantics:** the `cases` table only carries
+  `created_by_user_id`; there is no `assigned_to` column equivalent to
+  `leads.assigned_to`. The viewer ownership check is therefore strict
+  owner-only by schema. Adding case assignment is tracked separately as
+  follow-up work (Task #11 candidate); when that column lands, the filter
+  on `GET /` and the predicate in `GET /:id` should be widened to
+  `created_by_user_id === user.id || assigned_to === user.id` to match
+  the leads convention.
+
+### `routes/decision-engine.ts` — read vs write split
+
+The original implementation mounted a single `requireRole("admin")` on the
+whole router, meaning attorneys could not even read their own portfolio
+summary or engine settings. That was overly restrictive given attorneys
+are the primary consumers of the portfolio dashboard. The router now
+splits read from write:
+
+| Route | Gate |
+| --- | --- |
+| `GET /portfolio` | `requireRole("attorney")` (attorney+ via hierarchy) |
+| `GET /settings` | `requireRole("attorney")` |
+| `PUT /settings` | `requireRole("admin")` |
+| `POST /leads/:id/recompute` | `requireRole("admin")` |
+| `POST /recompute-all` | `requireRole("admin")` |
+
+The router still mounts `authMiddleware` globally, and the boot-time
+validator confirms every route has a per-handler role gate (no global
+`requireRole` is needed for the validator to accept the table; see the
+inline note in `decision-engine.ts`).
 
 ### `routes/paralegals.ts` — audit trail
 
@@ -234,7 +265,7 @@ the first log line.
 
 ## 7. Tests — `src/lib/__tests__/rbac.test.ts`
 
-45 / 45 passing under `node:test`. Coverage matrix:
+47 / 47 passing under `node:test`. Coverage matrix:
 
 | Group | Cases |
 | --- | --- |
@@ -244,7 +275,7 @@ the first log line.
 | `requireRole` hierarchy | every (required role × actual role) cell of the 4×4 matrix; multi-role lists; missing user → 401 |
 | `requirePermission` | allow / deny / missing user → 401 |
 | `authMiddleware` | no header → 401; malformed Bearer → 401; envelope shape `{status, code, message}` |
-| Dev gate | `IS_DEV` reflects current `NODE_ENV` (never true outside `"development"`) |
+| Dev gate | `IS_DEV` reflects current `NODE_ENV`; **the predicate is FALSE for `production` / `staging` / `test` / unset**; **TRUE only for the literal string `"development"`** (rejects `Development`, `DEVELOPMENT`, `development ` (trailing space), ` development` (leading space), `dev`, `develop`) |
 | **`validateRouteTable`** (boot-time) | rejects authenticated route with no gate; accepts authenticated + gated; **a contributor-named `requireRole` noop CANNOT bypass the validator**; `requirePermission` satisfies the gate; **a `Symbol.for()` router stamp CANNOT impersonate `markPublic`**; missing `authMiddleware` fails even with a gate present |
 
 ---

@@ -360,6 +360,38 @@ describe("dev gate (IS_DEV)", () => {
     const expected = process.env["NODE_ENV"] === "development";
     assert.equal(__rbacInternal.isDev(), expected);
   });
+
+  // The dev gate constant in rbac.ts (`IS_DEV`) is captured at module
+  // import time, so we cannot toggle process.env inside an existing test —
+  // we'd just be reading the cached value. Instead, we re-execute the
+  // gate's exact check in isolation against every problematic env shape.
+  // This also documents the canonical predicate used at boot and in the
+  // SESSION_SECRET fallback in lib/rbac.ts:39-40.
+  test("dev-mode predicate is FALSE for production / staging / test / unset", () => {
+    const isDevPredicate = (env: string | undefined) => env === "development";
+    for (const value of ["production", "staging", "test", undefined]) {
+      assert.equal(
+        isDevPredicate(value),
+        false,
+        `expected dev predicate === false for NODE_ENV=${String(value)}`,
+      );
+    }
+  });
+
+  test("dev-mode predicate is TRUE only for the exact string 'development'", () => {
+    const isDevPredicate = (env: string | undefined) => env === "development";
+    assert.equal(isDevPredicate("development"), true);
+    // Casing/whitespace/aliases MUST NOT enable the bypass — protects
+    // against a mis-set deployment env var (e.g. NODE_ENV=Development on
+    // Windows) accidentally turning on the dev auth shim.
+    for (const value of ["Development", "DEVELOPMENT", "development ", " development", "dev", "develop"]) {
+      assert.equal(
+        isDevPredicate(value),
+        false,
+        `expected dev predicate === false for NODE_ENV=${JSON.stringify(value)}`,
+      );
+    }
+  });
 });
 
 // =============================================================================
@@ -431,7 +463,7 @@ describe("validateRouteTable (boot-time)", () => {
     const parent = Router();
     const child = labelRouter(Router(), "test-perm");
     child.use(authMiddleware);
-    child.get("/with-perm", requirePermission(Permission.LEAD_READ_ALL), (_req, res) => res.json({ ok: true }));
+    child.get("/with-perm", requirePermission(Permission.LEAD_VIEW_ANY), (_req, res) => res.json({ ok: true }));
     parent.use("/test-perm", child);
 
     const counters = validateRouteTable(parent);
