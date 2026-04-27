@@ -206,8 +206,8 @@ export default function Integrations() {
     const res = await apiFetchRaw(`/api/integrations/${id}/test`, { method: "POST" });
     const data = await res.json();
     toast({
-      title: data.success ? "Connection verified" : "Connection failed",
-      description: data.message || `Latency: ${data.latency_ms}ms`,
+      title: data.success ? "Credentials verified" : "Credential check failed",
+      description: data.message,
       variant: data.success ? "default" : "destructive",
     });
     setTesting(null);
@@ -218,7 +218,16 @@ export default function Integrations() {
     setSyncing(id);
     const res = await apiFetchRaw(`/api/integrations/${id}/sync`, { method: "POST" });
     const data = await res.json();
-    toast({ title: "Sync complete", description: `${data.records_synced} records (${data.direction})` });
+    // The backend tells us whether a real sync handler ran. Don't claim
+    // "Sync complete" when no records were actually moved.
+    toast({
+      title: data.implemented === false
+        ? "Sync handler not yet implemented"
+        : `Sync complete — ${data.records_synced} record(s)`,
+      description: data.message
+        || (data.implemented === false ? undefined : `${data.records_synced} records (${data.direction})`),
+      variant: data.implemented === false ? "destructive" : "default",
+    });
     setSyncing(null);
     fetchData();
   };

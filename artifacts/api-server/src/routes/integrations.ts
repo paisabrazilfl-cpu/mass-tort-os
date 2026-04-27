@@ -241,16 +241,26 @@ router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
     }
   }
 
-  await db.update(integrationsTable).set({ last_sync_at: new Date(), updated_at: new Date() }).where(eq(integrationsTable.id, id));
-
+  // NOTE: This endpoint deliberately does NOT make a live HTTP call to the
+  // provider. There is no per-provider ping/echo handler in the codebase yet,
+  // so reporting a fake latency or claiming a successful API round-trip would
+  // mislead the operator. We verify what we *can* verify: that the stored
+  // credentials decrypt cleanly with the id-scoped AAD and that every secret
+  // field the preset declares is populated. That alone is genuinely useful —
+  // it catches encryption-key drift, AAD mismatches, and partial saves.
   const ok = credentialCheck === "ok";
   res.json({
     success: ok,
     credential_check: credentialCheck,
-    latency_ms: Math.floor(Math.random() * 200) + 50,
+    live_api_ping: false,
+    latency_ms: null,
     message: ok
-      ? `Credentials for ${row.provider} are present and decrypt successfully. Live API ping is provider-specific and runs in the dedicated worker.`
-      : `Credential check failed: ${credentialCheck}`,
+      ? `Credentials for ${row.provider} are present and decrypt successfully. Live API ping for this provider is not yet implemented.`
+      : credentialCheck === "no_credentials_stored"
+        ? "No secret credentials are stored for this integration. Reconnect and supply the required keys."
+        : credentialCheck === "decryption_failed"
+          ? `Decryption failed for: ${decryptionErrors.join(", ")}. The encryption key may have changed; reconnect with fresh credentials.`
+          : `Missing required secret(s): ${decryptionErrors.join(", ")}. Reconnect and supply all preset-declared fields.`,
     timestamp: new Date().toISOString(),
   });
 });
@@ -260,10 +270,26 @@ router.post("/:id/sync", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
   const [integration] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!integration) { res.status(404).json({ error: "Not found" }); return; }
 
-  await db.update(integrationsTable).set({ last_sync_at: new Date(), updated_at: new Date() }).where(eq(integrationsTable.id, id));
-  await auditLog("integration", String(req.user?.id || 0), "integration_synced", { id, provider: integration.provider });
+  // Honest stub: there is no per-provider sync handler in this codebase yet,
+  // so we don't pretend to have synced records and we don't bump
+  // `last_sync_at` (that column is meant to reflect a real sync). We still
+  // emit the audit row so a future implementation has a clear hook and so
+  // operators can see who clicked Sync. Records-synced is 0, not a random
+  // number, and `implemented: false` lets the UI render an honest message.
+  await auditLog("integration", String(req.user?.id || 0), "integration_sync_requested", {
+    id,
+    provider: integration.provider,
+    handler_implemented: false,
+  });
 
-  res.json({ success: true, records_synced: Math.floor(Math.random() * 50) + 1, direction: integration.sync_direction, timestamp: new Date().toISOString() });
+  res.json({
+    success: false,
+    implemented: false,
+    records_synced: 0,
+    direction: integration.sync_direction,
+    message: `Sync handler for ${integration.provider} is not yet implemented. The credential vault is wired up — once a provider-specific sync worker is added, this button will run it.`,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 export default router;
