@@ -94,12 +94,12 @@ export async function batchProcessWithSSE<T, R>(
   processor: (item: T, index: number) => Promise<R>,
   sendEvent: (event: { type: string; [key: string]: unknown }) => void,
   options: Omit<BatchOptions, "concurrency" | "onProgress"> = {}
-): Promise<R[]> {
+): Promise<Array<R | undefined>> {
   const { retries = 5, minTimeout = 1000, maxTimeout = 15000 } = options;
 
   sendEvent({ type: "started", total: items.length });
 
-  const results: R[] = [];
+  const results: Array<R | undefined> = [];
   let errors = 0;
 
   for (let index = 0; index < items.length; index++) {
@@ -127,7 +127,7 @@ export async function batchProcessWithSSE<T, R>(
       sendEvent({ type: "progress", index, result });
     } catch (error) {
       errors++;
-      results.push(undefined as R);
+      results.push(undefined);
       sendEvent({
         type: "progress",
         index,

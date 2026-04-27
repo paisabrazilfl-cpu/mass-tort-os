@@ -60,7 +60,7 @@ export default function LeadIntake() {
   // Form Engine. A previous version hardcoded a 10-item list which drifted as
   // soon as an operator added or deactivated a campaign in the admin UI.
   const { data: formConfigsResp } = useGetFormConfigs();
-  const tortCampaigns = ((formConfigsResp ?? []) as Array<{ id: string; label: string; active: boolean }>)
+  const tortCampaigns = (formConfigsResp?.tort_campaigns ?? [])
     .filter((c) => c.active)
     .map((c) => c.label);
   

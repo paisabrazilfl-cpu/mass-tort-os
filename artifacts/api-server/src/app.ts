@@ -1,7 +1,7 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
@@ -33,6 +33,7 @@ app.use(helmet({
 }));
 
 app.disable("x-powered-by");
+app.set("trust proxy", 1);
 
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -40,11 +41,7 @@ app.use(rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later" },
-  keyGenerator: (req) => {
-    return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
-      || req.socket.remoteAddress
-      || "unknown";
-  },
+  keyGenerator: (req) => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
 }));
 
 app.use(

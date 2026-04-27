@@ -3,3 +3,16 @@
 
 # No need to store the pnpm store twice.
 .local
+
+# Runtime-generated private files (PHI/PII risk — never deploy)
+artifacts/api-server/vault
+exports
+attached_assets
+
+# Build artifacts and caches
+node_modules
+dist
+build
+.cache
+.pnpm-store
+coverage
