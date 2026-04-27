@@ -5,19 +5,63 @@ const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12;
 const AUTH_TAG_LENGTH = 16;
 const ENCODING = "base64" as const;
-const CURRENT_KEY_VERSION = 1;
 
+/**
+ * Current encryption key version used for ALL new encrypts.
+ * Decryption is version-aware and uses whatever version is embedded in the
+ * ciphertext header ("enc:v<N>:...").
+ *
+ * Key rotation policy:
+ *  - Bump this constant when introducing a new key.
+ *  - Keep the OLD key available as ENCRYPTION_KEY_V<old> in Replit Secrets
+ *    until every row has been re-encrypted by `scripts/rotate-encryption-key.ts`.
+ *  - Once migration is verified, delete the old version's secret.
+ */
+const CURRENT_KEY_VERSION = 2;
+
+const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
+
+/**
+ * Resolve the AES-256 key for a given version. Strict, no silent fallbacks
+ * across versions (a missing v2 must NOT silently use v1, or you'd produce
+ * v2-tagged ciphertext encrypted with the v1 key — undetectable disaster).
+ *
+ * Backward-compat: v1 also reads the legacy `ENCRYPTION_KEY` name, because
+ * historical deployments stored the v1 key under that bare name (before
+ * versioning existed). This is the ONLY cross-name fallback allowed.
+ */
 function getKey(version?: number): Buffer {
   const keyVersion = version ?? CURRENT_KEY_VERSION;
-  const envName = keyVersion === 1 ? "ENCRYPTION_KEY" : `ENCRYPTION_KEY_V${keyVersion}`;
-  const key = process.env[envName] || process.env.ENCRYPTION_KEY;
-  if (!key) {
-    throw new Error(`${envName} environment variable is required`);
+  const envName = `ENCRYPTION_KEY_V${keyVersion}`;
+  let raw = process.env[envName];
+  if (!raw && keyVersion === 1) {
+    raw = process.env.ENCRYPTION_KEY;
   }
-  if (!/^[0-9a-fA-F]{64}$/.test(key)) {
-    throw new Error(`${envName} must be exactly 64 hex characters (32 bytes for AES-256)`);
+  if (!raw) {
+    throw new Error(
+      `${envName} environment variable is required (no key configured for encryption key version ${keyVersion})`,
+    );
   }
-  return Buffer.from(key, "hex");
+  if (!HEX_64_RE.test(raw)) {
+    throw new Error(
+      `${envName} must be exactly 64 hex characters (32 bytes for AES-256-GCM); got ${raw.length} chars`,
+    );
+  }
+  return Buffer.from(raw, "hex");
+}
+
+export function getCurrentKeyVersion(): number {
+  return CURRENT_KEY_VERSION;
+}
+
+/** Test-only / migration-only: check whether a given version's key is configured. */
+export function isKeyConfigured(version: number): boolean {
+  try {
+    getKey(version);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
