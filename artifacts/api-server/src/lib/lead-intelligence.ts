@@ -1,4 +1,4 @@
-import { anthropic } from "@workspace/integrations-anthropic-ai";
+import { getAnthropicClient } from "@workspace/integrations-anthropic-ai";
 import { logger } from "./logger";
 
 const MODEL = "claude-haiku-4-5";
@@ -300,6 +300,7 @@ Respond in JSON format:
 
 Use precise legal/professional language. No hedging. Be direct and authoritative.`;
 
+    const anthropic = await getAnthropicClient();
     const response = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 300,

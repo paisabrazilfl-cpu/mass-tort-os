@@ -1,4 +1,4 @@
-import { anthropic } from "@workspace/integrations-anthropic-ai";
+import { getAnthropicClient } from "@workspace/integrations-anthropic-ai";
 import { type ExtractedFeatures } from "./scoring";
 import { logger } from "./logger";
 
@@ -25,6 +25,7 @@ DOCUMENT TEXT:
 ${truncated}`;
 
   try {
+    const anthropic = await getAnthropicClient();
     const response = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 8192,

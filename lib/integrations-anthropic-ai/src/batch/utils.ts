@@ -10,11 +10,12 @@ import pRetry, { AbortError } from "p-retry";
  * USAGE:
  * ```typescript
  * import { batchProcess } from "@workspace/integrations-anthropic-ai/batch";
- * import { anthropic } from "@workspace/integrations-anthropic-ai";
+ * import { getAnthropicClient } from "@workspace/integrations-anthropic-ai";
  *
  * const results = await batchProcess(
  *   artworks,
  *   async (artwork) => {
+ *     const anthropic = await getAnthropicClient();
  *     const message = await anthropic.messages.create({
  *       model: "claude-sonnet-4-6",
  *       max_tokens: 8192,

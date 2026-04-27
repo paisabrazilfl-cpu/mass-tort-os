@@ -1,4 +1,4 @@
-import { anthropic } from "@workspace/integrations-anthropic-ai";
+import { getAnthropicClient } from "@workspace/integrations-anthropic-ai";
 import { logger } from "./logger";
 
 const MODEL = "claude-haiku-4-5";
@@ -47,6 +47,7 @@ export async function extractMedicalFields(
   ) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
   try {
+    const anthropic = await getAnthropicClient();
     const response = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 4096,
@@ -77,6 +78,7 @@ export async function extractMedicalFields(
 
 export async function analyzeDocumentText(text: string): Promise<MedicalRecordFields> {
   try {
+    const anthropic = await getAnthropicClient();
     const response = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 4096,

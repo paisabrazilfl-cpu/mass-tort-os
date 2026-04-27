@@ -4,7 +4,7 @@
  *
  * Output: Legora Grid row format matching the MTOS OCR spec.
  */
-import { anthropic } from "@workspace/integrations-anthropic-ai";
+import { getAnthropicClient } from "@workspace/integrations-anthropic-ai";
 import { logger } from "./logger";
 
 const MODEL = "claude-haiku-4-5";
@@ -48,6 +48,7 @@ export async function extractOcrData(
   ) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
   try {
+    const anthropic = await getAnthropicClient();
     const response = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 2048,
