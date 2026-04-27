@@ -53,6 +53,34 @@ function getStatusBadge(status: string | undefined) {
   }
 }
 
+function SearchScopeBadge({ result }: { result: any }) {
+  const scope = result?.search_scope as string | undefined;
+  const stateLabel = result?.searched_state_label as string | null | undefined;
+  const stateCode = result?.searched_state as string | null | undefined;
+  const courts = (result?.searched_courts as string[] | undefined) || [];
+
+  if (!scope) return null;
+
+  let label: string;
+  let tone: string;
+  if (scope === "state" && stateLabel) {
+    label = `Searched: ${stateLabel} federal courts (${courts.length})`;
+    tone = "bg-blue-500/10 text-blue-700 border-blue-500/20";
+  } else if (scope === "national-fallback") {
+    label = `Searched: nationwide (state filter "${stateCode ?? ""}" not applied)`;
+    tone = "bg-amber-500/10 text-amber-700 border-amber-500/20";
+  } else {
+    label = "Searched: nationwide federal courts";
+    tone = "bg-muted text-muted-foreground border";
+  }
+  return (
+    <Badge variant="outline" className={tone}>
+      <MapPin className="h-3 w-3 mr-1" />
+      {label}
+    </Badge>
+  );
+}
+
 function getSeverityBadge(severity: string | undefined) {
   switch (severity) {
     case "low":
@@ -461,6 +489,19 @@ export default function FormEngine() {
                       <p className="text-sm bg-background p-3 rounded border text-muted-foreground">
                         {bgCheckResult.summary}
                       </p>
+                      <div className="flex flex-wrap gap-3 text-xs">
+                        <SearchScopeBadge result={bgCheckResult} />
+                      </div>
+                      {bgCheckResult.notes && bgCheckResult.notes.length > 0 && (
+                        <ul className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 space-y-1">
+                          {bgCheckResult.notes.map((n: string, i: number) => (
+                            <li key={i} className="flex gap-1.5">
+                              <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                              <span>{n}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                     
                     {bgCheckResult.records && bgCheckResult.records.length > 0 && (
@@ -532,6 +573,19 @@ export default function FormEngine() {
                       <p className="text-sm bg-background p-3 rounded border text-muted-foreground">
                         {leadBgCheckResult.summary}
                       </p>
+                      <div className="flex flex-wrap gap-3 text-xs">
+                        <SearchScopeBadge result={leadBgCheckResult} />
+                      </div>
+                      {leadBgCheckResult.notes && leadBgCheckResult.notes.length > 0 && (
+                        <ul className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 space-y-1">
+                          {leadBgCheckResult.notes.map((n: string, i: number) => (
+                            <li key={i} className="flex gap-1.5">
+                              <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                              <span>{n}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                     
                     {leadBgCheckResult.records && leadBgCheckResult.records.length > 0 && (

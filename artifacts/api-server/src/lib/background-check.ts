@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { getCourtsForState, getStateLabel, normalizeStateCode } from "./courtlistener-courts";
 
 export interface BackgroundCheckResult {
   status: "clean" | "flagged" | "not_found" | "error";
@@ -6,6 +7,16 @@ export interface BackgroundCheckResult {
   checked_at: string;
   records: BackgroundRecord[];
   summary: string;
+  /** Which jurisdictional scope was searched. */
+  search_scope: "state" | "national" | "national-fallback";
+  /** The 2-letter state code that was effectively used (null if none). */
+  searched_state: string | null;
+  /** Human-readable label for `searched_state`. */
+  searched_state_label: string | null;
+  /** CourtListener court IDs queried (empty when nationwide). */
+  searched_courts: string[];
+  /** Operator-facing notes about source health, fallbacks, or limitations. */
+  notes: string[];
 }
 
 export interface BackgroundRecord {
@@ -25,22 +36,52 @@ export async function runBackgroundCheck(person: {
 }): Promise<BackgroundCheckResult> {
   const checkedAt = new Date().toISOString();
   const fullName = `${person.first_name} ${person.last_name}`;
+  const notes: string[] = [];
+
+  // Resolve search scope from the state input.
+  const stateCode = normalizeStateCode(person.state);
+  const stateLabel = getStateLabel(person.state);
+  let courts = stateCode ? getCourtsForState(stateCode) : [];
+  let searchScope: BackgroundCheckResult["search_scope"];
+
+  if (person.state && !stateCode) {
+    // Caller provided a state value we don't recognize — fall back nationwide
+    // and tell the operator. This prevents silently dropping the filter.
+    searchScope = "national-fallback";
+    notes.push(
+      `Provided state "${person.state}" is not a recognized US state — searched nationwide federal courts instead.`,
+    );
+  } else if (stateCode && courts.length === 0) {
+    searchScope = "national-fallback";
+    notes.push(
+      `No federal court coverage in CourtListener for ${stateLabel ?? stateCode} — searched nationwide federal courts instead.`,
+    );
+  } else if (stateCode && courts.length > 0) {
+    searchScope = "state";
+  } else {
+    searchScope = "national";
+  }
 
   try {
     const results: BackgroundRecord[] = [];
-
     let sourcesReached = 0;
 
-    const courtRecords = await searchCourtRecords(person);
+    const courtRecords = await searchCourtRecords(person, courts);
     if (courtRecords !== null) {
       sourcesReached++;
       results.push(...courtRecords);
+    } else {
+      notes.push("Court records source (CourtListener) was unreachable.");
     }
 
     const ofacResult = await checkOFACList(person);
-    if (ofacResult !== null) {
+    if (ofacResult.status === "ok") {
       sourcesReached++;
-      results.push(...ofacResult);
+      results.push(...ofacResult.records);
+    } else {
+      // OFAC check is "best effort" — degrade gracefully so the rest of the
+      // pipeline can still succeed, but be honest in the audit trail.
+      notes.push(ofacResult.note);
     }
 
     if (sourcesReached === 0) {
@@ -50,6 +91,11 @@ export async function runBackgroundCheck(person: {
         checked_at: checkedAt,
         records: [],
         summary: `All background check sources unreachable for ${fullName}`,
+        search_scope: searchScope,
+        searched_state: stateCode,
+        searched_state_label: stateLabel,
+        searched_courts: courts,
+        notes,
       };
     }
 
@@ -58,9 +104,10 @@ export async function runBackgroundCheck(person: {
     const nonCourtRecords = results.filter((r) => r.type !== "COURT_RECORD");
     const hasFlaggable = partyRecords.length > 0 || nonCourtRecords.length > 0;
     const status = hasFlaggable ? "flagged" : "clean";
+
     const parts: string[] = [];
     if (partyRecords.length > 0) {
-      parts.push(`${partyRecords.length} case(s) as party`);
+      parts.push(`${partyRecords.length} case(s) as named party`);
     }
     if (mentionRecords.length > 0) {
       parts.push(`${mentionRecords.length} mention(s) in other cases`);
@@ -68,9 +115,19 @@ export async function runBackgroundCheck(person: {
     if (nonCourtRecords.length > 0) {
       parts.push(`${nonCourtRecords.length} non-court record(s)`);
     }
-    const summary = parts.length > 0
+
+    let scopeBlurb: string;
+    if (searchScope === "state" && stateLabel) {
+      scopeBlurb = `${stateLabel} federal courts`;
+    } else if (searchScope === "national-fallback") {
+      scopeBlurb = "nationwide federal courts (state filter not applied)";
+    } else {
+      scopeBlurb = "nationwide federal courts";
+    }
+    const headline = parts.length > 0
       ? `${parts.join(", ")} for ${fullName}`
-      : `No records found for ${fullName}`;
+      : `No federal records found for ${fullName}`;
+    const summary = `${headline} (searched ${scopeBlurb})`;
 
     return {
       status,
@@ -78,6 +135,11 @@ export async function runBackgroundCheck(person: {
       checked_at: checkedAt,
       records: results,
       summary,
+      search_scope: searchScope,
+      searched_state: stateCode,
+      searched_state_label: stateLabel,
+      searched_courts: courts,
+      notes,
     };
   } catch (err) {
     logger.error({ err, person: fullName }, "Background check failed");
@@ -87,6 +149,11 @@ export async function runBackgroundCheck(person: {
       checked_at: checkedAt,
       records: [],
       summary: `Background check error for ${fullName}: ${err instanceof Error ? err.message : "Unknown error"}`,
+      search_scope: searchScope,
+      searched_state: stateCode,
+      searched_state_label: stateLabel,
+      searched_courts: courts,
+      notes,
     };
   }
 }
@@ -128,6 +195,25 @@ interface CourtResult {
   }>;
 }
 
+/**
+ * Returns true when first-name evidence appears anywhere in the result —
+ * case name, party list, or RECAP document text. Used to demote pure
+ * surname-only matches that would otherwise produce false positives for
+ * common surnames (e.g. "X v. Pereira" without "Giselle" anywhere).
+ */
+function hasFirstNameEvidence(
+  result: CourtResult,
+  firstName: string,
+  lastName: string,
+): boolean {
+  const haystack = [
+    result.caseName || "",
+    ...(result.party || []),
+    ...(result.recap_documents || []).map((d) => `${d.description || ""} ${d.snippet || ""}`),
+  ].join(" ");
+  return textContainsName(haystack, firstName, lastName) !== false;
+}
+
 function lastNameIsDefendant(
   result: CourtResult,
   lastName: string,
@@ -156,22 +242,35 @@ function lastNameIsDefendant(
   return false;
 }
 
-function nameMatchesResult(
+/**
+ * Decide whether a CourtListener result actually matches the person we're
+ * checking. Returns confidence + role; `match=false` means skip entirely.
+ *
+ * Critical: we never claim "party" role purely on a last-name "v. <ln>"
+ * pattern — common surnames (Pereira, Smith, Garcia) generate hundreds of
+ * unrelated "X v. Pereira" hits. We require first-name evidence somewhere
+ * in the result before claiming the person is a named party.
+ */
+export function nameMatchesResult(
   result: CourtResult,
   firstName: string,
   lastName: string,
 ): { match: boolean; confidence: "exact" | "strong" | "none"; role: "party" | "mentioned" } {
   const caseName = result.caseName || "";
+
+  // 1. Direct first+last in case name → exact party match
   const caseMatch = textContainsName(caseName, firstName, lastName);
   if (caseMatch === "exact") return { match: true, confidence: "exact", role: "party" };
   if (caseMatch === "initial") return { match: true, confidence: "strong", role: "party" };
 
+  // 2. Split case sides ("Smith v. Jones") and check each for first+last
   const caseParties = caseName.split(/\s+v\.?\s+|\s+vs\.?\s+|\s+and\s+/i);
   for (const party of caseParties) {
     const pm = textContainsName(party.trim(), firstName, lastName);
     if (pm) return { match: true, confidence: pm === "exact" ? "exact" : "strong", role: "party" };
   }
 
+  // 3. Party list explicitly contains both names
   if (result.party && Array.isArray(result.party)) {
     for (const p of result.party) {
       const pm = textContainsName(p, firstName, lastName);
@@ -179,10 +278,20 @@ function nameMatchesResult(
     }
   }
 
+  // 4. "X v. <lastName>" pattern — only count as party if first name appears
+  //    elsewhere in the result (party list or recap docs). Otherwise it's
+  //    almost certainly a different person with the same surname.
   if (lastNameIsDefendant(result, lastName)) {
-    return { match: true, confidence: "strong", role: "party" };
+    if (hasFirstNameEvidence(result, firstName, lastName)) {
+      return { match: true, confidence: "strong", role: "party" };
+    }
+    // Surname-only — skip entirely instead of producing a false-positive
+    // medium-severity "named party" record.
+    return { match: false, confidence: "none", role: "mentioned" };
   }
 
+  // 5. Mention in RECAP document text — low-severity reference, only when
+  //    BOTH names appear together (not just the surname).
   if (result.recap_documents && Array.isArray(result.recap_documents)) {
     for (const doc of result.recap_documents) {
       const searchable = `${doc.description || ""} ${doc.snippet || ""}`;
@@ -196,34 +305,38 @@ function nameMatchesResult(
 
 async function fetchCourtListenerResults(
   query: string,
-  stateParam: string,
-): Promise<CourtResult[]> {
+  courtFilter: string,
+): Promise<CourtResult[] | null> {
+  const url = `https://www.courtlistener.com/api/rest/v4/search/?q=${encodeURIComponent(query)}&type=r${courtFilter}&format=json`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
-    const url = `https://www.courtlistener.com/api/rest/v4/search/?q=${encodeURIComponent(query)}&type=r${stateParam}&format=json`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
     const response = await fetch(url, {
       headers: { "User-Agent": "MTOS-CRM/1.0 (Legal Background Check)" },
       signal: controller.signal,
     });
     clearTimeout(timeout);
-    if (!response.ok) return [];
+    if (!response.ok) {
+      logger.warn({ status: response.status, query }, "CourtListener returned non-OK status");
+      return null;
+    }
     const data = (await response.json()) as { results?: CourtResult[] };
     return data.results || [];
-  } catch {
-    return [];
+  } catch (err) {
+    clearTimeout(timeout);
+    logger.warn({ err, query }, "CourtListener fetch failed");
+    return null;
   }
 }
 
-async function searchCourtRecords(person: {
-  first_name: string;
-  last_name: string;
-  state?: string;
-}): Promise<BackgroundRecord[] | null> {
+async function searchCourtRecords(
+  person: { first_name: string; last_name: string },
+  courts: string[],
+): Promise<BackgroundRecord[] | null> {
   const firstName = person.first_name.trim();
   const lastName = person.last_name.trim();
-  const stateParam = person.state
-    ? `&state=${encodeURIComponent(person.state)}`
+  const courtFilter = courts.length > 0
+    ? `&court=${encodeURIComponent(courts.join(","))}`
     : "";
 
   const exactSearches = [
@@ -235,8 +348,13 @@ async function searchCourtRecords(person: {
 
   const seen = new Set<string>();
   const records: BackgroundRecord[] = [];
+  let anySourceReached = false;
 
-  function buildRecord(result: CourtResult, role: "party" | "mentioned", confidence: "exact" | "strong" | "none"): BackgroundRecord {
+  function buildRecord(
+    result: CourtResult,
+    role: "party" | "mentioned",
+    confidence: "exact" | "strong" | "none",
+  ): BackgroundRecord {
     const caseName = result.caseName || "Court record found";
     let severity: "low" | "medium" | "high";
     let description: string;
@@ -247,7 +365,7 @@ async function searchCourtRecords(person: {
         description = caseName;
       } else {
         severity = "medium";
-        description = `${caseName} (last name match — verify identity)`;
+        description = `${caseName} (name-initial match — verify identity)`;
       }
     } else {
       severity = "low";
@@ -264,24 +382,28 @@ async function searchCourtRecords(person: {
     };
   }
 
-  try {
-    const exactBatches = await Promise.all(
-      exactSearches.map((q) => fetchCourtListenerResults(q, stateParam)),
-    );
-    for (const batch of exactBatches) {
-      for (const result of batch) {
-        const docketNum = result.docketNumber || "";
-        const caseName = result.caseName || "";
-        const key = `${docketNum}|${caseName}|${result.dateFiled || ""}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+  const exactBatches = await Promise.all(
+    exactSearches.map((q) => fetchCourtListenerResults(q, courtFilter)),
+  );
+  for (const batch of exactBatches) {
+    if (batch === null) continue;
+    anySourceReached = true;
+    for (const result of batch) {
+      const docketNum = result.docketNumber || "";
+      const caseName = result.caseName || "";
+      const key = `${docketNum}|${caseName}|${result.dateFiled || ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-        const { confidence, role } = nameMatchesResult(result, firstName, lastName);
-        records.push(buildRecord(result, role, confidence));
-      }
+      const { match, confidence, role } = nameMatchesResult(result, firstName, lastName);
+      if (!match) continue;
+      records.push(buildRecord(result, role, confidence));
     }
+  }
 
-    const defResults = await fetchCourtListenerResults(defendantSearch, stateParam);
+  const defResults = await fetchCourtListenerResults(defendantSearch, courtFilter);
+  if (defResults !== null) {
+    anySourceReached = true;
     for (const result of defResults) {
       const docketNum = result.docketNumber || "";
       const caseName = result.caseName || "";
@@ -289,32 +411,31 @@ async function searchCourtRecords(person: {
       if (seen.has(key)) continue;
       seen.add(key);
 
+      // Require BOTH (a) lastName-as-defendant pattern AND (b) first-name
+      // evidence somewhere. Surname-only hits are dropped — they're the
+      // primary source of false positives for common surnames.
       if (!lastNameIsDefendant(result, lastName)) continue;
+      if (!hasFirstNameEvidence(result, firstName, lastName)) continue;
 
-      const hasFirstNameAnywhere = textContainsName(
-        `${caseName} ${(result.party || []).join(" ")} ${(result.recap_documents || []).map(d => `${d.description || ""} ${d.snippet || ""}`).join(" ")}`,
-        firstName,
-        lastName,
-      );
-
-      const otherFirstNames = (result.party || []).some(p => {
+      // Skip if a different person with the same surname is in the party
+      // list (e.g., "Pereira, Maria" when we're checking "Pereira, Giselle").
+      const otherFirstNames = (result.party || []).some((p) => {
         const pl = p.toLowerCase().trim();
-        return pl !== lastName.toLowerCase() &&
-          pl !== "united states" && pl !== "usa" &&
-          pl.includes(lastName.toLowerCase()) &&
-          !pl.includes(firstName.toLowerCase());
+        return pl !== lastName.toLowerCase()
+          && pl !== "united states"
+          && pl !== "usa"
+          && pl.includes(lastName.toLowerCase())
+          && !pl.includes(firstName.toLowerCase());
       });
-
       if (otherFirstNames) continue;
 
-      if (hasFirstNameAnywhere) {
-        records.push(buildRecord(result, "party", "exact"));
-      } else {
-        records.push(buildRecord(result, "party", "strong"));
-      }
+      records.push(buildRecord(result, "party", "exact"));
     }
+  }
 
-    const broadResults = await fetchCourtListenerResults(broadSearch, stateParam);
+  const broadResults = await fetchCourtListenerResults(broadSearch, courtFilter);
+  if (broadResults !== null) {
+    anySourceReached = true;
     for (const result of broadResults) {
       const docketNum = result.docketNumber || "";
       const caseName = result.caseName || "";
@@ -326,57 +447,92 @@ async function searchCourtRecords(person: {
       if (!match) continue;
       records.push(buildRecord(result, role, confidence));
     }
-  } catch (err) {
-    logger.warn({ err }, "Court record search failed — continuing");
-    return null;
   }
 
-  if (records.length === 0) {
-    const fallback = await fetchCourtListenerResults(lastName, stateParam);
-    for (const result of fallback) {
-      const { match, confidence, role } = nameMatchesResult(result, firstName, lastName);
-      if (!match) continue;
-      records.push(buildRecord(result, role, confidence));
-    }
+  if (!anySourceReached) return null;
+
+  // Deduplicate again by description+jurisdiction in case multiple search
+  // strategies surfaced the same case under slightly different docket numbers.
+  const finalSeen = new Set<string>();
+  const deduped: BackgroundRecord[] = [];
+  for (const rec of records) {
+    const key = `${rec.description}|${rec.jurisdiction || ""}|${rec.date || ""}`;
+    if (finalSeen.has(key)) continue;
+    finalSeen.add(key);
+    deduped.push(rec);
   }
 
-  return records.slice(0, 10);
+  return deduped.slice(0, 10);
 }
 
+type OFACOutcome =
+  | { status: "ok"; records: BackgroundRecord[] }
+  | { status: "unconfigured"; note: string }
+  | { status: "error"; note: string };
+
+/**
+ * OFAC sanctions check. The original implementation hit
+ * `search.ofac-api.com/v3` — a third-party paid service that returns 405
+ * without authentication, which the previous code silently treated as
+ * "0 matches found." This is now honest about its state:
+ *
+ *   - If `OFAC_API_KEY` is not set, return `unconfigured` so the caller
+ *     records "OFAC check skipped" instead of fabricating a clean result.
+ *   - If the call fails or returns non-OK, return `error` with detail.
+ *   - Only return `ok` when the source actually responded with a payload.
+ *
+ * The Treasury OFAC SDN list itself is published as an XML/CSV download
+ * (https://www.treasury.gov/ofac/downloads/sdn.xml), which would be the
+ * proper free path — left as a follow-up because it requires bundling and
+ * refreshing a ~50MB dataset.
+ */
 async function checkOFACList(person: {
   first_name: string;
   last_name: string;
-}): Promise<BackgroundRecord[] | null> {
-  const records: BackgroundRecord[] = [];
+}): Promise<OFACOutcome> {
+  const apiKey = process.env.OFAC_API_KEY;
+  if (!apiKey) {
+    return {
+      status: "unconfigured",
+      note: "OFAC sanctions check skipped — no provider configured (set OFAC_API_KEY).",
+    };
+  }
 
   try {
     const name = encodeURIComponent(`${person.first_name} ${person.last_name}`);
-    const url = `https://search.ofac-api.com/v3?name=${name}&minScore=95`;
+    const url = `https://search.ofac-api.com/v3?name=${name}&minScore=95&apikey=${encodeURIComponent(apiKey)}`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
-
-    const response = await fetch(url, {
-      signal: controller.signal,
-    });
+    const response = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
 
-    if (response.ok) {
-      const data = await response.json() as { matches?: Array<{ name?: string; programs?: string[]; score?: number }> };
-      if (data.matches && Array.isArray(data.matches) && data.matches.length > 0) {
-        for (const match of data.matches.slice(0, 5)) {
-          records.push({
-            type: "OFAC_SANCTIONS",
-            description: `OFAC match: ${match.name || "Unknown"} (Programs: ${match.programs?.join(", ") || "N/A"})`,
-            severity: "high",
-          });
-        }
+    if (!response.ok) {
+      return {
+        status: "error",
+        note: `OFAC sanctions check unavailable (provider returned HTTP ${response.status}).`,
+      };
+    }
+
+    const data = await response.json() as {
+      matches?: Array<{ name?: string; programs?: string[]; score?: number }>;
+    };
+    const records: BackgroundRecord[] = [];
+    if (data.matches && Array.isArray(data.matches) && data.matches.length > 0) {
+      for (const match of data.matches.slice(0, 5)) {
+        records.push({
+          type: "OFAC_SANCTIONS",
+          description: `OFAC match: ${match.name || "Unknown"} (Programs: ${match.programs?.join(", ") || "N/A"})`,
+          severity: "high",
+        });
       }
     }
+    return { status: "ok", records };
   } catch (err) {
-    logger.warn({ err }, "OFAC check failed — continuing");
-    return null;
+    logger.warn({ err }, "OFAC check failed");
+    return {
+      status: "error",
+      note: `OFAC sanctions check unavailable (${err instanceof Error ? err.message : "unknown error"}).`,
+    };
   }
-
-  return records;
 }

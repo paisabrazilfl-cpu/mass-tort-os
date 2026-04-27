@@ -1234,9 +1234,31 @@ export const RunBackgroundCheckResponse = zod.object({
       date: zod.string().nullish(),
       jurisdiction: zod.string().nullish(),
       severity: zod.enum(["low", "medium", "high"]),
+      role: zod.enum(["party", "mentioned"]).nullish(),
     }),
   ),
   summary: zod.string(),
+  search_scope: zod
+    .enum(["state", "national", "national-fallback"])
+    .describe(
+      "Which jurisdictional scope was searched.\n  - `state`: limited to federal courts in `searched_state`.\n  - `national`: no state was provided, searched nationwide.\n  - `national-fallback`: state was provided but unrecognized, fell back to nationwide.\n",
+    ),
+  searched_state: zod
+    .string()
+    .nullable()
+    .describe("2-letter state code that was effectively used."),
+  searched_state_label: zod
+    .string()
+    .nullable()
+    .describe("Human-readable state name for `searched_state`."),
+  searched_courts: zod
+    .array(zod.string())
+    .describe("CourtListener court IDs queried (empty when nationwide)."),
+  notes: zod
+    .array(zod.string())
+    .describe(
+      "Operator-facing notes about source health, fallbacks, or limitations.",
+    ),
 });
 
 /**
@@ -1257,9 +1279,31 @@ export const RunLeadBackgroundCheckResponse = zod.object({
       date: zod.string().nullish(),
       jurisdiction: zod.string().nullish(),
       severity: zod.enum(["low", "medium", "high"]),
+      role: zod.enum(["party", "mentioned"]).nullish(),
     }),
   ),
   summary: zod.string(),
+  search_scope: zod
+    .enum(["state", "national", "national-fallback"])
+    .describe(
+      "Which jurisdictional scope was searched.\n  - `state`: limited to federal courts in `searched_state`.\n  - `national`: no state was provided, searched nationwide.\n  - `national-fallback`: state was provided but unrecognized, fell back to nationwide.\n",
+    ),
+  searched_state: zod
+    .string()
+    .nullable()
+    .describe("2-letter state code that was effectively used."),
+  searched_state_label: zod
+    .string()
+    .nullable()
+    .describe("Human-readable state name for `searched_state`."),
+  searched_courts: zod
+    .array(zod.string())
+    .describe("CourtListener court IDs queried (empty when nationwide)."),
+  notes: zod
+    .array(zod.string())
+    .describe(
+      "Operator-facing notes about source health, fallbacks, or limitations.",
+    ),
 });
 
 /**

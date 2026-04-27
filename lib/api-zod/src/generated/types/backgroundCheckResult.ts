@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { BackgroundCheckResultRecordsItem } from "./backgroundCheckResultRecordsItem";
+import type { BackgroundCheckResultSearchScope } from "./backgroundCheckResultSearchScope";
 import type { BackgroundCheckResultStatus } from "./backgroundCheckResultStatus";
 
 export interface BackgroundCheckResult {
@@ -14,4 +15,18 @@ export interface BackgroundCheckResult {
   checked_at: string;
   records: BackgroundCheckResultRecordsItem[];
   summary: string;
+  /** Which jurisdictional scope was searched.
+  - `state`: limited to federal courts in `searched_state`.
+  - `national`: no state was provided, searched nationwide.
+  - `national-fallback`: state was provided but unrecognized, fell back to nationwide.
+ */
+  search_scope: BackgroundCheckResultSearchScope;
+  /** 2-letter state code that was effectively used. */
+  searched_state: string | null;
+  /** Human-readable state name for `searched_state`. */
+  searched_state_label: string | null;
+  /** CourtListener court IDs queried (empty when nationwide). */
+  searched_courts: string[];
+  /** Operator-facing notes about source health, fallbacks, or limitations. */
+  notes: string[];
 }

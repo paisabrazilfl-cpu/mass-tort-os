@@ -3021,7 +3021,47 @@ components:
               severity:
                 type: string
                 enum: [low, medium, high]
+              role:
+                type: string
+                enum: [party, mentioned]
+                nullable: true
             required: [type, description, severity]
         summary:
           type: string
-      required: [status, source, checked_at, records, summary]
+        search_scope:
+          type: string
+          enum: [state, national, national-fallback]
+          description: |
+            Which jurisdictional scope was searched.
+              - `state`: limited to federal courts in `searched_state`.
+              - `national`: no state was provided, searched nationwide.
+              - `national-fallback`: state was provided but unrecognized, fell back to nationwide.
+        searched_state:
+          type: string
+          nullable: true
+          description: 2-letter state code that was effectively used.
+        searched_state_label:
+          type: string
+          nullable: true
+          description: Human-readable state name for `searched_state`.
+        searched_courts:
+          type: array
+          items:
+            type: string
+          description: CourtListener court IDs queried (empty when nationwide).
+        notes:
+          type: array
+          items:
+            type: string
+          description: Operator-facing notes about source health, fallbacks, or limitations.
+      required:
+        - status
+        - source
+        - checked_at
+        - records
+        - summary
+        - search_scope
+        - searched_state
+        - searched_state_label
+        - searched_courts
+        - notes

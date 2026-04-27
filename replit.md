@@ -49,7 +49,7 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **Image Processing**: Sharp
 *   **Validation**: Zod
 *   **API Codegen**: Orval
-*   **Background Checks**: CourtListener, OFAC sanctions list
+*   **Background Checks**: CourtListener (federal courts only — see `lib/courtlistener-courts.ts` for state→court_id catalog; CourtListener has no `state=` query param so state filtering is implemented via `court=<csv>`), OFAC sanctions list (best-effort; gated on `OFAC_API_KEY` env — when unset the check is honestly skipped via the `notes` field instead of fabricating a clean result)
 *   **NPI Lookup**: NPPES API (CMS NPI Registry)
 *   **Security**: Helmet.js, express-rate-limit
 *   **News Feeds**: Google News RSS, Yahoo Finance RSS, MarketWatch RSS, CNBC RSS

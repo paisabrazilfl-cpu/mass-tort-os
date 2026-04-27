@@ -621,6 +621,11 @@ export default function LeadDetail() {
                 const bgData = JSON.parse(lead.background_check_data as string) as {
                   summary?: string;
                   checked_at?: string;
+                  search_scope?: "state" | "national" | "national-fallback";
+                  searched_state?: string | null;
+                  searched_state_label?: string | null;
+                  searched_courts?: string[];
+                  notes?: string[];
                   records?: Array<{
                     type: string;
                     description: string;
@@ -630,9 +635,24 @@ export default function LeadDetail() {
                     role?: string;
                   }>;
                 };
-                if (!bgData.records || bgData.records.length === 0) return null;
-                const partyRecords = bgData.records.filter(r => r.role === "party");
-                const mentionRecords = bgData.records.filter(r => r.role === "mentioned");
+                const partyRecords = (bgData.records ?? []).filter(r => r.role === "party");
+                const mentionRecords = (bgData.records ?? []).filter(r => r.role === "mentioned");
+                const hasNotes = (bgData.notes ?? []).length > 0;
+                const hasRecords = (bgData.records ?? []).length > 0;
+                if (!hasRecords && !hasNotes && !bgData.search_scope) return null;
+
+                let scopeLabel: string | null = null;
+                let scopeTone = "bg-muted text-muted-foreground border";
+                if (bgData.search_scope === "state" && bgData.searched_state_label) {
+                  scopeLabel = `Searched: ${bgData.searched_state_label} federal courts (${bgData.searched_courts?.length ?? 0})`;
+                  scopeTone = "bg-blue-500/10 text-blue-700 border-blue-500/20";
+                } else if (bgData.search_scope === "national-fallback") {
+                  scopeLabel = `Searched: nationwide (state filter "${bgData.searched_state ?? ""}" not applied)`;
+                  scopeTone = "bg-amber-500/10 text-amber-700 border-amber-500/20";
+                } else if (bgData.search_scope === "national") {
+                  scopeLabel = "Searched: nationwide federal courts";
+                }
+
                 return (
                   <Card>
                     <CardHeader>
@@ -643,6 +663,16 @@ export default function LeadDetail() {
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
+                      {scopeLabel && (
+                        <Badge variant="outline" className={`${scopeTone} text-xs`}>{scopeLabel}</Badge>
+                      )}
+                      {hasNotes && (
+                        <ul className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 space-y-1">
+                          {bgData.notes!.map((n, i) => (
+                            <li key={`note-${i}`}>• {n}</li>
+                          ))}
+                        </ul>
+                      )}
                       {partyRecords.length > 0 && (
                         <div className="space-y-2">
                           <div className="text-sm font-semibold text-red-600">Named Party ({partyRecords.length})</div>

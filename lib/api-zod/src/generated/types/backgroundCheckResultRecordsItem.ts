@@ -5,6 +5,7 @@
  * Mass Tort Operating System API
  * OpenAPI spec version: 0.1.0
  */
+import type { BackgroundCheckResultRecordsItemRole } from "./backgroundCheckResultRecordsItemRole";
 import type { BackgroundCheckResultRecordsItemSeverity } from "./backgroundCheckResultRecordsItemSeverity";
 
 export type BackgroundCheckResultRecordsItem = {
@@ -13,4 +14,5 @@ export type BackgroundCheckResultRecordsItem = {
   date?: string | null;
   jurisdiction?: string | null;
   severity: BackgroundCheckResultRecordsItemSeverity;
+  role?: BackgroundCheckResultRecordsItemRole;
 };

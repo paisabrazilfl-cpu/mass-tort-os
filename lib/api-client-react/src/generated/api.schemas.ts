@@ -852,13 +852,39 @@ export const BackgroundCheckResultRecordsItemSeverity = {
   high: "high",
 } as const;
 
+export type BackgroundCheckResultRecordsItemRole =
+  | (typeof BackgroundCheckResultRecordsItemRole)[keyof typeof BackgroundCheckResultRecordsItemRole]
+  | null;
+
+export const BackgroundCheckResultRecordsItemRole = {
+  party: "party",
+  mentioned: "mentioned",
+} as const;
+
 export type BackgroundCheckResultRecordsItem = {
   type: string;
   description: string;
   date?: string | null;
   jurisdiction?: string | null;
   severity: BackgroundCheckResultRecordsItemSeverity;
+  role?: BackgroundCheckResultRecordsItemRole;
 };
+
+/**
+ * Which jurisdictional scope was searched.
+  - `state`: limited to federal courts in `searched_state`.
+  - `national`: no state was provided, searched nationwide.
+  - `national-fallback`: state was provided but unrecognized, fell back to nationwide.
+
+ */
+export type BackgroundCheckResultSearchScope =
+  (typeof BackgroundCheckResultSearchScope)[keyof typeof BackgroundCheckResultSearchScope];
+
+export const BackgroundCheckResultSearchScope = {
+  state: "state",
+  national: "national",
+  "national-fallback": "national-fallback",
+} as const;
 
 export interface BackgroundCheckResult {
   status: BackgroundCheckResultStatus;
@@ -866,6 +892,20 @@ export interface BackgroundCheckResult {
   checked_at: string;
   records: BackgroundCheckResultRecordsItem[];
   summary: string;
+  /** Which jurisdictional scope was searched.
+  - `state`: limited to federal courts in `searched_state`.
+  - `national`: no state was provided, searched nationwide.
+  - `national-fallback`: state was provided but unrecognized, fell back to nationwide.
+ */
+  search_scope: BackgroundCheckResultSearchScope;
+  /** 2-letter state code that was effectively used. */
+  searched_state: string | null;
+  /** Human-readable state name for `searched_state`. */
+  searched_state_label: string | null;
+  /** CourtListener court IDs queried (empty when nationwide). */
+  searched_courts: string[];
+  /** Operator-facing notes about source health, fallbacks, or limitations. */
+  notes: string[];
 }
 
 export type ListLeadsParams = {
