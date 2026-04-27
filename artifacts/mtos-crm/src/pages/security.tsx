@@ -353,8 +353,8 @@ export default function Security() {
                         {alert.status.toUpperCase()}
                       </Badge>
                     </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {format(new Date(alert.created_at), "HH:mm:ss")}
+                    <TableCell className="font-mono text-xs whitespace-nowrap">
+                      {format(new Date(alert.created_at), "yyyy-MM-dd HH:mm")}
                     </TableCell>
                     <TableCell className="text-right">
                       {alert.status === "new" && (

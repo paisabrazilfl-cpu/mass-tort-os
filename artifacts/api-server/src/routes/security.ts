@@ -235,16 +235,9 @@ router.post("/test-alert", async (req, res) => {
   res.json({ message: "Test alert dispatched" });
 });
 
-router.post("/webhook-config", async (req, res) => {
-  const { webhook_url } = req.body;
-  if (!webhook_url) {
-    badRequest(res, "webhook_url is required");
-    return;
-  }
-  res.json({
-    message: "Webhook URL configured. Set SECURITY_WEBHOOK_URL environment variable for persistent configuration.",
-    webhook_url,
-  });
-});
+// /webhook-config endpoint removed: it persisted nothing and pretended to
+// configure something. Webhook delivery is driven by the SECURITY_WEBHOOK_URL
+// environment variable in dispatchSecurityAlert(); set it via the platform's
+// secrets manager. No CRM call is needed.
 
 export default router;

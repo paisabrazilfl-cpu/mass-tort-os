@@ -574,7 +574,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **160 checked / 13 public / 147 protected / 0 unprotected.**
+Boot-time count: **159 checked / 13 public / 146 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -747,7 +747,6 @@ Boot-time count: **160 checked / 13 public / 147 protected / 0 unprotected.**
 | security | GET | `/api/security/notifications` | ✓ | ✓ |  |  |  | — | `security:manage` | ✓ |
 | security | GET | `/api/security/stats` | ✓ | ✓ |  |  |  | — | `security:manage` | ✓ |
 | security | POST | `/api/security/test-alert` | ✓ | ✓ |  |  |  | — | `security:manage` | ✓ |
-| security | POST | `/api/security/webhook-config` | ✓ | ✓ |  |  |  | — | `security:manage` | ✓ |
 | timeline | GET | `/api/timeline/lead/:id` | ✓ | ✓ |  |  |  | — | `timeline:view` | ✓ |
 | vendors | DELETE | `/api/vendors/:id` | ✓ | ✓ |  |  |  | — | `vendors:delete` | ✓ |
 | vendors | GET | `/api/vendors/:id` | ✓ | ✓ |  |  |  | — | `vendors:view` | ✓ |
