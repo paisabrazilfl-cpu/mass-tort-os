@@ -18,3 +18,9 @@ id = "-QYARtcbTInhDiVUTN5_b"
 uri = "file://exports/mtos-crm-source.pdf"
 type = "pdf"
 title = "MTOS CRM — Full Source Code (PDF, 420 files, 1.9 MB)"
+
+[[outputs]]
+id = "T2n1VNIdbnRjQyRTfav8k"
+uri = "file://exports/mtos-source.tar.gz"
+type = "unspecified"
+title = "Mass Tort OS — Full Source Code"
