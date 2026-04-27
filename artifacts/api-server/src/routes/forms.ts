@@ -23,7 +23,7 @@ import {
   type CustomField,
 } from "../lib/form-config-service";
 import { customFieldSchema } from "@workspace/db";
-import type { Response } from "express";
+import type { Request, Response } from "express";
 
 // Unified error envelope helpers — keep responses identical in shape to the
 // global handler in app.ts so the CRM client only has one parser to maintain.
@@ -271,13 +271,14 @@ function extractCustomFieldValues(
   return out;
 }
 
-// SECURITY NOTE — /submit is intentionally authenticated.
-// Public unauthenticated submission from third-party host sites is DEFERRED
-// pending: (1) per-buyer/per-tort API keys, (2) per-key rate limiting,
-// (3) origin allowlist, (4) TrustedForm cert URL verification against
-// api.trustedform.com before accepting a lead, (5) CAPTCHA or equivalent
-// bot deterrent. Until then, /submit requires a logged-in CRM user role.
-router.post("/submit", requirePermission(Permission.FORMS_SUBMIT), auditAction("form_submit"), async (req, res) => {
+// Shared 10-step submission pipeline. Used by:
+//   - POST /api/forms/submit            (auth-required, CRM intake)
+//   - POST /api/forms-public/submit/:id (anonymous, third-party embed)
+// The public route in forms-public.ts performs its own pre-checks (tortId
+// must resolve to an active config; tort_type and source are server-forced)
+// before delegating here. Per-IP rate limiting and CSP/CORS for the public
+// surface are handled at the forms-public router level.
+export async function runSubmissionPipeline(req: Request, res: Response): Promise<void> {
   const data = req.body;
   const pipeline: PipelineStep[] = [];
 
@@ -740,7 +741,14 @@ router.post("/submit", requirePermission(Permission.FORMS_SUBMIT), auditAction("
       failed_step: "CRM_STORAGE",
     });
   }
-});
+}
+
+router.post(
+  "/submit",
+  requirePermission(Permission.FORMS_SUBMIT),
+  auditAction("form_submit"),
+  runSubmissionPipeline,
+);
 
 router.post("/background-check", requirePermission(Permission.FORMS_BACKGROUND_CHECK), async (req, res) => {
   const { first_name, last_name, state, date_of_birth } = req.body;
@@ -923,8 +931,13 @@ export function generateEmbedScript(tortId: string, config: EmbedConfig, baseUrl
   const customFieldsJson = JSON.stringify(config.custom_fields ?? []);
   const introText = config.intro_text ? escapeJs(config.intro_text) : "Complete all required fields to submit your claim for review.";
 
+  // Embed runs on third-party host sites with no CRM session. It MUST hit the
+  // public surface only — both submit and pre-submit validators live under
+  // /api/forms-public so they work without auth. The auth-gated /api/forms/*
+  // routes remain for the CRM Form Engine playground.
   return `(function(){
-var API="${baseUrl}/api/forms";
+var API="${baseUrl}/api/forms-public";
+var SUBMIT_URL=API+"/submit/${escapeJs(tortId)}";
 var TORT_ID="${escapeJs(tortId)}";
 var TORT_LABEL="${escapeJs(config.label)}";
 var TORT_INTRO="${introText}";
@@ -1137,7 +1150,7 @@ form.addEventListener("submit",function(e){
   var tfTok=document.getElementById("xxTrustedFormCertToken_0");
   if(tfTok&&tfTok.value)payload.trustedform_cert_token=tfTok.value;
 
-  fetch(API+"/submit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})
+  fetch(SUBMIT_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})
     .then(function(r){return r.json().then(function(d){return{ok:r.ok,data:d};});})
     .then(function(r){
       if(r.ok&&r.data.status==="ACCEPTED"){

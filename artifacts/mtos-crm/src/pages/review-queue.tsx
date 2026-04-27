@@ -13,6 +13,7 @@ import {
 import type { ReviewQueueItem } from "@workspace/api-client-react";
 
 import { apiFetchRaw } from "@/lib/api-fetch";
+import { useAuth } from "@/contexts/auth-context";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -83,13 +84,18 @@ function ReviewQueueRow({ item }: { item: ReviewQueueItem }) {
   const [expanded, setExpanded] = useState(false);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
   const resolveMutation = useResolveReviewItem();
 
   const handleResolve = (resolution: "accepted" | "rejected") => {
+    // Stamp the resolution with the authenticated reviewer's identity. The
+    // previous hardcoded "admin" string broke audit trails (every resolution
+    // looked like it came from the same actor regardless of who clicked).
+    const resolvedBy = user?.name?.trim() || user?.email || "system";
     resolveMutation.mutate(
       {
         id: item.id,
-        data: { resolution, resolved_by: "admin" },
+        data: { resolution, resolved_by: resolvedBy },
       },
       {
         onSuccess: () => {

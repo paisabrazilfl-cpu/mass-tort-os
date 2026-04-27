@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useCreateLead, useQualifyLead } from "@workspace/api-client-react";
+import { useCreateLead, useQualifyLead, useGetFormConfigs } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,22 +52,17 @@ const STATES = [
   "WV", "WI", "WY"
 ];
 
-const TORT_CAMPAIGNS = [
-  "Camp Lejeune",
-  "AFFF Firefighting Foam",
-  "Necrotizing Enterocolitis",
-  "Roundup",
-  "Talcum Powder",
-  "Asbestos",
-  "Paraquat",
-  "Zantac",
-  "Hair Relaxer",
-  "Tylenol"
-];
 
 export default function LeadIntake() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  // Fetch the live tort campaign list so this dropdown stays in sync with the
+  // Form Engine. A previous version hardcoded a 10-item list which drifted as
+  // soon as an operator added or deactivated a campaign in the admin UI.
+  const { data: formConfigsResp } = useGetFormConfigs();
+  const tortCampaigns = ((formConfigsResp ?? []) as Array<{ id: string; label: string; active: boolean }>)
+    .filter((c) => c.active)
+    .map((c) => c.label);
   
   const createLead = useCreateLead();
   const qualifyLead = useQualifyLead();
@@ -363,7 +358,7 @@ export default function LeadIntake() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {TORT_CAMPAIGNS.map((campaign) => (
+                          {tortCampaigns.map((campaign) => (
                             <SelectItem key={campaign} value={campaign}>
                               {campaign}
                             </SelectItem>

@@ -1,7 +1,10 @@
 import { Router, type IRouter, type Request } from "express";
 import rateLimit from "express-rate-limit";
 import { getFormConfig } from "../lib/form-config-service";
-import { generateEmbedScript } from "./forms";
+import { generateEmbedScript, runSubmissionPipeline } from "./forms";
+import { validateEmail } from "../lib/email-validator";
+import { validateAddress } from "../lib/address-validator";
+import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { badRequest, notFound, serverError } from "../lib/http-errors";
 
@@ -103,8 +106,8 @@ router.get("/preview/:tortId", async (req, res) => {
 <body>
 <div class="banner"><strong>Preview Mode</strong> — submissions are disabled in this preview window.</div>
 <div id="mtos-form"></div>
-<script src="${htmlEscape(baseUrl)}/api/forms/embed/${safeTortId}"></script>
-<script src="${htmlEscape(baseUrl)}/api/forms/preview-blocker.js"></script>
+<script src="${htmlEscape(baseUrl)}/api/forms-public/embed/${safeTortId}"></script>
+<script src="${htmlEscape(baseUrl)}/api/forms-public/preview-blocker.js"></script>
 </body>
 </html>`;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -128,6 +131,124 @@ router.get("/preview-blocker.js", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   res.send(js);
+});
+
+// Public, anonymous lead submission from third-party host sites running the
+// generated embed.js. Security model:
+//   1. Per-IP rate limit (60/min) is applied at the router level above.
+//   2. :tortId MUST resolve to an *active* form_configurations row. Inactive
+//      or unknown ids 404 before any pipeline work happens — this prevents
+//      enumeration probes from triggering NPI/address/email lookups.
+//   3. tort_type and source are SERVER-FORCED from the resolved config; the
+//      client cannot spoof which campaign a lead belongs to or which embed
+//      it came from.
+//   4. The shared 10-step pipeline still enforces TCPA consent (step 4) and
+//      a well-formed TrustedForm certificate URL (step 5) — both required for
+//      a lead to clear FINAL_ARBITER. No untrusted input bypasses validation.
+//   5. Origin / Referer / source IP are recorded to audit_log so abuse can be
+//      traced to a specific embed installation.
+router.post("/submit/:tortId", async (req, res) => {
+  const tortId = String(req.params.tortId);
+  let config;
+  try {
+    config = await getFormConfig(tortId);
+  } catch (err) {
+    logger.error({ err, tortId }, "form-config lookup failed during public submit");
+    serverError(res, "Form lookup failed");
+    return;
+  }
+  if (!config || !config.active) {
+    notFound(res, "Tort campaign not found or inactive");
+    return;
+  }
+
+  const sourceIp =
+    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+    req.socket.remoteAddress ||
+    "unknown";
+  const origin = req.get("origin") ?? null;
+  const referer = req.get("referer") ?? null;
+
+  // Server-force fields the client must not control.
+  if (req.body && typeof req.body === "object") {
+    req.body.tort_type = config.label;
+    req.body.source = `form_embed_${tortId}`;
+  }
+
+  // Audit the attempt (non-blocking) so every public submission is traceable
+  // even if the pipeline rejects it. A matching `form_submission_result` row
+  // is written from the res 'finish' hook below — together they bookend the
+  // full attempt + decision trail required for TCPA / lead-buyer disputes.
+  void auditLog("form_submission_attempt", tortId, "form_embed", {
+    tort_id: tortId,
+    tort_label: config.label,
+    source_ip: sourceIp,
+    origin,
+    referer,
+    user_agent: req.get("user-agent") ?? null,
+  }).catch((err) => {
+    logger.warn({ err, tortId }, "audit_log write failed for public submission attempt");
+  });
+
+  // Capture the pipeline response so the result audit row can record
+  // outcome + lead_id even on early-rejection paths (422 schema-rejected,
+  // 400 missing TCPA, etc). Wrapping res.json is the only point that sees
+  // every terminal write the pipeline emits.
+  const originalJson = res.json.bind(res);
+  let responseBody: unknown = null;
+  res.json = (body: unknown) => {
+    responseBody = body;
+    return originalJson(body);
+  };
+  res.on("finish", () => {
+    const body = (responseBody ?? {}) as Record<string, unknown>;
+    const pipeline = Array.isArray(body.pipeline) ? body.pipeline : [];
+    // Match BOTH "failed" and "error" so storage / unexpected pipeline errors
+    // surface in the audit row instead of leaving failed_step null. Falls back
+    // to a top-level body.failed_step the pipeline may have set explicitly.
+    const failedStep =
+      (typeof body.failed_step === "string" ? body.failed_step : null) ??
+      (pipeline.find(
+        (s: unknown): s is { name: string; status: string } =>
+          typeof s === "object" &&
+          s !== null &&
+          ((s as { status?: string }).status === "failed" ||
+            (s as { status?: string }).status === "error"),
+      )?.name ??
+        null);
+    void auditLog(
+      "form_submission_result",
+      String(body.lead_id ?? tortId),
+      "form_embed",
+      {
+        tort_id: tortId,
+        tort_label: config.label,
+        source_ip: sourceIp,
+        status_code: res.statusCode,
+        outcome: body.status ?? null,
+        lead_id: body.lead_id ?? null,
+        fraud_status: body.fraud_status ?? null,
+        failed_step: failedStep,
+      },
+    ).catch((err) => {
+      logger.warn({ err, tortId }, "audit_log write failed for public submission result");
+    });
+  });
+
+  await runSubmissionPipeline(req, res);
+});
+
+// Public pre-submit validators. Used by the embed.js to give live feedback
+// (typo suggestions, address completeness) before the user hits Submit. No
+// PII is required — validateEmail takes only an email string and validateAddress
+// takes only the address fields. Per-IP rate limit on the router caps abuse.
+router.post("/validate/email", (req, res) => {
+  const { email } = req.body ?? {};
+  res.json(validateEmail(email));
+});
+
+router.post("/validate/address", (req, res) => {
+  res.json(validateAddress(req.body ?? {}));
 });
 
 router.get("/embed/:tortId", async (req, res) => {

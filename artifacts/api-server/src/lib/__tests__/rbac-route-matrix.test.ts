@@ -276,9 +276,20 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
     // script tag for the requested tort. Asserting both ensures we got the
     // actual preview shell rather than e.g. a generic 404 HTML page.
     assert.ok(html.includes("Preview Mode"), "preview HTML missing 'Preview Mode' banner");
+    // Embed + preview-blocker scripts MUST point at the public router; if
+    // they regress to /api/forms/* (auth-gated) the iframe loads in dev via
+    // the synthetic-admin bypass but breaks in production with a 401.
     assert.ok(
-      html.includes("/api/forms/embed/paraquat"),
-      "preview HTML missing embed script tag for paraquat",
+      html.includes("/api/forms-public/embed/paraquat"),
+      "preview HTML missing public embed script tag for paraquat",
+    );
+    assert.ok(
+      html.includes("/api/forms-public/preview-blocker.js"),
+      "preview HTML missing public preview-blocker script tag",
+    );
+    assert.ok(
+      !html.includes("/api/forms/embed/") && !html.includes("/api/forms/preview-blocker.js"),
+      "preview HTML must NOT reference auth-gated /api/forms/* script paths",
     );
   });
 
