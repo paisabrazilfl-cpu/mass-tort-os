@@ -32,6 +32,52 @@ const TYPO_DOMAINS: Record<string, string> = {
 
 const MALFORMED_TLDS = [".vom", ".con", ".cmo", ".coom", ".comm", ".cim", ".ocm", ".cm"];
 
+const COMMON_PROVIDERS_FUZZY: Array<{ prefix: string; canonical: string; minLen: number }> = [
+  { prefix: "gmail", canonical: "gmail.com", minLen: 5 },
+  { prefix: "yahoo", canonical: "yahoo.com", minLen: 5 },
+  { prefix: "hotmail", canonical: "hotmail.com", minLen: 6 },
+  { prefix: "outlook", canonical: "outlook.com", minLen: 6 },
+  { prefix: "icloud", canonical: "icloud.com", minLen: 5 },
+  { prefix: "protonmail", canonical: "protonmail.com", minLen: 8 },
+];
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  let prev = new Array(b.length + 1);
+  let curr = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length];
+}
+
+function findFuzzyProviderMatch(domain: string): string | null {
+  const lastDot = domain.lastIndexOf(".");
+  if (lastDot === -1) return null;
+  const prefix = domain.slice(0, lastDot);
+  const tld = domain.slice(lastDot);
+  if (tld !== ".com") return null;
+  if (prefix.length < 3) return null;
+  let best: { canonical: string; distance: number } | null = null;
+  for (const { prefix: known, canonical, minLen } of COMMON_PROVIDERS_FUZZY) {
+    if (prefix.length < minLen) continue;
+    if (prefix === known) return null;
+    const dist = levenshtein(prefix, known);
+    const threshold = known.length <= 7 ? 3 : 4;
+    if (dist === 0 || dist > threshold) continue;
+    if (!best || dist < best.distance) best = { canonical, distance: dist };
+  }
+  return best?.canonical ?? null;
+}
+
 const RFC_EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
 
 const DISPOSABLE_DOMAINS = [
@@ -84,6 +130,12 @@ export function validateEmail(email: string): EmailValidationResult {
   if (TYPO_DOMAINS[domain]) {
     errors.push("TYPO_DOMAIN_DETECTED");
     suggestion = `${localPart}@${TYPO_DOMAINS[domain]}`;
+  } else {
+    const fuzzyMatch = findFuzzyProviderMatch(domain);
+    if (fuzzyMatch) {
+      errors.push("LIKELY_TYPO_DOMAIN");
+      suggestion = `${localPart}@${fuzzyMatch}`;
+    }
   }
 
   for (const tld of MALFORMED_TLDS) {
