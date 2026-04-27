@@ -28,6 +28,10 @@ args = "rbac-test"
 task = "workflow.run"
 args = "rbac-route-matrix"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "db-drift"
+
 [[workflows.workflow]]
 name = "MTOS Worker: Job Processor"
 author = "agent"
@@ -57,6 +61,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "bash scripts/check-rbac-route-matrix.sh"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "db-drift"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/db run drift"
 
 [workflows.workflow.metadata]
 isValidation = true
