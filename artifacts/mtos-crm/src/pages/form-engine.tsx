@@ -25,7 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -589,7 +589,12 @@ function FormPreviewDialog({ config }: { config: FormConfig }) {
       </DialogTrigger>
       <DialogContent className="sm:max-w-[680px] h-[85vh] flex flex-col p-0">
         <DialogHeader className="p-6 pb-2 shrink-0 flex-row items-center justify-between space-y-0">
-          <DialogTitle>Live Preview: {config.label}</DialogTitle>
+          <div className="space-y-1">
+            <DialogTitle>Live Preview: {config.label}</DialogTitle>
+            <DialogDescription>
+              Embedded preview of the public intake form for this campaign. Submissions made here are not saved.
+            </DialogDescription>
+          </div>
           <Button size="sm" variant="ghost" onClick={() => setReloadKey(k => k + 1)}>
             <RefreshCw className="h-4 w-4 mr-1" /> Reload
           </Button>
@@ -724,6 +729,9 @@ function FormEditDialog({ config }: { config: FormConfig }) {
       <DialogContent className="sm:max-w-[720px] max-h-[88vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit: {config.label}</DialogTitle>
+          <DialogDescription>
+            Update intake form settings, intro text, valid diagnoses, and custom fields for this campaign.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-6">
           <div className="flex items-center justify-between rounded-md border p-3">

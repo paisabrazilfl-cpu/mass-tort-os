@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Plus, User } from "lucide-react";
@@ -55,6 +55,9 @@ export default function Paralegals() {
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Add New Paralegal</DialogTitle>
+              <DialogDescription>
+                Create a paralegal record so cases and tasks can be assigned to this team member.
+              </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleAddParalegal} className="space-y-4 pt-4">
               <div className="space-y-2">

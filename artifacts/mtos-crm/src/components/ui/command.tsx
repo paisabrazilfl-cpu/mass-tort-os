@@ -26,7 +26,14 @@ Command.displayName = CommandPrimitive.displayName
 const CommandDialog = ({ children, ...props }: DialogProps) => {
   return (
     <Dialog {...props}>
-      <DialogContent className="overflow-hidden p-0">
+      {/*
+        aria-describedby={undefined} is the documented Radix escape hatch
+        for dialogs that genuinely have no secondary description — here the
+        CommandInput's visible search affordance IS the description. Without
+        this, Radix logs a "Missing 'Description'" warning for every consumer
+        of CommandDialog (see replit.md "Dialog Accessibility Convention").
+      */}
+      <DialogContent className="overflow-hidden p-0" aria-describedby={undefined}>
         <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5">
           {children}
         </Command>

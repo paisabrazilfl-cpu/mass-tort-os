@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, Plus, Pencil, Trash2, Upload, Eye } from "lucide-react";
@@ -209,6 +209,11 @@ export default function DocumentTemplatesPage() {
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{typeof editing.id === "number" ? "Edit Template" : "New Template"}</DialogTitle>
+            <DialogDescription>
+              {typeof editing.id === "number"
+                ? "Update template name, type, body, and merge tags."
+                : "Create a reusable document template with merge tags for HIPAA, retainer, or affidavit forms."}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">

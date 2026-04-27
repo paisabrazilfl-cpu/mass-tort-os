@@ -16,7 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
@@ -118,6 +118,9 @@ export default function OcrInbox() {
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Upload Fax for OCR Processing</DialogTitle>
+                <DialogDescription>
+                  Upload a fax image to extract text and route results back to the matching lead.
+                </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleUploadSubmit} className="space-y-4 pt-4">
                 <div className="space-y-2">

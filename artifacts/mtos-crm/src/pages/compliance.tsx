@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { format } from "date-fns";
 import { Activity, AlertCircle, Clock } from "lucide-react";
 
@@ -153,6 +153,9 @@ export default function Compliance() {
                           <DialogContent className="max-w-2xl">
                             <DialogHeader>
                               <DialogTitle>Audit Details</DialogTitle>
+                              <DialogDescription>
+                                Raw JSON payload captured for this audit log entry.
+                              </DialogDescription>
                             </DialogHeader>
                             <div className="bg-muted p-4 rounded-md overflow-auto max-h-[60vh]">
                               <pre className="text-xs">
