@@ -28,6 +28,9 @@ interface ModelStats {
   total_training_samples: number;
   feature_weights: Record<string, number>;
   model_accuracy: number;
+  evaluated_samples?: number;
+  accuracy_available?: boolean;
+  last_computed?: string;
   last_trained: string;
 }
 
@@ -87,8 +90,8 @@ export default function Predictive() {
     return (
       <div className="space-y-6">
         <h1 className="text-3xl font-bold tracking-tight">Praxis AI Analytics</h1>
-        <div className="grid gap-4 md:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => <Card key={i}><CardContent className="pt-6"><Skeleton className="h-20" /></CardContent></Card>)}
+        <div className="grid gap-4 md:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => <Card key={i}><CardContent className="pt-6"><Skeleton className="h-20" /></CardContent></Card>)}
         </div>
       </div>
     );
@@ -129,11 +132,27 @@ export default function Predictive() {
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Model Accuracy</CardTitle></CardHeader>
-          <CardContent><div className="text-3xl font-bold">{modelStats ? Math.round(modelStats.model_accuracy * 100) : 0}%</div></CardContent>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Backtest Accuracy</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {modelStats?.accuracy_available ? (
+              <>
+                <div className="text-3xl font-bold">{Math.round(modelStats.model_accuracy * 100)}%</div>
+                <p className="text-xs text-muted-foreground mt-1">vs {modelStats.evaluated_samples} signed/rejected outcomes</p>
+              </>
+            ) : (
+              <>
+                <div className="text-3xl font-bold text-muted-foreground">—</div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Need ≥5 signed/rejected leads ({modelStats?.evaluated_samples ?? 0} so far)
+                </p>
+              </>
+            )}
+          </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Training Samples</CardTitle></CardHeader>
+          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Leads Scored</CardTitle></CardHeader>
           <CardContent><div className="text-3xl font-bold">{modelStats?.total_training_samples || 0}</div></CardContent>
         </Card>
       </div>
