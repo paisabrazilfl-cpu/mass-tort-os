@@ -21,8 +21,21 @@ import {
   generateToken,
   isTokenVersionRevoked,
   __rbacInternal,
+  type AuthUser,
+  type UserRole,
 } from "../rbac.js";
+
 import { isCaseVisibleToUser } from "../../routes/cases.js";
+
+function mkUser(role: UserRole, overrides: Partial<AuthUser> = {}): AuthUser {
+  return {
+    id: 1,
+    email: `${role}@test.local`,
+    name: `${role} user`,
+    role,
+    ...overrides,
+  };
+}
 
 // In-memory request/response stand-ins covering only the express bits the
 // rbac middleware touches.
@@ -261,15 +274,15 @@ describe("hasPermission()", () => {
     assert.equal(hasPermission(null as unknown as undefined, Permission.LEAD_VIEW_OWN), false);
   });
   test("returns true when role has perm (viewer+CASE_VIEW_OWN)", () => {
-    assert.equal(hasPermission({ id: 1, role: "viewer" }, Permission.CASE_VIEW_OWN), true);
+    assert.equal(hasPermission(mkUser("viewer"), Permission.CASE_VIEW_OWN), true);
   });
   test("returns false when role lacks perm (viewer+LEAD_DELETE)", () => {
-    assert.equal(hasPermission({ id: 1, role: "viewer" }, Permission.LEAD_DELETE), false);
+    assert.equal(hasPermission(mkUser("viewer"), Permission.LEAD_DELETE), false);
   });
   test("admin always returns true (sanity-check the broad grant)", () => {
     for (const p of Object.values(Permission)) {
       assert.equal(
-        hasPermission({ id: 1, role: "admin" }, p as Permission),
+        hasPermission(mkUser("admin"), p as Permission),
         true,
         `admin should pass ${p}`,
       );
@@ -279,19 +292,19 @@ describe("hasPermission()", () => {
 
 describe("canBypassOwnership()", () => {
   test("admin and attorney bypass ownership", () => {
-    assert.equal(canBypassOwnership({ id: 1, role: "admin" }), true);
-    assert.equal(canBypassOwnership({ id: 2, role: "attorney" }), true);
+    assert.equal(canBypassOwnership(mkUser("admin", { id: 1 })), true);
+    assert.equal(canBypassOwnership(mkUser("attorney", { id: 2 })), true);
   });
   test("paralegal and viewer do not bypass ownership", () => {
-    assert.equal(canBypassOwnership({ id: 3, role: "paralegal" }), false);
-    assert.equal(canBypassOwnership({ id: 4, role: "viewer" }), false);
+    assert.equal(canBypassOwnership(mkUser("paralegal", { id: 3 })), false);
+    assert.equal(canBypassOwnership(mkUser("viewer", { id: 4 })), false);
   });
   test("missing user does not bypass", () => {
     assert.equal(canBypassOwnership(undefined), false);
   });
   test("user.id===0 (dev synthetic) does NOT grant god mode by itself", () => {
-    assert.equal(canBypassOwnership({ id: 0, role: "viewer" }), false);
-    assert.equal(canBypassOwnership({ id: 0, role: "paralegal" }), false);
+    assert.equal(canBypassOwnership(mkUser("viewer", { id: 0 })), false);
+    assert.equal(canBypassOwnership(mkUser("paralegal", { id: 0 })), false);
   });
 });
 
