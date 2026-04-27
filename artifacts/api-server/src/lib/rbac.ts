@@ -615,7 +615,7 @@ type UserCredentialsRow = AuthUser & {
   failed_login_attempts: number;
   locked_until: Date | null;
   token_version: number;
-};
+} & Record<string, unknown>;
 
 export async function createUser(email: string, name: string, role: UserRole, passwordHash: string): Promise<AuthUser> {
   const result = await db.execute(sql`
