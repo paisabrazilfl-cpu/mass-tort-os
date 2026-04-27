@@ -24,6 +24,7 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "pdf-lib": "^1.17.1",
+    "pg": "^8.20.0",
     "pino": "^9",
     "pino-http": "^10",
     "sharp": "^0.34.5",

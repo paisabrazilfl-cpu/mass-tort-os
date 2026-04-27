@@ -10,7 +10,6 @@
  */
 import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
 import { resolveProvider, isResolved } from "./provider-router";
@@ -20,6 +19,17 @@ import { getEmailAdapter } from "./email/sendgrid";
 import { downloadTemplate } from "./template-storage";
 import { decryptLeadFields } from "./encryption";
 import { FAX_SOURCE_FILE_TEMPLATE } from "./fax-results-matcher";
+
+// pdf-lib is heavy (~830 KB with transitives) and only needed when
+// buildTemplatePdf or buildMedRecordsCoverLetter actually run a job that
+// produces a placeholder/cover-letter PDF. Lazy-loaded + externalized
+// (see build.mjs) so worker boot doesn't pay for it.
+type PdfLib = typeof import("pdf-lib");
+let pdfLibModule: PdfLib | undefined;
+async function loadPdfLib(): Promise<PdfLib> {
+  if (!pdfLibModule) pdfLibModule = await import("pdf-lib");
+  return pdfLibModule;
+}
 
 interface SendEsignPacketPayload {
   lead_id: number;
@@ -63,6 +73,7 @@ async function buildTemplatePdf(template: typeof documentTemplatesTable.$inferSe
     { template_id: template.id, lead_id: lead.id },
     "AI-drafted template requested but drafting-ai not yet implemented — sending placeholder PDF",
   );
+  const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([612, 792]);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
@@ -90,6 +101,7 @@ async function buildTemplatePdf(template: typeof documentTemplatesTable.$inferSe
  * Includes the signed HIPAA reference (envelope_id) so the doctor's office can verify.
  */
 async function buildMedRecordsCoverLetter(lead: typeof leadsTable.$inferSelect, envelopeId: number): Promise<Buffer> {
+  const { PDFDocument, StandardFonts } = await loadPdfLib();
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([612, 792]);
   const font = await pdf.embedFont(StandardFonts.Helvetica);

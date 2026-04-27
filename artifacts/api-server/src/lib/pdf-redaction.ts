@@ -1,5 +1,14 @@
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import { logger } from "./logger";
+
+// pdf-lib is heavy (~830 KB with transitives). Loaded on demand inside
+// redactPdf() so the API server boot doesn't pay for it on routes that
+// never redact a PDF. Externalized in build.mjs.
+type PdfLib = typeof import("pdf-lib");
+let pdfLibModule: PdfLib | undefined;
+async function loadPdfLib(): Promise<PdfLib> {
+  if (!pdfLibModule) pdfLibModule = await import("pdf-lib");
+  return pdfLibModule;
+}
 
 export interface RedactionRule {
   type: "text" | "region";
@@ -23,6 +32,7 @@ export async function redactPdf(
   pdfBytes: Buffer | Uint8Array,
   rules: RedactionRule[]
 ): Promise<Uint8Array> {
+  const { PDFDocument, rgb, StandardFonts } = await loadPdfLib();
   try {
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const pages = pdfDoc.getPages();
@@ -58,6 +68,7 @@ export async function highlightPdfRegions(
   pdfBytes: Buffer | Uint8Array,
   highlights: { page: number; x: number; y: number; width: number; height: number; color?: string; label?: string }[]
 ): Promise<Uint8Array> {
+  const { PDFDocument, rgb, StandardFonts } = await loadPdfLib();
   try {
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const pages = pdfDoc.getPages();
@@ -102,11 +113,13 @@ export async function createHipaaRedactedPdf(
 }
 
 export async function getPdfPageCount(pdfBytes: Buffer | Uint8Array): Promise<number> {
+  const { PDFDocument } = await loadPdfLib();
   const pdfDoc = await PDFDocument.load(pdfBytes);
   return pdfDoc.getPageCount();
 }
 
 export async function createBlankPdfWithText(text: string, title?: string): Promise<Uint8Array> {
+  const { PDFDocument, rgb, StandardFonts } = await loadPdfLib();
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);

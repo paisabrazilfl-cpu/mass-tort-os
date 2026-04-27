@@ -10,7 +10,38 @@ globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
+// Heavy runtime deps that are resolved from node_modules at runtime instead
+// of bundled. Each one is a direct or catalog dep of @workspace/api-server,
+// so Node's resolver finds them via artifacts/api-server/node_modules. Keeps
+// the bundle small without changing behavior. See replit.md "API Server
+// Bundle Size Budget" before adding more.
+const runtimeExternal = [
+  // Heavy app deps — lazy-imported at call sites in addition to being external.
+  "pdf-lib",                 // ~650 KB + transitive @pdf-lib/* and pako (~966 KB total). Used only by PDF redaction & doc generation.
+  "@pdf-lib/*",              // pdf-lib's font + image submodules pulled in transitively.
+  "@anthropic-ai/sdk",       // ~346 KB; lazy-loaded inside threat-analyzer.ts.
+  "@anthropic-ai/sdk/*",
+  // Hot-path runtime deps — kept resolved-at-runtime so the bundle is small.
+  // All listed in package.json dependencies, so node_modules has them.
+  "zod",                     // ~547 KB (v3 + v4 namespaces).
+  "zod/*",
+  "drizzle-orm",             // ~221 KB; api-server, @workspace/db, @workspace/api-zod all use the same catalog version.
+  "drizzle-orm/*",
+  // Express HTTP stack — transitively pulls in body-parser, raw-body,
+  // iconv-lite (~530 KB), mime-types, mime-db (~228 KB), qs, send, etc.
+  "express",
+  "express-rate-limit",
+  "helmet",
+  "cors",
+  "jsonwebtoken",
+  "pino-http",
+  // Postgres driver tree (~130 KB)
+  "pg",
+  "pg-*",
+];
+
 const external = [
+  ...runtimeExternal,
   "*.node",
   "sharp",
   "better-sqlite3",
