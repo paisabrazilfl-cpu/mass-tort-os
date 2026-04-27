@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/pdfkit": "^0.17.3",
     "tsx": "catalog:"
   },
   "dependencies": {
