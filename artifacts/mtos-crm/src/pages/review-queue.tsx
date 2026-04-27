@@ -286,15 +286,15 @@ export default function ReviewQueue() {
 
   const { data: queueItems = [], isLoading: queueLoading } = useListReviewQueue(queryParams);
 
-  const pendingCount = stats?.total_pending || 0;
-  
-  const criticalCount = stats?.by_severity?.find((s: any) => s.severity === "critical")?.count || 0;
-  const highCount = stats?.by_severity?.find((s: any) => s.severity === "high")?.count || 0;
-  
-  const resolvedCount = stats?.by_resolution?.reduce((acc: number, r: any) => {
-    if (r.resolution !== "pending") return acc + (r.count || 0);
-    return acc;
-  }, 0) || 0;
+  // Card counts are read straight off the API stats payload — every field
+  // here is server-scoped so the four cards finally agree on what "now" means:
+  //   pending_count    = pending only
+  //   critical/high    = pending only (was: all-time, screamed "act now" about resolved work)
+  //   resolved_today   = today only (was: all-time sum mislabeled "Today")
+  const pendingCount = stats?.total_pending ?? 0;
+  const criticalCount = stats?.pending_critical ?? 0;
+  const highCount = stats?.pending_high ?? 0;
+  const resolvedCount = stats?.resolved_today ?? 0;
 
   return (
     <div className="flex flex-col gap-6 p-8 max-w-7xl mx-auto w-full">

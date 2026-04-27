@@ -708,6 +708,17 @@ export const ListReviewQueueResponse = zod.array(ListReviewQueueResponseItem);
  */
 export const GetReviewQueueStatsResponse = zod.object({
   total_pending: zod.number(),
+  pending_critical: zod
+    .number()
+    .describe("Critical-severity items currently in pending resolution."),
+  pending_high: zod
+    .number()
+    .describe("High-severity items currently in pending resolution."),
+  resolved_today: zod
+    .number()
+    .describe(
+      "Items whose resolution timestamp falls within today (server local date).",
+    ),
   by_resolution: zod.array(
     zod.object({
       resolution: zod.string().optional(),

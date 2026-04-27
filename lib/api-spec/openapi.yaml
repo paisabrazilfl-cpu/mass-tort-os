@@ -2275,6 +2275,15 @@ components:
       properties:
         total_pending:
           type: integer
+        pending_critical:
+          type: integer
+          description: Critical-severity items currently in pending resolution.
+        pending_high:
+          type: integer
+          description: High-severity items currently in pending resolution.
+        resolved_today:
+          type: integer
+          description: Items whose resolution timestamp falls within today (server local date).
         by_resolution:
           type: array
           items:
@@ -2311,7 +2320,7 @@ components:
                 type: string
               count:
                 type: integer
-      required: [total_pending, by_resolution, by_conflict_type, by_severity, by_failsafe_mode]
+      required: [total_pending, pending_critical, pending_high, resolved_today, by_resolution, by_conflict_type, by_severity, by_failsafe_mode]
 
     ResolveReviewBody:
       type: object

@@ -483,6 +483,12 @@ export type ReviewQueueStatsByFailsafeModeItem = {
 
 export interface ReviewQueueStats {
   total_pending: number;
+  /** Critical-severity items currently in pending resolution. */
+  pending_critical: number;
+  /** High-severity items currently in pending resolution. */
+  pending_high: number;
+  /** Items whose resolution timestamp falls within today (server local date). */
+  resolved_today: number;
   by_resolution: ReviewQueueStatsByResolutionItem[];
   by_conflict_type: ReviewQueueStatsByConflictTypeItem[];
   by_severity: ReviewQueueStatsBySeverityItem[];

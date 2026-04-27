@@ -56,42 +56,70 @@ router.get("/", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req, res
 });
 
 router.get("/stats", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req, res) => {
-  const byResolution = await db
-    .select({
-      resolution: reviewQueueTable.resolution,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(reviewQueueTable)
-    .groupBy(reviewQueueTable.resolution);
-
-  const byConflictType = await db
-    .select({
-      conflict_type: reviewQueueTable.conflict_type,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(reviewQueueTable)
-    .groupBy(reviewQueueTable.conflict_type);
-
-  const bySeverity = await db
-    .select({
-      severity: reviewQueueTable.severity,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(reviewQueueTable)
-    .groupBy(reviewQueueTable.severity);
-
-  const byFailsafe = await db
-    .select({
-      failsafe_mode: reviewQueueTable.failsafe_mode,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(reviewQueueTable)
-    .groupBy(reviewQueueTable.failsafe_mode);
+  // The dashboard cards live next to "Pending Review" so operators read them
+  // as "what currently needs attention". Counting all-time critical/high
+  // (including resolved) is the same kind of misleading display we just
+  // removed from the security alerts table: a card that visually screams
+  // "act now" while actually summing historical work. Same logic applies to
+  // "Resolved Today" — that label promises a daily figure, so the count must
+  // be scoped to today's resolved_at timestamps, not "every non-pending row
+  // since the table was created".
+  const [byResolution, byConflictType, bySeverity, byFailsafe, pendingBySeverity, resolvedTodayRow] =
+    await Promise.all([
+      db
+        .select({
+          resolution: reviewQueueTable.resolution,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(reviewQueueTable)
+        .groupBy(reviewQueueTable.resolution),
+      db
+        .select({
+          conflict_type: reviewQueueTable.conflict_type,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(reviewQueueTable)
+        .groupBy(reviewQueueTable.conflict_type),
+      db
+        .select({
+          severity: reviewQueueTable.severity,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(reviewQueueTable)
+        .groupBy(reviewQueueTable.severity),
+      db
+        .select({
+          failsafe_mode: reviewQueueTable.failsafe_mode,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(reviewQueueTable)
+        .groupBy(reviewQueueTable.failsafe_mode),
+      db
+        .select({
+          severity: reviewQueueTable.severity,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(reviewQueueTable)
+        .where(eq(reviewQueueTable.resolution, "pending"))
+        .groupBy(reviewQueueTable.severity),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(reviewQueueTable)
+        .where(
+          sql`${reviewQueueTable.resolution} <> 'pending' AND ${reviewQueueTable.resolved_at} >= current_date`,
+        ),
+    ]);
 
   const totalPending = byResolution.find((r) => r.resolution === "pending")?.count || 0;
+  const pendingCritical = pendingBySeverity.find((r) => r.severity === "critical")?.count || 0;
+  const pendingHigh = pendingBySeverity.find((r) => r.severity === "high")?.count || 0;
+  const resolvedToday = resolvedTodayRow[0]?.count || 0;
 
   res.json({
     total_pending: totalPending,
+    pending_critical: pendingCritical,
+    pending_high: pendingHigh,
+    resolved_today: resolvedToday,
     by_resolution: byResolution,
     by_conflict_type: byConflictType,
     by_severity: bySeverity,

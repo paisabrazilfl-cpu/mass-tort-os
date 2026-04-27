@@ -102,8 +102,17 @@ export default function LeadIntake() {
 
   const diagnosisConfirmed = form.watch("diagnosis_confirmed");
   const wasAtLocation = form.watch("was_at_location");
-  
-  const isDisqualified = !diagnosisConfirmed || !wasAtLocation;
+  const tortType = form.watch("tort_type");
+  const diagnosis = form.watch("diagnosis");
+
+  // Only show the disqualification warning once the operator has actually
+  // started filling in the medical section. Showing it on a pristine form is
+  // a false alarm — both required checkboxes default to false, so the prior
+  // logic flagged every empty form as "probable disqualification" before the
+  // user typed a single character.
+  const medicalSectionStarted = Boolean(tortType) || Boolean(diagnosis);
+  const isDisqualified =
+    medicalSectionStarted && (!diagnosisConfirmed || !wasAtLocation);
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     try {
