@@ -24,3 +24,9 @@ id = "T2n1VNIdbnRjQyRTfav8k"
 uri = "file://exports/mtos-source.tar.gz"
 type = "unspecified"
 title = "Mass Tort OS — Full Source Code"
+
+[[outputs]]
+id = "cr3BVJ-zrpJ6FRQi4RK2c"
+uri = "file://.local/exports/mass-tort-os-source.tar.gz"
+type = "unspecified"
+title = "Mass Tort OS — full source code (tar.gz, 3.0 MB)"
