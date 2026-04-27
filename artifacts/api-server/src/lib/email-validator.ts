@@ -70,6 +70,9 @@ function findFuzzyProviderMatch(domain: string): string | null {
   for (const { prefix: known, canonical, minLen } of COMMON_PROVIDERS_FUZZY) {
     if (prefix.length < minLen) continue;
     if (prefix === known) return null;
+    // Anchor on the first character to avoid classifying real-but-similar
+    // domains (ymail.com, email.com, cloud.com) as typos of gmail/icloud.
+    if (prefix[0] !== known[0]) continue;
     const dist = levenshtein(prefix, known);
     const threshold = known.length <= 7 ? 3 : 4;
     if (dist === 0 || dist > threshold) continue;
@@ -91,6 +94,13 @@ export interface EmailValidationResult {
   errors: string[];
   suggestion?: string;
 }
+
+// Codes that are advisory ("did you mean ...?") rather than hard failures.
+// They remain in `errors` for backwards compatibility with existing UI that
+// renders the codes verbatim, but they are excluded from the `valid` boolean
+// so callers (e.g. the form-submission pipeline) do not reject leads on a
+// suggested-correction signal.
+const ADVISORY_CODES = new Set(["TYPO_DOMAIN_DETECTED", "LIKELY_TYPO_DOMAIN"]);
 
 export function validateEmail(email: string): EmailValidationResult {
   const errors: string[] = [];
@@ -167,8 +177,9 @@ export function validateEmail(email: string): EmailValidationResult {
     }
   }
 
+  const hardErrors = errors.filter((e) => !ADVISORY_CODES.has(e));
   return {
-    valid: errors.length === 0,
+    valid: hardErrors.length === 0,
     errors,
     suggestion,
   };

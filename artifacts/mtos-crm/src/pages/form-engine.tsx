@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { StateCombobox } from "@/components/state-combobox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -372,12 +373,12 @@ export default function FormEngine() {
                     </div>
                     <div className="col-span-1 space-y-1.5">
                       <Label className="text-xs">State</Label>
-                      <Select value={addressInput.state} onValueChange={(v) => setAddressInput({...addressInput, state: v})}>
-                        <SelectTrigger className="px-2"><SelectValue placeholder="ST" /></SelectTrigger>
-                        <SelectContent>
-                          {US_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
+                      <StateCombobox
+                        value={addressInput.state}
+                        onChange={(v) => setAddressInput({ ...addressInput, state: v })}
+                        placeholder="ST"
+                        triggerClassName="px-2"
+                      />
                     </div>
                     <div className="col-span-2 space-y-1.5">
                       <Label className="text-xs">ZIP</Label>

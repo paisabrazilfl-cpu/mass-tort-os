@@ -329,14 +329,20 @@ export function buildPortfolio(
   torts: Map<string, TortInputs>,
   settings: EngineSettings
 ): PortfolioSummary {
-  const totalSpend = Array.from(leadsByTort.values()).reduce((s, r) => s + r.total_spend, 0);
+  // Filter orphan tort buckets (no matching form configuration) BEFORE
+  // computing totalSpend so the denominator only counts spend we are actually
+  // surfacing in `rows`. Otherwise unmapped legacy tort labels inflate the
+  // total and depress every surviving tort's spend_pct, which can suppress
+  // concentration warnings that should fire.
+  const validEntries = Array.from(leadsByTort.entries()).filter(([id]) => torts.has(id));
+  const totalSpend = validEntries.reduce((s, [, r]) => s + r.total_spend, 0);
   let totalConvex = 0;
   let totalConcave = 0;
   let totalRuin = 0;
   let concentration: { tort_id: string; pct: number } | null = null;
 
   const rows: PortfolioTortRow[] = [];
-  for (const [tort_id, agg] of leadsByTort.entries()) {
+  for (const [tort_id, agg] of validEntries) {
     const tort = torts.get(tort_id);
     if (!tort) continue;
     const qualified_rate = agg.lead_count > 0 ? agg.qualified / agg.lead_count : 0;

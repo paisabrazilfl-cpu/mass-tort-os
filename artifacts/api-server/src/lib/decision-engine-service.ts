@@ -5,7 +5,7 @@
 
 import { db, leadsTable, formConfigurationsTable, leadSourcesTable, decisionEngineSettingsTable } from "@workspace/db";
 import type { Lead } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
 import {
   scoreLead,
   buildPortfolio,
@@ -95,13 +95,33 @@ export async function updateEngineSettings(updates: Partial<{
 }
 
 async function loadTortInputs(tort_id: string): Promise<TortInputs | null> {
+  // Historic data: leads.tort_type is sometimes the human-readable label
+  // (e.g. "Camp Lejeune") instead of the slug id (e.g. "camp-lejeune") because
+  // older intake paths persisted whatever the campaign dropdown showed. Match
+  // by id first, then fall back to a case-insensitive label match so those
+  // rows still get scored instead of being silently skipped.
   const rows = await db
     .select()
     .from(formConfigurationsTable)
-    .where(eq(formConfigurationsTable.id, tort_id))
+    .where(
+      or(
+        eq(formConfigurationsTable.id, tort_id),
+        sql`lower(${formConfigurationsTable.label}) = lower(${tort_id})`,
+      ),
+    )
     .limit(1);
   const row = rows[0];
   if (!row) return null;
+  if (row.id !== tort_id) {
+    // Resolved by case-insensitive label fallback rather than slug match.
+    // Log so we can detect intake regressions that re-introduce label-instead-
+    // of-slug writes; once `leads.tort_type` is fully backfilled this should
+    // stop firing.
+    logger.warn(
+      { raw_tort_type: tort_id, resolved_tort_id: row.id },
+      "decision_engine.tort_type_label_fallback",
+    );
+  }
   return {
     id: row.id,
     label: row.label,
@@ -193,6 +213,11 @@ export async function buildPortfolioSummary(): Promise<PortfolioSummary> {
   // All torts
   const tortRows = await db.select().from(formConfigurationsTable);
   const torts = new Map<string, TortInputs>();
+  // Index for resolving historic leads.tort_type values that hold the
+  // human-readable label ("Camp Lejeune") instead of the slug id
+  // ("camp-lejeune"). Without this map, those rows aggregate into orphan
+  // buckets that buildPortfolio() drops because no tort matches.
+  const labelToId = new Map<string, string>();
   for (const row of tortRows) {
     torts.set(row.id, {
       id: row.id,
@@ -206,6 +231,7 @@ export async function buildPortfolioSummary(): Promise<PortfolioSummary> {
       required_exposure: row.required_exposure,
       valid_diagnoses: row.valid_diagnoses || [],
     });
+    labelToId.set(row.label.toLowerCase(), row.id);
   }
 
   // Aggregate leads by tort
@@ -233,15 +259,50 @@ export async function buildPortfolioSummary(): Promise<PortfolioSummary> {
     concave_count: number;
   }>();
   for (const r of aggRows) {
-    byTort.set(r.tort_type, {
-      lead_count: Number(r.lead_count),
-      total_spend: Number(r.total_spend),
-      qualified: Number(r.qualified),
-      retained: Number(r.retained),
-      ruin_flag_count: Number(r.ruin_flag_count),
-      convex_count: Number(r.convex_count),
-      concave_count: Number(r.concave_count),
-    });
+    if (!r.tort_type) continue;
+    // Resolve to canonical slug: try direct id match, then label fallback.
+    let key: string;
+    if (torts.has(r.tort_type)) {
+      key = r.tort_type;
+    } else {
+      const resolved = labelToId.get(r.tort_type.toLowerCase());
+      if (resolved) {
+        key = resolved;
+        logger.warn(
+          { raw_tort_type: r.tort_type, resolved_tort_id: resolved, lead_count: Number(r.lead_count) },
+          "decision_engine.portfolio_label_fallback",
+        );
+      } else {
+        // Unmapped orphan (e.g. renamed campaign) — keep the raw key so the
+        // row falls through to buildPortfolio()'s `if (!tort) continue;`
+        // filter, where its spend is now correctly excluded from totalSpend.
+        key = r.tort_type;
+        logger.warn(
+          { raw_tort_type: r.tort_type, lead_count: Number(r.lead_count), total_spend: Number(r.total_spend) },
+          "decision_engine.portfolio_orphan_tort",
+        );
+      }
+    }
+    const existing = byTort.get(key);
+    if (existing) {
+      existing.lead_count += Number(r.lead_count);
+      existing.total_spend += Number(r.total_spend);
+      existing.qualified += Number(r.qualified);
+      existing.retained += Number(r.retained);
+      existing.ruin_flag_count += Number(r.ruin_flag_count);
+      existing.convex_count += Number(r.convex_count);
+      existing.concave_count += Number(r.concave_count);
+    } else {
+      byTort.set(key, {
+        lead_count: Number(r.lead_count),
+        total_spend: Number(r.total_spend),
+        qualified: Number(r.qualified),
+        retained: Number(r.retained),
+        ruin_flag_count: Number(r.ruin_flag_count),
+        convex_count: Number(r.convex_count),
+        concave_count: Number(r.concave_count),
+      });
+    }
   }
 
   return buildPortfolio(byTort, torts, settings);
