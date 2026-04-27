@@ -19,13 +19,22 @@
 // - Does not flag tables in the DB that aren't in the schema (e.g. tables
 //   from extensions). Only walks tables the Drizzle schema knows about.
 
-import { getTableColumns, getTableName, sql, is, Table } from "drizzle-orm";
-import { pool, db } from "@workspace/db";
+import { getTableColumns, getTableName, is, Table } from "drizzle-orm";
+import { pool } from "@workspace/db";
 import * as schema from "@workspace/db";
 
 interface ColumnInfo {
   column_name: string;
   is_nullable: "YES" | "NO";
+}
+
+function isColumnInfo(value: unknown): value is ColumnInfo {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.column_name === "string" &&
+    (v.is_nullable === "YES" || v.is_nullable === "NO")
+  );
 }
 
 interface DriftItem {
@@ -36,16 +45,26 @@ interface DriftItem {
 }
 
 async function fetchLiveColumns(tableName: string): Promise<ColumnInfo[]> {
-  const result = await db.execute(sql`
-    SELECT column_name, is_nullable
-    FROM information_schema.columns
-    WHERE table_schema = current_schema()
-      AND table_name = ${tableName}
-    ORDER BY ordinal_position
-  `);
-  // node-postgres wraps rows under .rows; assert the shape we know.
-  const rows = (result as unknown as { rows: ColumnInfo[] }).rows;
-  return rows;
+  // Use pg's pool.query directly (not drizzle's db.execute) so the result
+  // shape is the well-typed pg.QueryResult<T>. The validateRow guard then
+  // confirms each row matches ColumnInfo at runtime, so a future Drizzle/pg
+  // change can't silently invalidate the comparison logic — it would throw.
+  const result = await pool.query<ColumnInfo>(
+    `SELECT column_name, is_nullable
+     FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = $1
+     ORDER BY ordinal_position`,
+    [tableName],
+  );
+  for (const row of result.rows) {
+    if (!isColumnInfo(row)) {
+      throw new Error(
+        `check-drift: information_schema.columns row for table "${tableName}" did not match expected shape: ${JSON.stringify(row)}`,
+      );
+    }
+  }
+  return result.rows;
 }
 
 function collectTables(): Table[] {
