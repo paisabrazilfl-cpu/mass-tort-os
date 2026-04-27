@@ -13,18 +13,18 @@ interface State {
 }
 
 export class RouteErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  override state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo): void {
+  override componentDidCatch(error: Error, info: ErrorInfo): void {
     // eslint-disable-next-line no-console
     console.error("RouteErrorBoundary caught an error:", error, info);
   }
 
-  componentDidUpdate(prev: Props) {
+  override componentDidUpdate(prev: Props) {
     if (prev.resetKey !== this.props.resetKey && this.state.error) {
       this.setState({ error: null });
     }
@@ -32,7 +32,7 @@ export class RouteErrorBoundary extends Component<Props, State> {
 
   private handleRetry = () => this.setState({ error: null });
 
-  render() {
+  override render() {
     const { error } = this.state;
     if (!error) return this.props.children;
 

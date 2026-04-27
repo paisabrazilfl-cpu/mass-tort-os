@@ -1,12 +1,12 @@
 {
   "compilerOptions": {
     "isolatedModules": true,
-    "lib": ["es2022"],
-    "module": "esnext",
-    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "noEmitOnError": true,
     "noFallthroughCasesInSwitch": true,
-    "noImplicitOverride": false,
+    "noImplicitOverride": true,
     "noImplicitReturns": true,
     "noUnusedLocals": false,
     "noImplicitAny": true,
@@ -18,7 +18,7 @@
     "useUnknownInCatchVariables": true,
     "alwaysStrict": true,
     "skipLibCheck": true,
-    "target": "es2022",
+    "target": "ES2022",
     "types": [],
     "customConditions": ["workspace"]
   }
