@@ -166,14 +166,14 @@ async function probe(
 // 1. Public allowlist enforcement (asserts against validateRouteTable's policy).
 
 describe("public allowlist (validateRouteTable policy)", () => {
-  test("only health / forms-public / webhooks routers are stamped 'public'", () => {
+  test("only health / forms-public / web-forms / webhooks routers are stamped 'public'", () => {
     if (!booted) throw new Error("app not booted");
     const publicRouters = new Set(
       booted.policy
         .filter((p) => p.status === "public")
         .map((p) => p.router),
     );
-    const expected = new Set(["health", "forms-public", "webhooks"]);
+    const expected = new Set(["health", "forms-public", "web-forms", "webhooks"]);
     for (const r of publicRouters) {
       assert.ok(expected.has(r), `unexpected public router: ${r}`);
     }
@@ -359,15 +359,21 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
     );
   });
 
-  test("public path-prefix contract: every 'public' policy entry resolves under /api/healthz, /api/forms-public/, or /api/webhooks/", () => {
+  test("public path-prefix contract: every 'public' policy entry resolves under /api/healthz, /api/forms-public/, /api/web-forms/, or /api/webhooks/", () => {
     if (!booted) throw new Error("app not booted");
     // router-label → mounted URL prefix (mirror of routes/index.ts).
     const ROUTER_PREFIX: Record<string, string> = {
       health: "/api",
       "forms-public": "/api/forms-public",
+      "web-forms": "/api/web-forms",
       webhooks: "/api/webhooks",
     };
-    const ALLOWED_PUBLIC_PREFIXES = ["/api/healthz", "/api/forms-public/", "/api/webhooks/"];
+    const ALLOWED_PUBLIC_PREFIXES = [
+      "/api/healthz",
+      "/api/forms-public/",
+      "/api/web-forms/",
+      "/api/webhooks/",
+    ];
     for (const p of booted.policy) {
       if (p.status !== "public") continue;
       const prefix = ROUTER_PREFIX[p.router];

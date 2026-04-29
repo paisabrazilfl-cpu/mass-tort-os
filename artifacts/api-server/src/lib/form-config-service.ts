@@ -1,6 +1,6 @@
 import { db } from "@workspace/db";
 import { formConfigurationsTable } from "@workspace/db";
-import type { CustomField, FormConfiguration } from "@workspace/db";
+import type { CustomField, FormConfiguration, WebFormConfig } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { TORT_REGISTRY, TortDefinition } from "./tort-engine";
 import { logger } from "./logger";
@@ -24,6 +24,7 @@ export interface FormConfigPublic {
   avg_settlement_high: number | null;
   mdl_status: string | null;
   sol_months: number | null;
+  web_form_config: WebFormConfig | null;
   updated_at: string;
 }
 
@@ -102,6 +103,7 @@ function toPublic(row: FormConfiguration): FormConfigPublic {
     avg_settlement_high: row.avg_settlement_high ?? null,
     mdl_status: row.mdl_status ?? null,
     sol_months: row.sol_months ?? null,
+    web_form_config: row.web_form_config ?? null,
     updated_at: row.updated_at?.toISOString?.() ?? new Date().toISOString(),
   };
 }
@@ -149,6 +151,7 @@ export async function getFormConfig(tortId: string): Promise<FormConfigPublic | 
       mdl_status: null,
       sol_months: null,
       updated_at: new Date().toISOString(),
+      web_form_config: null,
     };
   }
   return toPublic(rows[0]);

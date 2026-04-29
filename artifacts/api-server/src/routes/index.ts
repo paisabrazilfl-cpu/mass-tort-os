@@ -12,6 +12,7 @@ import npiRouter from "./npi";
 import reviewQueueRouter from "./review-queue";
 import formsRouter from "./forms";
 import formsPublicRouter from "./forms-public";
+import webFormsRouter from "./web-forms";
 import vendorsRouter from "./vendors";
 import securityRouter from "./security";
 import timelineRouter from "./timeline";
@@ -42,6 +43,7 @@ import { markPublic, labelRouter } from "../lib/route-protection";
 // PUBLIC: providers cannot send our session cookie / Bearer token.
 markPublic(healthRouter, "health");
 markPublic(formsPublicRouter, "forms-public");
+markPublic(webFormsRouter, "web-forms");
 markPublic(webhooksRouter, "webhooks");
 // auth router carries a *mix* — login/refresh/register are public, the rest
 // are gated. The validator's AUTH_ROUTE_EXCEPTIONS list whitelists the public
@@ -83,6 +85,10 @@ router.use("/auth", authRouter);
 // (`/api/healthz`, `/api/forms-public/*`, `/api/webhooks/*`) holds at the
 // path-prefix level, not just at the router-label level.
 router.use("/forms-public", formsPublicRouter);
+// Lightweight public lead-capture forms (the "Web Forms" tab). Distinct
+// surface from /api/forms-public/* — these are the simpler embed-on-a-
+// landing-page forms with per-tort field/eligibility configuration.
+router.use("/web-forms", webFormsRouter);
 // Provider webhooks must be PUBLIC (callbacks have no Bearer token).
 // Each handler verifies provider signatures internally and always returns 200.
 router.use("/webhooks", webhooksRouter);

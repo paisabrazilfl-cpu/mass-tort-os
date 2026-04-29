@@ -46,6 +46,7 @@ import BuyersPage from "@/pages/buyers";
 import DocumentTemplatesPage from "@/pages/document-templates";
 import TemplateAssignmentsPage from "@/pages/template-assignments";
 import WorkflowSettingsPage from "@/pages/workflow-settings";
+import WebFormsPage from "@/pages/web-forms";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
 // 401s are handled separately by api-fetch's auth-failure callback.
@@ -114,6 +115,7 @@ function AuthedRoutes() {
           <Route path="/document-templates" component={DocumentTemplatesPage} />
           <Route path="/template-assignments" component={TemplateAssignmentsPage} />
           <Route path="/workflow-settings" component={WorkflowSettingsPage} />
+          <Route path="/web-forms" component={WebFormsPage} />
           <Route component={NotFound} />
         </Switch>
       </RouteErrorBoundary>

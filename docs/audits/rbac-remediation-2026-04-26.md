@@ -574,7 +574,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **159 checked / 13 public / 146 protected / 0 unprotected.**
+Boot-time count: **168 checked / 18 public / 150 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -682,6 +682,10 @@ Boot-time count: **159 checked / 13 public / 146 protected / 0 unprotected.**
 | forms | POST | `/api/forms/submit` | ✓ | ✓ |  |  |  | — | `forms:submit` | ✓ |
 | forms | POST | `/api/forms/validate/address` | ✓ |  |  | ✓ |  | — | — | ✓ |
 | forms | POST | `/api/forms/validate/email` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| forms | PATCH | `/api/forms/web-config/:tortId/toggle` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
+| forms | GET | `/api/forms/web-config/:tortId` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
+| forms | PUT | `/api/forms/web-config/:tortId` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
+| forms | GET | `/api/forms/web-config` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
 | health | GET | `/api/health/healthz` |  |  | ✓ |  |  | — | — | — |
 | image-objects | GET | `/api/image-objects/:id/integrity` | ✓ | ✓ |  |  |  | — | `image_objects:view` | ✓ |
 | image-objects | DELETE | `/api/image-objects/:id` | ✓ | ✓ |  |  |  | — | `image_objects:delete` | ✓ |
@@ -753,6 +757,11 @@ Boot-time count: **159 checked / 13 public / 146 protected / 0 unprotected.**
 | vendors | PATCH | `/api/vendors/:id` | ✓ | ✓ |  |  |  | — | `vendors:manage` | ✓ |
 | vendors | GET | `/api/vendors/` | ✓ | ✓ |  |  |  | — | `vendors:view` | ✓ |
 | vendors | POST | `/api/vendors/` | ✓ | ✓ |  |  |  | — | `vendors:manage` | ✓ |
+| web-forms | GET | `/api/web-forms/:tortId/embed.js` |  |  | ✓ |  |  | — | — | — |
+| web-forms | POST | `/api/web-forms/:tortId/submit` |  |  | ✓ |  |  | — | — | — |
+| web-forms | GET | `/api/web-forms/:tortId` |  |  | ✓ |  |  | — | — | — |
+| web-forms | POST | `/api/web-forms/validate/address` |  |  | ✓ |  |  | — | — | — |
+| web-forms | POST | `/api/web-forms/validate/email` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/_test/envelope-signed` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/docusign` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/dropbox-sign` |  |  | ✓ |  |  | — | — | — |

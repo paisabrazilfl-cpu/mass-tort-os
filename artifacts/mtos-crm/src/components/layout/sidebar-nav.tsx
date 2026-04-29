@@ -33,6 +33,7 @@ export const navigation: NavSection[] = [
   {
     section: "Document Workflow",
     items: [
+      { name: "Web Forms", href: "/web-forms", icon: AppWindow },
       { name: "Buyers", href: "/buyers", icon: Building },
       { name: "Doc Templates", href: "/document-templates", icon: FileSignature },
       { name: "Assignment Matrix", href: "/template-assignments", icon: Grid3x3 },

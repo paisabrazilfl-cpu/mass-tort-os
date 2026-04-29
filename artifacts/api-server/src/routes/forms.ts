@@ -22,7 +22,9 @@ import {
   removeCustomField,
   type CustomField,
 } from "../lib/form-config-service";
-import { customFieldSchema } from "@workspace/db";
+import { customFieldSchema, webFormConfigSchema, type WebFormConfig } from "@workspace/db";
+import { updateWebFormConfig } from "./web-forms";
+import { buildDefaultWebFormConfig } from "../lib/web-form-defaults";
 import type { Request, Response } from "express";
 
 // Unified error envelope helpers — keep responses identical in shape to the
@@ -226,6 +228,170 @@ router.delete(
 router.get("/categories", (_req, res) => {
   res.json(getTortCategories());
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Web Forms admin endpoints (separate from the heavy custom_fields config
+// above). These manage the lightweight, embeddable lead-capture forms the
+// CRM exposes via /api/web-forms/*.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * List every tort with a summary of its web form config (or null if not
+ * yet configured). Used by the Web Forms admin page to render the table.
+ */
+router.get(
+  "/web-config",
+  authMiddleware,
+  requirePermission(Permission.FORMS_CONFIG_VIEW),
+  async (_req, res) => {
+    try {
+      const all = await getAllFormConfigs();
+      const summaries = all.map((c) => ({
+        tort_id: c.id,
+        tort_label: c.label,
+        category: c.category,
+        active: c.active,
+        web_form_enabled: c.web_form_config?.enabled ?? false,
+        field_count: c.web_form_config?.fields?.length ?? 0,
+        rule_count: c.web_form_config?.eligibility_rules?.length ?? 0,
+        send_confirmation_email: c.web_form_config?.send_confirmation_email ?? false,
+        configured: c.web_form_config !== null,
+        updated_at: c.updated_at,
+      }));
+      res.json({ web_forms: summaries });
+    } catch (err) {
+      logger.error({ err }, "Failed to load web form configs");
+      serverError(res, "Failed to load web form configurations");
+    }
+  },
+);
+
+/**
+ * Fetch the full web form config for a single tort. If the tort has never
+ * had a web form configured, returns the seeded default (without persisting)
+ * so the admin can review and save.
+ */
+router.get(
+  "/web-config/:tortId",
+  authMiddleware,
+  requirePermission(Permission.FORMS_CONFIG_VIEW),
+  async (req, res) => {
+    try {
+      const tortId = String(req.params.tortId);
+      const config = await getFormConfig(tortId);
+      if (!config) {
+        notFound(res, "Tort campaign not found");
+        return;
+      }
+      const tort = TORT_REGISTRY[tortId];
+      const cfg =
+        config.web_form_config ?? (tort ? buildDefaultWebFormConfig(tort) : null);
+      if (!cfg) {
+        notFound(res, "No default web form available for this tort");
+        return;
+      }
+      res.json({
+        tort_id: tortId,
+        tort_label: config.label,
+        web_form_config: cfg,
+        is_default: config.web_form_config === null,
+        updated_at: config.updated_at,
+      });
+    } catch (err) {
+      logger.error({ err }, "Failed to load web form config");
+      serverError(res, "Failed to load web form configuration");
+    }
+  },
+);
+
+/**
+ * Replace the entire web form config for a tort. Validates the full
+ * structure (fields + eligibility rules) before persisting so an
+ * admin can never save a form that the public router would later
+ * reject as malformed.
+ */
+router.put(
+  "/web-config/:tortId",
+  authMiddleware,
+  requirePermission(Permission.FORMS_CONFIG_MANAGE),
+  auditAction("web_form_config_update"),
+  async (req, res) => {
+    try {
+      const tortId = String(req.params.tortId);
+      const parsed = webFormConfigSchema.safeParse(req.body);
+      if (!parsed.success) {
+        badRequest(res, "Invalid web form config", parsed.error.issues);
+        return;
+      }
+      // Reject duplicate field keys (silent dedupe would mask admin mistakes).
+      const keys = new Set<string>();
+      for (const f of parsed.data.fields) {
+        if (keys.has(f.key)) {
+          badRequest(res, `Duplicate field key: ${f.key}`);
+          return;
+        }
+        keys.add(f.key);
+      }
+      // Eligibility rules must reference real field keys.
+      for (const r of parsed.data.eligibility_rules) {
+        if (!keys.has(r.field)) {
+          badRequest(res, `Eligibility rule "${r.id}" references unknown field "${r.field}"`);
+          return;
+        }
+      }
+      const userId = req.user?.id ?? null;
+      const updated = await updateWebFormConfig(tortId, parsed.data as WebFormConfig, userId);
+      if (!updated) {
+        notFound(res, "Tort campaign not found");
+        return;
+      }
+      res.json({ tort_id: tortId, web_form_config: updated });
+    } catch (err) {
+      logger.error({ err }, "Failed to update web form config");
+      serverError(res, "Failed to update web form configuration");
+    }
+  },
+);
+
+/**
+ * Quick toggle for the on/off switch in the admin UI. Doesn't require
+ * sending the full config back.
+ */
+router.patch(
+  "/web-config/:tortId/toggle",
+  authMiddleware,
+  requirePermission(Permission.FORMS_CONFIG_MANAGE),
+  auditAction("web_form_config_toggle"),
+  async (req, res) => {
+    try {
+      const tortId = String(req.params.tortId);
+      const enabled = (req.body as Record<string, unknown>)?.enabled;
+      if (typeof enabled !== "boolean") {
+        badRequest(res, "enabled must be boolean");
+        return;
+      }
+      const config = await getFormConfig(tortId);
+      if (!config) {
+        notFound(res, "Tort campaign not found");
+        return;
+      }
+      const tort = TORT_REGISTRY[tortId];
+      const current =
+        config.web_form_config ?? (tort ? buildDefaultWebFormConfig(tort) : null);
+      if (!current) {
+        notFound(res, "No web form configurable for this tort");
+        return;
+      }
+      const next: WebFormConfig = { ...current, enabled };
+      const userId = req.user?.id ?? null;
+      const updated = await updateWebFormConfig(tortId, next, userId);
+      res.json({ tort_id: tortId, enabled: updated?.enabled ?? enabled });
+    } catch (err) {
+      logger.error({ err }, "Failed to toggle web form");
+      serverError(res, "Failed to toggle web form");
+    }
+  },
+);
 
 router.post("/validate/email", (req, res) => {
   const { email } = req.body;
