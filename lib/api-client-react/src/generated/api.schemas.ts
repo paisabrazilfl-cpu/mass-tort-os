@@ -536,6 +536,129 @@ export interface NpiSearchResponse {
   result_count: number;
 }
 
+/**
+ * Claimed provider profile to verify against the registry.
+ */
+export interface NpiVerifyExpected {
+  name?: string;
+  organization?: string;
+  city?: string;
+  state?: string;
+  specialty?: string;
+}
+
+export interface NpiVerifyRichRequest {
+  /** 10-digit NPI. If supplied, lookup is direct; otherwise we search by name + city + state and pick the best fuzzy candidate. */
+  npi?: string | null;
+  expected: NpiVerifyExpected;
+}
+
+export interface NpiVerifyMatchedTaxonomy {
+  code: string;
+  desc: string;
+  primary: boolean;
+}
+
+export type NpiVerifyProviderSummaryAddress = {
+  address_1: string;
+  city: string;
+  state: string;
+  postal_code: string;
+};
+
+export interface NpiVerifyProviderSummary {
+  npi: string;
+  name: string;
+  organization_name: string;
+  taxonomies: NpiVerifyMatchedTaxonomy[];
+  address: NpiVerifyProviderSummaryAddress;
+}
+
+export type NpiVerifyRichResultMethod =
+  | (typeof NpiVerifyRichResultMethod)[keyof typeof NpiVerifyRichResultMethod]
+  | null;
+
+export const NpiVerifyRichResultMethod = {
+  npi: "npi",
+  name_search: "name_search",
+} as const;
+
+export type NpiVerifyRichResultChecksNpiLookup = {
+  found: boolean;
+  npi?: string;
+  message?: string;
+  error?: string;
+};
+
+export type NpiVerifyRichResultChecksSearch = {
+  found: boolean;
+  candidates_returned?: number;
+  best_score?: number;
+  message?: string;
+  error?: string;
+};
+
+export type NpiVerifyRichResultChecksName = {
+  expected: string;
+  provider: string;
+  score: number;
+  match: boolean;
+};
+
+export type NpiVerifyRichResultChecksOrganization = {
+  expected: string;
+  provider: string;
+  score: number;
+  match: boolean;
+};
+
+export type NpiVerifyRichResultChecksLocation = {
+  expected_city: string;
+  provider_city: string;
+  city_score: number;
+  city_match: boolean;
+  expected_state: string;
+  provider_state: string;
+  state_score: number;
+  state_match: boolean;
+};
+
+export type NpiVerifyRichResultChecksSpecialty = {
+  expected_specialty: string;
+  taxonomy_matches: NpiVerifyMatchedTaxonomy[];
+  all_taxonomies: string[];
+  match: boolean;
+};
+
+export type NpiVerifyRichResultChecksDecisionThresholds = {
+  identity_score: number;
+  identity_ok: boolean;
+  city_score: number;
+  city_ok: boolean;
+  state_score: number;
+  state_ok: boolean;
+  specialty_ok: boolean;
+};
+
+export type NpiVerifyRichResultChecks = {
+  npi_lookup?: NpiVerifyRichResultChecksNpiLookup;
+  search?: NpiVerifyRichResultChecksSearch;
+  name?: NpiVerifyRichResultChecksName;
+  organization?: NpiVerifyRichResultChecksOrganization;
+  location?: NpiVerifyRichResultChecksLocation;
+  specialty?: NpiVerifyRichResultChecksSpecialty;
+  decision_thresholds?: NpiVerifyRichResultChecksDecisionThresholds;
+};
+
+export interface NpiVerifyRichResult {
+  method: NpiVerifyRichResultMethod;
+  provider: NpiVerifyProviderSummary | null;
+  verified: boolean;
+  confidence: number;
+  candidates_returned?: number;
+  checks: NpiVerifyRichResultChecks;
+}
+
 export interface Paralegal {
   id: number;
   name: string;

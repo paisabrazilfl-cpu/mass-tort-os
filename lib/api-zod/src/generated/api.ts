@@ -844,6 +844,128 @@ export const LookupNpiResponse = zod.object({
 });
 
 /**
+ * @summary Verify a claimed provider against the NPI Registry with per-field scoring
+ */
+export const VerifyProviderMatchBody = zod.object({
+  npi: zod
+    .string()
+    .nullish()
+    .describe(
+      "10-digit NPI. If supplied, lookup is direct; otherwise we search by name + city + state and pick the best fuzzy candidate.",
+    ),
+  expected: zod
+    .object({
+      name: zod.string().optional(),
+      organization: zod.string().optional(),
+      city: zod.string().optional(),
+      state: zod.string().optional(),
+      specialty: zod.string().optional(),
+    })
+    .describe("Claimed provider profile to verify against the registry."),
+});
+
+export const VerifyProviderMatchResponse = zod.object({
+  method: zod
+    .union([zod.literal("npi"), zod.literal("name_search"), zod.literal(null)])
+    .nullable(),
+  provider: zod
+    .object({
+      npi: zod.string(),
+      name: zod.string(),
+      organization_name: zod.string(),
+      taxonomies: zod.array(
+        zod.object({
+          code: zod.string(),
+          desc: zod.string(),
+          primary: zod.boolean(),
+        }),
+      ),
+      address: zod.object({
+        address_1: zod.string(),
+        city: zod.string(),
+        state: zod.string(),
+        postal_code: zod.string(),
+      }),
+    })
+    .nullable(),
+  verified: zod.boolean(),
+  confidence: zod.number(),
+  candidates_returned: zod.number().optional(),
+  checks: zod.object({
+    npi_lookup: zod
+      .object({
+        found: zod.boolean(),
+        npi: zod.string().optional(),
+        message: zod.string().optional(),
+        error: zod.string().optional(),
+      })
+      .optional(),
+    search: zod
+      .object({
+        found: zod.boolean(),
+        candidates_returned: zod.number().optional(),
+        best_score: zod.number().optional(),
+        message: zod.string().optional(),
+        error: zod.string().optional(),
+      })
+      .optional(),
+    name: zod
+      .object({
+        expected: zod.string(),
+        provider: zod.string(),
+        score: zod.number(),
+        match: zod.boolean(),
+      })
+      .optional(),
+    organization: zod
+      .object({
+        expected: zod.string(),
+        provider: zod.string(),
+        score: zod.number(),
+        match: zod.boolean(),
+      })
+      .optional(),
+    location: zod
+      .object({
+        expected_city: zod.string(),
+        provider_city: zod.string(),
+        city_score: zod.number(),
+        city_match: zod.boolean(),
+        expected_state: zod.string(),
+        provider_state: zod.string(),
+        state_score: zod.number(),
+        state_match: zod.boolean(),
+      })
+      .optional(),
+    specialty: zod
+      .object({
+        expected_specialty: zod.string(),
+        taxonomy_matches: zod.array(
+          zod.object({
+            code: zod.string(),
+            desc: zod.string(),
+            primary: zod.boolean(),
+          }),
+        ),
+        all_taxonomies: zod.array(zod.string()),
+        match: zod.boolean(),
+      })
+      .optional(),
+    decision_thresholds: zod
+      .object({
+        identity_score: zod.number(),
+        identity_ok: zod.boolean(),
+        city_score: zod.number(),
+        city_ok: zod.boolean(),
+        state_score: zod.number(),
+        state_ok: zod.boolean(),
+        specialty_ok: zod.boolean(),
+      })
+      .optional(),
+  }),
+});
+
+/**
  * @summary Get all tort campaign form configurations
  */
 export const GetFormConfigsResponse = zod.object({

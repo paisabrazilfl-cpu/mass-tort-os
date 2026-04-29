@@ -746,6 +746,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /npi/verify:
+    post:
+      operationId: verifyProviderMatch
+      tags: [npi]
+      summary: Verify a claimed provider against the NPI Registry with per-field scoring
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NpiVerifyRichRequest"
+      responses:
+        "200":
+          description: Verification result with confidence score and per-field breakdown
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NpiVerifyRichResult"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /forms/config:
     get:
       operationId: getFormConfigs
@@ -2385,6 +2410,197 @@ components:
         result_count:
           type: integer
       required: [results, result_count]
+
+    NpiVerifyExpected:
+      type: object
+      description: Claimed provider profile to verify against the registry.
+      properties:
+        name:
+          type: string
+        organization:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        specialty:
+          type: string
+
+    NpiVerifyRichRequest:
+      type: object
+      properties:
+        npi:
+          type: string
+          nullable: true
+          description: 10-digit NPI. If supplied, lookup is direct; otherwise we search by name + city + state and pick the best fuzzy candidate.
+        expected:
+          $ref: "#/components/schemas/NpiVerifyExpected"
+      required: [expected]
+
+    NpiVerifyMatchedTaxonomy:
+      type: object
+      properties:
+        code:
+          type: string
+        desc:
+          type: string
+        primary:
+          type: boolean
+      required: [code, desc, primary]
+
+    NpiVerifyProviderSummary:
+      type: object
+      properties:
+        npi:
+          type: string
+        name:
+          type: string
+        organization_name:
+          type: string
+        taxonomies:
+          type: array
+          items:
+            $ref: "#/components/schemas/NpiVerifyMatchedTaxonomy"
+        address:
+          type: object
+          properties:
+            address_1:
+              type: string
+            city:
+              type: string
+            state:
+              type: string
+            postal_code:
+              type: string
+          required: [address_1, city, state, postal_code]
+      required: [npi, name, organization_name, taxonomies, address]
+
+    NpiVerifyRichResult:
+      type: object
+      properties:
+        method:
+          type: string
+          nullable: true
+          enum: [npi, name_search, null]
+        provider:
+          allOf:
+            - $ref: "#/components/schemas/NpiVerifyProviderSummary"
+          nullable: true
+        verified:
+          type: boolean
+        confidence:
+          type: number
+          format: float
+        candidates_returned:
+          type: integer
+        checks:
+          type: object
+          properties:
+            npi_lookup:
+              type: object
+              properties:
+                found:
+                  type: boolean
+                npi:
+                  type: string
+                message:
+                  type: string
+                error:
+                  type: string
+              required: [found]
+            search:
+              type: object
+              properties:
+                found:
+                  type: boolean
+                candidates_returned:
+                  type: integer
+                best_score:
+                  type: number
+                message:
+                  type: string
+                error:
+                  type: string
+              required: [found]
+            name:
+              type: object
+              properties:
+                expected:
+                  type: string
+                provider:
+                  type: string
+                score:
+                  type: number
+                match:
+                  type: boolean
+              required: [expected, provider, score, match]
+            organization:
+              type: object
+              properties:
+                expected:
+                  type: string
+                provider:
+                  type: string
+                score:
+                  type: number
+                match:
+                  type: boolean
+              required: [expected, provider, score, match]
+            location:
+              type: object
+              properties:
+                expected_city:
+                  type: string
+                provider_city:
+                  type: string
+                city_score:
+                  type: number
+                city_match:
+                  type: boolean
+                expected_state:
+                  type: string
+                provider_state:
+                  type: string
+                state_score:
+                  type: number
+                state_match:
+                  type: boolean
+              required: [expected_city, provider_city, city_score, city_match, expected_state, provider_state, state_score, state_match]
+            specialty:
+              type: object
+              properties:
+                expected_specialty:
+                  type: string
+                taxonomy_matches:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/NpiVerifyMatchedTaxonomy"
+                all_taxonomies:
+                  type: array
+                  items:
+                    type: string
+                match:
+                  type: boolean
+              required: [expected_specialty, taxonomy_matches, all_taxonomies, match]
+            decision_thresholds:
+              type: object
+              properties:
+                identity_score:
+                  type: number
+                identity_ok:
+                  type: boolean
+                city_score:
+                  type: number
+                city_ok:
+                  type: boolean
+                state_score:
+                  type: number
+                state_ok:
+                  type: boolean
+                specialty_ok:
+                  type: boolean
+              required: [identity_score, identity_ok, city_score, city_ok, state_score, state_ok, specialty_ok]
+      required: [method, provider, verified, confidence, checks]
 
     Paralegal:
       type: object

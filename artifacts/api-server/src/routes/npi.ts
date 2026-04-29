@@ -2,6 +2,7 @@ import { Router } from "express";
 import { logger } from "../lib/logger";
 import { Permission, requirePermission } from "../lib/rbac";
 import { badRequest, errorEnvelope, notFound } from "../lib/http-errors";
+import { verifyProvider } from "../lib/npi-verify";
 
 const router = Router();
 
@@ -140,6 +141,41 @@ router.get("/lookup/:npi", requirePermission(Permission.NPI_LOOKUP), async (req,
   } catch (err) {
     logger.error({ err }, "NPI lookup failed");
     errorEnvelope(res, 502, "upstream_error", "NPI Registry lookup failed");
+  }
+});
+
+// Verify a claimed provider against the registry — see lib/npi-verify.ts for
+// strategy and decision thresholds. Distinct from /api/forms/npi-verify which
+// is the lighter taxonomy-only check used by the public form pipeline; this
+// endpoint is the operator-facing rich verify with per-field scoring.
+router.post("/verify", requirePermission(Permission.NPI_LOOKUP), async (req, res) => {
+  const { npi, expected } = req.body ?? {};
+  if (!expected || typeof expected !== "object") {
+    badRequest(res, "expected provider profile is required");
+    return;
+  }
+  if (
+    !expected.name &&
+    !expected.organization &&
+    !expected.city &&
+    !expected.state &&
+    !expected.specialty &&
+    !npi
+  ) {
+    badRequest(res, "Provide at least an NPI or one expected field (name, organization, city, state, specialty)");
+    return;
+  }
+  if (npi !== undefined && npi !== null && typeof npi !== "string") {
+    badRequest(res, "npi must be a string when provided");
+    return;
+  }
+
+  try {
+    const result = await verifyProvider({ npi: npi || undefined, expected });
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "NPI verify failed");
+    errorEnvelope(res, 502, "upstream_error", "NPI Registry verification failed");
   }
 });
 

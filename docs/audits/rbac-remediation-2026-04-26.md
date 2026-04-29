@@ -576,7 +576,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **169 checked / 19 public / 150 protected / 0 unprotected.**
+Boot-time count: **170 checked / 19 public / 151 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -730,6 +730,7 @@ Boot-time count: **169 checked / 19 public / 150 protected / 0 unprotected.**
 | news | GET | `/api/news/mass-tort` | ✓ | ✓ |  |  |  | — | `news:view` | ✓ |
 | npi | GET | `/api/npi/lookup/:npi` | ✓ | ✓ |  |  |  | — | `npi:lookup` | ✓ |
 | npi | GET | `/api/npi/search` | ✓ | ✓ |  |  |  | — | `npi:lookup` | ✓ |
+| npi | POST | `/api/npi/verify` | ✓ | ✓ |  |  |  | — | `npi:lookup` | ✓ |
 | ocr | POST | `/api/ocr/ai-fields/result/:id` | ✓ | ✓ |  |  |  | — | `ocr:ai_fields` | ✓ |
 | ocr | POST | `/api/ocr/ai-fields` | ✓ | ✓ |  |  |  | — | `ocr:ai_fields` | ✓ |
 | ocr | GET | `/api/ocr/queue-stats` | ✓ | ✓ |  |  |  | — | `ocr:queue_admin` | ✓ |

@@ -58,6 +58,8 @@ import type {
   NpiProvider,
   NpiSearchResponse,
   NpiVerifyResult,
+  NpiVerifyRichRequest,
+  NpiVerifyRichResult,
   Paralegal,
   ParalegalDetail,
   ParalegalLeaderboardRow,
@@ -2674,6 +2676,92 @@ export function useLookupNpi<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Verify a claimed provider against the NPI Registry with per-field scoring
+ */
+export const getVerifyProviderMatchUrl = () => {
+  return `/api/npi/verify`;
+};
+
+export const verifyProviderMatch = async (
+  npiVerifyRichRequest: NpiVerifyRichRequest,
+  options?: RequestInit,
+): Promise<NpiVerifyRichResult> => {
+  return customFetch<NpiVerifyRichResult>(getVerifyProviderMatchUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(npiVerifyRichRequest),
+  });
+};
+
+export const getVerifyProviderMatchMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof verifyProviderMatch>>,
+    TError,
+    { data: BodyType<NpiVerifyRichRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof verifyProviderMatch>>,
+  TError,
+  { data: BodyType<NpiVerifyRichRequest> },
+  TContext
+> => {
+  const mutationKey = ["verifyProviderMatch"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof verifyProviderMatch>>,
+    { data: BodyType<NpiVerifyRichRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return verifyProviderMatch(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type VerifyProviderMatchMutationResult = NonNullable<
+  Awaited<ReturnType<typeof verifyProviderMatch>>
+>;
+export type VerifyProviderMatchMutationBody = BodyType<NpiVerifyRichRequest>;
+export type VerifyProviderMatchMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Verify a claimed provider against the NPI Registry with per-field scoring
+ */
+export const useVerifyProviderMatch = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof verifyProviderMatch>>,
+    TError,
+    { data: BodyType<NpiVerifyRichRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof verifyProviderMatch>>,
+  TError,
+  { data: BodyType<NpiVerifyRichRequest> },
+  TContext
+> => {
+  return useMutation(getVerifyProviderMatchMutationOptions(options));
+};
 
 /**
  * @summary Get all tort campaign form configurations
