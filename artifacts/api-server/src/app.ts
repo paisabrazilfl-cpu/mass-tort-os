@@ -63,6 +63,22 @@ app.use(
     },
   }),
 );
+// Permissive CORS for the embeddable public web-forms surface. These
+// endpoints are intentionally designed to be loaded and POSTed from any
+// third-party landing page (the whole point of an embeddable form), so
+// they need to allow any origin. Credentials are NOT allowed here — there
+// is no auth cookie flowing; rate limiting is IP-based; the audit log
+// captures the submitting Origin. This middleware is mounted BEFORE the
+// strict global CORS so that preflight OPTIONS for /api/web-forms/* is
+// answered correctly and the request never reaches the strict matcher.
+app.use("/api/web-forms", cors({
+  origin: true,
+  credentials: false,
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"],
+  maxAge: 86400,
+}));
+// Strict CORS for the CRM admin app and all other authenticated routes.
 app.use(cors({
   origin: process.env.NODE_ENV === "production"
     ? [process.env.REPL_SLUG ? `https://${process.env.REPL_SLUG}.replit.app` : ""].filter(Boolean)
