@@ -107,6 +107,7 @@ export * from "./npiVerifyRichResultChecksOrganization";
 export * from "./npiVerifyRichResultChecksSearch";
 export * from "./npiVerifyRichResultChecksSpecialty";
 export * from "./npiVerifyRichResultMethod";
+export * from "./npiVerifyRichResultStatus";
 export * from "./paralegal";
 export * from "./paralegalDetail";
 export * from "./paralegalLeaderboardRow";

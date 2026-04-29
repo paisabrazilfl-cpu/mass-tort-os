@@ -889,6 +889,7 @@ export const VerifyProviderMatchResponse = zod.object({
     })
     .nullable(),
   verified: zod.boolean(),
+  status: zod.enum(["VERIFIED", "MISMATCH", "UNAVAILABLE"]).optional(),
   confidence: zod.number(),
   candidates_returned: zod.number().optional(),
   checks: zod.object({

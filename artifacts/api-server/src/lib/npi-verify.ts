@@ -10,11 +10,31 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity } from "./string-similarity";
+import { normalize, similarity, similarityName } from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
 const HTTP_TIMEOUT_MS = 10_000;
+const NPI_USER_AGENT = "MTOS-NPPES-Verifier/1.0";
+const NPI_MAX_RETRIES = 2; // 1 initial + 2 retries = 3 attempts total
+
+// Specialty aliases: when an operator types "general practitioner" we want the
+// taxonomy match to also accept "general practice", "family medicine", or
+// "internal medicine" — those are the actual NPPES taxonomy descriptions for
+// the same job. Without this, perfectly valid NPIs scored 0 on specialty.
+const SPECIALTY_ALIASES: Record<string, readonly string[]> = {
+  "general practitioner": ["general practice", "family medicine", "internal medicine"],
+  "general practice": ["family medicine", "internal medicine"],
+  "family doctor": ["family medicine", "general practice"],
+  "primary care": ["family medicine", "internal medicine", "general practice"],
+};
+
+class NppesUnavailable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NppesUnavailable";
+  }
+}
 
 interface NpiAddress {
   address_purpose?: string;
@@ -75,9 +95,18 @@ export interface ProviderSummary {
   };
 }
 
+// Three-way honest verdict: VERIFIED means we got data back from NPPES and
+// every gate passed; MISMATCH means we got data back but a gate failed;
+// UNAVAILABLE means we could NOT reach NPPES at all (network failure, HTTP
+// error, non-JSON response). UNAVAILABLE must NEVER be downgraded to
+// MISMATCH — that would be a silent-pass-style honesty bug, the same family
+// the BG hub OFAC fix addresses.
+export type VerifyProviderStatus = "VERIFIED" | "MISMATCH" | "UNAVAILABLE";
+
 export interface VerifyProviderResult {
   method: "npi" | "name_search" | null;
   provider: ProviderSummary | null;
+  status: VerifyProviderStatus;
   checks: {
     npi_lookup?: { found: boolean; npi?: string; message?: string; error?: string };
     search?: { found: boolean; candidates_returned?: number; best_score?: number; message?: string; error?: string };
@@ -114,20 +143,69 @@ export interface VerifyProviderResult {
   candidates_returned?: number;
 }
 
-async function fetchNpi(params: URLSearchParams): Promise<NpiRegistryResult[]> {
+async function fetchNpiOnce(params: URLSearchParams): Promise<NpiRegistryResult[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
   try {
     const url = `${NPI_API_BASE}?${params.toString()}`;
-    const r = await fetch(url, { signal: controller.signal });
+    const r = await fetch(url, {
+      signal: controller.signal,
+      // Identified User-Agent + JSON Accept header. NPPES is friendlier to
+      // identified clients and is more likely to rate-limit anonymous ones.
+      headers: { "User-Agent": NPI_USER_AGENT, Accept: "application/json" },
+    });
     if (!r.ok) {
-      throw new Error(`NPI registry returned ${r.status}`);
+      // Treat HTTP failure as transient/unavailable — the honest bucket.
+      throw new NppesUnavailable(`NPPES returned HTTP ${r.status}`);
     }
-    const data = (await r.json()) as { results?: NpiRegistryResult[] };
+    let data: { results?: NpiRegistryResult[] };
+    try {
+      data = (await r.json()) as { results?: NpiRegistryResult[] };
+    } catch (err) {
+      throw new NppesUnavailable(
+        `NPPES returned non-JSON response: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     return data.results ?? [];
+  } catch (err) {
+    if (err instanceof NppesUnavailable) throw err;
+    // AbortError, network errors, etc. — wrap.
+    throw new NppesUnavailable(err instanceof Error ? err.message : String(err));
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// Retry wrapper with linear backoff for transient NPPES failures. Only
+// NppesUnavailable is retried — anything else propagates immediately.
+async function fetchNpi(params: URLSearchParams): Promise<NpiRegistryResult[]> {
+  let lastErr: NppesUnavailable | null = null;
+  for (let attempt = 0; attempt <= NPI_MAX_RETRIES; attempt++) {
+    try {
+      return await fetchNpiOnce(params);
+    } catch (err) {
+      if (!(err instanceof NppesUnavailable)) throw err;
+      lastErr = err;
+      if (attempt < NPI_MAX_RETRIES) {
+        const backoffMs = 250 * (attempt + 1);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+  }
+  throw lastErr ?? new NppesUnavailable("NPPES request failed");
+}
+
+// Pick the most relevant address from an NPPES record. NPPES may return
+// MAILING and LOCATION (practice) addresses; LOCATION is what we want for
+// "where do they actually work" matching. Falls back to MAILING, then any.
+function pickPrimaryAddress(addresses: NpiAddress[] | undefined): NpiAddress {
+  const list = addresses ?? [];
+  return (
+    list.find((a) => a.address_purpose === "LOCATION") ??
+    list.find((a) => a.address_purpose === "MAILING") ??
+    list[0] ??
+    {}
+  );
 }
 
 async function lookupByNpi(npi: string): Promise<NpiRegistryResult | null> {
@@ -171,8 +249,8 @@ function pickBestSearchResult(
       basic.name ??
       [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
     const org = basic.organization_name ?? "";
-    const primaryAddr = (r.addresses ?? [])[0] ?? {};
-    const nameScore = Math.max(similarity(expName, name), similarity(expName, org));
+    const primaryAddr = pickPrimaryAddress(r.addresses);
+    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
     const orgScore = similarity(expOrg, org);
     const cityScore = similarity(expCity, primaryAddr.city ?? "");
     const stateScore =
@@ -190,18 +268,35 @@ function pickBestSearchResult(
   return best ? { best, score: bestScore } : null;
 }
 
+// Build the set of accepted specialty terms for matching. Always includes
+// the operator-supplied term verbatim plus any aliases registered in
+// SPECIALTY_ALIASES. All terms are normalized for case-insensitive substring
+// comparison against NPPES taxonomy descriptions.
+function specialtyAcceptedTerms(expectedSpecialty: string): string[] {
+  const base = normalize(expectedSpecialty);
+  if (!base) return [];
+  const aliases = SPECIALTY_ALIASES[base] ?? [];
+  const all = [base, ...aliases].map((t) => normalize(t)).filter(Boolean);
+  return Array.from(new Set(all));
+}
+
 function providerTaxonomyMatches(
   provider: NpiRegistryResult,
   expectedSpecialty: string,
 ): { matched: boolean; matched_taxonomies: Array<{ code: string; desc: string; primary: boolean }>; all_descs: string[] } {
-  const expected = normalize(expectedSpecialty);
+  const terms = specialtyAcceptedTerms(expectedSpecialty);
   const taxonomies = provider.taxonomies ?? [];
   const matchedTaxonomies: Array<{ code: string; desc: string; primary: boolean }> = [];
-  for (const t of taxonomies) {
-    const desc = t.desc ?? "";
-    if (!desc) continue;
-    if (expected && normalize(desc).includes(expected)) {
-      matchedTaxonomies.push({ code: t.code ?? "", desc, primary: !!t.primary });
+  if (terms.length > 0) {
+    for (const t of taxonomies) {
+      const desc = t.desc ?? "";
+      if (!desc) continue;
+      const descNorm = normalize(desc);
+      // Substring match either direction so "family medicine" matches
+      // "Family Medicine - Sports Medicine Physician" and so on.
+      if (terms.some((term) => descNorm.includes(term) || term.includes(descNorm))) {
+        matchedTaxonomies.push({ code: t.code ?? "", desc, primary: !!t.primary });
+      }
     }
   }
   const allDescs = taxonomies.map((t) => t.desc ?? "").filter(Boolean);
@@ -224,8 +319,10 @@ function compareStringsField(
 
 function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   const basic = p.basic ?? {};
-  const addresses = p.addresses ?? [];
-  const primary = addresses[0] ?? {};
+  // Prefer practice LOCATION over MAILING — mailing addresses for big
+  // hospital systems often resolve to a corporate PO box hundreds of miles
+  // from the actual practice, which would tank city scoring.
+  const primary = pickPrimaryAddress(p.addresses);
   return {
     npi: String(p.number ?? ""),
     name:
@@ -272,10 +369,21 @@ export async function verifyProvider(
   const result: VerifyProviderResult = {
     method: null,
     provider: null,
+    // Default to MISMATCH — flips to VERIFIED on success or UNAVAILABLE if
+    // ANY NPPES call surfaced a transport-level failure. This is the same
+    // honesty pattern the BG hub uses: an unreachable source must never be
+    // reported the same way as a confirmed-bad result.
+    status: "MISMATCH",
     checks: {},
     verified: false,
     confidence: 0,
   };
+
+  // Track whether we ever failed to reach NPPES. If a call fails AND we
+  // ultimately have no provider record to score, the verdict is UNAVAILABLE,
+  // not MISMATCH. If a call fails but we still get a candidate from another
+  // call, we proceed normally — the verdict reflects the data we DID get.
+  let nppesReachable = true;
 
   let provider: NpiRegistryResult | null = null;
   // Strict NPI mode: if the caller supplied an NPI, that is the only thing we
@@ -301,6 +409,7 @@ export async function verifyProvider(
         }
       } catch (err) {
         result.method = "npi";
+        if (err instanceof NppesUnavailable) nppesReachable = false;
         result.checks.npi_lookup = { found: false, error: (err as Error).message };
       }
     }
@@ -326,19 +435,31 @@ export async function verifyProvider(
         }
       }
     } catch (err) {
+      if (err instanceof NppesUnavailable) nppesReachable = false;
       result.checks.search = { found: false, error: (err as Error).message };
     }
   }
 
   if (!provider) {
+    // No provider record. If NPPES couldn't be reached, the honest verdict
+    // is UNAVAILABLE — operators must NOT interpret this as "doesn't match".
+    if (!nppesReachable) {
+      result.status = "UNAVAILABLE";
+    }
     return result;
   }
 
   result.provider = summarizeProvider(provider);
 
-  // Per-field scoring against the resolved provider
+  // Per-field scoring against the resolved provider. Use similarityName
+  // (title/credential aware) for the person name so "Dr. John Smith MD"
+  // matches the registered "John Smith" cleanly. Inline rather than extending
+  // compareStringsField so this stays opt-in to person-name compares only.
   const provName = result.provider.name || result.provider.organization_name;
-  const nameCheck = compareStringsField(provName, expected.name, 0.75);
+  const nameRawScore = expected.name
+    ? similarityName(provName, expected.name)
+    : 1.0;
+  const nameCheck = { score: nameRawScore, match: nameRawScore >= 0.75 };
   result.checks.name = {
     expected: expected.name ?? "",
     provider: provName,
@@ -407,6 +528,10 @@ export async function verifyProvider(
   };
 
   result.verified = identityOk && locationOk && specialtyOk;
+  // Three-way honest status: VERIFIED when all gates pass, MISMATCH when
+  // we got data but a gate failed. UNAVAILABLE was already set above if
+  // we never got a provider record because NPPES was unreachable.
+  result.status = result.verified ? "VERIFIED" : "MISMATCH";
   return result;
 }
 

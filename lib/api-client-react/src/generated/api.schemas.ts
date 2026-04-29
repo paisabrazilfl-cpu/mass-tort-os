@@ -583,6 +583,15 @@ export const NpiVerifyRichResultMethod = {
   name_search: "name_search",
 } as const;
 
+export type NpiVerifyRichResultStatus =
+  (typeof NpiVerifyRichResultStatus)[keyof typeof NpiVerifyRichResultStatus];
+
+export const NpiVerifyRichResultStatus = {
+  VERIFIED: "VERIFIED",
+  MISMATCH: "MISMATCH",
+  UNAVAILABLE: "UNAVAILABLE",
+} as const;
+
 export type NpiVerifyRichResultChecksNpiLookup = {
   found: boolean;
   npi?: string;
@@ -654,6 +663,7 @@ export interface NpiVerifyRichResult {
   method: NpiVerifyRichResultMethod;
   provider: NpiVerifyProviderSummary | null;
   verified: boolean;
+  status?: NpiVerifyRichResultStatus;
   confidence: number;
   candidates_returned?: number;
   checks: NpiVerifyRichResultChecks;

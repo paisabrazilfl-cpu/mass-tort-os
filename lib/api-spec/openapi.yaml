@@ -2543,6 +2543,15 @@ components:
           nullable: true
         verified:
           type: boolean
+        # Three-way honest verdict layered on top of `verified`. VERIFIED when
+        # all gates pass, MISMATCH when we got data back but a gate failed,
+        # UNAVAILABLE when NPPES could not be reached at all (network failure,
+        # HTTP error, non-JSON). UNAVAILABLE must NEVER be interpreted as
+        # "doesn't match" — same honesty principle as the BG hub OFAC fix.
+        # Optional in the schema so older clients don't break.
+        status:
+          type: string
+          enum: [VERIFIED, MISMATCH, UNAVAILABLE]
         confidence:
           type: number
           format: float

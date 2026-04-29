@@ -12,6 +12,57 @@ export function normalize(s: string | null | undefined): string {
     .trim();
 }
 
+// Title and credential tokens that should NOT contribute to person-name
+// similarity. "Dr. John Smith MD" and "John Smith" are the same person; the
+// raw normalize() above would penalize them ~40%. Used by name comparisons
+// in npi-verify so "Dr. Micah Edwin, MD" matches "Micah Edwin" cleanly.
+const TITLE_TOKENS = new Set(["dr", "doctor", "mr", "mrs", "ms", "miss"]);
+const CREDENTIAL_TOKENS = new Set([
+  "md",
+  "do",
+  "pa",
+  "np",
+  "rn",
+  "lpn",
+  "pharmd",
+  "dds",
+  "dmd",
+  "phd",
+  "psyd",
+  "msw",
+  "lcsw",
+  "facp",
+  "facs",
+  "esq",
+  "jr",
+  "sr",
+  "ii",
+  "iii",
+  "iv",
+]);
+
+// Strip title and credential tokens AFTER applying normalize(), so that
+// name similarity reflects the actual person name. Returns "" when the
+// input collapses to only stripped tokens.
+export function normalizeName(s: string | null | undefined): string {
+  const tokens = normalize(s).split(" ").filter(Boolean);
+  return tokens
+    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
+    .join(" ");
+}
+
+// Convenience: similarity that also tries the title-stripped variant and
+// returns whichever is HIGHER. Strictly additive — can never lower a
+// previously-passing score; existing thresholds keep their meaning.
+export function similarityName(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  const raw = similarity(a, b);
+  const stripped = similarity(normalizeName(a), normalizeName(b));
+  return Math.max(raw, stripped);
+}
+
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   if (a.length === 0) return b.length;

@@ -8,11 +8,13 @@
 import type { NpiVerifyProviderSummary } from "./npiVerifyProviderSummary";
 import type { NpiVerifyRichResultChecks } from "./npiVerifyRichResultChecks";
 import type { NpiVerifyRichResultMethod } from "./npiVerifyRichResultMethod";
+import type { NpiVerifyRichResultStatus } from "./npiVerifyRichResultStatus";
 
 export interface NpiVerifyRichResult {
   method: NpiVerifyRichResultMethod;
   provider: NpiVerifyProviderSummary | null;
   verified: boolean;
+  status?: NpiVerifyRichResultStatus;
   confidence: number;
   candidates_returned?: number;
   checks: NpiVerifyRichResultChecks;
