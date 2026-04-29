@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { VerifyProviderMatchBody } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
 import { Permission, requirePermission } from "../lib/rbac";
 import { badRequest, errorEnvelope, notFound } from "../lib/http-errors";
@@ -149,24 +150,24 @@ router.get("/lookup/:npi", requirePermission(Permission.NPI_LOOKUP), async (req,
 // is the lighter taxonomy-only check used by the public form pipeline; this
 // endpoint is the operator-facing rich verify with per-field scoring.
 router.post("/verify", requirePermission(Permission.NPI_LOOKUP), async (req, res) => {
-  const { npi, expected } = req.body ?? {};
-  if (!expected || typeof expected !== "object") {
-    badRequest(res, "expected provider profile is required");
+  // Validate via the generated Zod schema (parity with the rest of the API).
+  // This catches non-string fields, malformed bodies, etc., and returns a
+  // structured 400 instead of crashing inside verifyProvider().
+  const parsed = VerifyProviderMatchBody.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    badRequest(res, parsed.error.issues[0]?.message ?? "invalid request body");
     return;
   }
-  if (
-    !expected.name &&
-    !expected.organization &&
-    !expected.city &&
-    !expected.state &&
-    !expected.specialty &&
-    !npi
-  ) {
-    badRequest(res, "Provide at least an NPI or one expected field (name, organization, city, state, specialty)");
-    return;
-  }
-  if (npi !== undefined && npi !== null && typeof npi !== "string") {
-    badRequest(res, "npi must be a string when provided");
+  const npi = (parsed.data.npi ?? "").trim();
+  const expected = parsed.data.expected ?? {};
+  const hasAnyExpected = Boolean(
+    expected.name || expected.organization || expected.city || expected.state || expected.specialty,
+  );
+  if (!npi && !hasAnyExpected) {
+    badRequest(
+      res,
+      "Provide at least an NPI or one expected field (name, organization, city, state, specialty)",
+    );
     return;
   }
 

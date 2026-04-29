@@ -1,7 +1,28 @@
 import { useState } from "react";
 import { Link } from "wouter";
-import { useSearchNpi, getSearchNpiQueryKey, SearchNpiParams, NpiProvider } from "@workspace/api-client-react";
-import { Search, Stethoscope, ChevronDown, ChevronUp, MapPin, Phone, Building, User, Calendar } from "lucide-react";
+import {
+  useSearchNpi,
+  getSearchNpiQueryKey,
+  SearchNpiParams,
+  NpiProvider,
+  useVerifyProviderMatch,
+  NpiVerifyRichResult,
+} from "@workspace/api-client-react";
+import {
+  Search,
+  Stethoscope,
+  ChevronDown,
+  ChevronUp,
+  MapPin,
+  Phone,
+  Building,
+  User,
+  Calendar,
+  ShieldCheck,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,6 +31,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Separator } from "@/components/ui/separator";
 
 const US_STATES = [
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", 
@@ -124,6 +147,240 @@ function ProviderRow({ provider }: { provider: NpiProvider }) {
   );
 }
 
+type VerifyFormState = {
+  npi: string;
+  name: string;
+  organization: string;
+  city: string;
+  state: string;
+  specialty: string;
+};
+
+const EMPTY_VERIFY_FORM: VerifyFormState = {
+  npi: "",
+  name: "",
+  organization: "",
+  city: "",
+  state: "",
+  specialty: "",
+};
+
+function pct(score?: number) {
+  if (typeof score !== "number") return "—";
+  return `${Math.round(score * 100)}%`;
+}
+
+function FieldRow({
+  label,
+  expected,
+  actual,
+  score,
+  match,
+}: {
+  label: string;
+  expected: string;
+  actual: string;
+  score?: number;
+  match?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-12 gap-3 py-2 items-center text-sm border-b border-border/30 last:border-0">
+      <div className="col-span-2 text-muted-foreground font-medium">{label}</div>
+      <div className="col-span-4">
+        {expected ? (
+          <span>{expected}</span>
+        ) : (
+          <span className="text-muted-foreground italic">not provided</span>
+        )}
+      </div>
+      <div className="col-span-4 font-mono text-xs">
+        {actual ? (
+          <span>{actual}</span>
+        ) : (
+          <span className="text-muted-foreground italic">—</span>
+        )}
+      </div>
+      <div className="col-span-1 text-center text-xs text-muted-foreground">
+        {pct(score)}
+      </div>
+      <div className="col-span-1 text-right">
+        {match === true ? (
+          <CheckCircle2 className="h-4 w-4 text-emerald-500 inline" />
+        ) : match === false ? (
+          <XCircle className="h-4 w-4 text-destructive inline" />
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function VerifyResultPanel({ result }: { result: NpiVerifyRichResult }) {
+  const checks = result.checks ?? {};
+  const provider = result.provider;
+  const verified = result.verified;
+  const confidencePct = Math.round((result.confidence ?? 0) * 100);
+
+  // Pull out per-field check shapes (orval makes them all optional, so guard).
+  const nameCheck = checks.name;
+  const orgCheck = checks.organization;
+  const locCheck = checks.location;
+  const specCheck = checks.specialty;
+  const decision = checks.decision_thresholds;
+  const npiLookup = checks.npi_lookup;
+  const search = checks.search;
+
+  return (
+    <Card className={`border ${verified ? "border-emerald-500/40 bg-emerald-500/5" : "border-amber-500/40 bg-amber-500/5"}`}>
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              {verified ? (
+                <>
+                  <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                  Verified Match
+                </>
+              ) : (
+                <>
+                  <AlertTriangle className="h-5 w-5 text-amber-500" />
+                  Could Not Verify
+                </>
+              )}
+            </CardTitle>
+            <CardDescription>
+              {result.method === "npi" && "Direct NPI lookup against CMS Registry."}
+              {result.method === "name_search" && "Best fuzzy match from name + city + state search."}
+              {!result.method && "No registry match was found for the provided criteria."}
+            </CardDescription>
+          </div>
+          <div className="text-right">
+            <div className="text-3xl font-bold tabular-nums">{confidencePct}%</div>
+            <div className="text-xs text-muted-foreground">confidence</div>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {provider && (
+          <div className="rounded-md bg-background/60 border border-border/40 p-3 text-sm">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Registry record
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="font-medium">{provider.name || provider.organization_name || "—"}</div>
+                <div className="text-xs text-muted-foreground font-mono mt-0.5">NPI {provider.npi}</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {provider.address?.address_1}
+                  {provider.address?.city ? `, ${provider.address.city}` : ""}
+                  {provider.address?.state ? `, ${provider.address.state}` : ""}
+                  {provider.address?.postal_code ? ` ${provider.address.postal_code}` : ""}
+                </div>
+              </div>
+              <a
+                href={`https://npiregistry.cms.hhs.gov/provider-view/${provider.npi}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-primary hover:underline whitespace-nowrap"
+              >
+                Open profile →
+              </a>
+            </div>
+          </div>
+        )}
+
+        {(npiLookup?.error || search?.error) && (
+          <div className="text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded p-2">
+            {npiLookup?.error ?? search?.error}
+          </div>
+        )}
+
+        <div>
+          <div className="grid grid-cols-12 gap-3 py-2 text-xs uppercase tracking-wide text-muted-foreground border-b border-border/50">
+            <div className="col-span-2">Field</div>
+            <div className="col-span-4">Expected</div>
+            <div className="col-span-4">Registry</div>
+            <div className="col-span-1 text-center">Score</div>
+            <div className="col-span-1 text-right">Match</div>
+          </div>
+          <FieldRow
+            label="Name"
+            expected={nameCheck?.expected ?? ""}
+            actual={nameCheck?.provider ?? ""}
+            score={nameCheck?.score}
+            match={nameCheck?.match}
+          />
+          {orgCheck && (orgCheck.expected || orgCheck.provider) && (
+            <FieldRow
+              label="Org"
+              expected={orgCheck.expected ?? ""}
+              actual={orgCheck.provider ?? ""}
+              score={orgCheck.score}
+              match={orgCheck.match}
+            />
+          )}
+          <FieldRow
+            label="City"
+            expected={locCheck?.expected_city ?? ""}
+            actual={locCheck?.provider_city ?? ""}
+            score={locCheck?.city_score}
+            match={locCheck?.city_match}
+          />
+          <FieldRow
+            label="State"
+            expected={locCheck?.expected_state ?? ""}
+            actual={locCheck?.provider_state ?? ""}
+            score={locCheck?.state_score}
+            match={locCheck?.state_match}
+          />
+          <FieldRow
+            label="Specialty"
+            expected={specCheck?.expected_specialty ?? ""}
+            actual={
+              specCheck?.taxonomy_matches && specCheck.taxonomy_matches.length > 0
+                ? specCheck.taxonomy_matches.map((t: { desc: string }) => t.desc).join(", ")
+                : (specCheck?.all_taxonomies ?? []).slice(0, 3).join(", ")
+            }
+            match={specCheck?.match}
+          />
+        </div>
+
+        {decision && (
+          <div className="text-xs space-y-1 pt-1">
+            <div className="text-muted-foreground uppercase tracking-wide mb-1">Decision thresholds</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <Badge variant={decision.identity_ok ? "default" : "outline"} className="justify-between gap-2">
+                Identity {pct(decision.identity_score)}
+                {decision.identity_ok ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+              </Badge>
+              <Badge variant={decision.city_ok ? "default" : "outline"} className="justify-between gap-2">
+                City {pct(decision.city_score)}
+                {decision.city_ok ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+              </Badge>
+              <Badge variant={decision.state_ok ? "default" : "outline"} className="justify-between gap-2">
+                State {pct(decision.state_score)}
+                {decision.state_ok ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+              </Badge>
+              <Badge variant={decision.specialty_ok ? "default" : "outline"} className="justify-between gap-2">
+                Specialty
+                {decision.specialty_ok ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+              </Badge>
+            </div>
+          </div>
+        )}
+
+        {result.method === "name_search" && typeof result.candidates_returned === "number" && (
+          <p className="text-xs text-muted-foreground">
+            Searched {result.candidates_returned} candidate{result.candidates_returned === 1 ? "" : "s"} from the registry.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function NpiLookup() {
   const [formValues, setFormValues] = useState<SearchNpiParams>({
     npi_number: "",
@@ -143,6 +400,34 @@ export default function NpiLookup() {
       queryKey: getSearchNpiQueryKey(searchParams || {})
     }
   });
+
+  // Verify Match panel state — operator-facing rich verification.
+  const [verifyForm, setVerifyForm] = useState<VerifyFormState>(EMPTY_VERIFY_FORM);
+  const verifyMutation = useVerifyProviderMatch();
+  const verifyResult = verifyMutation.data;
+  const verifyError = verifyMutation.error as { message?: string } | null;
+
+  const handleVerify = (e: React.FormEvent) => {
+    e.preventDefault();
+    const npi = verifyForm.npi.trim();
+    const expected = {
+      name: verifyForm.name.trim() || undefined,
+      organization: verifyForm.organization.trim() || undefined,
+      city: verifyForm.city.trim() || undefined,
+      state: verifyForm.state.trim() || undefined,
+      specialty: verifyForm.specialty.trim() || undefined,
+    };
+    const hasAnyExpected = Object.values(expected).some((v) => !!v);
+    if (!npi && !hasAnyExpected) return;
+    verifyMutation.mutate({
+      data: { npi: npi || undefined, expected },
+    });
+  };
+
+  const handleVerifyClear = () => {
+    setVerifyForm(EMPTY_VERIFY_FORM);
+    verifyMutation.reset();
+  };
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,6 +467,20 @@ export default function NpiLookup() {
           <Stethoscope className="h-8 w-8 text-primary opacity-20" />
         </div>
       </div>
+
+      <Tabs defaultValue="search">
+        <TabsList>
+          <TabsTrigger value="search" className="gap-2">
+            <Search className="h-4 w-4" />
+            Search
+          </TabsTrigger>
+          <TabsTrigger value="verify" className="gap-2">
+            <ShieldCheck className="h-4 w-4" />
+            Verify Match
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="search" className="space-y-4 mt-4">
 
       <Card className="border-border/50 shadow-sm">
         <form onSubmit={handleSearch}>
@@ -357,6 +656,140 @@ export default function NpiLookup() {
           </div>
         </Card>
       </div>
+        </TabsContent>
+
+        <TabsContent value="verify" className="space-y-4 mt-4">
+          <Card className="border-border/50 shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <ShieldCheck className="h-5 w-5 text-primary" />
+                Verify Provider Match
+              </CardTitle>
+              <CardDescription>
+                Check whether a claimed provider profile (from intake, a referral, or a lead) actually matches the
+                CMS NPI Registry. Provide an NPI for a direct lookup, or leave it blank to fuzzy-search by name +
+                city + state.
+              </CardDescription>
+            </CardHeader>
+            <form onSubmit={handleVerify}>
+              <CardContent className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  <div className="space-y-2">
+                    <Label htmlFor="verify_npi">NPI (optional)</Label>
+                    <Input
+                      id="verify_npi"
+                      placeholder="10-digit NPI"
+                      value={verifyForm.npi}
+                      onChange={(e) => setVerifyForm({ ...verifyForm, npi: e.target.value })}
+                      className="font-mono"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      If supplied, lookup is direct; otherwise we search by the fields below.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="verify_name">Provider Name</Label>
+                    <Input
+                      id="verify_name"
+                      placeholder="e.g. Ardalan Enkeshafi"
+                      value={verifyForm.name}
+                      onChange={(e) => setVerifyForm({ ...verifyForm, name: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="verify_organization">Organization</Label>
+                    <Input
+                      id="verify_organization"
+                      placeholder="(optional, for org-type NPIs)"
+                      value={verifyForm.organization}
+                      onChange={(e) => setVerifyForm({ ...verifyForm, organization: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="verify_city">City</Label>
+                    <Input
+                      id="verify_city"
+                      placeholder="e.g. Bethesda"
+                      value={verifyForm.city}
+                      onChange={(e) => setVerifyForm({ ...verifyForm, city: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="verify_state">State</Label>
+                    <Select
+                      value={verifyForm.state || ""}
+                      onValueChange={(val) =>
+                        setVerifyForm({ ...verifyForm, state: val === "ALL" ? "" : val })
+                      }
+                    >
+                      <SelectTrigger id="verify_state">
+                        <SelectValue placeholder="Any State" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ALL">Any State</SelectItem>
+                        {US_STATES.map((state) => (
+                          <SelectItem key={state} value={state}>
+                            {state}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="verify_specialty">Specialty</Label>
+                    <Input
+                      id="verify_specialty"
+                      placeholder="e.g. Hospitalist, Oncology"
+                      value={verifyForm.specialty}
+                      onChange={(e) => setVerifyForm({ ...verifyForm, specialty: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleVerifyClear}
+                    className="w-1/4"
+                  >
+                    Clear
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="w-3/4"
+                    disabled={verifyMutation.isPending}
+                  >
+                    {verifyMutation.isPending ? (
+                      <span className="flex items-center gap-2">
+                        <div className="h-4 w-4 rounded-full border-2 border-background border-t-transparent animate-spin" />
+                        Verifying...
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-2">
+                        <ShieldCheck className="h-4 w-4" />
+                        Verify Match
+                      </span>
+                    )}
+                  </Button>
+                </div>
+              </CardContent>
+            </form>
+          </Card>
+
+          {verifyError && !verifyMutation.isPending && (
+            <Card className="border-destructive/40 bg-destructive/5">
+              <CardContent className="pt-6 text-sm text-destructive">
+                {verifyError.message ?? "Verification failed. Please try again."}
+              </CardContent>
+            </Card>
+          )}
+
+          {verifyResult && !verifyMutation.isPending && (
+            <VerifyResultPanel result={verifyResult} />
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

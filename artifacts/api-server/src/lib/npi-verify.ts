@@ -278,10 +278,16 @@ export async function verifyProvider(
   };
 
   let provider: NpiRegistryResult | null = null;
+  // Strict NPI mode: if the caller supplied an NPI, that is the only thing we
+  // are allowed to consider — a bad/unknown NPI must NOT silently fall back to
+  // a name search and then return verified=true on a different person. Code
+  // review caught this: would have produced misleading results.
+  const npiSupplied = Boolean(input.npi);
 
   // 1) NPI direct lookup if supplied
   if (input.npi) {
     if (!/^\d{10}$/.test(input.npi)) {
+      result.method = "npi";
       result.checks.npi_lookup = { found: false, error: "NPI must be a 10-digit number" };
     } else {
       try {
@@ -294,13 +300,14 @@ export async function verifyProvider(
           provider = found;
         }
       } catch (err) {
+        result.method = "npi";
         result.checks.npi_lookup = { found: false, error: (err as Error).message };
       }
     }
   }
 
-  // 2) Fallback: name + city + state search
-  if (!provider) {
+  // 2) Fallback: name + city + state search — ONLY if no NPI was supplied.
+  if (!provider && !npiSupplied) {
     try {
       const results = await searchByNameLocation(expected);
       if (results.length === 0) {
@@ -384,13 +391,18 @@ export async function verifyProvider(
   const locationOk = cityCheck.score >= 0.8 && (stateExact || stateScore >= 0.9);
   const specialtyOk = tax.matched;
 
+  // Threshold reporting MUST mirror the actual gate at `locationOk` above —
+  // the operator-facing badges are useless if they disagree with the verified
+  // verdict. Code review caught a previous drift where city_ok used
+  // compareStringsField's 0.85 internal cutoff and state_ok ignored the
+  // 0.9 fuzzy fallback.
   result.checks.decision_thresholds = {
     identity_score: round(identityScore, 3),
     identity_ok: identityOk,
     city_score: round(cityCheck.score, 3),
-    city_ok: cityCheck.match,
+    city_ok: cityCheck.score >= 0.8,
     state_score: round(stateScore, 3),
-    state_ok: stateExact,
+    state_ok: stateExact || stateScore >= 0.9,
     specialty_ok: specialtyOk,
   };
 
