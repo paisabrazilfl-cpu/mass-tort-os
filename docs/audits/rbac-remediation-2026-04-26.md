@@ -14,7 +14,9 @@ on boot (`router`, `method`, `path`, `status` ∈ `public` | `auth-exception` |
 `auth-only` | `role-gated`) so an SOC reviewer can see the full surface in
 one structured log line — no need to spelunk through router code.
 **Public allowlist contract (path-prefix):** the unauthenticated surface is
-now exactly `/api/healthz`, `/api/forms-public/*`, and `/api/webhooks/*`.
+now exactly `/api/healthz`, `/api/forms-public/*`, `/api/webhooks/*`, and
+`/api/web-forms/*` (the embeddable per-tort lead-capture form: public config
+GET, embed.js, preview HTML, submit POST, and the two validate/* helpers).
 The previous mount of `formsPublicRouter` at `/api/forms` (which collided
 with the authenticated `formsRouter`) has been remounted at
 `/api/forms-public` so the allowlist holds at the URL-prefix level, not
@@ -31,7 +33,7 @@ across two files:
   explicit forge-attempt tests] + 2 dev-mode predicate tests.
 - `src/lib/__tests__/rbac-route-matrix.test.ts` (33 booted-app integration
   tests): 4 `validateRouteTable` policy-report assertions (public allowlist
-  is exactly `health` / `forms-public` / `webhooks`; auth router exceptions
+  is exactly `health` / `forms-public` / `webhooks` / `web-forms`; auth router exceptions
   are exactly `POST /login` / `/refresh` / `/register`; auth-only allowlist
   matches the documented set; **forms config GETs are role-gated, not
   auth-only**) + **5 path-prefix contract tests** (`/api/healthz` 2xx
@@ -438,7 +440,7 @@ deletes the rows in `after()` and force-drops keep-alive sockets.
 
 | Group | Cases |
 | --- | --- |
-| Public allowlist (policy report) | only routers `health` / `forms-public` / `webhooks` are stamped public; auth router exceptions are exactly `POST /login` / `/refresh` / `/register`; `auth-only` allowlist matches the documented set with no drift; **forms config GETs are role-gated, not auth-only** |
+| Public allowlist (policy report) | only routers `health` / `forms-public` / `webhooks` / `web-forms` are stamped public; auth router exceptions are exactly `POST /login` / `/refresh` / `/register`; `auth-only` allowlist matches the documented set with no drift; **forms config GETs are role-gated, not auth-only** |
 | **Path-prefix contract** | (1) `GET /api/healthz` returns 2xx unauth; (2) `GET /api/forms-public/preview-blocker.js` returns 2xx unauth; (3) `POST /api/webhooks/dropbox-sign` does NOT 401 (sig verify happens inside the handler — public stamp holds at path level); (4) **`GET /api/forms/preview/some-tort` returns 401** — the OLD public path is now auth-only, proving the remount worked; (5) every `public` policy entry resolves under one of `/api/healthz`, `/api/forms-public/`, or `/api/webhooks/`. |
 | Unauth denial | `GET /api/leads`, `/api/cases`, `/api/forms/config`, `/api/decision-engine/portfolio` all return `401 UNAUTHENTICATED` without a token |
 | Role × route matrix | 5 routes × 4 roles = 20 cells. Allow/deny expectation per cell: `GET /api/forms/config` (attorney+); `GET /api/forms/config/:tortId` (attorney+, 404 acceptable); `GET /api/decision-engine/portfolio` (attorney+); `PUT /api/decision-engine/settings` (admin only, 400 acceptable for empty body); `GET /api/auth/me` (any authenticated). On `deny` the test asserts both `status === 403` AND `body.code === "FORBIDDEN"`. |
@@ -564,7 +566,7 @@ boot-time validator (`src/lib/route-protection.ts → validateRouteTable`)
 applies. A route is healthy iff one of the following is true:
 
 - **Public** — explicitly allow-listed via `markPublic(router, label)`
-  (currently `health`, `forms-public`, `webhooks`).
+  (currently `health`, `forms-public`, `webhooks`, `web-forms`).
 - **Login-exception** — `POST /login`, `POST /refresh`, `POST /register`
   on the `auth` router.
 - **Auth + Gate** — has both an `__internal_markAuthMiddleware`-stamped
@@ -574,7 +576,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **168 checked / 18 public / 150 protected / 0 unprotected.**
+Boot-time count: **169 checked / 19 public / 150 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -758,6 +760,7 @@ Boot-time count: **168 checked / 18 public / 150 protected / 0 unprotected.**
 | vendors | GET | `/api/vendors/` | ✓ | ✓ |  |  |  | — | `vendors:view` | ✓ |
 | vendors | POST | `/api/vendors/` | ✓ | ✓ |  |  |  | — | `vendors:manage` | ✓ |
 | web-forms | GET | `/api/web-forms/:tortId/embed.js` |  |  | ✓ |  |  | — | — | — |
+| web-forms | GET | `/api/web-forms/:tortId/preview` |  |  | ✓ |  |  | — | — | — |
 | web-forms | POST | `/api/web-forms/:tortId/submit` |  |  | ✓ |  |  | — | — | — |
 | web-forms | GET | `/api/web-forms/:tortId` |  |  | ✓ |  |  | — | — | — |
 | web-forms | POST | `/api/web-forms/validate/address` |  |  | ✓ |  |  | — | — | — |

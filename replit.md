@@ -40,6 +40,7 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **Vendor Management**: CRUD operations for various vendor types with status tracking.
 *   **CSV Lead Import**: Bulk lead ingestion with auto-column mapping, deduplication, conflict detection, and encryption of sensitive fields.
 *   **Public Form Submission Surface**: A 10-step submission pipeline for public-facing forms with built-in validation and rate limiting.
+*   **Web Forms (lightweight, embeddable lead capture)**: Per-tort, public, JS-embeddable lead capture forms with admin configuration (fields, eligibility rules, on/off toggle, confirmation email). Distinct from the heavier operator/public intake. Endpoints under `/api/web-forms/:tortId/*` (`GET` config / `embed.js` / `preview` HTML, `POST` submit). The embedded form is **fully responsive** — single-column on phones, side-by-side radio choices on tablets, max-width centered on desktop, with 16px input font (no iOS zoom-on-focus) and 44px+ touch targets. Admin UI under "Web Forms" sidebar entry uses a card list on mobile and a table on tablet/desktop. A `/api/web-forms/:tortId/preview` endpoint serves a standalone HTML page so admins can verify the form across viewports before sending the embed snippet to a partner.
 
 # External Dependencies
 

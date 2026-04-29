@@ -426,6 +426,64 @@ router.get("/:tortId", async (req, res) => {
  * client-side for live UX, then POSTs to /submit. Server still re-validates
  * everything — client checks are only a hint.
  */
+/**
+ * Standalone HTML preview of the embedded form. Useful for admins to verify
+ * the form across desktop / tablet / mobile viewports before sending the embed
+ * snippet to a partner. Mirrors what a partner site would see.
+ */
+router.get("/:tortId/preview", async (req, res) => {
+  const tortId = String(req.params.tortId);
+  try {
+    const baseUrl = resolveBaseUrl(req);
+    if (!baseUrl) {
+      badRequest(res, "Invalid host");
+      return;
+    }
+    const config = await getFormConfig(tortId);
+    if (!config || !config.active) {
+      notFound(res, "Form not found or inactive");
+      return;
+    }
+    const cfg = config.web_form_config;
+    if (!cfg || !cfg.enabled) {
+      notFound(res, "Web form is not enabled for this campaign");
+      return;
+    }
+    const safeLabel = String(config.label).replace(/[<>&"']/g, "");
+    const safeTortId = encodeURIComponent(tortId);
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>${safeLabel} — Web Form Preview</title>
+<style>
+html,body{margin:0;padding:0;background:#f8fafc;min-height:100%}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a}
+.wrap{max-width:720px;margin:0 auto;padding:16px}
+.bar{font-size:12px;color:#64748b;padding:8px 4px;border-bottom:1px solid #e2e8f0;margin-bottom:16px}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:8px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+@media (min-width:640px){.wrap{padding:24px}.card{padding:16px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="bar">Preview · responsive · embedded form for <strong>${safeLabel}</strong></div>
+<div class="card"><div id="mtos-web-form"></div></div>
+</div>
+<script src="${baseUrl}/api/web-forms/${safeTortId}/embed.js" defer></script>
+</body>
+</html>`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(html);
+  } catch (err) {
+    logger.error({ err, tortId }, "Failed to generate web form preview");
+    serverError(res, "Failed to generate preview");
+  }
+});
+
 router.get("/:tortId/embed.js", async (req, res) => {
   const tortId = String(req.params.tortId);
   try {
@@ -639,7 +697,7 @@ function ruleFails(rule,val){
 function init(){
   var root=document.getElementById("mtos-web-form")||document.querySelector(".mtos-web-form");
   if(!root){console.warn("MTOS web form: container #mtos-web-form not found");return;}
-  var style=el("style",{text:".mtos-wf{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;color:#0f172a}.mtos-wf h2{margin:0 0 8px 0;font-size:22px}.mtos-wf .wf-sub{color:#475569;margin:0 0 20px 0}.mtos-wf .wf-section{border:none;padding:0;margin:0 0 24px 0}.mtos-wf legend{font-weight:600;font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:#0f172a;margin-bottom:12px;padding:0}.mtos-wf .wf-row{margin-bottom:14px}.mtos-wf .wf-label{display:block;font-size:13px;font-weight:500;margin-bottom:6px}.mtos-wf .wf-req-star{color:#dc2626}.mtos-wf input[type=text],.mtos-wf input[type=email],.mtos-wf input[type=tel],.mtos-wf input[type=number],.mtos-wf input[type=date],.mtos-wf select,.mtos-wf textarea{width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;font-family:inherit;background:#fff}.mtos-wf textarea{resize:vertical;min-height:80px}.mtos-wf .wf-radio-group{display:flex;gap:12px;flex-wrap:wrap}.mtos-wf .wf-radio-opt{display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer}.mtos-wf .wf-checkbox-row{display:flex;align-items:flex-start;gap:8px}.mtos-wf .wf-cb-label{font-size:13px;color:#334155;line-height:1.4}.mtos-wf .wf-helper{font-size:12px;color:#64748b;margin-top:4px}.mtos-wf .wf-error{font-size:12px;color:#dc2626;margin-top:4px;min-height:0}.mtos-wf button{background:#0f172a;color:#fff;border:0;padding:12px 20px;border-radius:6px;font-size:15px;font-weight:500;cursor:pointer;width:100%;margin-top:8px}.mtos-wf button:disabled{opacity:.5;cursor:not-allowed}.mtos-wf .wf-block{background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:12px 14px;border-radius:6px;font-size:14px;margin-top:14px}.mtos-wf .wf-success{background:#f0fdf4;border:1px solid #86efac;color:#166534;padding:14px 16px;border-radius:6px}"});
+  var style=el("style",{text:".mtos-wf{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;width:100%;max-width:640px;margin:0 auto;padding:16px;color:#0f172a;line-height:1.4}.mtos-wf *,.mtos-wf *::before,.mtos-wf *::after{box-sizing:border-box}.mtos-wf h2{margin:0 0 8px 0;font-size:22px;line-height:1.25;word-wrap:break-word}.mtos-wf .wf-sub{color:#475569;margin:0 0 20px 0;font-size:15px}.mtos-wf .wf-section{border:none;padding:0;margin:0 0 24px 0;min-width:0}.mtos-wf legend{font-weight:600;font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:#0f172a;margin-bottom:12px;padding:0;display:block;width:100%}.mtos-wf .wf-row{margin-bottom:14px;min-width:0}.mtos-wf .wf-grid{display:grid;grid-template-columns:1fr;gap:14px;margin-bottom:14px}.mtos-wf .wf-label{display:block;font-size:13px;font-weight:500;margin-bottom:6px;word-wrap:break-word}.mtos-wf .wf-req-star{color:#dc2626}.mtos-wf input[type=text],.mtos-wf input[type=email],.mtos-wf input[type=tel],.mtos-wf input[type=number],.mtos-wf input[type=date],.mtos-wf select,.mtos-wf textarea{display:block;width:100%;max-width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius:8px;font-size:16px;font-family:inherit;background:#fff;color:#0f172a;-webkit-appearance:none;appearance:none;min-height:44px}.mtos-wf select{background-image:url(data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%228%22%20viewBox%3D%220%200%2012%208%22%3E%3Cpath%20fill%3D%22%23475569%22%20d%3D%22M6%208L0%200h12z%22%2F%3E%3C%2Fsvg%3E);background-repeat:no-repeat;background-position:right 14px center;padding-right:36px}.mtos-wf input:focus,.mtos-wf select:focus,.mtos-wf textarea:focus{outline:none;border-color:#0f172a;box-shadow:0 0 0 3px rgba(15,23,42,.12)}.mtos-wf textarea{resize:vertical;min-height:96px;line-height:1.5}.mtos-wf .wf-radio-group{display:flex;flex-direction:column;gap:8px}.mtos-wf .wf-radio-opt{display:flex;align-items:center;gap:10px;font-size:15px;cursor:pointer;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;min-height:44px;background:#fff}.mtos-wf .wf-radio-opt:hover{background:#f8fafc}.mtos-wf .wf-radio-opt input[type=radio]{width:18px;height:18px;margin:0;flex-shrink:0;accent-color:#0f172a}.mtos-wf .wf-checkbox-row{display:flex;align-items:flex-start;gap:10px;padding:4px 0}.mtos-wf .wf-checkbox-row input[type=checkbox]{width:20px;height:20px;margin-top:1px;flex-shrink:0;accent-color:#0f172a}.mtos-wf .wf-cb-label{font-size:14px;color:#334155;line-height:1.45;cursor:pointer;flex:1;min-width:0;word-wrap:break-word}.mtos-wf .wf-helper{font-size:12px;color:#64748b;margin-top:6px;line-height:1.4}.mtos-wf .wf-error{font-size:12px;color:#dc2626;margin-top:4px;min-height:0}.mtos-wf button{background:#0f172a;color:#fff;border:0;padding:14px 20px;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;width:100%;margin-top:8px;min-height:48px;-webkit-appearance:none;appearance:none}.mtos-wf button:hover:not(:disabled){background:#1e293b}.mtos-wf button:disabled{opacity:.5;cursor:not-allowed}.mtos-wf .wf-block{background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:12px 14px;border-radius:8px;font-size:14px;margin-top:14px;line-height:1.45}.mtos-wf .wf-success{background:#f0fdf4;border:1px solid #86efac;color:#166534;padding:16px 18px;border-radius:8px;font-size:15px;line-height:1.5}@media (min-width:480px){.mtos-wf .wf-radio-group{flex-direction:row;flex-wrap:wrap}.mtos-wf .wf-radio-opt{flex:0 1 auto;min-width:120px}}@media (min-width:640px){.mtos-wf{padding:24px}.mtos-wf h2{font-size:26px}.mtos-wf .wf-grid-2{grid-template-columns:1fr 1fr}.mtos-wf button{width:auto;min-width:200px}}@media (max-width:380px){.mtos-wf{padding:12px}.mtos-wf h2{font-size:20px}.mtos-wf .wf-sub{font-size:14px}.mtos-wf legend{font-size:13px}}"});
   document.head.appendChild(style);
   var cont=el("div",{"class":"mtos-wf"});
   if(DATA.introHeadline)cont.appendChild(el("h2",{text:DATA.introHeadline}));

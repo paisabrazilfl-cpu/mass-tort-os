@@ -319,97 +319,188 @@ export default function WebFormsPage() {
               <Skeleton className="h-10 w-full" />
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[220px]">Tort</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead className="text-center">Enabled</TableHead>
-                  <TableHead className="text-center">Fields</TableHead>
-                  <TableHead className="text-center">Rules</TableHead>
-                  <TableHead className="text-center">Email</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <>
+              {/* Mobile: card list */}
+              <div className="divide-y md:hidden">
                 {summaries.map((s) => (
-                  <TableRow key={s.tort_id}>
-                    <TableCell>
-                      <div className="font-medium">{s.tort_label}</div>
-                      <div className="text-muted-foreground text-xs">
-                        {s.tort_id}
+                  <div key={s.tort_id} className="space-y-3 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-medium">
+                          {s.tort_label}
+                        </div>
+                        <div className="text-muted-foreground truncate text-xs">
+                          {s.tort_id}
+                        </div>
+                        <div className="mt-1.5">
+                          <Badge variant="outline" className="text-xs">
+                            {s.category}
+                          </Badge>
+                        </div>
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="text-xs">
-                        {s.category}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
                       <Switch
                         checked={s.web_form_enabled}
                         onCheckedChange={(v) => void handleToggle(s.tort_id, v)}
                         aria-label={`Toggle ${s.tort_label}`}
                       />
-                    </TableCell>
-                    <TableCell className="text-center text-sm">
-                      {s.field_count}
-                    </TableCell>
-                    <TableCell className="text-center text-sm">
-                      {s.rule_count}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {s.send_confirmation_email ? (
-                        <Badge variant="secondary" className="text-xs">
-                          on
-                        </Badge>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">
-                          off
+                    </div>
+                    <div className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                      <span>
+                        <span className="text-foreground font-medium">
+                          {s.field_count}
+                        </span>{" "}
+                        fields
+                      </span>
+                      <span>
+                        <span className="text-foreground font-medium">
+                          {s.rule_count}
+                        </span>{" "}
+                        rules
+                      </span>
+                      <span>
+                        Email:{" "}
+                        <span className="text-foreground font-medium">
+                          {s.send_confirmation_email ? "on" : "off"}
                         </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          title="Copy embed snippet"
-                          onClick={() =>
-                            void copyToClipboard(
-                              buildEmbedSnippet(s.tort_id, origin),
-                              "Embed snippet",
-                            )
-                          }
-                        >
-                          <Code className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          title="Copy public config URL"
-                          onClick={() =>
-                            void copyToClipboard(
-                              buildPublicConfigUrl(s.tort_id, origin),
-                              "Config URL",
-                            )
-                          }
-                        >
-                          <Copy className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setEditingTortId(s.tort_id)}
-                        >
-                          Configure
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => setEditingTortId(s.tort_id)}
+                      >
+                        Configure
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Copy embed snippet"
+                        onClick={() =>
+                          void copyToClipboard(
+                            buildEmbedSnippet(s.tort_id, origin),
+                            "Embed snippet",
+                          )
+                        }
+                      >
+                        <Code className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Copy public config URL"
+                        onClick={() =>
+                          void copyToClipboard(
+                            buildPublicConfigUrl(s.tort_id, origin),
+                            "Config URL",
+                          )
+                        }
+                      >
+                        <Copy className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
                 ))}
-              </TableBody>
-            </Table>
+              </div>
+
+              {/* Tablet/desktop: table (horizontal-scroll fallback for tablets) */}
+              <div className="hidden overflow-x-auto md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[220px]">Tort</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead className="text-center">Enabled</TableHead>
+                      <TableHead className="text-center">Fields</TableHead>
+                      <TableHead className="text-center">Rules</TableHead>
+                      <TableHead className="text-center">Email</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {summaries.map((s) => (
+                      <TableRow key={s.tort_id}>
+                        <TableCell>
+                          <div className="font-medium">{s.tort_label}</div>
+                          <div className="text-muted-foreground text-xs">
+                            {s.tort_id}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">
+                            {s.category}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Switch
+                            checked={s.web_form_enabled}
+                            onCheckedChange={(v) =>
+                              void handleToggle(s.tort_id, v)
+                            }
+                            aria-label={`Toggle ${s.tort_label}`}
+                          />
+                        </TableCell>
+                        <TableCell className="text-center text-sm">
+                          {s.field_count}
+                        </TableCell>
+                        <TableCell className="text-center text-sm">
+                          {s.rule_count}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {s.send_confirmation_email ? (
+                            <Badge variant="secondary" className="text-xs">
+                              on
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">
+                              off
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Copy embed snippet"
+                              onClick={() =>
+                                void copyToClipboard(
+                                  buildEmbedSnippet(s.tort_id, origin),
+                                  "Embed snippet",
+                                )
+                              }
+                            >
+                              <Code className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Copy public config URL"
+                              onClick={() =>
+                                void copyToClipboard(
+                                  buildPublicConfigUrl(s.tort_id, origin),
+                                  "Config URL",
+                                )
+                              }
+                            >
+                              <Copy className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setEditingTortId(s.tort_id)}
+                            >
+                              Configure
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -664,7 +755,7 @@ function ConfigureDialog({
 
   return (
     <Dialog open onOpenChange={(o) => (!o ? onClose() : null)}>
-      <DialogContent className="flex max-h-[92vh] max-w-5xl flex-col overflow-hidden">
+      <DialogContent className="flex h-[95vh] w-[95vw] max-w-5xl flex-col overflow-hidden p-0 sm:h-[92vh] sm:p-6">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             Configure: {tortLabel}
