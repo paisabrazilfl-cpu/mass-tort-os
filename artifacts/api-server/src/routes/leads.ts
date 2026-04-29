@@ -20,6 +20,7 @@ import { encryptLeadFields, decryptLeadFields, decryptLeadArray } from "../lib/e
 import { Permission, requirePermission, auditAction, canBypassOwnership, denyForbidden } from "../lib/rbac";
 import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
+import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
 
 // Thrown by buildLeadFilters when a date query param parses to Invalid Date.
 // Caught at each route call site and converted to a 400 with a structured
@@ -370,6 +371,24 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
       // Decision Engine — score even review-required leads (banner + portfolio rollup).
       computeAndPersistLeadScore(lead.id).catch(() => {});
 
+      // Outbound webhook to active automation integrations (n8n / Zapier / Make).
+      // Fire-and-forget; never blocks the response.
+      dispatchLeadCreated({
+        source: lead.source ?? "operator_intake",
+        lead: {
+          id: lead.id,
+          name: lead.name ?? null,
+          first_name: lead.first_name ?? null,
+          last_name: lead.last_name ?? null,
+          email: lead.email ?? null,
+          state: lead.state ?? null,
+          tort_type: lead.tort_type ?? null,
+          status: lead.status ?? null,
+          source: lead.source ?? null,
+          created_at: lead.created_at ? new Date(lead.created_at).toISOString() : new Date().toISOString(),
+        },
+      });
+
       res.status(201).json({
         ...decryptLeadFields(lead),
         _conflict: {
@@ -408,6 +427,24 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
 
   // Decision Engine — score asynchronously; never block lead creation on errors.
   computeAndPersistLeadScore(lead.id).catch(() => {});
+
+  // Outbound webhook to active automation integrations (n8n / Zapier / Make).
+  // Fire-and-forget; never blocks the response.
+  dispatchLeadCreated({
+    source: lead.source ?? "operator_intake",
+    lead: {
+      id: lead.id,
+      name: lead.name ?? null,
+      first_name: lead.first_name ?? null,
+      last_name: lead.last_name ?? null,
+      email: lead.email ?? null,
+      state: lead.state ?? null,
+      tort_type: lead.tort_type ?? null,
+      status: lead.status ?? null,
+      source: lead.source ?? null,
+      created_at: lead.created_at ? new Date(lead.created_at).toISOString() : new Date().toISOString(),
+    },
+  });
 
   res.status(201).json(decryptLeadFields(lead));
 });

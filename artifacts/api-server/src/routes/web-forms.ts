@@ -12,6 +12,7 @@ import { logger } from "../lib/logger";
 import { resolveProvider, isResolved } from "../lib/provider-router";
 import { getEmailAdapter } from "../lib/email/sendgrid";
 import { badRequest, notFound, serverError } from "../lib/http-errors";
+import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
 
 const router: IRouter = Router();
 
@@ -240,19 +241,21 @@ async function runWebFormPipeline(
   // STEP 5: Insert the lead.
   const step5: PipelineStep = { name: "LEAD_INSERT", status: "passed", errors: [] };
   let leadId: number | null = null;
+  // Lift these out of the try block so the outbound webhook dispatch
+  // below can reference them after a successful insert.
+  const firstName = String(body.first_name ?? "").trim() || null;
+  const lastName = String(body.last_name ?? "").trim() || null;
+  const stateCode = stateField
+    ? String(body[stateField.key] ?? "").toUpperCase().slice(0, 2) || null
+    : null;
+  // The legacy `name` column on `leads` is still NOT NULL at the table
+  // level (kept for back-compat with older read paths). Match the same
+  // join used by the operator intake handler in routes/leads.ts so admin
+  // list views show the lead identically regardless of source.
+  const fullName = `${firstName ?? ""} ${lastName ?? ""}`.trim() || (emailValue || "Web form lead");
   try {
-    const firstName = String(body.first_name ?? "").trim() || null;
-    const lastName = String(body.last_name ?? "").trim() || null;
     const phone = String(body.phone ?? "").trim() || null;
-    const stateCode = stateField
-      ? String(body[stateField.key] ?? "").toUpperCase().slice(0, 2) || null
-      : null;
     const briefStory = body.brief_description ? String(body.brief_description).slice(0, 5000) : null;
-    // The legacy `name` column on `leads` is still NOT NULL at the table
-    // level (kept for back-compat with older read paths). Match the same
-    // join used by the operator intake handler in routes/leads.ts so admin
-    // list views show the lead identically regardless of source.
-    const fullName = `${firstName ?? ""} ${lastName ?? ""}`.trim() || (emailValue || "Web form lead");
 
     const encrypted = encryptLeadFields({
       phone: phone,
@@ -282,6 +285,28 @@ async function runWebFormPipeline(
     return failed(pipeline, "LEAD_INSERT", "Failed to record submission");
   }
   pipeline.push(step5);
+
+  // Outbound webhook: notify any active automation integrations
+  // (n8n / Zapier / Make) that a new lead landed. Fire-and-forget so
+  // a slow third-party endpoint never blocks our response to the
+  // submitter. Each delivery is audit-logged with status + latency.
+  if (leadId) {
+    dispatchLeadCreated({
+      source: `web_form_${tortId}`,
+      lead: {
+        id: leadId,
+        name: fullName,
+        first_name: firstName,
+        last_name: lastName,
+        email: emailValue || null,
+        state: stateCode,
+        tort_type: config.label,
+        status: "web_form_intake",
+        source: `web_form_${tortId}`,
+        created_at: new Date().toISOString(),
+      },
+    });
+  }
 
   // STEP 6: Optional confirmation email.
   const step6: PipelineStep = { name: "CONFIRMATION_EMAIL", status: "skipped", errors: [] };

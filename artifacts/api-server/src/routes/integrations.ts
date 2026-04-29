@@ -6,6 +6,7 @@ import { auditLog } from "../lib/audit";
 import { PRESET_INTEGRATIONS } from "../lib/integration-presets";
 import { encrypt, decrypt } from "../lib/encryption";
 import { logger } from "../lib/logger";
+import { pingLeadWebhook } from "../lib/lead-webhook-dispatcher";
 import crypto from "crypto";
 
 const router = Router();
@@ -241,26 +242,81 @@ router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
     }
   }
 
-  // NOTE: This endpoint deliberately does NOT make a live HTTP call to the
-  // provider. There is no per-provider ping/echo handler in the codebase yet,
-  // so reporting a fake latency or claiming a successful API round-trip would
-  // mislead the operator. We verify what we *can* verify: that the stored
-  // credentials decrypt cleanly with the id-scoped AAD and that every secret
-  // field the preset declares is populated. That alone is genuinely useful —
-  // it catches encryption-key drift, AAD mismatches, and partial saves.
-  const ok = credentialCheck === "ok";
+  // For type=automation integrations (n8n / Zapier / Make), we go further
+  // than credential decryption and actually POST a sample lead.created
+  // payload to the configured webhook_url. This is the only way to honestly
+  // confirm end-to-end wiring — without it the operator has no way to know
+  // whether their n8n flow will actually receive our events.
+  let livePing: {
+    attempted: boolean;
+    response_status: number | null;
+    latency_ms: number | null;
+    signed: boolean;
+    delivery_id: string | null;
+    error: string | null;
+    reason: string | null;
+  } = {
+    attempted: false,
+    response_status: null,
+    latency_ms: null,
+    signed: false,
+    delivery_id: null,
+    error: null,
+    reason: null,
+  };
+  if (row.type === "automation" && row.webhook_url && row.status === "active") {
+    const ping = await pingLeadWebhook(row.id);
+    livePing = {
+      attempted: ping.attempted,
+      response_status: ping.response_status ?? null,
+      latency_ms: ping.latency_ms ?? null,
+      signed: !!ping.signed,
+      delivery_id: ping.delivery_id ?? null,
+      error: ping.error ?? null,
+      reason: ping.reason ?? null,
+    };
+  }
+
+  // For non-automation providers we still don't fake a round-trip — there's
+  // no per-provider echo handler, and reporting a fake latency would mislead
+  // the operator. Credential decryption is what we can verify; that alone
+  // catches encryption-key drift, AAD mismatches, and partial saves.
+  const credsOk = credentialCheck === "ok";
+  const pingOk =
+    !livePing.attempted ||
+    (livePing.response_status !== null && livePing.response_status >= 200 && livePing.response_status < 300);
+  const ok = credsOk && pingOk;
+
+  let message: string;
+  if (livePing.attempted) {
+    if (pingOk) {
+      message = `Credentials decrypt successfully and the webhook at ${row.webhook_url} responded ${livePing.response_status} in ${livePing.latency_ms}ms${livePing.signed ? " (signed with HMAC-SHA256)" : " (no api_key on file — sent unsigned)"}.`;
+    } else if (livePing.error) {
+      message = `Webhook delivery failed: ${livePing.error}. Verify the URL is reachable and accepts POST.`;
+    } else {
+      message = `Webhook responded ${livePing.response_status} (expected 2xx). Check that your n8n / Zapier / Make endpoint accepts POST and returns success.`;
+    }
+  } else if (credsOk) {
+    message = `Credentials for ${row.provider} are present and decrypt successfully. Live API ping for this provider is not yet implemented.`;
+  } else if (credentialCheck === "no_credentials_stored") {
+    message = "No secret credentials are stored for this integration. Reconnect and supply the required keys.";
+  } else if (credentialCheck === "decryption_failed") {
+    message = `Decryption failed for: ${decryptionErrors.join(", ")}. The encryption key may have changed; reconnect with fresh credentials.`;
+  } else {
+    message = `Missing required secret(s): ${decryptionErrors.join(", ")}. Reconnect and supply all preset-declared fields.`;
+  }
+
   res.json({
     success: ok,
     credential_check: credentialCheck,
-    live_api_ping: false,
-    latency_ms: null,
-    message: ok
-      ? `Credentials for ${row.provider} are present and decrypt successfully. Live API ping for this provider is not yet implemented.`
-      : credentialCheck === "no_credentials_stored"
-        ? "No secret credentials are stored for this integration. Reconnect and supply the required keys."
-        : credentialCheck === "decryption_failed"
-          ? `Decryption failed for: ${decryptionErrors.join(", ")}. The encryption key may have changed; reconnect with fresh credentials.`
-          : `Missing required secret(s): ${decryptionErrors.join(", ")}. Reconnect and supply all preset-declared fields.`,
+    live_api_ping: livePing.attempted,
+    response_status: livePing.response_status,
+    latency_ms: livePing.latency_ms,
+    signed: livePing.signed,
+    delivery_id: livePing.delivery_id,
+    ping_error: livePing.error,
+    ping_skip_reason: livePing.reason,
+    message,
     timestamp: new Date().toISOString(),
   });
 });
