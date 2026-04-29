@@ -16,8 +16,15 @@ const ENCODING = "base64" as const;
  *  - Keep the OLD key available as ENCRYPTION_KEY_V<old> in Replit Secrets
  *    until every row has been re-encrypted by `scripts/rotate-encryption-key.ts`.
  *  - Once migration is verified, delete the old version's secret.
+ *
+ * Currently pinned to v1: the legacy `ENCRYPTION_KEY` secret IS the v1 key
+ * (the resolver in `getKey()` accepts that name as the v1 fallback). Version 2
+ * was never actually deployed — no row in the database is tagged `enc:v2:`,
+ * and `ENCRYPTION_KEY_V2` was never provisioned. To roll forward to v2 in
+ * the future, provision `ENCRYPTION_KEY_V2`, run the rotation script to
+ * re-encrypt existing rows, then bump this constant.
  */
-const CURRENT_KEY_VERSION = 2;
+const CURRENT_KEY_VERSION = 1;
 
 const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
 

@@ -248,6 +248,11 @@ async function runWebFormPipeline(
       ? String(body[stateField.key] ?? "").toUpperCase().slice(0, 2) || null
       : null;
     const briefStory = body.brief_description ? String(body.brief_description).slice(0, 5000) : null;
+    // The legacy `name` column on `leads` is still NOT NULL at the table
+    // level (kept for back-compat with older read paths). Match the same
+    // join used by the operator intake handler in routes/leads.ts so admin
+    // list views show the lead identically regardless of source.
+    const fullName = `${firstName ?? ""} ${lastName ?? ""}`.trim() || (emailValue || "Web form lead");
 
     const encrypted = encryptLeadFields({
       phone: phone,
@@ -256,6 +261,7 @@ async function runWebFormPipeline(
     const inserted = await db
       .insert(leadsTable)
       .values({
+        name: fullName,
         tort_type: config.label,
         status: "web_form_intake",
         source: `web_form_${tortId}`,
