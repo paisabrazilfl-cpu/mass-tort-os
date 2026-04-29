@@ -158,7 +158,7 @@ async function runWebFormPipeline(
   tortId: string,
   config: { label: string; web_form_config: WebFormConfig },
   body: Record<string, unknown>,
-  req: Request,
+  _req: Request,
 ): Promise<PipelineResult> {
   const pipeline: PipelineStep[] = [];
   const cfg = config.web_form_config;
@@ -253,6 +253,19 @@ async function runWebFormPipeline(
   // join used by the operator intake handler in routes/leads.ts so admin
   // list views show the lead identically regardless of source.
   const fullName = `${firstName ?? ""} ${lastName ?? ""}`.trim() || (emailValue || "Web form lead");
+  // TCPA consent: the default web form's "tcpa_required" eligibility rule
+  // already blocks submission unless this checkbox is true, so by the time
+  // we reach STEP 5 it's guaranteed truthy. Persist it on the lead row
+  // anyway as a durable proof-of-consent column. The submission IP +
+  // user-agent + timestamp are captured in the immutable audit_log row
+  // above and can be cross-referenced by lead_id during any TCPA dispute.
+  // If an operator removed the tcpa_consent field from a custom form, we
+  // honestly write `false` so downstream contact rules can refuse to dial.
+  const tcpaConsentVal = body.tcpa_consent;
+  const tcpaConsented =
+    tcpaConsentVal === true ||
+    tcpaConsentVal === "true" ||
+    tcpaConsentVal === "on";
   try {
     const phone = String(body.phone ?? "").trim() || null;
     const briefStory = body.brief_description ? String(body.brief_description).slice(0, 5000) : null;
@@ -274,6 +287,7 @@ async function runWebFormPipeline(
         phone: encrypted.phone,
         state: stateCode,
         notes: briefStory,
+        tcpa_consent: tcpaConsented,
       } as typeof leadsTable.$inferInsert)
       .returning({ id: leadsTable.id });
     leadId = inserted[0]?.id ?? null;
@@ -310,7 +324,12 @@ async function runWebFormPipeline(
 
   // STEP 6: Optional confirmation email.
   const step6: PipelineStep = { name: "CONFIRMATION_EMAIL", status: "skipped", errors: [] };
-  let emailOutcome: "sent" | "would_send_no_provider" | "skipped" | "failed" = "skipped";
+  let emailOutcome:
+    | "sent"
+    | "would_send_no_provider"
+    | "would_send_no_adapter"
+    | "skipped"
+    | "failed" = "skipped";
   if (cfg.send_confirmation_email && emailValue) {
     try {
       const resolved = await resolveProvider("email");
@@ -326,9 +345,37 @@ async function runWebFormPipeline(
       } else {
         const adapter = getEmailAdapter(resolved.provider);
         if (!adapter) {
-          emailOutcome = "would_send_no_provider";
+          // The operator picked an email provider in workflow_settings that
+          // is in the credential vault but has no live send adapter shipped
+          // in this build (e.g., Mailgun, Postmark, SES). The migration-
+          // honesty principle forbids us from claiming we sent it. Audit
+          // the miss so the operator can see WHICH provider needs to be
+          // wired (or swapped to SendGrid).
+          emailOutcome = "would_send_no_adapter";
           step6.status = "skipped";
-          step6.errors = ["no_adapter"];
+          step6.errors = [`no_adapter:${resolved.provider}`];
+          logger.warn(
+            {
+              tortId,
+              leadId,
+              provider: resolved.provider,
+              integration_id: resolved.integration_id,
+            },
+            "Web form confirmation email skipped — no adapter shipped for chosen email provider",
+          );
+          void auditLog(
+            "web_form_confirmation_email",
+            String(leadId ?? tortId),
+            "would_send_no_adapter",
+            {
+              tort_id: tortId,
+              provider: resolved.provider,
+              integration_id: resolved.integration_id,
+              integration_name: resolved.name,
+              reason:
+                "Provider selected in workflow_settings has no live send adapter in this build. Switch to SendGrid or wait for the adapter to ship.",
+            },
+          );
         } else {
           const fromEmail =
             (resolved.credentials as Record<string, unknown>).from_email as string | undefined ||

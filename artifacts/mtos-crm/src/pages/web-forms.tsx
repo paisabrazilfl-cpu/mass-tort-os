@@ -812,9 +812,12 @@ function ConfigureDialog({
                     Send confirmation email on submit
                   </Label>
                   <p className="text-muted-foreground text-xs">
-                    Uses the configured email provider. If none is wired, the
-                    server audits "would_send_no_provider" and never silently
-                    pretends to send.
+                    Uses the email provider chosen in Workflow Settings. Today
+                    only SendGrid has a live send adapter shipped — if you pick
+                    a vault-only provider (Mailgun, Postmark, SES, etc.) the
+                    server audits "would_send_no_adapter" with the provider
+                    name and never pretends it sent. Pick SendGrid to actually
+                    deliver email.
                   </p>
                 </div>
               </div>
