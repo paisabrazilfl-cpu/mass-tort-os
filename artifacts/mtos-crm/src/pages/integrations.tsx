@@ -29,6 +29,12 @@ interface Preset {
   recommended?: boolean;
   pricing: "free" | "freemium" | "usage" | "subscription" | "enterprise";
   notes?: string;
+  /** "live"          — adapter code exists and consumes vault credentials.
+   *  "live_no_vault" — adapter exists but auth is via SDK/env, not the vault
+   *                    (e.g. Anthropic via the Replit AI SDK).
+   *  "vault_only"    — preset accepts credentials but no code uses them yet. */
+  wired?: "live" | "live_no_vault" | "vault_only";
+  wiring_note?: string | null;
 }
 
 interface Integration {
@@ -280,13 +286,23 @@ export default function Integrations() {
                   <TableHead>Provider</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Wiring</TableHead>
                   <TableHead>Last Sync</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {integrations.map((i) => (
-                  <TableRow key={i.id} data-testid={`row-integration-${i.id}`}>
+                {integrations.map((i) => {
+                  const presetForRow = presets.find(p => p.provider === i.provider);
+                  // Both "live" and "live_no_vault" mean the underlying feature works;
+                  // only "vault_only" (or unknown) means the integration is decorative.
+                  const rowWired = presetForRow?.wired === "live" || presetForRow?.wired === "live_no_vault";
+                  return (
+                  <TableRow
+                    key={i.id}
+                    data-testid={`row-integration-${i.id}`}
+                    className={!rowWired ? "bg-amber-50/30" : ""}
+                  >
                     <TableCell className="font-medium">{i.name}</TableCell>
                     <TableCell><Badge variant="outline">{i.provider}</Badge></TableCell>
                     <TableCell><Badge variant="outline">{i.type}</Badge></TableCell>
@@ -295,6 +311,26 @@ export default function Integrations() {
                         <Badge className="bg-green-100 text-green-700"><CheckCircle className="h-3 w-3 mr-1" />Active</Badge>
                       ) : (
                         <Badge className="bg-gray-100 text-gray-700"><XCircle className="h-3 w-3 mr-1" />Inactive</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {rowWired ? (
+                        <Badge
+                          className="bg-emerald-100 text-emerald-800 border border-emerald-300"
+                          data-testid={`badge-row-wired-live-${i.id}`}
+                          title={presetForRow?.wiring_note || "Live adapter exists — workflows will call this provider's API."}
+                        >
+                          <CheckCircle className="h-3 w-3 mr-1" />Live
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-400 text-amber-800"
+                          data-testid={`badge-row-wired-vault-${i.id}`}
+                          title="Credentials are saved, but no code in this build calls this provider's API yet. Workflows that depend on this integration will not fire."
+                        >
+                          Vault only
+                        </Badge>
                       )}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
@@ -314,7 +350,8 @@ export default function Integrations() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           </CardContent>
@@ -386,10 +423,19 @@ export default function Integrations() {
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                   {items.map((p) => {
                     const isConnected = integrations.some(i => i.provider === p.provider);
+                    // Both "live" and "live_no_vault" mean the underlying feature works in this build.
+                    const isLive = p.wired === "live" || p.wired === "live_no_vault";
+                    const showVaultWarning = isConnected && !isLive;
                     return (
                       <Card
                         key={p.provider}
-                        className={`relative ${isConnected ? "border-green-300 bg-green-50/40" : ""} ${p.recommended ? "ring-1 ring-amber-200" : ""}`}
+                        className={`relative ${
+                          showVaultWarning
+                            ? "border-amber-300 bg-amber-50/40"
+                            : isConnected
+                            ? "border-green-300 bg-green-50/40"
+                            : ""
+                        } ${p.recommended ? "ring-1 ring-amber-200" : ""}`}
                         data-testid={`card-preset-${p.provider}`}
                       >
                         {p.recommended && (
@@ -408,6 +454,24 @@ export default function Integrations() {
                                 <Badge variant="outline" className={`text-xs capitalize ${pricingColors[p.pricing]}`}>
                                   {p.pricing}
                                 </Badge>
+                                {isLive ? (
+                                  <Badge
+                                    className="bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs"
+                                    data-testid={`badge-wired-live-${p.provider}`}
+                                    title="A working adapter exists in this build — saving credentials will let workflows call this provider's API."
+                                  >
+                                    <CheckCircle className="h-3 w-3 mr-0.5" /> Live
+                                  </Badge>
+                                ) : (
+                                  <Badge
+                                    variant="outline"
+                                    className="border-slate-300 text-slate-600 text-xs"
+                                    data-testid={`badge-wired-vault-${p.provider}`}
+                                    title="Credentials can be stored, but no code in this build calls this provider's API yet. Saving credentials has no effect on workflows."
+                                  >
+                                    Vault only
+                                  </Badge>
+                                )}
                                 {isConnected && (
                                   <Badge className="bg-green-100 text-green-700 text-xs">Connected</Badge>
                                 )}
@@ -418,6 +482,24 @@ export default function Integrations() {
                           {p.notes && (
                             <p className="text-xs italic text-muted-foreground/80 mt-2 border-l-2 border-amber-200 pl-2">
                               {p.notes}
+                            </p>
+                          )}
+                          {p.wiring_note && (
+                            <p
+                              className={`text-xs mt-2 border-l-2 pl-2 ${
+                                isLive ? "border-emerald-300 text-emerald-800" : "border-slate-300 text-slate-600"
+                              }`}
+                              data-testid={`text-wiring-note-${p.provider}`}
+                            >
+                              {p.wiring_note}
+                            </p>
+                          )}
+                          {showVaultWarning && (
+                            <p
+                              className="text-xs mt-2 border-l-2 border-amber-400 pl-2 text-amber-800 bg-amber-50 py-1.5 rounded-r"
+                              data-testid={`warning-vault-only-${p.provider}`}
+                            >
+                              <strong>Heads up:</strong> credentials are saved, but this build has no adapter for {p.name} yet. Workflows won't fire until an adapter is wired.
                             </p>
                           )}
                           <div className="flex gap-2 mt-4">

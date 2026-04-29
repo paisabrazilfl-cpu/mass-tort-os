@@ -96,3 +96,7 @@ const ADAPTERS: Record<string, EmailAdapter> = {
 export function getEmailAdapter(provider: string): EmailAdapter | null {
   return ADAPTERS[provider] || null;
 }
+
+export function listEmailProviders(): string[] {
+  return Object.keys(ADAPTERS);
+}

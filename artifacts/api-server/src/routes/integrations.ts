@@ -4,6 +4,7 @@ import { eq, desc } from "drizzle-orm";
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { PRESET_INTEGRATIONS } from "../lib/integration-presets";
+import { getWiring, isWired, consumesVaultCredentials } from "../lib/integration-wiring";
 import { encrypt, decrypt } from "../lib/encryption";
 import { logger } from "../lib/logger";
 import { pingLeadWebhook } from "../lib/lead-webhook-dispatcher";
@@ -102,7 +103,15 @@ router.get("/categories", requirePermission(Permission.INTEGRATIONS_MANAGE), (_r
 });
 
 router.get("/presets", requirePermission(Permission.INTEGRATIONS_MANAGE), (_req, res) => {
-  res.json(PRESET_INTEGRATIONS);
+  // Annotate each preset with its current wiring status so the admin UI can
+  // honestly distinguish "this provider has live adapter code" from "saving
+  // credentials here has no effect on workflows yet".
+  res.json(
+    PRESET_INTEGRATIONS.map((p) => {
+      const w = getWiring(p.provider);
+      return { ...p, wired: w.status, wiring_note: w.note };
+    }),
+  );
 });
 
 function maskRow(row: any) {
@@ -285,7 +294,35 @@ router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
   const pingOk =
     !livePing.attempted ||
     (livePing.response_status !== null && livePing.response_status >= 200 && livePing.response_status < 300);
-  const ok = credsOk && pingOk;
+
+  // The most important signal an operator needs before migration: does this
+  // build actually have adapter code that will USE these credentials? If
+  // not, saving credentials and clicking Test is theatre. We refuse to
+  // claim "success: true" for vault-only providers no matter how cleanly
+  // their credentials decrypt — workflows will never call them.
+  //
+  // For "live_no_vault" providers (today: Anthropic via Replit AI SDK)
+  // the underlying feature works regardless of what's in the vault, so we
+  // do report success: true — but the message and explicit `vault_consumed`
+  // field tell the operator that the saved credentials themselves are not
+  // what makes the feature work.
+  //
+  // Contract for non-UI consumers:
+  //   - Use `credential_check === "ok"` for credential-vault viability.
+  //   - Use `adapter_wired` for "is there code that calls this provider".
+  //   - Use `vault_consumed` for "do those credentials actually get used".
+  //   - `success` is the rolled-up answer to "would clicking this row do
+  //     something useful right now"; do not rely on it for credential
+  //     viability alone.
+  const wiring = getWiring(row.provider);
+  const adapterWired = isWired(row.provider) || row.type === "automation";
+  const vaultConsumed = consumesVaultCredentials(row.provider) || row.type === "automation";
+
+  // For live_no_vault providers, credential check is irrelevant — the
+  // feature works without any saved vault credentials.
+  const ok = vaultConsumed
+    ? credsOk && pingOk && adapterWired
+    : adapterWired;
 
   let message: string;
   if (livePing.attempted) {
@@ -296,8 +333,12 @@ router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
     } else {
       message = `Webhook responded ${livePing.response_status} (expected 2xx). Check that your n8n / Zapier / Make endpoint accepts POST and returns success.`;
     }
+  } else if (wiring.status === "live_no_vault") {
+    message = `${row.provider} powers AI features in this build via the Replit AI Integrations SDK, which manages its own auth via environment variables. Credentials saved here are NOT consumed — there is nothing to test for the vault entry. The feature works regardless of what is saved here.`;
+  } else if (credsOk && !adapterWired) {
+    message = `Credentials for ${row.provider} decrypt successfully, but no live adapter for this provider is wired in this build. Saving credentials here has no effect on workflows yet — an adapter must be added under lib/${row.type || "providers"}/ before this integration will fire.`;
   } else if (credsOk) {
-    message = `Credentials for ${row.provider} are present and decrypt successfully. Live API ping for this provider is not yet implemented.`;
+    message = `Credentials for ${row.provider} are present and decrypt successfully. Live API ping for this provider is not yet implemented, but workflow handlers will use them.`;
   } else if (credentialCheck === "no_credentials_stored") {
     message = "No secret credentials are stored for this integration. Reconnect and supply the required keys.";
   } else if (credentialCheck === "decryption_failed") {
@@ -309,6 +350,10 @@ router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
   res.json({
     success: ok,
     credential_check: credentialCheck,
+    adapter_wired: adapterWired,
+    vault_consumed: vaultConsumed,
+    wiring_status: wiring.status,
+    wiring_note: wiring.note,
     live_api_ping: livePing.attempted,
     response_status: livePing.response_status,
     latency_ms: livePing.latency_ms,
