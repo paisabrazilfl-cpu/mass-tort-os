@@ -3,7 +3,7 @@ import { db, leadsTable, leadBackgroundCheckSnapshotsTable } from "@workspace/db
 import { desc, eq } from "drizzle-orm";
 import { runBackgroundCheckHub } from "../lib/bg-hub/hub";
 import { BG_HUB_VERSION, type BackgroundHubResult } from "../lib/bg-hub/types";
-import { encryptLeadFields } from "../lib/encryption";
+import { encryptLeadFields, decryptLeadFields } from "../lib/encryption";
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
 import { runBackgroundCheck } from "../lib/background-check";
@@ -942,11 +942,16 @@ router.post("/background-check/lead/:id", requirePermission(Permission.FORMS_BAC
   }
 
   try {
-    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
-    if (!lead) {
+    const [leadRow] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    if (!leadRow) {
       notFound(res, "Lead not found");
       return;
     }
+
+    // Decrypt PII fields (e.g. first_name/last_name when stored encrypted) so
+    // the validators see real values, not `enc:v1:...` ciphertext. Same
+    // pattern as the bg-hub route below and every other lead-reading path.
+    const lead = decryptLeadFields(leadRow, String(leadId));
 
     if (!lead.first_name || !lead.last_name) {
       unprocessable(res, "Lead missing first_name or last_name");
@@ -997,11 +1002,18 @@ router.post(
       return;
     }
     try {
-      const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
-      if (!lead) {
+      const [leadRow] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+      if (!leadRow) {
         notFound(res, "Lead not found");
         return;
       }
+      // Decrypt PII fields before passing to BG hub. Without this, encrypted
+      // fields (e.g. phone stored as `enc:v1:...`) get fed raw into the lane
+      // validators, which strip non-digits from the ciphertext header and
+      // falsely report `invalid_phone_format`. Every other lead-reading
+      // path (leads.ts, workflow-handlers.ts, decision-engine-service.ts)
+      // calls decryptLeadFields first; this route must too.
+      const lead = decryptLeadFields(leadRow, String(leadId));
       const result = await runBackgroundCheckHub({
         id: leadId,
         first_name: lead.first_name ?? null,
