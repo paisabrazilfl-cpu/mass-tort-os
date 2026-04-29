@@ -36,3 +36,9 @@ id = "IghvUmAm_os28tXjAPy5Y"
 uri = "file://.local/python-review/python-code-for-review.tar.gz"
 type = "unspecified"
 title = "Python code shared with me — 2 scripts (NPI Verify + OCR Engine)"
+
+[[outputs]]
+id = "6yBgRD0D4fZcuhHOPulZg"
+uri = "file://.local/exports/mass-tort-os-source-20260429-2151.tar.gz"
+type = "unspecified"
+title = "Mass Tort OS — full source code (tar.gz, 4.7 MB, 617 files, HEAD cf245b6)"
