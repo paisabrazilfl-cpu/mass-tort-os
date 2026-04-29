@@ -1037,6 +1037,113 @@ export interface BackgroundCheckResult {
   notes: string[];
 }
 
+export type BackgroundHubSourceSourceType =
+  (typeof BackgroundHubSourceSourceType)[keyof typeof BackgroundHubSourceSourceType];
+
+export const BackgroundHubSourceSourceType = {
+  primary: "primary",
+  federal: "federal",
+  state: "state",
+  county: "county",
+  technical: "technical",
+  directory: "directory",
+  secondary: "secondary",
+} as const;
+
+export interface BackgroundHubSource {
+  name: string;
+  url: string;
+  source_type: BackgroundHubSourceSourceType;
+  requires_api_key: boolean;
+  live_adapter_available: boolean;
+  notes?: string;
+}
+
+export type BackgroundHubLaneResultLane =
+  (typeof BackgroundHubLaneResultLane)[keyof typeof BackgroundHubLaneResultLane];
+
+export const BackgroundHubLaneResultLane = {
+  address: "address",
+  email: "email",
+  phone: "phone",
+  residency: "residency",
+  criminal_court: "criminal_court",
+  incarceration: "incarceration",
+  sex_offender_nsopw: "sex_offender_nsopw",
+  attorney: "attorney",
+  business_entity: "business_entity",
+} as const;
+
+export type BackgroundHubLaneResultStatus =
+  (typeof BackgroundHubLaneResultStatus)[keyof typeof BackgroundHubLaneResultStatus];
+
+export const BackgroundHubLaneResultStatus = {
+  PASS: "PASS",
+  REVIEW_REQUIRED: "REVIEW_REQUIRED",
+  FAIL: "FAIL",
+  NOT_RUN: "NOT_RUN",
+} as const;
+
+export interface BackgroundHubLaneResult {
+  lane: BackgroundHubLaneResultLane;
+  status: BackgroundHubLaneResultStatus;
+  score: number;
+  flags: string[];
+  notes: string[];
+  sources: BackgroundHubSource[];
+  checked_at: string;
+  /** Adapter-specific evidence payload (shape varies by lane). */
+  raw?: unknown;
+  error?: string | null;
+}
+
+export type BackgroundHubResultFinalStatus =
+  (typeof BackgroundHubResultFinalStatus)[keyof typeof BackgroundHubResultFinalStatus];
+
+export const BackgroundHubResultFinalStatus = {
+  PASS: "PASS",
+  REVIEW_REQUIRED: "REVIEW_REQUIRED",
+  FAIL: "FAIL",
+  NOT_RUN: "NOT_RUN",
+} as const;
+
+export type BackgroundHubResultSummary = {
+  pass: number;
+  review_required: number;
+  fail: number;
+  not_run: number;
+};
+
+export interface BackgroundHubResult {
+  lead_id: number;
+  version: string;
+  final_status: BackgroundHubResultFinalStatus;
+  overall_score: number;
+  checked_at: string;
+  summary: BackgroundHubResultSummary;
+  results: BackgroundHubLaneResult[];
+}
+
+export type BackgroundHubSnapshotFinalStatus =
+  (typeof BackgroundHubSnapshotFinalStatus)[keyof typeof BackgroundHubSnapshotFinalStatus];
+
+export const BackgroundHubSnapshotFinalStatus = {
+  PASS: "PASS",
+  REVIEW_REQUIRED: "REVIEW_REQUIRED",
+  FAIL: "FAIL",
+  NOT_RUN: "NOT_RUN",
+} as const;
+
+export interface BackgroundHubSnapshot {
+  id: number;
+  lead_id: number;
+  version: string;
+  final_status: BackgroundHubSnapshotFinalStatus;
+  overall_score: number;
+  result: BackgroundHubResult;
+  created_at: string;
+}
+
 export type ListLeadsParams = {
   status?: ListLeadsStatus;
   tort_type?: string;
@@ -1112,6 +1219,14 @@ export type RunBackgroundCheckBody = {
   last_name: string;
   state?: string;
   date_of_birth?: string;
+};
+
+export type ListLeadBackgroundCheckHubSnapshotsParams = {
+  /**
+   * @minimum 1
+   * @maximum 50
+   */
+  limit?: number;
 };
 
 export type GetTortCategories200ItemTortsItem = {

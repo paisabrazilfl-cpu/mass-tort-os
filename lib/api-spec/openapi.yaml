@@ -1019,6 +1019,61 @@ paths:
               schema:
                 $ref: "#/components/schemas/BackgroundCheckResult"
 
+  /forms/background-check-hub/lead/{id}:
+    post:
+      operationId: runLeadBackgroundCheckHub
+      tags: [forms]
+      summary: Run the unified Background Check Hub on an existing lead
+      description: |
+        Runs every background-check lane (address, email, phone, residency,
+        criminal court, incarceration, NSOPW, attorney, business entity) and
+        returns a unified PASS / REVIEW_REQUIRED / FAIL / NOT_RUN result with
+        per-lane evidence. Persists a snapshot row.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Hub result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackgroundHubResult"
+        "404":
+          description: Lead not found
+
+  /forms/background-check-hub/lead/{id}/snapshots:
+    get:
+      operationId: listLeadBackgroundCheckHubSnapshots
+      tags: [forms]
+      summary: List historical Background Check Hub snapshots for a lead
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        "200":
+          description: Snapshot list (most recent first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BackgroundHubSnapshot"
+
   /forms/categories:
     get:
       operationId: getTortCategories
@@ -3290,3 +3345,121 @@ components:
         - searched_state_label
         - searched_courts
         - notes
+
+    BackgroundHubSource:
+      type: object
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+        source_type:
+          type: string
+          enum: [primary, federal, state, county, technical, directory, secondary]
+        requires_api_key:
+          type: boolean
+        live_adapter_available:
+          type: boolean
+        notes:
+          type: string
+      required: [name, url, source_type, requires_api_key, live_adapter_available]
+
+    BackgroundHubLaneResult:
+      type: object
+      properties:
+        lane:
+          type: string
+          enum:
+            - address
+            - email
+            - phone
+            - residency
+            - criminal_court
+            - incarceration
+            - sex_offender_nsopw
+            - attorney
+            - business_entity
+        status:
+          type: string
+          enum: [PASS, REVIEW_REQUIRED, FAIL, NOT_RUN]
+        score:
+          type: integer
+        flags:
+          type: array
+          items:
+            type: string
+        notes:
+          type: array
+          items:
+            type: string
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackgroundHubSource"
+        checked_at:
+          type: string
+        raw:
+          description: Adapter-specific evidence payload (shape varies by lane).
+        error:
+          type: string
+          nullable: true
+      required: [lane, status, score, flags, notes, sources, checked_at]
+
+    BackgroundHubResult:
+      type: object
+      properties:
+        lead_id:
+          type: integer
+        version:
+          type: string
+        final_status:
+          type: string
+          enum: [PASS, REVIEW_REQUIRED, FAIL, NOT_RUN]
+        overall_score:
+          type: integer
+        checked_at:
+          type: string
+        summary:
+          type: object
+          properties:
+            pass:
+              type: integer
+            review_required:
+              type: integer
+            fail:
+              type: integer
+            not_run:
+              type: integer
+          required: [pass, review_required, fail, not_run]
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackgroundHubLaneResult"
+      required:
+        - lead_id
+        - version
+        - final_status
+        - overall_score
+        - checked_at
+        - summary
+        - results
+
+    BackgroundHubSnapshot:
+      type: object
+      properties:
+        id:
+          type: integer
+        lead_id:
+          type: integer
+        version:
+          type: string
+        final_status:
+          type: string
+          enum: [PASS, REVIEW_REQUIRED, FAIL, NOT_RUN]
+        overall_score:
+          type: integer
+        result:
+          $ref: "#/components/schemas/BackgroundHubResult"
+        created_at:
+          type: string
+      required: [id, lead_id, version, final_status, overall_score, result, created_at]

@@ -1440,6 +1440,163 @@ export const RunLeadBackgroundCheckResponse = zod.object({
 });
 
 /**
+ * Runs every background-check lane (address, email, phone, residency,
+criminal court, incarceration, NSOPW, attorney, business entity) and
+returns a unified PASS / REVIEW_REQUIRED / FAIL / NOT_RUN result with
+per-lane evidence. Persists a snapshot row.
+
+ * @summary Run the unified Background Check Hub on an existing lead
+ */
+export const RunLeadBackgroundCheckHubParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const RunLeadBackgroundCheckHubResponse = zod.object({
+  lead_id: zod.number(),
+  version: zod.string(),
+  final_status: zod.enum(["PASS", "REVIEW_REQUIRED", "FAIL", "NOT_RUN"]),
+  overall_score: zod.number(),
+  checked_at: zod.string(),
+  summary: zod.object({
+    pass: zod.number(),
+    review_required: zod.number(),
+    fail: zod.number(),
+    not_run: zod.number(),
+  }),
+  results: zod.array(
+    zod.object({
+      lane: zod.enum([
+        "address",
+        "email",
+        "phone",
+        "residency",
+        "criminal_court",
+        "incarceration",
+        "sex_offender_nsopw",
+        "attorney",
+        "business_entity",
+      ]),
+      status: zod.enum(["PASS", "REVIEW_REQUIRED", "FAIL", "NOT_RUN"]),
+      score: zod.number(),
+      flags: zod.array(zod.string()),
+      notes: zod.array(zod.string()),
+      sources: zod.array(
+        zod.object({
+          name: zod.string(),
+          url: zod.string(),
+          source_type: zod.enum([
+            "primary",
+            "federal",
+            "state",
+            "county",
+            "technical",
+            "directory",
+            "secondary",
+          ]),
+          requires_api_key: zod.boolean(),
+          live_adapter_available: zod.boolean(),
+          notes: zod.string().optional(),
+        }),
+      ),
+      checked_at: zod.string(),
+      raw: zod
+        .unknown()
+        .optional()
+        .describe("Adapter-specific evidence payload (shape varies by lane)."),
+      error: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary List historical Background Check Hub snapshots for a lead
+ */
+export const ListLeadBackgroundCheckHubSnapshotsParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const listLeadBackgroundCheckHubSnapshotsQueryLimitDefault = 10;
+export const listLeadBackgroundCheckHubSnapshotsQueryLimitMax = 50;
+
+export const ListLeadBackgroundCheckHubSnapshotsQueryParams = zod.object({
+  limit: zod.coerce
+    .number()
+    .min(1)
+    .max(listLeadBackgroundCheckHubSnapshotsQueryLimitMax)
+    .default(listLeadBackgroundCheckHubSnapshotsQueryLimitDefault),
+});
+
+export const ListLeadBackgroundCheckHubSnapshotsResponseItem = zod.object({
+  id: zod.number(),
+  lead_id: zod.number(),
+  version: zod.string(),
+  final_status: zod.enum(["PASS", "REVIEW_REQUIRED", "FAIL", "NOT_RUN"]),
+  overall_score: zod.number(),
+  result: zod.object({
+    lead_id: zod.number(),
+    version: zod.string(),
+    final_status: zod.enum(["PASS", "REVIEW_REQUIRED", "FAIL", "NOT_RUN"]),
+    overall_score: zod.number(),
+    checked_at: zod.string(),
+    summary: zod.object({
+      pass: zod.number(),
+      review_required: zod.number(),
+      fail: zod.number(),
+      not_run: zod.number(),
+    }),
+    results: zod.array(
+      zod.object({
+        lane: zod.enum([
+          "address",
+          "email",
+          "phone",
+          "residency",
+          "criminal_court",
+          "incarceration",
+          "sex_offender_nsopw",
+          "attorney",
+          "business_entity",
+        ]),
+        status: zod.enum(["PASS", "REVIEW_REQUIRED", "FAIL", "NOT_RUN"]),
+        score: zod.number(),
+        flags: zod.array(zod.string()),
+        notes: zod.array(zod.string()),
+        sources: zod.array(
+          zod.object({
+            name: zod.string(),
+            url: zod.string(),
+            source_type: zod.enum([
+              "primary",
+              "federal",
+              "state",
+              "county",
+              "technical",
+              "directory",
+              "secondary",
+            ]),
+            requires_api_key: zod.boolean(),
+            live_adapter_available: zod.boolean(),
+            notes: zod.string().optional(),
+          }),
+        ),
+        checked_at: zod.string(),
+        raw: zod
+          .unknown()
+          .optional()
+          .describe(
+            "Adapter-specific evidence payload (shape varies by lane).",
+          ),
+        error: zod.string().nullish(),
+      }),
+    ),
+  }),
+  created_at: zod.string(),
+});
+export const ListLeadBackgroundCheckHubSnapshotsResponse = zod.array(
+  ListLeadBackgroundCheckHubSnapshotsResponseItem,
+);
+
+/**
  * @summary Get all tort categories with grouped torts
  */
 export const GetTortCategoriesResponseItem = zod.object({

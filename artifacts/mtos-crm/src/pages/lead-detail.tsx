@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { EnvelopeTimeline } from "@/components/envelope-timeline";
+import { BackgroundCheckHubCard } from "@/components/background-check-hub-card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
 interface IntelligenceScore {
@@ -712,6 +713,8 @@ export default function LeadDetail() {
                 );
               } catch { return null; }
             })()}
+
+            <BackgroundCheckHubCard leadId={leadId} />
           </div>
         </TabsContent>
 

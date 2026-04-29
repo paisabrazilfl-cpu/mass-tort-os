@@ -23,6 +23,8 @@ import type {
   AuditLogEntry,
   AuditSummary,
   BackgroundCheckResult,
+  BackgroundHubResult,
+  BackgroundHubSnapshot,
   Case,
   CaseDetail,
   CreateCaseBody,
@@ -53,6 +55,7 @@ import type {
   HealthStatus,
   Lead,
   ListDocumentsParams,
+  ListLeadBackgroundCheckHubSnapshotsParams,
   ListLeadsParams,
   ListReviewQueueParams,
   NpiProvider,
@@ -3698,6 +3701,219 @@ export const useRunLeadBackgroundCheck = <
 > => {
   return useMutation(getRunLeadBackgroundCheckMutationOptions(options));
 };
+
+/**
+ * Runs every background-check lane (address, email, phone, residency,
+criminal court, incarceration, NSOPW, attorney, business entity) and
+returns a unified PASS / REVIEW_REQUIRED / FAIL / NOT_RUN result with
+per-lane evidence. Persists a snapshot row.
+
+ * @summary Run the unified Background Check Hub on an existing lead
+ */
+export const getRunLeadBackgroundCheckHubUrl = (id: number) => {
+  return `/api/forms/background-check-hub/lead/${id}`;
+};
+
+export const runLeadBackgroundCheckHub = async (
+  id: number,
+  options?: RequestInit,
+): Promise<BackgroundHubResult> => {
+  return customFetch<BackgroundHubResult>(getRunLeadBackgroundCheckHubUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRunLeadBackgroundCheckHubMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runLeadBackgroundCheckHub>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof runLeadBackgroundCheckHub>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["runLeadBackgroundCheckHub"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof runLeadBackgroundCheckHub>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return runLeadBackgroundCheckHub(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RunLeadBackgroundCheckHubMutationResult = NonNullable<
+  Awaited<ReturnType<typeof runLeadBackgroundCheckHub>>
+>;
+
+export type RunLeadBackgroundCheckHubMutationError = ErrorType<void>;
+
+/**
+ * @summary Run the unified Background Check Hub on an existing lead
+ */
+export const useRunLeadBackgroundCheckHub = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runLeadBackgroundCheckHub>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof runLeadBackgroundCheckHub>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getRunLeadBackgroundCheckHubMutationOptions(options));
+};
+
+/**
+ * @summary List historical Background Check Hub snapshots for a lead
+ */
+export const getListLeadBackgroundCheckHubSnapshotsUrl = (
+  id: number,
+  params?: ListLeadBackgroundCheckHubSnapshotsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/forms/background-check-hub/lead/${id}/snapshots?${stringifiedParams}`
+    : `/api/forms/background-check-hub/lead/${id}/snapshots`;
+};
+
+export const listLeadBackgroundCheckHubSnapshots = async (
+  id: number,
+  params?: ListLeadBackgroundCheckHubSnapshotsParams,
+  options?: RequestInit,
+): Promise<BackgroundHubSnapshot[]> => {
+  return customFetch<BackgroundHubSnapshot[]>(
+    getListLeadBackgroundCheckHubSnapshotsUrl(id, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListLeadBackgroundCheckHubSnapshotsQueryKey = (
+  id: number,
+  params?: ListLeadBackgroundCheckHubSnapshotsParams,
+) => {
+  return [
+    `/api/forms/background-check-hub/lead/${id}/snapshots`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListLeadBackgroundCheckHubSnapshotsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listLeadBackgroundCheckHubSnapshots>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  params?: ListLeadBackgroundCheckHubSnapshotsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listLeadBackgroundCheckHubSnapshots>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListLeadBackgroundCheckHubSnapshotsQueryKey(id, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listLeadBackgroundCheckHubSnapshots>>
+  > = ({ signal }) =>
+    listLeadBackgroundCheckHubSnapshots(id, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listLeadBackgroundCheckHubSnapshots>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListLeadBackgroundCheckHubSnapshotsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listLeadBackgroundCheckHubSnapshots>>
+>;
+export type ListLeadBackgroundCheckHubSnapshotsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List historical Background Check Hub snapshots for a lead
+ */
+
+export function useListLeadBackgroundCheckHubSnapshots<
+  TData = Awaited<ReturnType<typeof listLeadBackgroundCheckHubSnapshots>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  params?: ListLeadBackgroundCheckHubSnapshotsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listLeadBackgroundCheckHubSnapshots>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListLeadBackgroundCheckHubSnapshotsQueryOptions(
+    id,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Get all tort categories with grouped torts

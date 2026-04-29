@@ -1,6 +1,8 @@
 import { Router } from "express";
-import { db, leadsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, leadsTable, leadBackgroundCheckSnapshotsTable } from "@workspace/db";
+import { desc, eq } from "drizzle-orm";
+import { runBackgroundCheckHub } from "../lib/bg-hub/hub";
+import { BG_HUB_VERSION, type BackgroundHubResult } from "../lib/bg-hub/types";
 import { encryptLeadFields } from "../lib/encryption";
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
@@ -978,6 +980,106 @@ router.post("/background-check/lead/:id", requirePermission(Permission.FORMS_BAC
     serverError(res, "Background check failed");
   }
 });
+
+// ─── Background Check Hub ────────────────────────────────────────────────────
+// Unified multi-lane background check (address, email, phone, residency,
+// criminal court, incarceration, NSOPW, attorney, business entity). Wraps
+// existing per-lane validators where we have them; honest stubs for lanes
+// without live adapters. Persists every run as a snapshot row so the operator
+// can see history. Same RBAC permission as the legacy single-source check.
+router.post(
+  "/background-check-hub/lead/:id",
+  requirePermission(Permission.FORMS_BACKGROUND_CHECK),
+  async (req, res) => {
+    const leadId = Number(req.params["id"]);
+    if (!Number.isFinite(leadId) || leadId <= 0) {
+      badRequest(res, "Invalid lead ID");
+      return;
+    }
+    try {
+      const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+      if (!lead) {
+        notFound(res, "Lead not found");
+        return;
+      }
+      const result = await runBackgroundCheckHub({
+        id: leadId,
+        first_name: lead.first_name ?? null,
+        last_name: lead.last_name ?? null,
+        full_name: lead.name ?? null,
+        email: lead.email ?? null,
+        phone: lead.phone ?? lead.phone_primary ?? null,
+        address: lead.street_address ?? null,
+        city: lead.city ?? null,
+        state: lead.state ?? null,
+        zip: lead.zip ?? null,
+        dob: lead.date_of_birth ?? null,
+        // leads table has no business_name column — claimants are people, not
+        // entities. Hub will resolve to NOT_RUN for the business_entity lane.
+        business_name: null,
+      });
+      // Persist a snapshot row (history ledger). Failure to persist is logged
+      // but does not block the response — the hub result is still useful.
+      try {
+        await db.insert(leadBackgroundCheckSnapshotsTable).values({
+          lead_id: leadId,
+          version: BG_HUB_VERSION,
+          final_status: result.final_status,
+          overall_score: result.overall_score,
+          result,
+        });
+      } catch (persistErr) {
+        req.log.error({ err: persistErr, leadId }, "bg-hub: snapshot persist failed");
+      }
+      // Audit-log the operator action with the headline outcome (no PII).
+      await auditLog("lead", String(leadId), "background_check_hub_run", {
+        final_status: result.final_status,
+        overall_score: result.overall_score,
+        summary: result.summary,
+      });
+      res.json(result);
+    } catch (err) {
+      req.log.error({ err, leadId }, "Background check hub failed");
+      serverError(res, "Background check hub failed");
+    }
+  },
+);
+
+router.get(
+  "/background-check-hub/lead/:id/snapshots",
+  requirePermission(Permission.FORMS_BACKGROUND_CHECK),
+  async (req, res) => {
+    const leadId = Number(req.params["id"]);
+    if (!Number.isFinite(leadId) || leadId <= 0) {
+      badRequest(res, "Invalid lead ID");
+      return;
+    }
+    const limitRaw = Number(req.query["limit"] ?? 10);
+    const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 10, 1), 50);
+    try {
+      const rows = await db
+        .select()
+        .from(leadBackgroundCheckSnapshotsTable)
+        .where(eq(leadBackgroundCheckSnapshotsTable.lead_id, leadId))
+        .orderBy(desc(leadBackgroundCheckSnapshotsTable.created_at))
+        .limit(limit);
+      res.json(
+        rows.map((r) => ({
+          id: r.id,
+          lead_id: r.lead_id,
+          version: r.version,
+          final_status: r.final_status,
+          overall_score: r.overall_score,
+          result: r.result as BackgroundHubResult,
+          created_at: r.created_at.toISOString(),
+        })),
+      );
+    } catch (err) {
+      req.log.error({ err, leadId }, "bg-hub snapshots query failed");
+      serverError(res, "Failed to load snapshots");
+    }
+  },
+);
 
 router.post("/npi-verify", requirePermission(Permission.FORMS_NPI_VERIFY), async (req, res) => {
   const { physician_first_name, physician_last_name, diagnosis } = req.body;
