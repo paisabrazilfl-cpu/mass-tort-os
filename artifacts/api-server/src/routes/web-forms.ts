@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import { db, formConfigurationsTable, leadsTable } from "@workspace/db";
 import type { WebFormConfig, WebFormField, EligibilityRule } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getFormConfig } from "../lib/form-config-service";
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
@@ -13,6 +13,8 @@ import { resolveProvider, isResolved } from "../lib/provider-router";
 import { getEmailAdapter } from "../lib/email/sendgrid";
 import { badRequest, notFound, serverError } from "../lib/http-errors";
 import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
+import { findExistingLeadForIntake } from "../lib/lead-dedup";
+import { runBackgroundCheck } from "../lib/background-check";
 
 const router: IRouter = Router();
 
@@ -69,6 +71,7 @@ interface PipelineStep {
   name: string;
   status: "passed" | "failed" | "skipped";
   errors: string[];
+  data?: Record<string, unknown>;
 }
 
 /**
@@ -238,9 +241,17 @@ async function runWebFormPipeline(
   }
   pipeline.push(step4);
 
-  // STEP 5: Insert the lead.
+  // STEP 5: Persist the lead (dedup-aware upsert).
+  //
+  // Product rule: a single human filling out the website widget AND
+  // the emailed Form Engine intake for the SAME tort campaign must end
+  // up as ONE lead row ("signee"). See lib/lead-dedup.ts for the match
+  // strategy. We attempt dedup BEFORE the insert, then either UPDATE
+  // the existing row (preserving its identity for downstream documents
+  // / envelopes) or INSERT a fresh one.
   const step5: PipelineStep = { name: "LEAD_INSERT", status: "passed", errors: [] };
   let leadId: number | null = null;
+  let dedupOutcome: "inserted" | "merged_email" | "merged_phone" = "inserted";
   // Lift these out of the try block so the outbound webhook dispatch
   // below can reference them after a successful insert.
   const firstName = String(body.first_name ?? "").trim() || null;
@@ -270,35 +281,144 @@ async function runWebFormPipeline(
     const phone = String(body.phone ?? "").trim() || null;
     const briefStory = body.brief_description ? String(body.brief_description).slice(0, 5000) : null;
 
-    const encrypted = encryptLeadFields({
-      phone: phone,
+    // Dedup BEFORE the write. We scope to the same tort label that we'd
+    // be inserting under so the comparison is apples-to-apples.
+    const existing = await findExistingLeadForIntake({
+      email: emailValue || null,
+      phone,
+      tortType: config.label,
     });
 
-    const inserted = await db
-      .insert(leadsTable)
-      .values({
-        name: fullName,
-        tort_type: config.label,
-        status: "web_form_intake",
-        source: `web_form_${tortId}`,
-        first_name: firstName,
-        last_name: lastName,
-        email: emailValue || null,
-        phone: encrypted.phone,
-        state: stateCode,
-        notes: briefStory,
-        tcpa_consent: tcpaConsented,
-      } as typeof leadsTable.$inferInsert)
-      .returning({ id: leadsTable.id });
-    leadId = inserted[0]?.id ?? null;
+    const encrypted = encryptLeadFields({ phone });
+
+    if (existing) {
+      // FILL-EMPTY MERGE.
+      //
+      // This endpoint is PUBLIC and unauthenticated. Without a
+      // possession-of-email proof (a signed token in a confirmation-
+      // email link — tracked as a follow-up), an attacker who knows or
+      // guesses a victim's email could submit a form to tamper with
+      // their record. We mitigate by NEVER overwriting an already-set
+      // identifying field. We only fill columns that are currently
+      // NULL/empty, so the worst an attacker can do is annotate a
+      // partial lead — they cannot alter existing PII or status.
+      //
+      // SQL `COALESCE(existing, $new)` keeps the existing value if it
+      // is NOT NULL; otherwise picks the submitter's value. We use
+      // `sql` template tags to express this concisely while still
+      // letting Drizzle parameterize the new values safely.
+      const setExpr: Record<string, unknown> = {
+        updated_at: new Date(),
+      };
+      if (firstName) setExpr.first_name = sql`COALESCE(${leadsTable.first_name}, ${firstName})`;
+      if (lastName) setExpr.last_name = sql`COALESCE(${leadsTable.last_name}, ${lastName})`;
+      if (emailValue) setExpr.email = sql`COALESCE(${leadsTable.email}, ${emailValue})`;
+      if (encrypted.phone) setExpr.phone = sql`COALESCE(${leadsTable.phone}, ${encrypted.phone})`;
+      if (stateCode) setExpr.state = sql`COALESCE(${leadsTable.state}, ${stateCode})`;
+      if (briefStory) setExpr.notes = sql`COALESCE(${leadsTable.notes}, ${briefStory})`;
+      // tcpa_consent is the one field that should ratchet UP — once
+      // consented, stay consented. Never demote to false.
+      if (tcpaConsented) setExpr.tcpa_consent = sql`${leadsTable.tcpa_consent} OR true`;
+      await db
+        .update(leadsTable)
+        .set(setExpr as Partial<typeof leadsTable.$inferInsert>)
+        .where(eq(leadsTable.id, existing.leadId));
+
+      // Audit every public merge so an operator can investigate
+      // suspicious activity. The audit row carries the submitter IP /
+      // user-agent recorded in the surrounding pipeline's audit_log
+      // entries, which can be cross-referenced by lead_id.
+      await auditLog("lead", String(existing.leadId), "web_form_merge", {
+        tort_id: tortId,
+        matched_by: existing.matchedBy,
+        had_email: !!emailValue,
+        had_phone: !!encrypted.phone,
+      });
+
+      leadId = existing.leadId;
+      dedupOutcome = existing.matchedBy === "email" ? "merged_email" : "merged_phone";
+    } else {
+      const inserted = await db
+        .insert(leadsTable)
+        .values({
+          name: fullName,
+          tort_type: config.label,
+          status: "web_form_intake",
+          source: `web_form_${tortId}`,
+          first_name: firstName,
+          last_name: lastName,
+          email: emailValue || null,
+          phone: encrypted.phone,
+          state: stateCode,
+          notes: briefStory,
+          tcpa_consent: tcpaConsented,
+        } as typeof leadsTable.$inferInsert)
+        .returning({ id: leadsTable.id });
+      leadId = inserted[0]?.id ?? null;
+    }
   } catch (err) {
-    logger.error({ err, tortId }, "web-form lead insert failed");
+    logger.error({ err, tortId }, "web-form lead persist failed");
     step5.errors = ["LEAD_INSERT_FAILED"];
     step5.status = "failed";
     pipeline.push(step5);
     return failed(pipeline, "LEAD_INSERT", "Failed to record submission");
   }
+  step5.data = { dedup_outcome: dedupOutcome, lead_id: leadId };
   pipeline.push(step5);
+
+  // STEP 5b: Background check (synchronous-but-non-fatal, same pattern
+  // as the heavy Form Engine pipeline at routes/forms.ts:861). The
+  // result is persisted onto the lead row via `background_check_status`
+  // and `background_check_data`. A failure here MUST NOT roll back the
+  // lead — operators can re-run the heavy hub manually from the UI.
+  const stepBg: PipelineStep = { name: "BACKGROUND_CHECK", status: "skipped", errors: [] };
+  // Skip on MERGE *only if the merged lead already has a meaningful
+  // bg result*. This prevents:
+  //   (a) clobbering a meaningful prior result with a transient
+  //       `error` / `not_found` from the lightweight check,
+  //   (b) an attacker spamming the bg-check provider via the public
+  //       endpoint with a victim's email.
+  // But it deliberately ALLOWS backfill: if the original submission
+  // failed the bg step or skipped it (no name on file at the time),
+  // a legitimate resubmission can still complete the bg check.
+  let bgAlreadyDone = false;
+  if (leadId && dedupOutcome !== "inserted") {
+    const [existingBg] = await db
+      .select({ status: leadsTable.background_check_status })
+      .from(leadsTable)
+      .where(eq(leadsTable.id, leadId))
+      .limit(1);
+    bgAlreadyDone =
+      !!existingBg?.status && existingBg.status !== "" && existingBg.status !== "error";
+  }
+  if (bgAlreadyDone) {
+    stepBg.errors = ["SKIPPED_ALREADY_HAS_RESULT"];
+  } else if (leadId && firstName && lastName) {
+    try {
+      const bg = await runBackgroundCheck({
+        first_name: firstName,
+        last_name: lastName,
+        state: stateCode ?? undefined,
+      });
+      await db
+        .update(leadsTable)
+        .set({
+          background_check_status: bg.status,
+          background_check_data: JSON.stringify(bg),
+          updated_at: new Date(),
+        })
+        .where(eq(leadsTable.id, leadId));
+      stepBg.status = "passed";
+      stepBg.data = { status: bg.status };
+    } catch (bgErr) {
+      logger.warn({ err: bgErr, leadId }, "web-form background check failed");
+      stepBg.status = "failed";
+      stepBg.errors = ["BACKGROUND_CHECK_ERROR"];
+    }
+  } else if (leadId) {
+    stepBg.errors = ["MISSING_NAME_FOR_BG_CHECK"];
+  }
+  pipeline.push(stepBg);
 
   // Outbound webhook: notify any active automation integrations
   // (n8n / Zapier / Make) that a new lead landed. Fire-and-forget so

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, leadsTable, leadBackgroundCheckSnapshotsTable } from "@workspace/db";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { runBackgroundCheckHub } from "../lib/bg-hub/hub";
 import { sanitizeHubResultForPersistence } from "../lib/bg-hub/snapshot-sanitizer";
 import { BG_HUB_VERSION, type BackgroundHubResult } from "../lib/bg-hub/types";
@@ -26,6 +26,7 @@ import {
   type CustomField,
 } from "../lib/form-config-service";
 import { customFieldSchema, webFormConfigSchema, type WebFormConfig } from "@workspace/db";
+import { findExistingLeadForIntake } from "../lib/lead-dedup";
 import { updateWebFormConfig } from "./web-forms";
 import { buildDefaultWebFormConfig } from "../lib/web-form-defaults";
 import type { Request, Response } from "express";
@@ -758,66 +759,151 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
 
   const step10: PipelineStep = { name: "CRM_STORAGE", status: "passed", errors: [], data: {} };
   try {
-    const [lead] = await db
-      .insert(leadsTable)
-      .values(encryptLeadFields({
-        name: fullName,
-        email: data.email,
-        phone: data.phone_primary,
-        tort_type: data.tort_type,
-        first_name: data.first_name,
-        last_name: data.last_name,
-        date_of_birth: data.date_of_birth,
-        street_address: data.street_address,
-        city: data.city,
-        state: data.state,
-        zip: data.zip,
-        phone_primary: data.phone_primary,
-        last_4_ssn: data.last_4_ssn,
-        diagnosis: data.diagnosis,
-        diagnosis_date: data.diagnosis_date,
-        diagnosis_confirmed: data.diagnosis_confirmed ?? false,
-        was_at_location: data.was_at_location ?? false,
-        location_name: data.location_name ?? null,
-        physician_first_name: data.physician_first_name,
-        physician_last_name: data.physician_last_name,
-        physician_full_address: data.physician_full_address,
-        physician_contact_info: data.physician_contact_info,
-        hospital_name: data.hospital_name,
-        hospital_fax: data.hospital_fax,
-        hospital_contact_info: data.hospital_contact_info,
-        medications: data.medications ?? null,
-        tcpa_consent: true,
-        trustedform_cert_url: data.trustedform_cert_url,
-        trustedform_ping_url: data.trustedform_ping_url ?? null,
-        trustedform_cert_token: data.trustedform_cert_token ?? null,
-        trustedform_ip: data.trustedform_ip ?? null,
-        trustedform_user_agent: data.trustedform_user_agent ?? null,
-        trustedform_timestamp: data.trustedform_timestamp ? new Date(data.trustedform_timestamp) : new Date(),
-        email_validation_status: "valid",
-        address_validation_status: "valid",
-        npi_verified: npiResult.npi_found,
-        npi_number: npiResult.npi_number,
-        physician_taxonomy: npiResult.specialty,
-        fraud_score: fraudResult!.fraud_score,
-        fraud_status: arbiterResult.decision,
-        fraud_indicators: fraudResult!.indicators.length > 0 ? JSON.stringify(fraudResult!.indicators) : null,
-        exposure_start: data.exposure_start ?? null,
-        exposure_end: data.exposure_end ?? null,
-        diagnosis_type: data.diagnosis_type ?? null,
-        notes: data.notes ?? null,
-        ad_spend: data.ad_spend ? String(data.ad_spend) : null,
-        source: data.source ?? "form_embed",
-        status,
-        custom_fields: await (async () => {
-          const cfg = await getFormConfigByIdOrLabel(String(data.tort_type ?? ""));
-          const allow = (cfg?.custom_fields ?? []).map((f) => f.key);
-          return extractCustomFieldValues(data, allow);
-        })(),
-      }) as any)
-      .returning();
+    // Dedup BEFORE the write — same product rule as the Web Forms widget:
+    // a single human filling out the website AND the emailed Form Engine
+    // intake for the SAME tort campaign must end up as ONE lead row
+    // ("signee"). The website widget creates a `web_form_intake` row
+    // first; this Form Engine submission then upgrades that same row
+    // with the full intake payload, preserving its id so any documents
+    // / envelopes / bg-check snapshots already attached stay attached.
+    // See lib/lead-dedup.ts for match strategy.
+    const dedupExisting = await findExistingLeadForIntake({
+      email: data.email,
+      phone: data.phone_primary,
+      tortType: String(data.tort_type ?? ""),
+    });
 
-    step10.data = { lead_id: lead.id, status };
+    const customFieldsValue = await (async () => {
+      const cfg = await getFormConfigByIdOrLabel(String(data.tort_type ?? ""));
+      const allow = (cfg?.custom_fields ?? []).map((f) => f.key);
+      return extractCustomFieldValues(data, allow);
+    })();
+
+    const persistedFields = encryptLeadFields({
+      name: fullName,
+      email: data.email,
+      phone: data.phone_primary,
+      tort_type: data.tort_type,
+      first_name: data.first_name,
+      last_name: data.last_name,
+      date_of_birth: data.date_of_birth,
+      street_address: data.street_address,
+      city: data.city,
+      state: data.state,
+      zip: data.zip,
+      phone_primary: data.phone_primary,
+      last_4_ssn: data.last_4_ssn,
+      diagnosis: data.diagnosis,
+      diagnosis_date: data.diagnosis_date,
+      diagnosis_confirmed: data.diagnosis_confirmed ?? false,
+      was_at_location: data.was_at_location ?? false,
+      location_name: data.location_name ?? null,
+      physician_first_name: data.physician_first_name,
+      physician_last_name: data.physician_last_name,
+      physician_full_address: data.physician_full_address,
+      physician_contact_info: data.physician_contact_info,
+      hospital_name: data.hospital_name,
+      hospital_fax: data.hospital_fax,
+      hospital_contact_info: data.hospital_contact_info,
+      medications: data.medications ?? null,
+      tcpa_consent: true,
+      trustedform_cert_url: data.trustedform_cert_url,
+      trustedform_ping_url: data.trustedform_ping_url ?? null,
+      trustedform_cert_token: data.trustedform_cert_token ?? null,
+      trustedform_ip: data.trustedform_ip ?? null,
+      trustedform_user_agent: data.trustedform_user_agent ?? null,
+      trustedform_timestamp: data.trustedform_timestamp ? new Date(data.trustedform_timestamp) : new Date(),
+      email_validation_status: "valid",
+      address_validation_status: "valid",
+      npi_verified: npiResult.npi_found,
+      npi_number: npiResult.npi_number,
+      physician_taxonomy: npiResult.specialty,
+      fraud_score: fraudResult!.fraud_score,
+      fraud_status: arbiterResult.decision,
+      fraud_indicators: fraudResult!.indicators.length > 0 ? JSON.stringify(fraudResult!.indicators) : null,
+      exposure_start: data.exposure_start ?? null,
+      exposure_end: data.exposure_end ?? null,
+      diagnosis_type: data.diagnosis_type ?? null,
+      notes: data.notes ?? null,
+      ad_spend: data.ad_spend ? String(data.ad_spend) : null,
+      source: data.source ?? "form_embed",
+      status,
+      custom_fields: customFieldsValue,
+    });
+
+    let lead: typeof leadsTable.$inferSelect;
+    if (dedupExisting) {
+      // MERGE — strict FILL-EMPTY for every field (no exceptions).
+      //
+      // The /api/forms-public/* mount that fronts this pipeline is
+      // PUBLIC and unauthenticated. We have no possession-of-email
+      // proof, so we cannot trust that the submitter actually owns
+      // the email being dedup'd against. An earlier two-tier design
+      // overwrote "engine-derived" fields (status / fraud_* / npi_* /
+      // trustedform_*) on the assumption they came from the trusted
+      // server-side pipeline — but those fields are computed FROM the
+      // attacker-controlled submission payload, so an attacker can
+      // still influence them by crafting a payload that flips fraud
+      // status, status, etc. on the victim's lead.
+      //
+      // The defensible policy until Phase 2 (HMAC-signed token in the
+      // confirmation-email link) ships is: NEVER overwrite anything on
+      // a public merge. Only fill columns that are currently NULL.
+      // For a legitimate merge after a Web Form Stage 1, this still
+      // populates the previously-NULL Form Engine fields (TrustedForm
+      // certs, fraud score, status, etc.) — Stage 1 leaves them all
+      // empty, so fill-empty == "store fresh" in the legitimate flow.
+      //
+      // Trade-off: a legit user who genuinely wants to UPDATE an
+      // already-filled field via resubmission can't, and must contact
+      // support. Acceptable for MVP — the alternative is silently
+      // letting attackers tamper with operator-visible fields.
+      const setExpr: Record<string, unknown> = { updated_at: new Date() };
+      for (const [field, value] of Object.entries(persistedFields)) {
+        if (value === undefined) continue;
+        // Skip booleans that need ratchet semantics (handled below).
+        if (field === "tcpa_consent" || field === "diagnosis_confirmed") continue;
+        setExpr[field] = sql`COALESCE(${sql.identifier(field)}, ${value})`;
+      }
+      // Boolean flags that should ratchet UP only (consent stays true
+      // once given; diagnosis_confirmed stays true once confirmed).
+      if (persistedFields.tcpa_consent) {
+        setExpr.tcpa_consent = sql`${leadsTable.tcpa_consent} OR true`;
+      }
+      if (persistedFields.diagnosis_confirmed) {
+        setExpr.diagnosis_confirmed = sql`${leadsTable.diagnosis_confirmed} OR true`;
+      }
+      const [updated] = await db
+        .update(leadsTable)
+        .set(setExpr as Partial<typeof leadsTable.$inferInsert>)
+        .where(eq(leadsTable.id, dedupExisting.leadId))
+        .returning();
+      lead = updated!;
+
+      // Audit every public merge so an operator can investigate
+      // suspicious activity (e.g. someone hammering the form with a
+      // victim's email).
+      await auditLog("lead", String(lead.id), "form_engine_merge", {
+        tort_type: String(data.tort_type ?? ""),
+        matched_by: dedupExisting.matchedBy,
+        had_email: !!data.email,
+        had_phone: !!data.phone_primary,
+      });
+
+      step10.data = {
+        lead_id: lead.id,
+        status,
+        dedup_outcome:
+          dedupExisting.matchedBy === "email" ? "merged_email" : "merged_phone",
+      };
+    } else {
+      const inserted = await db
+        .insert(leadsTable)
+        .values(persistedFields as any)
+        .returning();
+      lead = inserted[0]!;
+      step10.data = { lead_id: lead.id, status, dedup_outcome: "inserted" };
+    }
 
     // Decision Engine — score every lead created via form submission.
     {
