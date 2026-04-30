@@ -767,7 +767,11 @@ describe("production NODE_ENV refuses the dev-mode bypass", () => {
     const apiServerRoot = path.resolve(import.meta.dirname, "../../..");
 
     // Inline tsx program: set NODE_ENV=production, import rbac, run the
-    // middleware against a stub req/res, print a one-line JSON verdict.
+    // middleware against a stub req/res, print a one-line JSON verdict
+    // tagged with a sentinel prefix so we don't accidentally pick up a
+    // stray deprecation warning, tsx banner, or async log line. The Task
+    // #20 sibling test below uses the same __VERDICT__ pattern; keep them
+    // in lock-step so neither becomes flaky in isolation.
     const program = `
       import("./src/lib/rbac.ts").then(async ({ authMiddleware }) => {
         const req = { headers: {}, path: "/x", method: "GET", socket: { remoteAddress: "127.0.0.1" }, get: () => undefined, ip: "127.0.0.1" };
@@ -786,7 +790,7 @@ describe("production NODE_ENV refuses the dev-mode bypass", () => {
           else if (status !== 0) resolve();
         });
         // eslint-disable-next-line no-console
-        console.log(JSON.stringify({ status, code: body && body.code, hasUser: req.user !== undefined, role: req.user && req.user.role }));
+        console.log("__VERDICT__" + JSON.stringify({ status, code: body && body.code, hasUser: req.user !== undefined, role: req.user && req.user.role }));
       }).catch((e) => { console.error("CHILD_ERR:" + (e && e.message ? e.message : String(e))); process.exit(2); });
     `;
     const result = spawnSync(
@@ -810,12 +814,22 @@ describe("production NODE_ENV refuses the dev-mode bypass", () => {
         `child exited ${result.status}; stderr: ${result.stderr?.toString().slice(0, 500)}; stdout: ${result.stdout?.toString().slice(0, 500)}`,
       );
     }
-    const lastLine = (result.stdout ?? "").trim().split(/\n/).filter(Boolean).pop() ?? "";
+    const stdout = result.stdout ?? "";
+    const verdictLine = stdout
+      .split(/\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("__VERDICT__"))
+      .pop();
+    if (!verdictLine) {
+      throw new Error(
+        `child produced no __VERDICT__ line; full stdout: ${stdout.slice(0, 800)}; stderr: ${(result.stderr ?? "").toString().slice(0, 500)}`,
+      );
+    }
     let verdict: { status: number; code: string; hasUser: boolean; role?: string };
     try {
-      verdict = JSON.parse(lastLine);
+      verdict = JSON.parse(verdictLine.replace("__VERDICT__", ""));
     } catch (_e) {
-      throw new Error(`could not parse child verdict: ${lastLine}`);
+      throw new Error(`could not parse child verdict: ${verdictLine}`);
     }
     assert.equal(verdict.status, 401, "production must return 401 for unauth request");
     assert.equal(verdict.code, "UNAUTHENTICATED");

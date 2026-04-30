@@ -576,7 +576,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **189 checked / 26 public / 163 protected / 0 unprotected.**
+Boot-time count: **194 checked / 31 public / 163 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -787,6 +787,11 @@ Boot-time count: **189 checked / 26 public / 163 protected / 0 unprotected.**
 | webhooks | POST | `/api/webhooks/dropbox-sign` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/stripe` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/telnyx/sms` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/vapi/call-ended` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/vapi/call-started` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/vapi/escalate-human` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/vapi/intake-result` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/vapi/transcript` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/vapi` |  |  | ✓ |  |  | — | — | — |
 | workflow-settings | GET | `/api/workflow-settings/_options/providers` | ✓ | ✓ |  |  |  | — | `workflow_settings:manage` | ✓ |
 | workflow-settings | GET | `/api/workflow-settings/:scope` | ✓ | ✓ |  |  |  | — | `workflow_settings:view` | ✓ |

@@ -247,8 +247,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     Permission.DASHBOARD_VIEW,
     Permission.ANALYTICS_VIEW,
     Permission.ANALYTICS_PREDICTIVE_LEAD_VIEW,
-    // Billing — attorney owns billing for their firm in the MVI shell.
-    Permission.BILLING_MANAGE,
+    // NOTE: BILLING_MANAGE is admin-only per spec (Task #51 T006). Attorney
+    // does NOT get billing perms even though they own legal work for the firm.
     // Voice & SMS — attorney can review calls and send SMS to leads.
     Permission.CALLS_VIEW,
     Permission.SMS_SEND,

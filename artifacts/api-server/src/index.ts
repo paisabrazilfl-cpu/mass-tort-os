@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
+import { seedDefaultFirm } from "./lib/firm-bootstrap";
 import { workerLoop } from "./worker";
 
 const NODE_ENV = process.env["NODE_ENV"];
@@ -59,6 +60,18 @@ app.listen(port, async (err) => {
     await seedFormConfigurations();
   } catch (e) {
     logger.error({ err: e }, "Form configuration seed failed on boot");
+  }
+
+  // Seed the single "Default Firm" required by the MVI single-firm shell
+  // (Task #51 T001). Idempotent: if the slug='default' row already exists
+  // this is a no-op except for any users.firm_id IS NULL backfill. We must
+  // do this BEFORE the subscription gate or billing routes can serve real
+  // traffic, otherwise getFirmIdForUser() would return null for users that
+  // pre-date the firm_id column.
+  try {
+    await seedDefaultFirm();
+  } catch (e) {
+    logger.error({ err: e }, "Default firm seed failed on boot");
   }
 
   // In production (autoscale), the standalone worker workflow does not run —

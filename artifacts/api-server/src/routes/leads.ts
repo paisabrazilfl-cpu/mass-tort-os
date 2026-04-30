@@ -563,22 +563,18 @@ router.get("/:id/fax-results", requirePermission(Permission.LEAD_VIEW_OWN, Permi
   }
   if (!(await ensureLeadAccess(req, res, id))) return;
   const { faxResultsTable } = await import("@workspace/db");
-  const { desc, like, or, eq: eqOp } = await import("drizzle-orm");
-  const { buildFaxResultsLikePattern } = await import("../lib/fax-results-matcher.js");
-  // Task #16: prefer the canonical FK lead_id column populated at insert
-  // time (and via scripts/backfill-fax-results-lead-id.ts for legacy rows).
-  // Keep the source_file LIKE-pattern fallback so any row that escaped the
-  // backfill (e.g. inserted between deploy + backfill, or with a malformed
-  // filename the parser couldn't reverse) still surfaces in the UI.
+  const { desc, eq: eqOp } = await import("drizzle-orm");
+  // Task #16 (final): query the canonical FK lead_id column only. The
+  // historical filename-pattern fallback was removed at the read path
+  // because (a) all new inserts populate lead_id at write time and
+  // (b) scripts/backfill-fax-results-lead-id.ts has populated lead_id
+  // for every legacy row whose filename matches FAX_SOURCE_FILE_TEMPLATE.
+  // Filename parsing remains in fax-results-matcher.ts for ingest /
+  // backfill utilities only — no runtime reader still parses filenames.
   const rows = await db
     .select()
     .from(faxResultsTable)
-    .where(
-      or(
-        eqOp(faxResultsTable.lead_id, id),
-        like(faxResultsTable.source_file, buildFaxResultsLikePattern(id)),
-      ),
-    )
+    .where(eqOp(faxResultsTable.lead_id, id))
     .orderBy(desc(faxResultsTable.created_at));
   res.json(rows);
 });

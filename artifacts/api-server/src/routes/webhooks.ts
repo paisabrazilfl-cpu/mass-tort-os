@@ -412,9 +412,22 @@ async function applyStripeEvent(event: Stripe.Event): Promise<void> {
 // Vapi voice webhook
 //   Auth: HMAC-SHA256 of raw body OR static bearer (verifyVapiSignature).
 //   Events: call-started, transcript, call-ended, intake-result, escalate-human.
+//
+// Per spec (Task #51 T003) we expose ONE multiplexer route plus FIVE thin
+// named-event routes. The named routes let Vapi dashboards point individual
+// event hooks at distinct URLs (some operators prefer that), while the
+// multiplexer keeps backwards-compatibility with deployments that pin a
+// single webhook URL and discriminate on the JSON `type` field. All routes
+// re-use the same signature verifier and applyVapiEvent dispatcher so the
+// per-event side effects (call_logs upsert, lead_dispositions, review_queue
+// escalation, etc.) live in exactly one place.
 // ─────────────────────────────────────────────────────────────────
 
-router.post("/vapi", async (req, res) => {
+async function handleVapiWebhook(
+  req: import("express").Request,
+  res: import("express").Response,
+  forcedEventType: string | null,
+): Promise<void> {
   const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
   if (!rawBody) {
     res.status(200).json({ ok: true, note: "no_raw_body" });
@@ -429,12 +442,26 @@ router.post("/vapi", async (req, res) => {
   }
 
   try {
-    await applyVapiEvent(req.body);
+    // Named routes pin the event type so a payload that arrived at e.g.
+    // /webhooks/vapi/call-ended is always treated as call-ended even if the
+    // body's `type` field disagrees. The multiplexer leaves it to the body.
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (forcedEventType) {
+      body["type"] = forcedEventType;
+    }
+    await applyVapiEvent(body);
   } catch (err) {
     logger.error({ err }, "vapi event apply failed");
   }
   res.status(200).json({ ok: true });
-});
+}
+
+router.post("/vapi", (req, res) => handleVapiWebhook(req, res, null));
+router.post("/vapi/call-started", (req, res) => handleVapiWebhook(req, res, "call-started"));
+router.post("/vapi/transcript", (req, res) => handleVapiWebhook(req, res, "transcript"));
+router.post("/vapi/call-ended", (req, res) => handleVapiWebhook(req, res, "call-ended"));
+router.post("/vapi/intake-result", (req, res) => handleVapiWebhook(req, res, "intake-result"));
+router.post("/vapi/escalate-human", (req, res) => handleVapiWebhook(req, res, "escalate-human"));
 
 interface VapiEventPayload {
   type?: string;

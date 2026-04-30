@@ -5,6 +5,7 @@ import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { Permission, requirePermission, auditAction } from "../lib/rbac";
 import { badRequest, notFound } from "../lib/http-errors";
+import { enqueueLeadFollowUpSms } from "../lib/workflow-engine";
 
 const router = Router();
 
@@ -134,9 +135,10 @@ router.patch("/:id", requirePermission(Permission.REVIEW_QUEUE_RESOLVE), auditAc
     return;
   }
 
-  const { resolution, resolution_notes } = req.body as {
+  const { resolution, resolution_notes, followup_sms_body } = req.body as {
     resolution?: string;
     resolution_notes?: string;
+    followup_sms_body?: string;
   };
   const resolved_by = req.user?.email || "unknown";
 
@@ -162,6 +164,34 @@ router.patch("/:id", requirePermission(Permission.REVIEW_QUEUE_RESOLVE), auditAc
     .where(eq(reviewQueueTable.id, id))
     .returning();
 
+  // Optional SMS follow-up step (Task #51 T004): if the reviewer accepted a
+  // lead-scoped item AND supplied a non-empty body, schedule a Telnyx SMS via
+  // the workflow engine. We only fire on `accepted` for lead entities and
+  // never on rejects/escalations to avoid contacting leads we just declined.
+  let smsJobId: number | null = null;
+  let smsReason: string | undefined;
+  if (
+    resolution === "accepted" &&
+    existing.entity_type === "lead" &&
+    typeof followup_sms_body === "string" &&
+    followup_sms_body.trim().length > 0
+  ) {
+    const leadId = Number(existing.entity_id);
+    if (Number.isFinite(leadId) && leadId > 0) {
+      const result = await enqueueLeadFollowUpSms(leadId, followup_sms_body, {
+        source: "review_queue_resolve",
+      });
+      smsJobId = result.job_id;
+      smsReason = result.reason;
+      if (!result.job_id) {
+        logger.warn(
+          { review_id: id, lead_id: leadId, reason: result.reason },
+          "review-queue: follow-up SMS enqueue failed",
+        );
+      }
+    }
+  }
+
   await auditLog("review_queue", String(id), "resolved", {
     entity_type: existing.entity_type,
     entity_id: existing.entity_id,
@@ -169,11 +199,16 @@ router.patch("/:id", requirePermission(Permission.REVIEW_QUEUE_RESOLVE), auditAc
     resolution,
     resolution_notes,
     resolved_by: resolved_by || "admin",
+    followup_sms_job_id: smsJobId,
+    followup_sms_reason: smsReason ?? null,
   });
 
-  logger.info({ review_id: id, resolution, entity: existing.entity_id }, "Review item resolved");
+  logger.info(
+    { review_id: id, resolution, entity: existing.entity_id, followup_sms_job_id: smsJobId },
+    "Review item resolved",
+  );
 
-  res.json(updated);
+  res.json({ ...updated, followup_sms_job_id: smsJobId });
 });
 
 export default router;

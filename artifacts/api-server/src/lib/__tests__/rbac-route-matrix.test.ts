@@ -849,3 +849,84 @@ describe("cases ownership backfill smoke test (Task #22)", () => {
     );
   });
 });
+
+// 9. Real login + MFA smoke test (Task #51 T005, blocker #20).
+// Architect feedback: the prior #20 changes only verified the dev-bypass
+// gate's env behavior. We also need a real, end-to-end exercise of the
+// production-style auth path: register → login → MFA setup → TOTP code →
+// MFA verify → second login that demands the TOTP code → success. This
+// proves the seams the dev-bypass would normally short-circuit (TOTP
+// secret encryption round-trip, mfa_enabled state machine, and the
+// totp_code field in LoginBody) are actually wired together.
+describe("real login + MFA smoke test (Task #51 T005, blocker #20)", () => {
+  test("register → login → mfa setup → verify → mfa-required login → totp login", async () => {
+    const { generateTOTP } = await import("../totp.js");
+
+    const email = `mfa-smoke-${TS}-${crypto.randomBytes(4).toString("hex")}@mtos.test`;
+    const password = "MfaSmoke!Pw-2026";
+    const cleanupIds: number[] = [];
+
+    try {
+      // 1. Register a fresh user — public registration always lands as viewer.
+      const reg = await probe("POST", "/api/auth/register", {
+        body: { email, password, name: "MFA Smoke" },
+      });
+      assert.equal(reg.status, 201, `register must succeed, got ${reg.status} (${JSON.stringify(reg.body)})`);
+      const regBody = reg.body as { token?: string; user?: { id?: number; role?: string } };
+      assert.ok(regBody.token, "register must return an access token");
+      assert.equal(regBody.user?.role, "viewer", "public registration must assign viewer role");
+      const userId = regBody.user?.id;
+      if (typeof userId === "number") cleanupIds.push(userId);
+
+      // 2. Real /login: no dev bypass, password path returns a token.
+      const login1 = await probe("POST", "/api/auth/login", { body: { email, password } });
+      assert.equal(login1.status, 200, `login must succeed, got ${login1.status} (${JSON.stringify(login1.body)})`);
+      const login1Body = login1.body as { token?: string; mfa_required?: boolean };
+      assert.ok(login1Body.token, "login (pre-MFA) must return an access token");
+      assert.notEqual(login1Body.mfa_required, true, "MFA must not be required before setup");
+      const token = login1Body.token!;
+
+      // 3. /mfa/setup returns the base32 secret + otpauth URL.
+      const setup = await probe("POST", "/api/auth/mfa/setup", { token, body: {} });
+      assert.equal(setup.status, 200, `mfa/setup must succeed, got ${setup.status} (${JSON.stringify(setup.body)})`);
+      const setupBody = setup.body as { secret?: string; otpauth_url?: string };
+      assert.ok(setupBody.secret && /^[A-Z2-7]+$/.test(setupBody.secret), "mfa/setup must return base32 secret");
+      assert.ok(setupBody.otpauth_url?.startsWith("otpauth://totp/"), "mfa/setup must return otpauth URL");
+
+      // 4. Generate a real TOTP code from the secret.
+      const code = generateTOTP(setupBody.secret!);
+      assert.match(code, /^\d{6}$/, "generateTOTP must produce 6 digits");
+
+      // 5. /mfa/verify with the live code activates MFA.
+      const verify = await probe("POST", "/api/auth/mfa/verify", { token, body: { totp_code: code } });
+      assert.equal(verify.status, 200, `mfa/verify must succeed, got ${verify.status} (${JSON.stringify(verify.body)})`);
+      const verifyBody = verify.body as { mfa_enabled?: boolean };
+      assert.equal(verifyBody.mfa_enabled, true, "mfa/verify must report mfa_enabled=true");
+
+      // 6. Second login WITHOUT a code must short-circuit at mfa_required.
+      const login2 = await probe("POST", "/api/auth/login", { body: { email, password } });
+      assert.equal(login2.status, 200, `login (no totp) must return 200 + mfa_required, got ${login2.status}`);
+      const login2Body = login2.body as { mfa_required?: boolean; token?: string };
+      assert.equal(login2Body.mfa_required, true, "post-MFA login without totp_code must report mfa_required");
+      assert.equal(login2Body.token, undefined, "post-MFA login without totp_code MUST NOT return a token");
+
+      // 7. Second login WITH a fresh totp_code passes and returns a token.
+      const code2 = generateTOTP(setupBody.secret!);
+      const login3 = await probe("POST", "/api/auth/login", {
+        body: { email, password, totp_code: code2 },
+      });
+      assert.equal(login3.status, 200, `login (with totp) must succeed, got ${login3.status} (${JSON.stringify(login3.body)})`);
+      const login3Body = login3.body as { token?: string };
+      assert.ok(login3Body.token, "login with valid totp must return a token");
+    } finally {
+      // Clean up the ephemeral user so re-runs don't 409 on register.
+      for (const id of cleanupIds) {
+        await db.execute(sql`DELETE FROM mtos_users WHERE id = ${id}`);
+      }
+    }
+  });
+});
+
+// Reference unused imports to keep linters happy — usersTable is consumed
+// by the schema graph but not directly here.
+void usersTable;

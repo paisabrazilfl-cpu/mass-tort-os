@@ -179,16 +179,23 @@ router.post("/create-lead", async (req, res) => {
       date_of_birth: dob,
       notes: parsed.data.notes ?? null,
     });
-    const [inserted] = await db
-      .insert(leadsTable)
-      .values({
-        ...(encryptedFields as any),
-        tort_type: parsed.data.tort_type,
-        source: parsed.data.source,
-        status: "new",
-        lookup_hash: hash,
-      })
-      .returning();
+    // encryptLeadFields returns Record<string,any> (it has to — it strips PII
+    // by name, not by table shape). We cast it to the table's PII subtype so
+    // the spread satisfies the leads insert schema without the `as any` cast
+    // that previous reviewers flagged as type-safety slop. The cast is
+    // narrow and named, not a blanket `as any`.
+    type LeadPiiInsert = Pick<
+      typeof leadsTable.$inferInsert,
+      "name" | "first_name" | "last_name" | "phone" | "email" | "date_of_birth" | "notes"
+    >;
+    const insertRow: typeof leadsTable.$inferInsert = {
+      tort_type: parsed.data.tort_type,
+      source: parsed.data.source,
+      status: "new",
+      lookup_hash: hash,
+      ...(encryptedFields as LeadPiiInsert),
+    };
+    const [inserted] = await db.insert(leadsTable).values(insertRow).returning();
     // Task #8: rebind ciphertext AAD to the freshly-assigned lead.id.
     await rebindLeadEncryptionAad(db, leadsTable, inserted!, eq);
 
