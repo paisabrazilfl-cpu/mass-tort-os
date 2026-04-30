@@ -5,13 +5,33 @@ import { eq, desc, and, sql } from "drizzle-orm";
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { serverError } from "../lib/http-errors";
+import { badRequest, serverError } from "../lib/http-errors";
 
 const router = Router();
+
+const MAX_LIST_LIMIT = 200;
 
 function sanitizeForClient(image: any) {
   const { vault_path, ...safe } = image;
   return safe;
+}
+
+// Returns positive integer or null. Invalid (non-numeric / <=0 / non-integer)
+// returns undefined so callers can distinguish "not provided" from "garbage".
+function parsePositiveIntOrInvalid(value: unknown): number | null | undefined {
+  if (value === undefined || value === null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n <= 0) return undefined;
+  return n;
+}
+
+function parseIdParam(res: any, raw: unknown, label = "id"): number | null {
+  const n = Number(Array.isArray(raw) ? raw[0] : raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    badRequest(res, `${label} must be a positive integer`);
+    return null;
+  }
+  return n;
 }
 
 router.get("/", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, res) => {
@@ -20,16 +40,23 @@ router.get("/", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, re
 
     const conditions: any[] = [];
     if (source_type) conditions.push(eq(imageObjectsTable.source_type, String(source_type)));
-    if (lead_id) conditions.push(eq(imageObjectsTable.lead_id, Number(lead_id)));
+    if (lead_id !== undefined && lead_id !== "") {
+      const parsed = parsePositiveIntOrInvalid(lead_id);
+      if (parsed === undefined) { badRequest(res, "lead_id must be a positive integer"); return; }
+      if (parsed !== null) conditions.push(eq(imageObjectsTable.lead_id, parsed));
+    }
     if (case_id) conditions.push(eq(imageObjectsTable.case_id, String(case_id)));
+
+    const limitNum = Math.min(Math.max(Number(limit) || 50, 1), MAX_LIST_LIMIT);
+    const offsetNum = Math.max(Number(offset) || 0, 0);
 
     const results = await db
       .select()
       .from(imageObjectsTable)
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(imageObjectsTable.created_at))
-      .limit(Number(limit))
-      .offset(Number(offset));
+      .limit(limitNum)
+      .offset(offsetNum);
 
     res.json(results.map(sanitizeForClient));
   } catch (err) {
@@ -61,10 +88,12 @@ router.get("/stats", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (_r
 
 router.get("/:id", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, res) => {
   try {
+    const id = parseIdParam(res, req.params.id);
+    if (id === null) return;
     const [image] = await db
       .select()
       .from(imageObjectsTable)
-      .where(eq(imageObjectsTable.id, Number(req.params.id)));
+      .where(eq(imageObjectsTable.id, id));
 
     if (!image) { res.status(404).json({ error: "Image object not found" }); return; }
     res.json(sanitizeForClient(image));
@@ -181,6 +210,8 @@ router.post("/", requirePermission(Permission.IMAGE_OBJECTS_MANAGE), async (req,
 
 router.patch("/:id", requirePermission(Permission.IMAGE_OBJECTS_MANAGE), async (req, res) => {
   try {
+    const id = parseIdParam(res, req.params.id);
+    if (id === null) return;
     const allowedFields = [
       "ocr_status", "ocr_text", "ocr_confidence", "ocr_extracted_fields",
       "lead_id", "document_id", "fax_result_id", "case_id",
@@ -197,7 +228,7 @@ router.patch("/:id", requirePermission(Permission.IMAGE_OBJECTS_MANAGE), async (
     const [updated] = await db
       .update(imageObjectsTable)
       .set(updates)
-      .where(eq(imageObjectsTable.id, Number(req.params.id)))
+      .where(eq(imageObjectsTable.id, id))
       .returning();
 
     if (!updated) { res.status(404).json({ error: "Image object not found" }); return; }
@@ -216,10 +247,12 @@ router.patch("/:id", requirePermission(Permission.IMAGE_OBJECTS_MANAGE), async (
 
 router.delete("/:id", requirePermission(Permission.IMAGE_OBJECTS_DELETE), async (req, res) => {
   try {
+    const id = parseIdParam(res, req.params.id);
+    if (id === null) return;
     const [image] = await db
       .select()
       .from(imageObjectsTable)
-      .where(eq(imageObjectsTable.id, Number(req.params.id)));
+      .where(eq(imageObjectsTable.id, id));
 
     if (!image) { res.status(404).json({ error: "Image object not found" }); return; }
 
@@ -249,10 +282,12 @@ router.delete("/:id", requirePermission(Permission.IMAGE_OBJECTS_DELETE), async 
 
 router.get("/:id/integrity", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, res) => {
   try {
+    const id = parseIdParam(res, req.params.id);
+    if (id === null) return;
     const [image] = await db
       .select()
       .from(imageObjectsTable)
-      .where(eq(imageObjectsTable.id, Number(req.params.id)));
+      .where(eq(imageObjectsTable.id, id));
 
     if (!image) { res.status(404).json({ error: "Image object not found" }); return; }
 

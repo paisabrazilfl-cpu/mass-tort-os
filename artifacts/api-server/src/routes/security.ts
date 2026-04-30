@@ -169,11 +169,31 @@ router.post("/analyze", async (req, res) => {
   const { alert_ids } = req.body;
 
   let alerts;
-  if (alert_ids && Array.isArray(alert_ids)) {
+  if (alert_ids !== undefined) {
+    // Validate explicit input — do NOT silently fall back to "new" on garbage.
+    if (!Array.isArray(alert_ids)) {
+      badRequest(res, "alert_ids must be an array of integer IDs");
+      return;
+    }
+    // Empty array means "no alerts requested" — short-circuit instead of
+    // emitting `WHERE id = ANY(ARRAY[])` which Postgres rejects.
+    if (alert_ids.length === 0) {
+      res.json({ message: "No alerts to analyze", analysis: null });
+      return;
+    }
+    const numericIds: number[] = [];
+    for (const raw of alert_ids) {
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n <= 0) {
+        badRequest(res, "alert_ids must contain only positive integers");
+        return;
+      }
+      numericIds.push(n);
+    }
     alerts = await db
       .select()
       .from(securityAlertsTable)
-      .where(sql`${securityAlertsTable.id} = ANY(${alert_ids})`);
+      .where(sql`${securityAlertsTable.id} = ANY(${numericIds})`);
   } else {
     alerts = await db
       .select()
@@ -193,7 +213,11 @@ router.post("/analyze", async (req, res) => {
 });
 
 router.patch("/alerts/:id/dismiss", async (req, res) => {
-  const id = parseInt(req.params.id, 10);
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    badRequest(res, "Alert id must be a positive integer");
+    return;
+  }
   const [alert] = await db
     .update(securityAlertsTable)
     .set({ status: "dismissed" })
@@ -215,7 +239,11 @@ router.get("/notifications", async (_req, res) => {
 });
 
 router.patch("/notifications/:id/acknowledge", async (req, res) => {
-  const id = parseInt(req.params.id, 10);
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    badRequest(res, "Notification id must be a positive integer");
+    return;
+  }
   const user = req.user;
   const updated = await acknowledgeNotification(id, user?.email || "admin");
   if (!updated) {

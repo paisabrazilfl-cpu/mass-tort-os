@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, Response } from "express";
 import { db, integrationsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 import { Permission, requirePermission } from "../lib/rbac";
@@ -8,9 +8,21 @@ import { getWiring, isWired, consumesVaultCredentials } from "../lib/integration
 import { encrypt, decrypt } from "../lib/encryption";
 import { logger } from "../lib/logger";
 import { pingLeadWebhook } from "../lib/lead-webhook-dispatcher";
+import { badRequest } from "../lib/http-errors";
 import crypto from "crypto";
 
 const router = Router();
+
+// Validate :id route param. Returns the parsed positive integer, or null after
+// emitting a 400 response. Caller must `return` on null.
+function parseIntegrationId(res: Response, raw: unknown): number | null {
+  const id = Number(Array.isArray(raw) ? raw[0] : raw);
+  if (!Number.isInteger(id) || id <= 0) {
+    badRequest(res, "Integration id must be a positive integer");
+    return null;
+  }
+  return id;
+}
 
 // Credential field names that we treat as secrets (encrypted at rest).
 // `api_url` and `webhook_url` are NOT secrets — they are stored plaintext.
@@ -129,7 +141,7 @@ router.get("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (_req, 
 });
 
 router.get("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
-  const id = parseInt(String(req.params.id));
+  const id = parseIntegrationId(res, req.params.id); if (id === null) return;
   const [row] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!row) { res.status(404).json({ error: "Integration not found" }); return; }
   res.json(maskRow(row));
@@ -175,7 +187,7 @@ router.post("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, 
 });
 
 router.patch("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
-  const id = parseInt(String(req.params.id));
+  const id = parseIntegrationId(res, req.params.id); if (id === null) return;
   const [existing] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -208,7 +220,7 @@ router.patch("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (r
 });
 
 router.delete("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
-  const id = parseInt(String(req.params.id));
+  const id = parseIntegrationId(res, req.params.id); if (id === null) return;
   const [deleted] = await db.delete(integrationsTable).where(eq(integrationsTable.id, id)).returning();
   if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
   await auditLog("integration", String(req.user?.id || 0), "integration_deleted", { id, provider: deleted.provider });
@@ -216,7 +228,7 @@ router.delete("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (
 });
 
 router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
-  const id = parseInt(String(req.params.id));
+  const id = parseIntegrationId(res, req.params.id); if (id === null) return;
   const [row] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -367,7 +379,7 @@ router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
 });
 
 router.post("/:id/sync", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
-  const id = parseInt(String(req.params.id));
+  const id = parseIntegrationId(res, req.params.id); if (id === null) return;
   const [integration] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!integration) { res.status(404).json({ error: "Not found" }); return; }
 
