@@ -126,6 +126,7 @@ The original Task #42 scope was a 36-page exhaustive frontend sweep. Per user di
 | Lead Import | `/lead-import` | PROBED-CLEAN | CSV upload UI renders; column-map step engages on file pick |
 | Cases | `/cases` | PROBED-CLEAN | List loads; row click navigates to detail |
 | Case Detail | `/cases/:id` | PROBED-CLEAN | Reached via Cases click-through; documents/jobs tabs render |
+| Case New | `/cases/new` | PROBED-CLEAN | Reached via "New Case" button on Cases list; create form renders + validates |
 | Review Queue | `/review-queue` | PROBED-CLEAN | Queue loads; resolve interaction submits; audit row written |
 | Documents | `/documents` | PROBED-CLEAN | List + filters render; pagination works |
 | OCR Inbox | `/ocr-inbox` | PROBED-CLEAN | `/api/ocr/{results,queue-stats}` 200; queue table renders |
@@ -150,10 +151,12 @@ The original Task #42 scope was a 36-page exhaustive frontend sweep. Per user di
 | News | `/news` | DEFERRED | Out of launch scope per user direction |
 | Financial News | `/financial-news` | DEFERRED | Out of launch scope per user direction |
 | Decision Engine | `/decision-engine` | DEFERRED | Out of launch scope per user direction |
+| Decision Engine Settings | `/decision-engine-settings` | DEFERRED | Out of launch scope per user direction |
 | Document Templates | `/document-templates` | DEFERRED | Out of launch scope per user direction |
 | Template Assignments | `/template-assignments` | DEFERRED | Out of launch scope per user direction |
-| Calls | `/calls` | NOT-YET-BUILT | Gated on Task #51 (Vapi / Telnyx voice) |
-| Billing | `/billing` | NOT-YET-BUILT | Gated on Task #51 (Stripe) |
+| Not Found (404 catch-all) | `*` | PROBED-CLEAN | Catch-all route in `App.tsx`; rendered as expected on unknown URLs during the audit; no console errors |
+| Calls (forward-looking) | `/calls` | NOT-YET-BUILT | Gated on Task #51 (Vapi / Telnyx voice) — page file does not yet exist in `src/pages/` |
+| Billing (forward-looking) | `/billing` | NOT-YET-BUILT | Gated on Task #51 (Stripe) — page file does not yet exist in `src/pages/` |
 
 **Standing gates at task end (all GREEN, evidence captured):**
 
