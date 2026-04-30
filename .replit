@@ -36,12 +36,12 @@ args = "db-drift"
 name = "MTOS Worker: Job Processor"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm --filter @workspace/api-server run build && pnpm --filter @workspace/api-server run worker"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/api-server run dev:worker"
 
 [[workflows.workflow]]
 name = "rbac-test"

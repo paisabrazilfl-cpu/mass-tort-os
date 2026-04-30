@@ -35,6 +35,15 @@ function timeAgo(dateStr: string): string {
   return `${days}d ago`;
 }
 
+function stripHtml(html: string): string {
+  if (!html) return "";
+  if (typeof DOMParser === "undefined") {
+    return html.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+  }
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return (doc.body.textContent || "").replace(/\s+/g, " ").trim();
+}
+
 export default function FinancialNews() {
   const { toast } = useToast();
   const [articles, setArticles] = useState<Article[]>([]);
@@ -59,7 +68,10 @@ export default function FinancialNews() {
 
   const filtered = articles.filter(a => {
     if (filterCategory !== "all" && a.category !== filterCategory) return false;
-    if (search && !a.title.toLowerCase().includes(search.toLowerCase()) && !a.description.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      if (!a.title.toLowerCase().includes(q) && !stripHtml(a.description).toLowerCase().includes(q)) return false;
+    }
     return true;
   });
 
@@ -151,9 +163,12 @@ export default function FinancialNews() {
                         </span>
                       </div>
                       <h3 className="font-semibold text-base leading-snug line-clamp-2">{article.title}</h3>
-                      {article.description && (
-                        <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{article.description}</p>
-                      )}
+                      {(() => {
+                        const desc = stripHtml(article.description);
+                        return desc ? (
+                          <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{desc}</p>
+                        ) : null;
+                      })()}
                     </div>
                     <ExternalLink className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-1" />
                   </div>

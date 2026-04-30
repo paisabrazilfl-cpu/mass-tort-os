@@ -4,10 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
-    "build": "node ./build.mjs",
-    "start": "node --enable-source-maps ./dist/index.mjs",
-    "worker": "node --enable-source-maps ./dist/worker.mjs",
+    "dev": "export NODE_ENV=development && pnpm run build:server && pnpm run start",
+    "dev:worker": "export NODE_ENV=development && pnpm run build:worker && pnpm run worker",
+    "build": "node ./build.mjs all",
+    "build:server": "node ./build.mjs server",
+    "build:worker": "node ./build.mjs worker",
+    "start": "node --enable-source-maps ./dist/server/index.mjs",
+    "worker": "node --enable-source-maps ./dist/worker/worker.mjs",
     "pretypecheck": "tsc -b ../../",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test --test-timeout=30000 src/lib/__tests__/*.test.ts"

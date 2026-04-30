@@ -115,6 +115,25 @@ export default function WorkflowSettingsPage() {
           <AlertTriangle className="h-3 w-3" /> No active integrations of this type. Add one on the Integrations page.
         </div>
       )}
+      {opts.length > 0 && value === null && (() => {
+        const usable = opts.filter((o) => o.adapter_implemented).length;
+        if (usable === 0) {
+          return (
+            <div className="flex items-center gap-1 text-xs text-amber-600 mt-1">
+              <AlertTriangle className="h-3 w-3" />
+              {`${opts.length} active integration${opts.length === 1 ? "" : "s"} of this type — but none has an adapter implemented yet, so jobs will still fail.`}
+            </div>
+          );
+        }
+        return (
+          <div className="flex items-center gap-1 text-xs text-amber-600 mt-1">
+            <AlertTriangle className="h-3 w-3" />
+            {usable === 1
+              ? `1 active integration available but none selected. Jobs that need this provider will fail until you pick one.`
+              : `${usable} active integrations available but none selected. Jobs that need this provider will fail until you pick one.`}
+          </div>
+        );
+      })()}
     </div>
   );
 

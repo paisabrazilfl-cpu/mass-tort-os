@@ -127,15 +127,12 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   `,
 };
 
-async function buildAll() {
-  const distDir = path.resolve(artifactDir, "dist");
-  await rm(distDir, { recursive: true, force: true });
-
-  const sharedOptions = {
+function makeSharedOptions(outdir) {
+  return {
     platform: "node",
     bundle: true,
     format: "esm",
-    outdir: distDir,
+    outdir,
     outExtension: { ".js": ".mjs" },
     logLevel: "info",
     external,
@@ -145,21 +142,35 @@ async function buildAll() {
       esbuildPluginPino({ transports: ["pino-pretty"] })
     ],
   };
+}
 
-  // Build API server
+async function buildEntry(entryFile, subdir) {
+  const outdir = path.resolve(artifactDir, "dist", subdir);
+  await rm(outdir, { recursive: true, force: true });
   await esbuild({
-    ...sharedOptions,
-    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
-  });
-
-  // Build worker (separate entry point — same bundle config, no HTTP server deps needed)
-  await esbuild({
-    ...sharedOptions,
-    entryPoints: [path.resolve(artifactDir, "src/worker.ts")],
+    ...makeSharedOptions(outdir),
+    entryPoints: [path.resolve(artifactDir, entryFile)],
   });
 }
 
-buildAll().catch((err) => {
+const target = process.argv[2] ?? "all";
+
+async function run() {
+  if (target === "server") {
+    await buildEntry("src/index.ts", "server");
+  } else if (target === "worker") {
+    await buildEntry("src/worker.ts", "worker");
+  } else if (target === "all") {
+    await Promise.all([
+      buildEntry("src/index.ts", "server"),
+      buildEntry("src/worker.ts", "worker"),
+    ]);
+  } else {
+    throw new Error(`Unknown build target '${target}' (expected: server | worker | all)`);
+  }
+}
+
+run().catch((err) => {
   console.error(err);
   process.exit(1);
 });
