@@ -70,6 +70,40 @@ export async function extractOcrData(
   }
 }
 
+/**
+ * Text-only OCR path: used when we already have extracted text (e.g. from a PDF).
+ * Runs the same structured extraction prompt against the provided text.
+ */
+export async function extractOcrDataFromText(text: string): Promise<LegoraGridRow> {
+  if (!text.trim()) return emptyRow();
+
+  try {
+    const raw = await callLLM({
+      module: "ai-ocr",
+      prompt: SYSTEM_PROMPT,
+      maxTokens: 2048,
+      systemPrompt: `The following is text extracted from a faxed document. Analyze it and return structured data.\n\nDocument text:\n${text.slice(0, 8000)}`,
+    });
+
+    const jsonMatch = raw.trim().match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      logger.warn({ raw }, "OCR (text): No JSON in response");
+      return { ...emptyRow(), raw_text: text.slice(0, 4000), confidence: 0.1 };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]) as LegoraGridRow;
+    if (!parsed.raw_text) parsed.raw_text = text.slice(0, 4000);
+    logger.info(
+      { drug_name: parsed.drug_name, confidence: parsed.confidence },
+      "OCR text extraction complete"
+    );
+    return parsed;
+  } catch (err) {
+    logger.error({ err }, "OCR: text extraction failed");
+    return { ...emptyRow(), raw_text: text.slice(0, 4000) };
+  }
+}
+
 function emptyRow(): LegoraGridRow {
   return {
     rx_number: "",

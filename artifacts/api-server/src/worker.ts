@@ -12,7 +12,8 @@ import { extractFeatures } from "./lib/ai-extract";
 import { scoreFeatures, scoreToVerdict } from "./lib/scoring";
 import { auditLog } from "./lib/audit";
 import { preprocessFaxBuffer, base64ToBuffer, detectMimeType } from "./lib/ocr-preprocess";
-import { extractOcrData } from "./lib/ai-ocr";
+import { extractOcrData, extractOcrDataFromText } from "./lib/ai-ocr";
+import { extractPdfText } from "./lib/pdf-extract";
 import { withErrorFallback, createLoopGuard, DEFAULT_LIMITS } from "./lib/error-fallback";
 import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail } from "./lib/workflow-handlers";
 import { ensureSystemUser } from "./lib/case-ownership-backfill";
@@ -242,10 +243,18 @@ async function processJob(job: {
         const rawBuffer = base64ToBuffer(rawBase64);
         const detectedMime = detectMimeType(rawBase64) || mime_type;
 
-        const processedBuffer = await preprocessFaxBuffer(rawBuffer);
-        const processedBase64 = processedBuffer.toString("base64");
-
-        const grid = await extractOcrData(processedBase64, detectedMime);
+        // PDFs cannot be processed by the vision model — extract text first,
+        // then analyse with the text-based OCR path.
+        let grid;
+        if (detectedMime === "application/pdf" || detectedMime === "application/x-pdf") {
+          logger.info({ fax_result_id, vault_path }, "Fax is a PDF — extracting text");
+          const pdfText = await extractPdfText(rawBuffer);
+          grid = await extractOcrDataFromText(pdfText);
+        } else {
+          const processedBuffer = await preprocessFaxBuffer(rawBuffer);
+          const processedBase64 = processedBuffer.toString("base64");
+          grid = await extractOcrData(processedBase64, detectedMime);
+        }
 
         await db
           .update(faxResultsTable)

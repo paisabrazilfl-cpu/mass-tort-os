@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@types/pdf-parse": "^1.1.5",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/integrations-anthropic-ai": "workspace:*",
@@ -28,6 +29,7 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "pdf-lib": "^1.17.1",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.20.0",
     "pino": "^9",
     "pino-http": "^10",

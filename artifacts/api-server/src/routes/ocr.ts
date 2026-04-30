@@ -128,6 +128,60 @@ router.get("/queue-stats", requirePermission(Permission.OCR_QUEUE_ADMIN), async 
   res.json(stats);
 });
 
+/**
+ * POST /api/ocr/results/:id/reprocess
+ * Re-enqueue a fax result for OCR processing (e.g. if it produced empty results).
+ * Resets status to "pending" and creates a new job.
+ */
+router.post("/results/:id/reprocess", requirePermission(Permission.OCR_AI_FIELDS), auditAction("reprocess_fax"), async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) {
+    badRequest(res, "Invalid ID");
+    return;
+  }
+
+  const [row] = await db.select().from(faxResultsTable).where(eq(faxResultsTable.id, id));
+  if (!row) {
+    notFound(res, "Not found");
+    return;
+  }
+
+  // Reset result fields and status
+  await db
+    .update(faxResultsTable)
+    .set({
+      status: "pending",
+      rx_number: "",
+      drug_name: "",
+      fill_date: "",
+      quantity: "",
+      confidence: 0,
+      raw_text: "",
+      error: null,
+      processed_at: null,
+    })
+    .where(eq(faxResultsTable.id, id));
+
+  const [job] = await db
+    .insert(jobQueueTable)
+    .values({
+      job_type: "process_fax",
+      payload: {
+        fax_result_id: row.id,
+        vault_path: row.vault_path,
+        source_file: row.source_file,
+        mime_type: "image/png",
+      },
+    })
+    .returning({ id: jobQueueTable.id });
+
+  await db.update(faxResultsTable).set({ job_id: job.id }).where(eq(faxResultsTable.id, id));
+  await auditLog("fax", String(id), "reprocess_queued", { job_id: job.id });
+
+  logger.info({ fax_result_id: id, job_id: job.id }, "Fax reprocess queued");
+  res.json({ fax_result_id: id, status: "queued", job_id: job.id });
+});
+
 router.post("/ai-fields", requirePermission(Permission.OCR_AI_FIELDS), auditAction("ai_fields_extract"), async (req, res) => {
   const { image_base64, mime_type, text } = req.body;
 

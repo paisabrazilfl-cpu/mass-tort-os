@@ -576,7 +576,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **174 checked / 19 public / 155 protected / 0 unprotected.**
+Boot-time count: **175 checked / 19 public / 156 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -737,6 +737,7 @@ Boot-time count: **174 checked / 19 public / 155 protected / 0 unprotected.**
 | ocr | POST | `/api/ocr/ai-fields/result/:id` | ✓ | ✓ |  |  |  | — | `ocr:ai_fields` | ✓ |
 | ocr | POST | `/api/ocr/ai-fields` | ✓ | ✓ |  |  |  | — | `ocr:ai_fields` | ✓ |
 | ocr | GET | `/api/ocr/queue-stats` | ✓ | ✓ |  |  |  | — | `ocr:queue_admin` | ✓ |
+| ocr | POST | `/api/ocr/results/:id/reprocess` | ✓ | ✓ |  |  |  | — | `ocr:ai_fields` | ✓ |
 | ocr | GET | `/api/ocr/results/:id` | ✓ | ✓ |  |  |  | — | `ocr:view` | ✓ |
 | ocr | GET | `/api/ocr/results` | ✓ | ✓ |  |  |  | — | `ocr:view` | ✓ |
 | ocr | POST | `/api/ocr/upload` | ✓ | ✓ |  |  |  | — | `ocr:upload` | ✓ |
