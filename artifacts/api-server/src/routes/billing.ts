@@ -1,22 +1,16 @@
 /**
- * Billing routes — checkout, portal, state, invoices.
+ * Billing routes — checkout, portal, state, invoices, firm-status.
  *
- * Single-firm shell for MVI: the user's firm is resolved from
- * mtos_users.firm_id, not URL parameters. Multi-firm scoping is a
- * follow-up — at that point this router takes a `:firmId` segment and
- * the resolver checks membership.
- *
- * All endpoints (except the webhook in routes/webhooks.ts) require
- * BILLING_MANAGE permission. Operators can still see plain-data
- * subscription state via /state on a viewer-level token? No — the
- * task spec says billing.manage gates everything. Viewers see "billing
- * is managed by your administrator" client-side.
+ * The user's firm is resolved from mtos_users.firm_id (single-firm
+ * shell for MVI). All endpoints require BILLING_MANAGE except
+ * /firm-status, which is the auth-only minimal subset (subscription
+ * status + period end, no Stripe IDs) used by the in-app banner.
  */
 import { Router } from "express";
 import { z } from "zod/v4";
 import { db, firmsTable, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { requirePermission, authMiddleware, Permission } from "../lib/rbac";
+import { requirePermission, Permission } from "../lib/rbac";
 import {
   createCheckoutSession,
   createPortalSession,
@@ -76,12 +70,10 @@ router.get(
 );
 
 // /firm-status — minimal subscription posture readable by ANY authenticated
-// user in the firm. Powers the global in-app billing banner that warns
-// every operator (not just admins) when their firm is past_due / canceled
-// / unpaid so write actions visibly fail with context. Returns ONLY the
+// user in the firm. Powers the global in-app billing banner. Returns only
 // non-sensitive status + period end; Stripe IDs stay behind BILLING_MANAGE
-// on /state.
-router.get("/firm-status", authMiddleware, async (req, res) => {
+// on /state. (Auth is already mounted globally before this router.)
+router.get("/firm-status", async (req, res) => {
   const firm = await getFirmForUser(req.user!.id);
   if (!firm) {
     res.json({
