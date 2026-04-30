@@ -6,6 +6,14 @@ This project is a full-stack Mass Tort Operating System (MTOS), a distributed ca
 
 I prefer clear and direct communication. I value a development process that emphasizes iterative development and early feedback. Please ask for my approval before implementing any major architectural changes or significant feature additions. I appreciate detailed explanations for complex technical decisions.
 
+**Standing engineering directives (Apr 30, 2026):**
+
+1. **Token-efficiency rule — deterministic logic first, AI second.** Wire as much internal `if / then / else`, lookup tables, regex, and rule-based branching into the system as possible BEFORE calling out to any AI provider. AI is a fallback for true natural-language / open-ended tasks (extraction from unstructured medical PDFs, summarization, drafting). Do not pay for an LLM round-trip when a deterministic rule can answer the question. Examples of work that must stay deterministic: field validation, scoring/qualification (already deterministic), tort-routing, taxonomy matching, dedup matching, conflict detection, status transitions, format normalization, simple classification with a known label set, address/phone/email format checks. Anywhere a rule can be expressed in code, write the rule in code.
+
+2. **OpenAI is the primary AI provider.** New AI call-sites must use OpenAI by default. Existing Anthropic call-sites (in `ai-extract.ts`, `ai-fields.ts`, `ai-ocr.ts`, `drafting-ai.ts`, `threat-analyzer.ts`, `lead-intelligence.ts`) will be migrated under a separate task per the "do not cause conflicts" rule — the migration must preserve current behavior on the same inputs and ship behind a per-module switch so we can roll back any one call-site without breaking the others.
+
+3. **Do not cause conflicts.** When making changes that touch a working surface, leave that surface working at every commit. If a migration takes more than one commit, gate the new path behind a config flag with the old path still wired up; never half-land a swap.
+
 # System Architecture
 
 The project is structured as a pnpm monorepo using TypeScript, targeting Node.js 24. The backend is an Express 5 API, integrated with a PostgreSQL database using Drizzle ORM. API codegen is handled by Orval from an OpenAPI specification. The UI/UX is built with React and Vite.
