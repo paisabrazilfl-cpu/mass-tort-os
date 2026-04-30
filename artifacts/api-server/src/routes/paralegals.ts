@@ -32,11 +32,37 @@ const router = Router();
 
 
 router.get("/", requirePermission(Permission.PARALEGAL_VIEW), async (_req, res) => {
-  const paralegals = await db
-    .select()
+  // Compute counts live from the leads table. The integer columns
+  // total_assigned / signed_cases / active_cases on the paralegals row are
+  // legacy denormalized counters that were never wired to update on lead
+  // status changes, so reading them directly always returned 0 even when
+  // leads were assigned. The leaderboard endpoint
+  // (/api/analytics/paralegal-leaderboard) already does this same join, so
+  // both surfaces now agree.
+  const rows = await db
+    .select({
+      id: paralegalsTable.id,
+      name: paralegalsTable.name,
+      email: paralegalsTable.email,
+      role: paralegalsTable.role,
+      created_at: paralegalsTable.created_at,
+      updated_at: paralegalsTable.updated_at,
+      total_assigned: sql<number>`count(${leadsTable.id})::int`,
+      signed_cases: sql<number>`count(*) filter (where ${leadsTable.status} = 'signed')::int`,
+      active_cases: sql<number>`count(*) filter (where ${leadsTable.status} not in ('signed','rejected') and ${leadsTable.id} is not null)::int`,
+    })
     .from(paralegalsTable)
-    .orderBy(desc(paralegalsTable.signed_cases));
-  res.json(paralegals);
+    .leftJoin(leadsTable, eq(paralegalsTable.id, leadsTable.assigned_to))
+    .groupBy(
+      paralegalsTable.id,
+      paralegalsTable.name,
+      paralegalsTable.email,
+      paralegalsTable.role,
+      paralegalsTable.created_at,
+      paralegalsTable.updated_at,
+    )
+    .orderBy(sql`count(*) filter (where ${leadsTable.status} = 'signed') desc`);
+  res.json(rows);
 });
 
 router.post("/", requirePermission(Permission.PARALEGAL_MANAGE), auditAction("create_paralegal"), async (req, res) => {
@@ -95,6 +121,7 @@ router.get("/:id", requirePermission(Permission.PARALEGAL_VIEW), auditAction("vi
 
   const signedCount = leads.filter(l => l.status === "signed").length;
   const qualifiedCount = leads.filter(l => l.status === "qualified").length;
+  const rejectedCount = leads.filter(l => l.status === "rejected").length;
   const totalAssigned = leads.length;
   const conversionRate = totalAssigned > 0 ? Math.round((signedCount / totalAssigned) * 100) : 0;
 
@@ -102,7 +129,11 @@ router.get("/:id", requirePermission(Permission.PARALEGAL_VIEW), auditAction("vi
     ...p,
     leads: decryptLeadArray(leads),
     signed_cases: signedCount,
-    active_cases: totalAssigned - signedCount,
+    // Match the list/leaderboard rule: active = neither signed nor rejected.
+    // Previously this was `totalAssigned - signedCount`, which incorrectly
+    // counted rejected leads as still active and disagreed with the list
+    // endpoint and leaderboard.
+    active_cases: totalAssigned - signedCount - rejectedCount,
     total_assigned: totalAssigned,
     conversion_rate: conversionRate,
   });
