@@ -563,18 +563,18 @@ router.get("/:id/fax-results", requirePermission(Permission.LEAD_VIEW_OWN, Permi
   }
   if (!(await ensureLeadAccess(req, res, id))) return;
   const { faxResultsTable } = await import("@workspace/db");
-  const { desc, eq: eqOp } = await import("drizzle-orm");
-  // Task #16 (final): query the canonical FK lead_id column only. The
-  // historical filename-pattern fallback was removed at the read path
-  // because (a) all new inserts populate lead_id at write time and
-  // (b) scripts/backfill-fax-results-lead-id.ts has populated lead_id
-  // for every legacy row whose filename matches FAX_SOURCE_FILE_TEMPLATE.
-  // Filename parsing remains in fax-results-matcher.ts for ingest /
-  // backfill utilities only — no runtime reader still parses filenames.
+  const { desc, eq: eqOp, or, ilike } = await import("drizzle-orm");
+  const { buildFaxResultsLikePattern } = await import("../lib/fax-results-matcher");
+  // Task #16: query the canonical FK lead_id column AND fall back to the
+  // legacy filename pattern for any historical fax_results row whose
+  // lead_id was never backfilled. fax_results.lead_id is intentionally
+  // nullable (per T001 "no enforced FK since legacy rows may dangle"),
+  // so the read path keeps the OR(lead_id, LIKE source_file) contract.
+  const pattern = buildFaxResultsLikePattern(id);
   const rows = await db
     .select()
     .from(faxResultsTable)
-    .where(eqOp(faxResultsTable.lead_id, id))
+    .where(or(eqOp(faxResultsTable.lead_id, id), ilike(faxResultsTable.source_file, pattern)))
     .orderBy(desc(faxResultsTable.created_at));
   res.json(rows);
 });
