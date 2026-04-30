@@ -238,7 +238,7 @@ export function assertWiringRegistryConsistency(): void {
       );
       continue;
     }
-    const presetFields: string[] = (preset.fields || []) as unknown as string[];
+    const presetFields: readonly string[] = preset.fields ?? [];
     const missing = requiredFields.filter((f) => !presetFields.includes(f));
     if (missing.length > 0) {
       errors.push(

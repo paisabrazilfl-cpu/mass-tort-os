@@ -52,9 +52,23 @@ async function main() {
     console.error("Token rejected. Body:", userInfoBody.slice(0, 500));
     process.exit(1);
   }
-  let userInfo: any;
-  try { userInfo = JSON.parse(userInfoBody); } catch { userInfo = {}; }
-  const accountMatch = (userInfo.accounts || []).find((a: any) => a.account_id === accountId);
+  interface DocusignAccountSummary {
+    account_id?: string;
+    account_name?: string;
+    base_uri?: string;
+    is_default?: boolean;
+  }
+  interface DocusignUserInfo {
+    accounts?: DocusignAccountSummary[];
+  }
+  let userInfo: DocusignUserInfo = {};
+  try {
+    const parsed: unknown = JSON.parse(userInfoBody);
+    if (parsed && typeof parsed === "object") {
+      userInfo = parsed as DocusignUserInfo;
+    }
+  } catch { /* malformed JSON — leave userInfo empty */ }
+  const accountMatch = (userInfo.accounts ?? []).find((a) => a.account_id === accountId);
   console.log(`     account_id ${accountId}: ${accountMatch ? "FOUND in token's accounts list" : "NOT in token's accounts list"}`);
   if (accountMatch) {
     console.log(`     account name: ${accountMatch.account_name}, base_uri: ${accountMatch.base_uri}, is_default: ${accountMatch.is_default}`);
@@ -72,8 +86,18 @@ async function main() {
     console.error("Account API call failed. Body:", accountBody.slice(0, 500));
     process.exit(1);
   }
-  let account: any;
-  try { account = JSON.parse(accountBody); } catch { account = {}; }
+  interface DocusignAccountInfo {
+    accountName?: string;
+    planName?: string;
+    canSendEnvelope?: boolean;
+  }
+  let account: DocusignAccountInfo = {};
+  try {
+    const parsed: unknown = JSON.parse(accountBody);
+    if (parsed && typeof parsed === "object") {
+      account = parsed as DocusignAccountInfo;
+    }
+  } catch { /* malformed JSON — leave account empty */ }
   console.log(`     account: ${account.accountName} (${account.planName} plan), can_send_envelope=${account.canSendEnvelope}`);
 
   console.log("\nRESULT: DocuSign token is LIVE. Adapter can send envelopes against this account.");
