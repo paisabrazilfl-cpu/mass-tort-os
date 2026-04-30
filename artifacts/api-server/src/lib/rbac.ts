@@ -314,6 +314,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     Permission.DOCUMENTS_VIEW,
     Permission.NEWS_VIEW,
     Permission.DASHBOARD_VIEW,
+    // Voice — viewer can listen to recorded calls (read-only).
+    // SMS_SEND is intentionally excluded; viewer cannot transmit.
+    Permission.CALLS_VIEW,
   ]),
 };
 

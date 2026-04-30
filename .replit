@@ -22,15 +22,15 @@ args = "MTOS Worker: Job Processor"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "rbac-test"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "rbac-route-matrix"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "db-drift"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "rbac-test"
 
 [[workflows.workflow]]
 name = "MTOS Worker: Job Processor"
@@ -42,17 +42,6 @@ outputType = "console"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pnpm --filter @workspace/api-server run dev:worker"
-
-[[workflows.workflow]]
-name = "rbac-test"
-author = "agent"
-
-[workflows.workflow.metadata]
-isValidation = true
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts src/lib/__tests__/rbac-route-matrix.test.ts src/lib/__tests__/rbac-route-matrix-headline.test.ts"
 
 [[workflows.workflow]]
 name = "rbac-route-matrix"
@@ -72,6 +61,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pnpm --filter @workspace/db run drift"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "rbac-test"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts src/lib/__tests__/rbac-route-matrix.test.ts src/lib/__tests__/rbac-route-matrix-headline.test.ts src/routes/__tests__/vapi-tools-eligibility-mapping.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

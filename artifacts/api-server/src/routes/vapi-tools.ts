@@ -14,8 +14,13 @@
  * Tools exposed:
  *   POST /lookup-lead         -> { found, lead_id, name, status }
  *   POST /create-lead         -> { lead_id }
- *   POST /check-eligibility   -> { eligible, reasons[], score }
- *   POST /escalate-to-human   -> { ok }
+ *   POST /check-eligibility   -> { result: "go"|"hold"|"abort", reason, disqualifiers[] }
+ *   POST /escalate-to-human   -> { ok } (also writes a review_queue row)
+ *
+ * PII handling: create-lead inserts encrypted ciphertexts via
+ * encryptLeadFields() then rebinds AAD to the assigned lead.id (#8) so
+ * the row matches the encryption shape used by every other ingestion
+ * surface (CSV, intake form, public-leads).
  *
  * Each tool accepts a JSON body keyed by snake_case fields per the
  * Vapi assistant configuration. Failures return 200 with `ok:false`
@@ -25,11 +30,12 @@
 import { Router, type Request } from "express";
 import crypto from "crypto";
 import { z } from "zod/v4";
-import { db, leadsTable, leadDispositionsTable } from "@workspace/db";
+import { db, leadsTable, leadDispositionsTable, reviewQueueTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import { loadVapiCredentials } from "../lib/voice/vapi";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
+import { encryptLeadFields, rebindLeadEncryptionAad } from "../lib/encryption";
 
 const router = Router();
 
@@ -159,22 +165,32 @@ router.post("/create-lead", async (req, res) => {
     const fullName =
       [parsed.data.first_name, parsed.data.last_name].filter(Boolean).join(" ").trim() ||
       `Vapi caller ${phoneE164}`;
+    // Task #8: encrypt PII before insert. We can't pass entityId yet
+    // (id is serial, assigned by RETURNING), so we encrypt with a
+    // (fieldName)-only AAD and immediately rebind to (fieldName, id)
+    // post-insert via rebindLeadEncryptionAad. lookup_hash is computed
+    // from the PLAINTEXT phone so dedupe queries continue to work.
+    const encryptedFields = encryptLeadFields({
+      name: fullName,
+      first_name: parsed.data.first_name ?? null,
+      last_name: parsed.data.last_name ?? null,
+      phone: phoneE164,
+      email: parsed.data.email ?? null,
+      date_of_birth: dob,
+      notes: parsed.data.notes ?? null,
+    });
     const [inserted] = await db
       .insert(leadsTable)
       .values({
-        name: fullName,
-        first_name: parsed.data.first_name ?? null,
-        last_name: parsed.data.last_name ?? null,
-        phone: phoneE164,
-        email: parsed.data.email ?? null,
-        date_of_birth: dob,
+        ...(encryptedFields as any),
         tort_type: parsed.data.tort_type,
         source: parsed.data.source,
         status: "new",
-        notes: parsed.data.notes ?? null,
         lookup_hash: hash,
       })
-      .returning({ id: leadsTable.id });
+      .returning();
+    // Task #8: rebind ciphertext AAD to the freshly-assigned lead.id.
+    await rebindLeadEncryptionAad(db, leadsTable, inserted!, eq);
 
     res.status(200).json({ ok: true, lead_id: inserted!.id, deduped: false });
   } catch (err) {
@@ -186,6 +202,51 @@ router.post("/create-lead", async (req, res) => {
 const eligibilitySchema = z.object({
   lead_id: z.coerce.number().int().positive(),
 });
+
+/**
+ * Map a decision-engine ScoreResult into the Vapi assistant's
+ * three-way verdict contract.
+ *
+ * The engine's Action enum (lib/decision-engine.ts) is:
+ *   "execute" | "modify" | "reject" | "review"
+ *
+ * Collapsed for the assistant:
+ *   execute            → "go"     (eligible, proceed with intake)
+ *   modify | review    → "hold"   (route to human; do not abort)
+ *   reject             → "abort"  (politely end the call)
+ *   unknown / missing  → "abort"  (fail closed)
+ *
+ * Exported so the mapping is unit-tested directly — drift between this
+ * mapping and the engine's enum has caused live aborts before.
+ */
+export function mapEligibilityResult(result: {
+  action?: string | null;
+  rationale?: string | null;
+  ruin_flags?: string[] | null;
+  missing_fields?: string[] | null;
+  contradictions?: string[] | null;
+}): { result: "go" | "hold" | "abort"; reason: string; disqualifiers: string[] } {
+  const action = String(result.action ?? "").toLowerCase();
+  let verdict: "go" | "hold" | "abort";
+  if (action === "execute") verdict = "go";
+  else if (action === "modify" || action === "review") verdict = "hold";
+  else if (action === "reject") verdict = "abort";
+  else verdict = "abort";
+
+  const disqualifiers = [
+    ...(result.ruin_flags ?? []),
+    ...(result.missing_fields ?? []).map((f) => `missing:${f}`),
+    ...(result.contradictions ?? []),
+  ];
+  const rationale =
+    typeof result.rationale === "string" ? result.rationale.trim() : "";
+  const reason =
+    rationale ||
+    disqualifiers[0] ||
+    `decision:${(result.action ?? "unknown").toLowerCase()}`;
+
+  return { result: verdict, reason, disqualifiers };
+}
 
 router.post("/check-eligibility", async (req, res) => {
   if (!(await checkBearer(req))) {
@@ -200,29 +261,20 @@ router.post("/check-eligibility", async (req, res) => {
   try {
     const result = await computeAndPersistLeadScore(parsed.data.lead_id);
     if (!result) {
-      res.status(200).json({ ok: true, eligible: false, reasons: ["lead_not_found"] });
+      res.status(200).json({
+        ok: true,
+        result: "abort",
+        reason: "lead_not_found",
+        disqualifiers: ["lead_not_found"],
+      });
       return;
     }
-    // Map the decision-engine action → eligibility verdict.
-    //   ACCEPT       → eligible
-    //   REVIEW/DEFER → human review (not auto-eligible, but not abort)
-    //   ABORT        → ineligible
-    // The assistant uses `eligible` for its primary branch and the full
-    // breakdown for its narration.
-    const action = String(result.action ?? "").toUpperCase();
-    const eligible = action === "ACCEPT";
+    const { result: verdict, reason, disqualifiers } = mapEligibilityResult(result);
     res.status(200).json({
       ok: true,
-      eligible,
-      action: result.action,
-      classification: result.classification,
-      ratio: result.ratio,
-      reasons: [
-        ...(result.ruin_flags ?? []),
-        ...(result.missing_fields ?? []).map((f) => `missing:${f}`),
-        ...(result.contradictions ?? []),
-      ],
-      rationale: result.rationale,
+      result: verdict,
+      reason,
+      disqualifiers,
     });
   } catch (err) {
     logger.error({ err, lead_id: parsed.data.lead_id }, "vapi-tools check-eligibility failed");
@@ -270,6 +322,24 @@ router.post("/escalate-to-human", async (req, res) => {
         .update(leadsTable)
         .set({ status: "review", updated_at: sql`now()` })
         .where(eq(leadsTable.id, parsed.data.lead_id));
+      // Spec: also post to review_queue so operators see a single
+      // queue entry (not just the disposition row + the lead.status
+      // bump). source_module="vapi" lets the UI filter/badge it.
+      // failsafe_mode="REVIEW_FAIL" matches the existing taxonomy
+      // used by conflict-engine + worker for human-review escalations.
+      await db.insert(reviewQueueTable).values({
+        entity_type: "lead",
+        entity_id: String(parsed.data.lead_id),
+        conflict_type: "vapi_escalation",
+        severity: "medium",
+        failsafe_mode: "REVIEW_FAIL",
+        source_module: "vapi",
+        summary: parsed.data.reason || "Vapi assistant escalated to human review",
+        details: {
+          vapi_call_id: parsed.data.call_id ?? null,
+          firm_id: lead[0].firm_id,
+        },
+      });
     }
     res.status(200).json({ ok: true });
   } catch (err) {

@@ -16,6 +16,32 @@ import { db, callLogsTable, leadsTable } from "@workspace/db";
 import { desc, eq, sql, and, or, ilike } from "drizzle-orm";
 import { requirePermission, Permission } from "../lib/rbac";
 import { badRequest } from "../lib/http-errors";
+import { getFirmIdForUser } from "../lib/subscription-gate";
+
+/**
+ * Firm scoping: every operator request must be filtered by their
+ * firm_id. The dev-bypass user (id=0) has no firm row — for that
+ * single account we fall back to "no scope" so local development
+ * with dev-login keeps working. Real users without a firm get a
+ * 403 because that's a misconfiguration, not a permission gap.
+ */
+async function resolveFirmScope(
+  userId: number,
+): Promise<{ firmId: number | null; error?: { status: number; code: string; message: string } }> {
+  if (userId <= 0) return { firmId: null }; // dev bypass — see header.
+  const firmId = await getFirmIdForUser(userId);
+  if (!firmId) {
+    return {
+      firmId: null,
+      error: {
+        status: 403,
+        code: "NO_FIRM",
+        message: "User account is not linked to a firm.",
+      },
+    };
+  }
+  return { firmId };
+}
 
 const router = Router();
 
@@ -41,7 +67,20 @@ router.get(
     const { page, page_size, status, lead_id, search } = parsed.data;
     const offset = (page - 1) * page_size;
 
+    const scope = await resolveFirmScope(req.user!.id);
+    if (scope.error) {
+      res.status(scope.error.status).json({
+        status: "error",
+        code: scope.error.code,
+        message: scope.error.message,
+      });
+      return;
+    }
+
     const conds = [];
+    if (scope.firmId !== null) {
+      conds.push(eq(callLogsTable.firm_id, scope.firmId));
+    }
     if (status) conds.push(eq(callLogsTable.status, status));
     if (lead_id) conds.push(eq(callLogsTable.lead_id, lead_id));
     if (search) {
@@ -108,6 +147,23 @@ router.get(
     }
     const { id } = parsed.data;
 
+    const scope = await resolveFirmScope(req.user!.id);
+    if (scope.error) {
+      res.status(scope.error.status).json({
+        status: "error",
+        code: scope.error.code,
+        message: scope.error.message,
+      });
+      return;
+    }
+
+    // Firm scope is folded into the WHERE so a cross-firm id returns
+    // 404, not 200 — leaking row existence across firms would itself
+    // be a data exposure.
+    const idCond = eq(callLogsTable.id, id);
+    const where =
+      scope.firmId !== null ? and(idCond, eq(callLogsTable.firm_id, scope.firmId)) : idCond;
+
     const rows = await db
       .select({
         id: callLogsTable.id,
@@ -133,7 +189,7 @@ router.get(
       })
       .from(callLogsTable)
       .leftJoin(leadsTable, eq(callLogsTable.lead_id, leadsTable.id))
-      .where(eq(callLogsTable.id, id))
+      .where(where)
       .limit(1);
     const row = rows[0];
     if (!row) {

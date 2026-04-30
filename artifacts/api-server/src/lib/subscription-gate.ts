@@ -8,10 +8,10 @@
  *   2. If no stripe vault row exists at all, the gate is disabled —
  *      self-hosted users without Stripe set up can keep working.
  *   3. If Stripe IS configured AND the firm's subscription_status is
- *      not in ("active","trialing","past_due"), writes 402.
- *      "past_due" is intentionally allowed — Stripe gives a grace
- *      window during which retries happen, and locking out a paying
- *      customer mid-payment-retry is hostile.
+ *      not in ("active","trialing"), writes 402. "past_due" is NOT
+ *      allowed per the MVI spec — Stripe still surfaces invoice
+ *      retries via the customer portal, but the operator must come
+ *      current before they can resume mutating data.
  *   4. `MTOS_DISABLE_BILLING_GATE=1` short-circuits everything — used
  *      in CI / e2e tests so we don't need to mock Stripe state.
  *
@@ -25,7 +25,7 @@ import { db, firmsTable, integrationsTable, usersTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { logger } from "./logger";
 
-const ALLOWED_STATUSES = new Set(["active", "trialing", "past_due"]);
+const ALLOWED_STATUSES = new Set(["active", "trialing"]);
 
 /**
  * Path prefixes that bypass the gate. These must remain reachable even

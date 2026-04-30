@@ -6,8 +6,10 @@
  * is stored in vault as `client_secret`. See
  * https://developers.telnyx.com/docs/messaging/webhooks for the spec.
  *
- * The integration vault preset for telnyx_sms must be added in
+ * The integration vault preset for "telnyx" (type=sms) lives in
  * integration-presets.ts; this adapter consumes those credentials.
+ * The provider key is "telnyx" — there is intentionally only one
+ * Telnyx integration row covering both SMS and (future) fax.
  */
 import { db, integrationsTable, smsMessagesTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
@@ -29,7 +31,7 @@ export async function loadTelnyxSmsCredentials(): Promise<TelnyxCredentials | nu
     .from(integrationsTable)
     .where(
       and(
-        eq(integrationsTable.provider, "telnyx_sms"),
+        eq(integrationsTable.provider, "telnyx"),
         eq(integrationsTable.status, "active"),
       ),
     )
@@ -42,7 +44,7 @@ export async function loadTelnyxSmsCredentials(): Promise<TelnyxCredentials | nu
   if (creds._decryption_errors && creds._decryption_errors.length) {
     logger.error(
       { fields: creds._decryption_errors, integration_id: row.id },
-      "telnyx_sms credential decryption failed",
+      "telnyx credential decryption failed",
     );
     return null;
   }
