@@ -6,10 +6,12 @@
  * token configured in the assistant; we compare it (constant-time)
  * against `client_secret` on the active vapi integration row.
  *
- * The router is mounted under /api/webhooks/vapi-tools and marked
- * `markPublic` so the route-protection validator does not require
- * authMiddleware. Each handler verifies the bearer at request time
- * and returns 401 on mismatch.
+ * The router is mounted under /api/vapi-tools (top-level under /api so
+ * the dump-route-matrix validator sees it without a session middleware
+ * chain) and marked `markPublic` so the route-protection validator does
+ * not require authMiddleware. Each handler verifies the bearer at
+ * request time and returns 401 on mismatch. Configure your Vapi
+ * assistant tool URLs as `${PUBLIC_API_BASE}/api/vapi-tools/<tool>`.
  *
  * Tools exposed:
  *   POST /lookup-lead         -> { found, lead_id, name, status }
