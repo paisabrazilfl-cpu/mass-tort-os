@@ -51,6 +51,31 @@
 import { listEmailProviders } from "./email/sendgrid";
 import { listEsignProviders } from "./esign";
 import { listFaxProviders } from "./fax";
+import { PRESET_INTEGRATIONS } from "./integration-presets";
+
+/**
+ * For each "live" provider, the credential field names the adapter actually
+ * reads from `creds` at call time. The preset's `fields` array MUST be a
+ * superset of this list — otherwise the integrations admin form will never
+ * prompt the operator for a field the adapter requires, and every workflow
+ * call will fail with "missing X" no matter how cleanly credentials decrypt.
+ *
+ * This is a stronger invariant than the adapter-existence check below: it
+ * caught a real bug where the docusign preset declared
+ * ["api_key","client_id","client_secret","api_url"] but the adapter reads
+ * ["api_key","account_sid"]. The form prompted for the wrong fields and
+ * every Send-for-signature attempt failed before leaving the adapter.
+ *
+ * Update this map whenever an adapter changes which credential keys it
+ * pulls off `creds`. Keep it in sync with the actual `creds.<field>` reads
+ * in lib/{email,esign,fax}/<provider>.ts.
+ */
+const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
+  sendgrid: ["api_key"],
+  docusign: ["api_key", "account_sid"],
+  dropbox_sign: ["api_key"],
+  telnyx_fax: ["api_key"],
+};
 
 export type WiringStatus = "live" | "live_no_vault" | "vault_only";
 
@@ -195,6 +220,30 @@ export function assertWiringRegistryConsistency(): void {
           `[${klass}] REGISTRY claims "${p}" is live, but it is missing from the ${klass} ADAPTERS map. Either add the adapter or change REGISTRY status.`,
         );
       }
+    }
+  }
+
+  // Field-level drift: every credential field the adapter reads at call time
+  // MUST be declared in its preset's `fields` array, otherwise the admin form
+  // never prompts for it and workflows fail with "missing X" no matter how
+  // cleanly the saved credentials decrypt. This was added after the docusign
+  // preset/adapter mismatch shipped to production undetected — the existence
+  // check above passed because docusign IS in the adapter map, but the form
+  // asked for client_id/client_secret while the adapter wanted account_sid.
+  for (const [provider, requiredFields] of Object.entries(ADAPTER_REQUIRED_FIELDS)) {
+    const preset = PRESET_INTEGRATIONS.find((p) => p.provider === provider);
+    if (!preset) {
+      errors.push(
+        `[fields] ADAPTER_REQUIRED_FIELDS lists "${provider}" but no preset with that key exists in integration-presets — operators have no UI path to save credentials for it.`,
+      );
+      continue;
+    }
+    const presetFields: string[] = (preset.fields || []) as unknown as string[];
+    const missing = requiredFields.filter((f) => !presetFields.includes(f));
+    if (missing.length > 0) {
+      errors.push(
+        `[fields] preset "${provider}" declares fields=[${presetFields.join(",")}] but adapter requires [${requiredFields.join(",")}] — admin form will never prompt for: ${missing.join(", ")}. Add the missing fields to the preset or change the adapter to read different keys.`,
+      );
     }
   }
 
