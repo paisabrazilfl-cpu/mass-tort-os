@@ -143,7 +143,7 @@ async function buildMedRecordsCoverLetter(lead: typeof leadsTable.$inferSelect, 
  * Resolve the lead's signer info (decrypted name + email).
  * Returns null if no usable signer email is on file — handler will record a clear error.
  */
-function getSignerFromLead(lead: typeof leadsTable.$inferSelect): { name: string; email: string } | null {
+export function getSignerFromLead(lead: typeof leadsTable.$inferSelect): { name: string; email: string } | null {
   const decrypted = decryptLeadFields(lead);
   const email = decrypted.email;
   if (!email || typeof email !== "string") return null;

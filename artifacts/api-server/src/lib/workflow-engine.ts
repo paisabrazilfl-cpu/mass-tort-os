@@ -12,6 +12,7 @@ import { eq, and, isNull, or } from "drizzle-orm";
 import { enqueueJob } from "./queue";
 import { auditLog } from "./audit";
 import { logger } from "./logger";
+import { getSignerFromLead } from "./workflow-handlers";
 
 export interface ApprovalDispatchResult {
   lead_id: number;
@@ -109,6 +110,27 @@ export async function enqueueLeadApprovalPackets(leadId: number): Promise<Approv
     await auditLog("lead", String(leadId), "approval_dispatch_skipped", {
       reason: "no_active_templates",
     });
+    return result;
+  }
+
+  // Pre-flight: if the lead has no signer email at all, every send_esign_packet
+  // job we enqueue is guaranteed to fail in the worker. Skip the whole batch
+  // up-front with a clear audit reason so the bad jobs never enter the queue
+  // and burn worker cycles on doomed retries.
+  const signer = getSignerFromLead(lead);
+  if (!signer) {
+    logger.warn({ lead_id: leadId }, "enqueueLeadApprovalPackets: lead has no signer email — skipping batch");
+    await auditLog("lead", String(leadId), "approval_dispatch_skipped", {
+      reason: "no_signer_email",
+      template_count: templates.length,
+    });
+    for (const tpl of templates) {
+      result.skipped.push({
+        template_id: tpl.id,
+        template_name: tpl.name,
+        reason: "no_signer_email",
+      });
+    }
     return result;
   }
 

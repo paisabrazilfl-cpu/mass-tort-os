@@ -237,8 +237,8 @@ async function checkDuplicate(lead: Record<string, any>): Promise<{ isDuplicate:
 
 router.post("/preview", requirePermission(Permission.LEAD_IMPORT_PREVIEW), async (req, res) => {
   try {
-    const { csv_data } = req.body;
-    if (!csv_data) { res.status(400).json({ error: "csv_data is required" }); return; }
+    const { csv_data } = req.body ?? {};
+    if (!csv_data) { res.status(400).json({ error: "csv_data is required (send JSON body with Content-Type: application/json)" }); return; }
 
     const { headers, rows } = parseCSV(csv_data);
     if (headers.length === 0) { res.status(400).json({ error: "No valid CSV headers found" }); return; }
@@ -263,8 +263,8 @@ router.post("/preview", requirePermission(Permission.LEAD_IMPORT_PREVIEW), async
 
 router.post("/execute", requirePermission(Permission.LEAD_IMPORT_EXECUTE), async (req, res) => {
   try {
-    const { csv_data, column_mapping, filename = "import.csv" } = req.body;
-    if (!csv_data) { res.status(400).json({ error: "csv_data is required" }); return; }
+    const { csv_data, column_mapping, filename = "import.csv" } = req.body ?? {};
+    if (!csv_data) { res.status(400).json({ error: "csv_data is required (send JSON body with Content-Type: application/json)" }); return; }
 
     const { headers, rows } = parseCSV(csv_data);
     if (rows.length === 0) { res.status(400).json({ error: "No data rows found in CSV" }); return; }

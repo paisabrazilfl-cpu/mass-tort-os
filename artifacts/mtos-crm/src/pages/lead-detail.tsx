@@ -109,8 +109,8 @@ export default function LeadDetail() {
   const [lensLoading, setLensLoading] = useState(false);
   const autoTriggered = useRef(false);
 
-  const { data: lead, isLoading } = useGetLead(leadId, {
-    query: { enabled: !!leadId, queryKey: getGetLeadQueryKey(leadId) }
+  const { data: lead, isLoading, isError, error } = useGetLead(leadId, {
+    query: { enabled: !!leadId, queryKey: getGetLeadQueryKey(leadId), retry: false }
   });
 
   const { data: documents, isLoading: docsLoading } = useListDocuments({ lead_id: leadId }, {
@@ -219,11 +219,38 @@ export default function LeadDetail() {
     }
   }, [lead, handleRunIntelligence, fetchLensScore]);
 
-  if (isLoading || !lead) {
+  if (isLoading) {
     return (
       <div className="space-y-6">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-[600px] w-full" />
+      </div>
+    );
+  }
+
+  if (isError || !lead) {
+    const status = (error as { status?: number } | null)?.status;
+    const isNotFound = status === 404;
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-4">
+          <Button variant="outline" size="icon" asChild>
+            <Link href="/leads"><ArrowLeft className="h-4 w-4" /></Link>
+          </Button>
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {isNotFound ? "Lead not found" : "Couldn't load lead"}
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              {isNotFound
+                ? `Lead #${leadId} doesn't exist or you don't have access. It may have been deleted.`
+                : "Something went wrong fetching this lead. Please retry or return to the list."}
+            </p>
+          </div>
+        </div>
+        <Button variant="outline" asChild>
+          <Link href="/leads">Back to leads</Link>
+        </Button>
       </div>
     );
   }
