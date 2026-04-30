@@ -4,7 +4,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { runBackgroundCheckHub } from "../lib/bg-hub/hub";
 import { sanitizeHubResultForPersistence } from "../lib/bg-hub/snapshot-sanitizer";
 import { BG_HUB_VERSION, type BackgroundHubResult } from "../lib/bg-hub/types";
-import { encryptLeadFields, decryptLeadFields } from "../lib/encryption";
+import { encryptLeadFields, decryptLeadFields, rebindLeadEncryptionAad } from "../lib/encryption";
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
 import { runBackgroundCheck } from "../lib/background-check";
@@ -27,6 +27,7 @@ import {
 } from "../lib/form-config-service";
 import { customFieldSchema, webFormConfigSchema, type WebFormConfig } from "@workspace/db";
 import { findExistingLeadForIntake } from "../lib/lead-dedup";
+import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { updateWebFormConfig } from "./web-forms";
 import { buildDefaultWebFormConfig } from "../lib/web-form-defaults";
 import type { Request, Response } from "express";
@@ -897,11 +898,23 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
           dedupExisting.matchedBy === "email" ? "merged_email" : "merged_phone",
       };
     } else {
+      // Task #15: stamp the canonical (tort|email|phone10) hash on insert
+      // so subsequent dedup queries can short-circuit the decrypt scan.
+      const insertValues = {
+        ...(persistedFields as Record<string, unknown>),
+        lookup_hash: leadLookupHash(
+          String(data.tort_type ?? ""),
+          data.email ?? null,
+          data.phone_primary ?? null,
+        ),
+      };
       const inserted = await db
         .insert(leadsTable)
-        .values(persistedFields as any)
+        .values(insertValues as any)
         .returning();
       lead = inserted[0]!;
+      // Task #8: rebind ciphertext AAD to the freshly-assigned lead.id.
+      await rebindLeadEncryptionAad(db, leadsTable, lead, eq);
       step10.data = { lead_id: lead.id, status, dedup_outcome: "inserted" };
     }
 

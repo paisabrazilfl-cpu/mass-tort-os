@@ -21,6 +21,11 @@ import {
 
 // Audit writes off — rbac.test.ts covers the denial+audit-row path.
 process.env["RBAC_DISABLE_AUDIT"] = "1";
+// Subscription gate off — these tests assert role/permission gating, not
+// billing posture. The gate has its own dedicated coverage path. Without
+// this, every PUT/POST in the matrix would trip the 402 NO_FIRM branch
+// because the ephemeral test users aren't members of any firm.
+process.env["MTOS_DISABLE_BILLING_GATE"] = "1";
 
 // Typed helpers (no `as any`).
 
@@ -173,7 +178,7 @@ describe("public allowlist (validateRouteTable policy)", () => {
         .filter((p) => p.status === "public")
         .map((p) => p.router),
     );
-    const expected = new Set(["health", "forms-public", "web-forms", "webhooks"]);
+    const expected = new Set(["health", "forms-public", "web-forms", "webhooks", "vapi-tools"]);
     for (const r of publicRouters) {
       assert.ok(expected.has(r), `unexpected public router: ${r}`);
     }
@@ -359,7 +364,7 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
     );
   });
 
-  test("public path-prefix contract: every 'public' policy entry resolves under /api/healthz, /api/forms-public/, /api/web-forms/, or /api/webhooks/", () => {
+  test("public path-prefix contract: every 'public' policy entry resolves under /api/healthz, /api/forms-public/, /api/web-forms/, /api/webhooks/, or /api/vapi-tools/", () => {
     if (!booted) throw new Error("app not booted");
     // router-label → mounted URL prefix (mirror of routes/index.ts).
     const ROUTER_PREFIX: Record<string, string> = {
@@ -367,12 +372,14 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       "forms-public": "/api/forms-public",
       "web-forms": "/api/web-forms",
       webhooks: "/api/webhooks",
+      "vapi-tools": "/api/vapi-tools",
     };
     const ALLOWED_PUBLIC_PREFIXES = [
       "/api/healthz",
       "/api/forms-public/",
       "/api/web-forms/",
       "/api/webhooks/",
+      "/api/vapi-tools/",
     ];
     for (const p of booted.policy) {
       if (p.status !== "public") continue;

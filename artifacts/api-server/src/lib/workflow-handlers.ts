@@ -592,3 +592,53 @@ export async function handleSendWorkflowEmail(payload: SendWorkflowEmailPayload)
 
   logger.info({ to, subject, provider: resolved.provider, external_id: outcome.externalMessageId }, "Workflow email sent");
 }
+
+// =============================================================================
+// SMS workflow handler — used by review-queue follow-up automation. Reads
+// the lead's encrypted phone, sends via the active Telnyx SMS integration,
+// and persists an `sms_messages` row keyed to the lead/firm so the
+// delivery webhook can update its status.
+// =============================================================================
+
+interface SendWorkflowSmsPayload {
+  lead_id: number;
+  body: string;
+  firm_id?: number | null;
+  source?: string; // e.g. "review_queue_follow_up"
+}
+
+export async function handleSendWorkflowSms(payload: SendWorkflowSmsPayload): Promise<void> {
+  const { sendSms } = await import("./sms/telnyx");
+
+  const [lead] = await db
+    .select()
+    .from(leadsTable)
+    .where(eq(leadsTable.id, payload.lead_id));
+  if (!lead) {
+    logger.warn({ lead_id: payload.lead_id }, "send_workflow_sms: lead not found");
+    return;
+  }
+  const decrypted = decryptLeadFields(lead, String(lead.id));
+  const phone = typeof decrypted.phone === "string" ? decrypted.phone.trim() : "";
+  if (!phone) {
+    logger.warn({ lead_id: payload.lead_id }, "send_workflow_sms: lead has no phone — skipping");
+    return;
+  }
+
+  const firmId = payload.firm_id ?? lead.firm_id ?? null;
+  const result = await sendSms({
+    to: phone,
+    body: payload.body,
+    firmId,
+    leadId: payload.lead_id,
+  });
+
+  if (!result.ok) {
+    // Persistent provider error → throw so worker retries up to job_queue.attempts.
+    throw new Error(`telnyx send failed: ${result.error ?? "unknown"}`);
+  }
+  logger.info(
+    { lead_id: payload.lead_id, sms_message_id: result.smsMessageId, source: payload.source ?? null },
+    "Workflow SMS sent",
+  );
+}

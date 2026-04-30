@@ -39,12 +39,19 @@ router.post("/upload", requirePermission(Permission.OCR_UPLOAD), auditAction("oc
     file_name
   );
 
+  // Task #16: parse the source_file convention so we can populate the
+  // canonical FK lead_id at insert time. Legacy rows backfill via
+  // scripts/backfill-fax-results-lead-id.ts; new rows use this path.
+  const { parseFaxSourceFile } = await import("../lib/fax-results-matcher.js");
+  const parsedSource = parseFaxSourceFile(file_name);
+
   const [result] = await db
     .insert(faxResultsTable)
     .values({
       source_file: file_name,
       vault_path: path,
       status: "pending",
+      lead_id: parsedSource?.lead_id ?? null,
     })
     .returning();
 

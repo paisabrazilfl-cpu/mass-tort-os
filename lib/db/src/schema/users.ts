@@ -5,6 +5,10 @@ export const usersTable = pgTable("mtos_users", {
   email: varchar("email", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 255 }).notNull(),
   role: varchar("role", { length: 20 }).notNull().default("viewer"),
+  // Single-firm shell for MVI. Every user belongs to exactly one firm.
+  // Nullable at the column level so the migration can backfill safely;
+  // application code treats missing firm_id as a fatal config error.
+  firm_id: integer("firm_id"),
   password_hash: text("password_hash").notNull(),
   token_version: integer("token_version").notNull().default(0),
   totp_secret: text("totp_secret"),

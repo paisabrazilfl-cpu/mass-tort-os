@@ -13,14 +13,27 @@
  * Errors are logged + audited.
  */
 import { Router } from "express";
-import { db, documentEnvelopesTable, integrationsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import {
+  db,
+  documentEnvelopesTable,
+  integrationsTable,
+  firmsTable,
+  callLogsTable,
+  smsMessagesTable,
+  leadDispositionsTable,
+} from "@workspace/db";
+import { eq, sql } from "drizzle-orm";
 import crypto from "crypto";
 import { logger } from "../lib/logger";
 import { auditLog } from "../lib/audit";
 import { onEnvelopeSigned } from "../lib/workflow-engine";
 import { getIntegrationCredentialsById } from "./integrations";
 import { badRequest, notFound } from "../lib/http-errors";
+import { verifyWebhook as verifyStripeWebhook } from "../lib/payments/stripe";
+import { verifyVapiSignature } from "../lib/voice/vapi";
+import { verifyTelnyxSignature } from "../lib/sms/telnyx";
+import { invalidateStripeConfiguredCache } from "../lib/subscription-gate";
+import type Stripe from "stripe";
 
 const router: ReturnType<typeof Router> = Router();
 
@@ -276,6 +289,391 @@ router.post("/docusign", async (req, res) => {
     res.status(200).json({ ok: true, note: "handler_error_logged" });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────
+// Stripe webhook
+//   Auth: Stripe-Signature header verified via constructEvent against
+//   the webhook signing secret (stored on integrations vault as
+//   `client_secret` of the stripe row). Updates firms row state.
+// ─────────────────────────────────────────────────────────────────
+
+router.post("/stripe", async (req, res) => {
+  const sig = req.header("stripe-signature");
+  const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+  if (!sig || !rawBody) {
+    logger.warn("stripe webhook: missing signature or raw body");
+    res.status(200).json({ ok: true, note: "missing_signature" });
+    return;
+  }
+
+  let event: Stripe.Event;
+  try {
+    event = await verifyStripeWebhook(rawBody, sig);
+  } catch (err) {
+    logger.warn({ err }, "stripe webhook signature verify failed");
+    res.status(200).json({ ok: true, note: "invalid_signature" });
+    return;
+  }
+
+  try {
+    await applyStripeEvent(event);
+  } catch (err) {
+    logger.error({ err, type: event.type }, "stripe event apply failed");
+  }
+  // Stripe creds may have changed (e.g. new integration row activated)
+  // — bust the gate's "is configured" cache so the next request re-checks.
+  invalidateStripeConfiguredCache();
+  res.status(200).json({ ok: true, received: event.type });
+});
+
+async function applyStripeEvent(event: Stripe.Event): Promise<void> {
+  switch (event.type) {
+    case "checkout.session.completed": {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const firmId = Number(
+        session.client_reference_id ?? (session.metadata?.firm_id as string | undefined),
+      );
+      if (!Number.isFinite(firmId) || firmId <= 0) {
+        logger.warn({ session_id: session.id }, "stripe checkout.session.completed without firm_id");
+        return;
+      }
+      const customerId =
+        typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+      const subscriptionId =
+        typeof session.subscription === "string"
+          ? session.subscription
+          : session.subscription?.id ?? null;
+      await db
+        .update(firmsTable)
+        .set({
+          stripe_customer_id: customerId,
+          stripe_subscription_id: subscriptionId,
+          subscription_status: "active",
+          updated_at: new Date(),
+        })
+        .where(eq(firmsTable.id, firmId));
+      return;
+    }
+    case "customer.subscription.created":
+    case "customer.subscription.updated":
+    case "customer.subscription.deleted": {
+      const sub = event.data.object as Stripe.Subscription;
+      const firmId = Number(sub.metadata?.firm_id);
+      const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? null;
+
+      // Stripe API reshape: `current_period_end` lives on the subscription
+      // item in newer API versions but on the subscription itself in older
+      // ones. Read the typed property when present, otherwise fall back to
+      // the first item's price period.
+      const subAny = sub as unknown as Record<string, unknown>;
+      const cpeRaw = (subAny.current_period_end as number | undefined) ??
+        (sub.items?.data?.[0] as unknown as { current_period_end?: number } | undefined)?.current_period_end ??
+        null;
+      const periodEnd = cpeRaw ? new Date(cpeRaw * 1000) : null;
+      const planPriceId = sub.items?.data?.[0]?.price?.id ?? null;
+
+      const updates = {
+        stripe_subscription_id: sub.id,
+        subscription_status: event.type === "customer.subscription.deleted" ? "canceled" : sub.status,
+        current_period_end: periodEnd,
+        plan_price_id: planPriceId,
+        updated_at: new Date(),
+      };
+      if (Number.isFinite(firmId) && firmId > 0) {
+        await db.update(firmsTable).set(updates).where(eq(firmsTable.id, firmId));
+      } else if (customerId) {
+        await db
+          .update(firmsTable)
+          .set(updates)
+          .where(eq(firmsTable.stripe_customer_id, customerId));
+      } else {
+        logger.warn({ event_type: event.type, sub_id: sub.id }, "stripe subscription event without firm anchor");
+      }
+      return;
+    }
+    case "invoice.payment_succeeded":
+    case "invoice.payment_failed": {
+      const inv = event.data.object as Stripe.Invoice;
+      const customerId = typeof inv.customer === "string" ? inv.customer : inv.customer?.id ?? null;
+      if (!customerId) return;
+      const status = event.type === "invoice.payment_succeeded" ? "active" : "past_due";
+      await db
+        .update(firmsTable)
+        .set({ subscription_status: status, updated_at: new Date() })
+        .where(eq(firmsTable.stripe_customer_id, customerId));
+      return;
+    }
+    default:
+      logger.info({ type: event.type }, "stripe webhook: unhandled event type");
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Vapi voice webhook
+//   Auth: HMAC-SHA256 of raw body OR static bearer (verifyVapiSignature).
+//   Events: call-started, transcript, call-ended, intake-result, escalate-human.
+// ─────────────────────────────────────────────────────────────────
+
+router.post("/vapi", async (req, res) => {
+  const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+  if (!rawBody) {
+    res.status(200).json({ ok: true, note: "no_raw_body" });
+    return;
+  }
+
+  const sig = await verifyVapiSignature(rawBody, req.headers as Record<string, string | string[] | undefined>);
+  if (!sig.ok) {
+    logger.warn({ reason: sig.reason }, "vapi webhook signature failed");
+    res.status(200).json({ ok: true, note: sig.reason ?? "unverified" });
+    return;
+  }
+
+  try {
+    await applyVapiEvent(req.body);
+  } catch (err) {
+    logger.error({ err }, "vapi event apply failed");
+  }
+  res.status(200).json({ ok: true });
+});
+
+interface VapiEventPayload {
+  type?: string;
+  call?: {
+    id?: string;
+    status?: string;
+    customer?: { number?: string };
+    assistant?: { id?: string };
+    startedAt?: string;
+    endedAt?: string;
+    recordingUrl?: string;
+    metadata?: Record<string, unknown>;
+  };
+  message?: {
+    type?: string;
+    role?: string;
+    content?: string;
+    transcript?: string;
+    timestamp?: string;
+  };
+  artifact?: {
+    transcript?: unknown[];
+    recordingUrl?: string;
+  };
+  result?: Record<string, unknown>;
+}
+
+async function applyVapiEvent(body: unknown): Promise<void> {
+  const payload = (body ?? {}) as VapiEventPayload;
+  const evtType = String(payload.type ?? payload.message?.type ?? "");
+  const call = payload.call;
+  const vapiCallId = call?.id;
+  if (!vapiCallId) {
+    logger.warn({ evtType }, "vapi event missing call.id");
+    return;
+  }
+
+  // Resolve / upsert the call_logs row.
+  const existing = await db
+    .select()
+    .from(callLogsTable)
+    .where(eq(callLogsTable.vapi_call_id, vapiCallId))
+    .limit(1);
+  let row = existing[0];
+
+  const firmId = Number(call?.metadata?.firm_id);
+  const leadId = Number(call?.metadata?.lead_id);
+
+  if (!row) {
+    const [inserted] = await db
+      .insert(callLogsTable)
+      .values({
+        firm_id: Number.isFinite(firmId) && firmId > 0 ? firmId : null,
+        lead_id: Number.isFinite(leadId) && leadId > 0 ? leadId : null,
+        vapi_call_id: vapiCallId,
+        direction: "inbound",
+        from_number: call?.customer?.number ?? null,
+        status: "in_progress",
+        started_at: call?.startedAt ? new Date(call.startedAt) : new Date(),
+        events: [{ type: evtType, ts: new Date().toISOString(), payload }] as unknown[],
+      })
+      .returning();
+    row = inserted!;
+  } else {
+    await db
+      .update(callLogsTable)
+      .set({
+        events: sql`${callLogsTable.events} || ${JSON.stringify([
+          { type: evtType, ts: new Date().toISOString(), payload },
+        ])}::jsonb`,
+        updated_at: new Date(),
+      })
+      .where(eq(callLogsTable.id, row.id));
+  }
+
+  // Per-event-type side effects.
+  switch (evtType) {
+    case "call-start":
+    case "call-started": {
+      await db
+        .update(callLogsTable)
+        .set({ status: "in_progress", started_at: call?.startedAt ? new Date(call.startedAt) : new Date(), updated_at: new Date() })
+        .where(eq(callLogsTable.id, row.id));
+      return;
+    }
+    case "transcript": {
+      const turn = {
+        role: payload.message?.role ?? "unknown",
+        content: payload.message?.transcript ?? payload.message?.content ?? "",
+        ts: payload.message?.timestamp ?? new Date().toISOString(),
+      };
+      await db
+        .update(callLogsTable)
+        .set({
+          transcript: sql`${callLogsTable.transcript} || ${JSON.stringify([turn])}::jsonb`,
+          updated_at: new Date(),
+        })
+        .where(eq(callLogsTable.id, row.id));
+      return;
+    }
+    case "end-of-call-report":
+    case "call-ended": {
+      const startedAt = row.started_at ?? (call?.startedAt ? new Date(call.startedAt) : null);
+      const endedAt = call?.endedAt ? new Date(call.endedAt) : new Date();
+      const duration = startedAt ? Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)) : null;
+      await db
+        .update(callLogsTable)
+        .set({
+          status: "completed",
+          ended_at: endedAt,
+          duration_seconds: duration,
+          recording_url: payload.artifact?.recordingUrl ?? call?.recordingUrl ?? row.recording_url,
+          transcript: payload.artifact?.transcript
+            ? (payload.artifact.transcript as unknown[])
+            : row.transcript,
+          updated_at: new Date(),
+        })
+        .where(eq(callLogsTable.id, row.id));
+      return;
+    }
+    case "intake-result": {
+      await db
+        .update(callLogsTable)
+        .set({ intake_result: payload.result ?? null, updated_at: new Date() })
+        .where(eq(callLogsTable.id, row.id));
+      return;
+    }
+    case "escalate-human": {
+      if (row.lead_id) {
+        await db.insert(leadDispositionsTable).values({
+          firm_id: row.firm_id,
+          lead_id: row.lead_id,
+          disposition: "human_review",
+          reason: typeof payload.result?.reason === "string" ? payload.result.reason : "vapi_escalation",
+          source: "vapi",
+        });
+      }
+      return;
+    }
+    default:
+      // Already appended to events; nothing else to do.
+      return;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Telnyx SMS delivery webhook
+//   Auth: Ed25519 signature (verifyTelnyxSignature).
+//   Updates sms_messages.status based on Telnyx delivery events.
+// ─────────────────────────────────────────────────────────────────
+
+router.post("/telnyx/sms", async (req, res) => {
+  const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+  if (!rawBody) {
+    res.status(200).json({ ok: true, note: "no_raw_body" });
+    return;
+  }
+  const ok = await verifyTelnyxSignature(rawBody, req.headers as Record<string, string | string[] | undefined>);
+  if (!ok) {
+    logger.warn("telnyx sms webhook signature failed");
+    res.status(200).json({ ok: true, note: "unverified" });
+    return;
+  }
+
+  try {
+    await applyTelnyxSmsEvent(req.body);
+  } catch (err) {
+    logger.error({ err }, "telnyx sms event apply failed");
+  }
+  res.status(200).json({ ok: true });
+});
+
+interface TelnyxSmsWebhookPayload {
+  data?: {
+    event_type?: string;
+    payload?: {
+      id?: string;
+      to?: Array<{ phone_number?: string; status?: string }>;
+      errors?: Array<{ code?: string; detail?: string }>;
+    };
+  };
+}
+
+async function applyTelnyxSmsEvent(body: unknown): Promise<void> {
+  const p = (body ?? {}) as TelnyxSmsWebhookPayload;
+  const eventType = p.data?.event_type ?? "";
+  const messageId = p.data?.payload?.id;
+  if (!messageId) return;
+
+  let nextStatus: string | null = null;
+  let setDelivered = false;
+  let setFailed = false;
+  let errorDetail: string | null = null;
+
+  switch (eventType) {
+    case "message.sent":
+      nextStatus = "sent";
+      break;
+    case "message.finalized":
+      // Telnyx sends a final state in payload.to[].status (delivered / sending_failed / delivery_failed)
+      {
+        const finalStatus = p.data?.payload?.to?.[0]?.status ?? "";
+        if (finalStatus === "delivered") {
+          nextStatus = "delivered";
+          setDelivered = true;
+        } else if (finalStatus === "sending_failed" || finalStatus === "delivery_failed") {
+          nextStatus = "failed_delivery";
+          setFailed = true;
+          errorDetail = p.data?.payload?.errors?.[0]?.detail ?? finalStatus;
+        }
+      }
+      break;
+    case "message.failed":
+      nextStatus = "failed";
+      setFailed = true;
+      errorDetail = p.data?.payload?.errors?.[0]?.detail ?? "telnyx_failed";
+      break;
+    default:
+      logger.info({ eventType }, "telnyx sms webhook: unhandled event type");
+      return;
+  }
+
+  if (!nextStatus) return;
+
+  const updates: Record<string, unknown> = {
+    status: nextStatus,
+    updated_at: new Date(),
+  };
+  if (setDelivered) updates.delivered_at = new Date();
+  if (setFailed) {
+    updates.failed_at = new Date();
+    if (errorDetail) updates.error = errorDetail;
+  }
+
+  await db
+    .update(smsMessagesTable)
+    .set(updates)
+    .where(eq(smsMessagesTable.telnyx_message_id, messageId));
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Manual test/trigger endpoint — admin can simulate a "signed" event

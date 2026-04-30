@@ -15,7 +15,7 @@ import { preprocessFaxBuffer, base64ToBuffer, detectMimeType } from "./lib/ocr-p
 import { extractOcrData, extractOcrDataFromText } from "./lib/ai-ocr";
 import { extractPdfText } from "./lib/pdf-extract";
 import { withErrorFallback, createLoopGuard, DEFAULT_LIMITS } from "./lib/error-fallback";
-import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail } from "./lib/workflow-handlers";
+import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail, handleSendWorkflowSms } from "./lib/workflow-handlers";
 import { ensureSystemUser } from "./lib/case-ownership-backfill";
 
 const POLL_INTERVAL_MS = 2000;
@@ -305,6 +305,8 @@ async function processJob(job: {
     await handleFaxMedRecordsRequest(payload as unknown as Parameters<typeof handleFaxMedRecordsRequest>[0]);
   } else if (job.job_type === "send_workflow_email") {
     await handleSendWorkflowEmail(payload as unknown as Parameters<typeof handleSendWorkflowEmail>[0]);
+  } else if (job.job_type === "send_workflow_sms") {
+    await handleSendWorkflowSms(payload as unknown as Parameters<typeof handleSendWorkflowSms>[0]);
   } else {
     logger.warn({ job_type: job.job_type }, "Unknown job type — skipping");
   }

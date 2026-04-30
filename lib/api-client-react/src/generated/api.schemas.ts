@@ -1167,6 +1167,149 @@ export interface BackgroundHubSnapshot {
   created_at: string;
 }
 
+export interface BillingState {
+  firm_id: number;
+  firm_name: string;
+  stripe_configured: boolean;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  subscription_status: string | null;
+  current_period_end: string | null;
+  plan_price_id: string | null;
+}
+
+export interface BillingStateEnvelope {
+  status: string;
+  data: BillingState;
+}
+
+export interface BillingCheckoutBody {
+  /** @minLength 1 */
+  price_id: string;
+  success_url: string;
+  cancel_url: string;
+}
+
+export interface BillingCheckoutSession {
+  url: string;
+  session_id: string;
+}
+
+export interface BillingCheckoutEnvelope {
+  status: string;
+  data: BillingCheckoutSession;
+}
+
+export interface BillingPortalBody {
+  return_url: string;
+}
+
+export interface BillingPortalSession {
+  url: string;
+}
+
+export interface BillingPortalEnvelope {
+  status: string;
+  data: BillingPortalSession;
+}
+
+export interface BillingInvoice {
+  id: string;
+  number?: string | null;
+  status?: string | null;
+  amount_due: number;
+  amount_paid: number;
+  currency: string;
+  created: number;
+  period_start: number;
+  period_end: number;
+  hosted_invoice_url?: string | null;
+  invoice_pdf?: string | null;
+}
+
+export interface BillingInvoicesEnvelope {
+  status: string;
+  data: BillingInvoice[];
+}
+
+export interface CallSummary {
+  id: number;
+  firm_id?: number | null;
+  lead_id?: number | null;
+  vapi_call_id?: string | null;
+  direction?: string | null;
+  from_number?: string | null;
+  to_number?: string | null;
+  status?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_seconds?: number | null;
+  recording_url?: string | null;
+  created_at: string;
+}
+
+export interface CallsListPayload {
+  rows: CallSummary[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface CallsListEnvelope {
+  status: string;
+  data: CallsListPayload;
+}
+
+export interface CallDetail {
+  id: number;
+  firm_id?: number | null;
+  lead_id?: number | null;
+  lead_first_name?: string | null;
+  lead_last_name?: string | null;
+  vapi_call_id?: string | null;
+  direction?: string | null;
+  from_number?: string | null;
+  to_number?: string | null;
+  status?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_seconds?: number | null;
+  recording_url?: string | null;
+  /** Vapi transcript payload (provider-defined shape) */
+  transcript?: unknown | null;
+  /** Decision-engine result payload */
+  intake_result?: unknown | null;
+  /** Provider event log */
+  events?: unknown | null;
+  error?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+}
+
+export interface CallDetailEnvelope {
+  status: string;
+  data: CallDetail;
+}
+
+export interface SendLeadSmsBody {
+  /**
+   * @minLength 1
+   * @maxLength 1600
+   */
+  body: string;
+}
+
+export interface SendLeadSmsResult {
+  sms_message_id: number;
+  telnyx_message_id?: string | null;
+  status: string;
+}
+
+export interface SendLeadSmsEnvelope {
+  status: string;
+  data: SendLeadSmsResult;
+}
+
 export type ListLeadsParams = {
   status?: ListLeadsStatus;
   tort_type?: string;
@@ -1311,3 +1454,36 @@ export type GetAuditTrailParams = {
   entity_type?: string;
   action?: string;
 };
+
+export type ListCallsParams = {
+  /**
+   * @minimum 1
+   */
+  page?: number;
+  /**
+   * @minimum 1
+   * @maximum 100
+   */
+  page_size?: number;
+  status?: ListCallsStatus;
+  /**
+   * @minimum 1
+   */
+  lead_id?: number;
+  /**
+   * @minLength 1
+   * @maxLength 60
+   */
+  search?: string;
+};
+
+export type ListCallsStatus =
+  (typeof ListCallsStatus)[keyof typeof ListCallsStatus];
+
+export const ListCallsStatus = {
+  queued: "queued",
+  in_progress: "in_progress",
+  completed: "completed",
+  failed: "failed",
+  no_answer: "no_answer",
+} as const;

@@ -20,7 +20,8 @@ router.post("/generate", requirePermission(Permission.DRAFTING_GENERATE), auditA
   if (lead_id) {
     const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, parseInt(lead_id)));
     if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
-    leadData = decryptLeadFields(lead);
+    // Task #8: bind AAD to lead.id (per-row scoping).
+    leadData = decryptLeadFields(lead, String(lead.id));
   }
 
   const draft = await generateDraft({
@@ -41,7 +42,8 @@ router.post("/generate-pdf", requirePermission(Permission.DRAFTING_GENERATE), au
   let leadData: Record<string, any> = {};
   if (lead_id) {
     const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, parseInt(lead_id)));
-    if (lead) leadData = decryptLeadFields(lead);
+    // Task #8: bind AAD to lead.id (per-row scoping).
+    if (lead) leadData = decryptLeadFields(lead, String(lead.id));
   }
 
   const draft = await generateDraft({

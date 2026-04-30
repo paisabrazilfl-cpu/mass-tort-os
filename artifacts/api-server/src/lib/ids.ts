@@ -4,12 +4,16 @@ import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
 import { dispatchCriticalAlert } from "./security-alerts";
 
+// Task #7 FP-tuning: the previous `or|and` + `[=<>]` pattern matched
+// natural-language paralegal notes ("Joe AND wife both diagnosed = severe")
+// and produced false-positive auto-blocks. Patterns below now require
+// canonical injection markers (quote+operator+quote, comment terminator,
+// or `union all select`) that cannot occur in normal English prose.
 const SQL_INJECTION_PATTERNS = [
   /(\b(union|select|insert|update|delete|drop|alter|create|exec|execute)\b.*\b(from|into|table|database|where)\b)/i,
-  /(\b(or|and)\b\s+[\d'"].*[=<>])/i,
+  /['"]\s*(or|and)\s+['"]?\d+['"]?\s*=\s*['"]?\d+/i,
   /(--\s|\/\*|\*\/|;.*\b(drop|delete|update|insert)\b)/i,
   /(\bwaitfor\b\s+\bdelay\b|\bsleep\s*\()/i,
-  /(\'.*\bor\b.*\'.*=.*\')/i,
   /(\bunion\b\s+\ball\b\s+\bselect\b)/i,
 ];
 
@@ -51,7 +55,22 @@ interface ThreatDetection {
 
 const ipRequestLog = new Map<string, { count: number; firstSeen: number; lastSeen: number }>();
 const IP_RATE_WINDOW = 60_000;
+// Task #7: anonymous traffic threshold is 100/min; authenticated CRM
+// operators routinely exceed that during bulk review (paginated leads list,
+// case docs, audit log scans), so credentialed traffic gets a 6× ceiling.
 const BRUTE_FORCE_THRESHOLD = 100;
+const BRUTE_FORCE_THRESHOLD_AUTH = 600;
+
+// Task #7: requests carrying credentials (Bearer JWT) are still attacker-
+// shaped IF they later fail authMiddleware, but they are at least claiming
+// to be internal. We use this signal to (a) raise the rate ceiling and
+// (b) skip body-payload deep-scans where free-text fields (notes, email
+// body, intake transcripts) trigger the bulk of false positives. URL +
+// query are still scanned regardless.
+function hasInternalCredentials(req: Request): boolean {
+  const auth = req.headers["authorization"];
+  return typeof auth === "string" && auth.toLowerCase().startsWith("bearer ");
+}
 
 function getClientIp(req: Request): string {
   return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() 
@@ -96,7 +115,7 @@ function deepScan(obj: any, path = ""): ThreatDetection | null {
   return null;
 }
 
-function checkBruteForce(ip: string): ThreatDetection | null {
+function checkBruteForce(ip: string, threshold: number): ThreatDetection | null {
   const now = Date.now();
   const entry = ipRequestLog.get(ip);
   if (entry) {
@@ -106,7 +125,7 @@ function checkBruteForce(ip: string): ThreatDetection | null {
     }
     entry.count++;
     entry.lastSeen = now;
-    if (entry.count > BRUTE_FORCE_THRESHOLD) {
+    if (entry.count > threshold) {
       return {
         type: "brute_force",
         severity: "high",
@@ -193,6 +212,7 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
 export function idsMiddleware() {
   return async (req: Request, res: Response, next: NextFunction) => {
     const ip = getClientIp(req);
+    const internal = hasInternalCredentials(req);
 
     const blocked = await isBlocked(ip);
     if (blocked) {
@@ -203,7 +223,10 @@ export function idsMiddleware() {
       return;
     }
 
-    const bruteForce = checkBruteForce(ip);
+    const bruteForce = checkBruteForce(
+      ip,
+      internal ? BRUTE_FORCE_THRESHOLD_AUTH : BRUTE_FORCE_THRESHOLD,
+    );
     if (bruteForce) {
       await recordAlert(req, bruteForce);
     }
@@ -228,7 +251,13 @@ export function idsMiddleware() {
       }
     }
 
-    if (req.body && typeof req.body === "object") {
+    // Task #7: skip body deep-scan for credentialed CRM traffic. Free-text
+    // fields (lead notes, email body, intake transcripts, deposition memos)
+    // routinely contain `select * from claimants` style legal prose that
+    // the regex set treats as SQL injection. URL + query are still scanned,
+    // and unauthenticated public surfaces (forms, webhooks) keep full
+    // scrutiny.
+    if (!internal && req.body && typeof req.body === "object") {
       const bodyThreat = deepScan(req.body);
       if (bodyThreat) {
         await recordAlert(req, bodyThreat);

@@ -37,6 +37,7 @@ import Timeline from "@/pages/timeline";
 import Drafting from "@/pages/drafting";
 import Predictive from "@/pages/predictive";
 import IntegrationsPage from "@/pages/integrations";
+import BillingPage from "@/pages/billing";
 import News from "@/pages/news";
 import FinancialNews from "@/pages/financial-news";
 import LeadImport from "@/pages/lead-import";
@@ -48,6 +49,7 @@ import TemplateAssignmentsPage from "@/pages/template-assignments";
 import WorkflowSettingsPage from "@/pages/workflow-settings";
 import WebFormsPage from "@/pages/web-forms";
 import JobQueue from "@/pages/job-queue";
+import CallsPage from "@/pages/calls";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
 // 401s are handled separately by api-fetch's auth-failure callback.
@@ -107,6 +109,8 @@ function AuthedRoutes() {
           <Route path="/drafting" component={Drafting} />
           <Route path="/predictive" component={Predictive} />
           <Route path="/integrations" component={IntegrationsPage} />
+          <Route path="/billing" component={BillingPage} />
+          <Route path="/calls" component={CallsPage} />
           <Route path="/news" component={News} />
           <Route path="/financial-news" component={FinancialNews} />
           <Route path="/lead-import" component={LeadImport} />

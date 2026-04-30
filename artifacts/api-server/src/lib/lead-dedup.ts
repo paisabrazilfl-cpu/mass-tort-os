@@ -1,6 +1,7 @@
 import { and, eq, isNotNull, or, sql } from "drizzle-orm";
 import { db, leadsTable } from "@workspace/db";
 import { decrypt } from "./encryption";
+import { leadLookupHash } from "./lead-lookup-hash";
 import { logger } from "./logger";
 
 /**
@@ -89,6 +90,33 @@ export async function findExistingLeadForIntake(
 ): Promise<DedupMatch | null> {
   const tortType = (input.tortType ?? "").trim();
   if (!tortType) return null;
+
+  // ---- Path 0: canonical lookup_hash short-circuit (Task #15) -------------
+  // When the submitter provides BOTH email and phone, we can skip the entire
+  // O(N)-decrypt phone scan loop with a single indexed equality query against
+  // `leads.lookup_hash`. The hash is computed at insert-time over the same
+  // normalized triple (tort|email|phone10), so a hit here is a definite
+  // match. A miss does NOT mean "no duplicate" — it only means there is no
+  // EXACT triple match, so we still fall through to the email + phone paths
+  // below for legacy rows and partial-input submissions.
+  const fastHash = leadLookupHash(tortType, input.email ?? null, input.phone ?? null);
+  if (fastHash) {
+    try {
+      const fastRows = await db
+        .select({ id: leadsTable.id })
+        .from(leadsTable)
+        .where(eq(leadsTable.lookup_hash, fastHash))
+        .limit(1);
+      if (fastRows.length > 0 && fastRows[0]) {
+        return { leadId: fastRows[0].id, matchedBy: "email" };
+      }
+    } catch (err) {
+      logger.warn(
+        { err, tortType },
+        "lead-dedup: lookup_hash fast-path query failed; falling through to email+phone scan",
+      );
+    }
+  }
 
   // ---- Path 1: email match (EXACT, case-insensitive) ---------------------
   const email = (input.email ?? "").trim();

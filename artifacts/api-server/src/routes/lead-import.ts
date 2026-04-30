@@ -3,7 +3,8 @@ import { db, leadsTable, importBatchesTable, importRowsTable } from "@workspace/
 import { eq, desc, or, and, ilike, sql } from "drizzle-orm";
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
-import { encryptLeadFields, decrypt, hashForLookup } from "../lib/encryption";
+import { encryptLeadFields, decrypt, hashForLookup, rebindLeadEncryptionAad } from "../lib/encryption";
+import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { runFullConflictCheck } from "../lib/conflict-engine";
 import { logger } from "../lib/logger";
 import { serverError } from "../lib/http-errors";
@@ -385,10 +386,21 @@ async function processImportBatch(
 
       const encrypted = encryptLeadFields(insertData);
 
+      // Task #15: stamp canonical (tort|email|phone10) hash so subsequent
+      // intake dedup queries can short-circuit. Uses PLAINTEXT inputs from
+      // insertData (pre-encryption) so phone10 normalizes correctly.
+      const csvLookupHash = leadLookupHash(
+        insertData.tort_type ?? null,
+        insertData.email ?? null,
+        insertData.phone_primary ?? insertData.phone ?? null,
+      );
+
       const [newLead] = await db
         .insert(leadsTable)
-        .values(encrypted as any)
-        .returning({ id: leadsTable.id });
+        .values({ ...(encrypted as any), lookup_hash: csvLookupHash })
+        .returning();
+      // Task #8: rebind ciphertext AAD to the freshly-assigned lead.id.
+      await rebindLeadEncryptionAad(db, leadsTable, newLead as Record<string, unknown>, eq);
 
       const rowStatus = conflictResult.has_conflict ? "conflict" : "success";
       if (conflictResult.has_conflict) conflictCount++;

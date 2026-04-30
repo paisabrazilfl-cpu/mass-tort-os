@@ -13,7 +13,9 @@ router.get("/lead/:id", requirePermission(Permission.TIMELINE_VIEW), async (req,
   const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
 
-  const decrypted = decryptLeadFields(lead);
+  // Task #8: bind AAD to lead.id so a swapped ciphertext from another row
+  // fails AES-GCM auth verification instead of silently decrypting.
+  const decrypted = decryptLeadFields(lead, String(lead.id));
   const events: { date: string; event: string; category: string; source: string; details?: string }[] = [];
 
   if (decrypted.date_of_birth) {

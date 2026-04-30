@@ -251,3 +251,46 @@ export async function onEnvelopeSigned(envelopeId: number): Promise<{ enqueued_f
     };
   }
 }
+
+// =============================================================================
+// SMS follow-up — used by the review queue to nudge a lead via the active
+// Telnyx SMS integration. Returns the queued job id (or null + reason).
+//
+// This wraps `enqueueJob("send_workflow_sms", …)` so the review-queue UI
+// (and later, automated review-status transitions) can fire one call to
+// schedule a deterministic, retryable SMS without owning the Telnyx
+// adapter or job-queue contract themselves.
+// =============================================================================
+export async function enqueueLeadFollowUpSms(
+  leadId: number,
+  body: string,
+  opts: { source?: string; firmId?: number | null } = {},
+): Promise<{ job_id: number | null; reason?: string }> {
+  if (!Number.isFinite(leadId) || leadId <= 0) {
+    return { job_id: null, reason: "invalid_lead_id" };
+  }
+  const trimmed = body.trim();
+  if (!trimmed) return { job_id: null, reason: "empty_body" };
+  if (trimmed.length > 1600) return { job_id: null, reason: "body_too_long" };
+
+  try {
+    const jobId = await enqueueJob("send_workflow_sms", {
+      lead_id: leadId,
+      body: trimmed,
+      firm_id: opts.firmId ?? null,
+      source: opts.source ?? "workflow_engine",
+    });
+    await auditLog("lead", String(leadId), "sms_followup_enqueued", {
+      job_id: jobId,
+      source: opts.source ?? "workflow_engine",
+      body_len: trimmed.length,
+    });
+    return { job_id: jobId };
+  } catch (err) {
+    logger.error({ err, lead_id: leadId }, "Failed to enqueue follow-up SMS");
+    return {
+      job_id: null,
+      reason: `enqueue_error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}

@@ -203,6 +203,51 @@ export function decryptLeadArray(leads: Record<string, any>[]): Record<string, a
   return leads.map(l => decryptLeadFields(l, String(l.id)));
 }
 
+/**
+ * Task #8: post-insert rebind of AAD to the freshly-assigned lead.id.
+ *
+ * Lead inserts cannot pass `entityId` to `encryptLeadFields` because the
+ * serial id is only known after `INSERT … RETURNING id`. Without rebind,
+ * the AAD-tagged ciphertexts are bound to (fieldName) only, and a future
+ * UPDATE on a different row can paste those bytes in without AES-GCM
+ * detecting the swap.
+ *
+ * This helper takes the just-inserted row, re-encrypts every populated
+ * encrypted field with `(fieldName, String(lead.id))` AAD, and writes
+ * the rebound ciphertexts back. The decrypt-side AAD-fallback chain in
+ * `decrypt()` makes this a no-op for already-bound rows and a one-shot
+ * upgrade for legacy rows; either way, any subsequent decrypt with the
+ * row's id verifies against the strict (field+entity) AAD first.
+ */
+export async function rebindLeadEncryptionAad(
+  db: { update: (...args: any[]) => any },
+  leadsTable: any,
+  lead: Record<string, any>,
+  eq: (col: any, val: any) => any,
+): Promise<void> {
+  if (!lead || lead.id === undefined || lead.id === null) return;
+  const id = String(lead.id);
+  const update: Record<string, any> = {};
+  for (const field of ENCRYPTED_FIELDS) {
+    const cur = lead[field];
+    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    try {
+      const plain = decrypt(cur, field, undefined);
+      if (plain === "[DECRYPTION_ERROR]") continue;
+      update[field] = encrypt(plain, field, id);
+    } catch {
+      // Skip individual field on rebind failure — the original ciphertext
+      // remains intact and decrypt-side fallback still recovers it.
+    }
+  }
+  if (Object.keys(update).length === 0) return;
+  try {
+    await db.update(leadsTable).set(update).where(eq(leadsTable.id, lead.id));
+  } catch (err) {
+    logger.warn({ err, leadId: lead.id }, "rebindLeadEncryptionAad: post-insert rebind UPDATE failed");
+  }
+}
+
 export function hashForLookup(value: string): string {
   return crypto.createHmac("sha256", getKey()).update(value.toLowerCase().trim()).digest("hex");
 }

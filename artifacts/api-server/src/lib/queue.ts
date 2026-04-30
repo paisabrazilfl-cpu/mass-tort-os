@@ -8,7 +8,8 @@ export type JobType =
   | "analyze_case"
   | "send_esign_packet"
   | "fax_med_records_request"
-  | "send_workflow_email";
+  | "send_workflow_email"
+  | "send_workflow_sms";
 
 export interface JobPayload {
   create_case: { case_id: string; data: Record<string, unknown>; created_by_user_id?: number | null };
@@ -33,6 +34,12 @@ export interface JobPayload {
     html: string;
     text?: string;
     explicit_integration_id?: number | null;
+  };
+  send_workflow_sms: {
+    lead_id: number;
+    body: string;
+    firm_id?: number | null;
+    source?: string;
   };
 }
 

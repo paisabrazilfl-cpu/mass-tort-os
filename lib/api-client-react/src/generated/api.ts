@@ -25,6 +25,14 @@ import type {
   BackgroundCheckResult,
   BackgroundHubResult,
   BackgroundHubSnapshot,
+  BillingCheckoutBody,
+  BillingCheckoutEnvelope,
+  BillingInvoicesEnvelope,
+  BillingPortalBody,
+  BillingPortalEnvelope,
+  BillingStateEnvelope,
+  CallDetailEnvelope,
+  CallsListEnvelope,
   Case,
   CaseDetail,
   CreateCaseBody,
@@ -55,6 +63,7 @@ import type {
   GetTortCategories200Item,
   HealthStatus,
   Lead,
+  ListCallsParams,
   ListDocumentsParams,
   ListLeadBackgroundCheckHubSnapshotsParams,
   ListLeadsParams,
@@ -81,6 +90,8 @@ import type {
   RunBackgroundCheckBody,
   RunFraudCheckBody,
   SearchNpiParams,
+  SendLeadSmsBody,
+  SendLeadSmsEnvelope,
   TortBreakdownRow,
   UpdateDocumentBody,
   UpdateLeadBody,
@@ -5721,3 +5732,583 @@ export function useGetOcrQueueStats<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Stripe subscription state for the requester's firm
+ */
+export const getGetBillingStateUrl = () => {
+  return `/api/billing/state`;
+};
+
+export const getBillingState = async (
+  options?: RequestInit,
+): Promise<BillingStateEnvelope> => {
+  return customFetch<BillingStateEnvelope>(getGetBillingStateUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetBillingStateQueryKey = () => {
+  return [`/api/billing/state`] as const;
+};
+
+export const getGetBillingStateQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBillingState>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBillingState>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetBillingStateQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getBillingState>>> = ({
+    signal,
+  }) => getBillingState({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getBillingState>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetBillingStateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBillingState>>
+>;
+export type GetBillingStateQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Stripe subscription state for the requester's firm
+ */
+
+export function useGetBillingState<
+  TData = Awaited<ReturnType<typeof getBillingState>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBillingState>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetBillingStateQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a Stripe Checkout session for the requester's firm
+ */
+export const getCreateBillingCheckoutUrl = () => {
+  return `/api/billing/checkout`;
+};
+
+export const createBillingCheckout = async (
+  billingCheckoutBody: BillingCheckoutBody,
+  options?: RequestInit,
+): Promise<BillingCheckoutEnvelope> => {
+  return customFetch<BillingCheckoutEnvelope>(getCreateBillingCheckoutUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(billingCheckoutBody),
+  });
+};
+
+export const getCreateBillingCheckoutMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createBillingCheckout>>,
+    TError,
+    { data: BodyType<BillingCheckoutBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createBillingCheckout>>,
+  TError,
+  { data: BodyType<BillingCheckoutBody> },
+  TContext
+> => {
+  const mutationKey = ["createBillingCheckout"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createBillingCheckout>>,
+    { data: BodyType<BillingCheckoutBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createBillingCheckout(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateBillingCheckoutMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createBillingCheckout>>
+>;
+export type CreateBillingCheckoutMutationBody = BodyType<BillingCheckoutBody>;
+export type CreateBillingCheckoutMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a Stripe Checkout session for the requester's firm
+ */
+export const useCreateBillingCheckout = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createBillingCheckout>>,
+    TError,
+    { data: BodyType<BillingCheckoutBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createBillingCheckout>>,
+  TError,
+  { data: BodyType<BillingCheckoutBody> },
+  TContext
+> => {
+  return useMutation(getCreateBillingCheckoutMutationOptions(options));
+};
+
+/**
+ * @summary Create a Stripe Customer Portal session
+ */
+export const getCreateBillingPortalUrl = () => {
+  return `/api/billing/portal`;
+};
+
+export const createBillingPortal = async (
+  billingPortalBody: BillingPortalBody,
+  options?: RequestInit,
+): Promise<BillingPortalEnvelope> => {
+  return customFetch<BillingPortalEnvelope>(getCreateBillingPortalUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(billingPortalBody),
+  });
+};
+
+export const getCreateBillingPortalMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createBillingPortal>>,
+    TError,
+    { data: BodyType<BillingPortalBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createBillingPortal>>,
+  TError,
+  { data: BodyType<BillingPortalBody> },
+  TContext
+> => {
+  const mutationKey = ["createBillingPortal"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createBillingPortal>>,
+    { data: BodyType<BillingPortalBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createBillingPortal(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateBillingPortalMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createBillingPortal>>
+>;
+export type CreateBillingPortalMutationBody = BodyType<BillingPortalBody>;
+export type CreateBillingPortalMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a Stripe Customer Portal session
+ */
+export const useCreateBillingPortal = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createBillingPortal>>,
+    TError,
+    { data: BodyType<BillingPortalBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createBillingPortal>>,
+  TError,
+  { data: BodyType<BillingPortalBody> },
+  TContext
+> => {
+  return useMutation(getCreateBillingPortalMutationOptions(options));
+};
+
+/**
+ * @summary Recent Stripe invoices for the requester's firm
+ */
+export const getListBillingInvoicesUrl = () => {
+  return `/api/billing/invoices`;
+};
+
+export const listBillingInvoices = async (
+  options?: RequestInit,
+): Promise<BillingInvoicesEnvelope> => {
+  return customFetch<BillingInvoicesEnvelope>(getListBillingInvoicesUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListBillingInvoicesQueryKey = () => {
+  return [`/api/billing/invoices`] as const;
+};
+
+export const getListBillingInvoicesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listBillingInvoices>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listBillingInvoices>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListBillingInvoicesQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listBillingInvoices>>
+  > = ({ signal }) => listBillingInvoices({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listBillingInvoices>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListBillingInvoicesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listBillingInvoices>>
+>;
+export type ListBillingInvoicesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Recent Stripe invoices for the requester's firm
+ */
+
+export function useListBillingInvoices<
+  TData = Awaited<ReturnType<typeof listBillingInvoices>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listBillingInvoices>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListBillingInvoicesQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Paginated list of call_logs for the operator
+ */
+export const getListCallsUrl = (params?: ListCallsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/calls?${stringifiedParams}`
+    : `/api/calls`;
+};
+
+export const listCalls = async (
+  params?: ListCallsParams,
+  options?: RequestInit,
+): Promise<CallsListEnvelope> => {
+  return customFetch<CallsListEnvelope>(getListCallsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListCallsQueryKey = (params?: ListCallsParams) => {
+  return [`/api/calls`, ...(params ? [params] : [])] as const;
+};
+
+export const getListCallsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listCalls>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListCallsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listCalls>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListCallsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listCalls>>> = ({
+    signal,
+  }) => listCalls(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listCalls>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListCallsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listCalls>>
+>;
+export type ListCallsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Paginated list of call_logs for the operator
+ */
+
+export function useListCalls<
+  TData = Awaited<ReturnType<typeof listCalls>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListCallsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listCalls>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListCallsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Single call detail with transcript + intake_result
+ */
+export const getGetCallUrl = (id: number) => {
+  return `/api/calls/${id}`;
+};
+
+export const getCall = async (
+  id: number,
+  options?: RequestInit,
+): Promise<CallDetailEnvelope> => {
+  return customFetch<CallDetailEnvelope>(getGetCallUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetCallQueryKey = (id: number) => {
+  return [`/api/calls/${id}`] as const;
+};
+
+export const getGetCallQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCall>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<Awaited<ReturnType<typeof getCall>>, TError, TData>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetCallQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getCall>>> = ({
+    signal,
+  }) => getCall(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getCall>>, TError, TData> & {
+    queryKey: QueryKey;
+  };
+};
+
+export type GetCallQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCall>>
+>;
+export type GetCallQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Single call detail with transcript + intake_result
+ */
+
+export function useGetCall<
+  TData = Awaited<ReturnType<typeof getCall>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<Awaited<ReturnType<typeof getCall>>, TError, TData>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetCallQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Send an outbound SMS to the lead's primary phone via Telnyx
+ */
+export const getSendLeadSmsUrl = (id: number) => {
+  return `/api/leads/${id}/send-sms`;
+};
+
+export const sendLeadSms = async (
+  id: number,
+  sendLeadSmsBody: SendLeadSmsBody,
+  options?: RequestInit,
+): Promise<SendLeadSmsEnvelope> => {
+  return customFetch<SendLeadSmsEnvelope>(getSendLeadSmsUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(sendLeadSmsBody),
+  });
+};
+
+export const getSendLeadSmsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendLeadSms>>,
+    TError,
+    { id: number; data: BodyType<SendLeadSmsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sendLeadSms>>,
+  TError,
+  { id: number; data: BodyType<SendLeadSmsBody> },
+  TContext
+> => {
+  const mutationKey = ["sendLeadSms"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sendLeadSms>>,
+    { id: number; data: BodyType<SendLeadSmsBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return sendLeadSms(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SendLeadSmsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sendLeadSms>>
+>;
+export type SendLeadSmsMutationBody = BodyType<SendLeadSmsBody>;
+export type SendLeadSmsMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Send an outbound SMS to the lead's primary phone via Telnyx
+ */
+export const useSendLeadSms = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendLeadSms>>,
+    TError,
+    { id: number; data: BodyType<SendLeadSmsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sendLeadSms>>,
+  TError,
+  { id: number; data: BodyType<SendLeadSmsBody> },
+  TContext
+> => {
+  return useMutation(getSendLeadSmsMutationOptions(options));
+};

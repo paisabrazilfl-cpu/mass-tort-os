@@ -9,4 +9,9 @@ pnpm install --frozen-lockfile
 # diffs.
 pnpm --filter @workspace/api-server exec tsx src/scripts/backfill-case-ownership.ts
 
+# Task #25: same idempotent pattern for leads.created_by_user_id. Runs
+# AFTER cases backfill so they share the SYSTEM_USER row (single ensure
+# call wins, second one is a no-op via ON CONFLICT DO NOTHING).
+pnpm --filter @workspace/api-server exec tsx src/scripts/backfill-lead-ownership.ts
+
 pnpm --filter db push

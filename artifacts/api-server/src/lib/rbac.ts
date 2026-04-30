@@ -170,6 +170,15 @@ export const Permission = {
 
   // User admin
   USERS_LIST: "users:list",
+
+  // Billing (Stripe)
+  BILLING_MANAGE: "billing:manage",
+
+  // Voice (Vapi call logs)
+  CALLS_VIEW: "calls:view",
+
+  // SMS (Telnyx outbound)
+  SMS_SEND: "sms:send",
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];
@@ -238,6 +247,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     Permission.DASHBOARD_VIEW,
     Permission.ANALYTICS_VIEW,
     Permission.ANALYTICS_PREDICTIVE_LEAD_VIEW,
+    // Billing — attorney owns billing for their firm in the MVI shell.
+    Permission.BILLING_MANAGE,
+    // Voice & SMS — attorney can review calls and send SMS to leads.
+    Permission.CALLS_VIEW,
+    Permission.SMS_SEND,
   ]),
   paralegal: new Set<Permission>([
     // Leads / lead-import (no delete/export, no execute)
@@ -285,6 +299,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     Permission.REVIEW_QUEUE_VIEW,
     Permission.DASHBOARD_VIEW,
     Permission.ANALYTICS_PREDICTIVE_LEAD_VIEW,
+    // Voice & SMS — paralegals can listen to calls and send SMS follow-ups.
+    Permission.CALLS_VIEW,
+    Permission.SMS_SEND,
   ]),
   viewer: new Set<Permission>([
     Permission.LEAD_VIEW_OWN,
@@ -429,7 +446,12 @@ export function isTokenVersionRevoked(decodedTv: number | undefined, currentDbTv
 async function _authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
-    if (IS_DEV) {
+    // Task #20: dev bypass is now OPT-IN via MTOS_DEV_LOGIN=1 even under
+    // NODE_ENV=development. Without this flag, the dev login UI exercises
+    // the real /auth/login + /auth/refresh JWT path, so MFA, lockout, and
+    // token-version revocation can be smoke-tested in the same loop the
+    // user runs locally. NODE_ENV=production still fails closed regardless.
+    if (IS_DEV && process.env.MTOS_DEV_LOGIN === "1") {
       logger.warn({ path: req.path }, "Dev-mode auth bypass active — DO NOT use in production");
       req.user = { id: 0, email: "dev@mtos.local", name: "Dev Admin", role: "admin" };
       next();

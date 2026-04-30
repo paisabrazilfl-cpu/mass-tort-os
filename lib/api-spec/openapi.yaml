@@ -36,6 +36,12 @@ tags:
     description: Form engine — embeddable intake forms with compliance validation
   - name: vendors
     description: Vendor management
+  - name: billing
+    description: Stripe subscription management — checkout, portal, invoices, state
+  - name: calls
+    description: Vapi voice intake call logs (operator read-only)
+  - name: sms
+    description: Outbound SMS via Telnyx (operator-triggered)
 paths:
   /healthz:
     get:
@@ -1554,6 +1560,149 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/QueueStats"
+
+  /billing/state:
+    get:
+      operationId: getBillingState
+      tags: [billing]
+      summary: Stripe subscription state for the requester's firm
+      responses:
+        "200":
+          description: Billing state envelope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingStateEnvelope"
+
+  /billing/checkout:
+    post:
+      operationId: createBillingCheckout
+      tags: [billing]
+      summary: Create a Stripe Checkout session for the requester's firm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BillingCheckoutBody"
+      responses:
+        "200":
+          description: Checkout session URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingCheckoutEnvelope"
+
+  /billing/portal:
+    post:
+      operationId: createBillingPortal
+      tags: [billing]
+      summary: Create a Stripe Customer Portal session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BillingPortalBody"
+      responses:
+        "200":
+          description: Portal session URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingPortalEnvelope"
+
+  /billing/invoices:
+    get:
+      operationId: listBillingInvoices
+      tags: [billing]
+      summary: Recent Stripe invoices for the requester's firm
+      responses:
+        "200":
+          description: Invoice list envelope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingInvoicesEnvelope"
+
+  /calls:
+    get:
+      operationId: listCalls
+      tags: [calls]
+      summary: Paginated list of call_logs for the operator
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: page_size
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [queued, in_progress, completed, failed, no_answer]
+        - in: query
+          name: lead_id
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: search
+          schema: { type: string, minLength: 1, maxLength: 60 }
+      responses:
+        "200":
+          description: Paginated call list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallsListEnvelope"
+
+  /calls/{id}:
+    get:
+      operationId: getCall
+      tags: [calls]
+      summary: Single call detail with transcript + intake_result
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Call detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallDetailEnvelope"
+        "404":
+          description: Call not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /leads/{id}/send-sms:
+    post:
+      operationId: sendLeadSms
+      tags: [sms]
+      summary: Send an outbound SMS to the lead's primary phone via Telnyx
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendLeadSmsBody"
+      responses:
+        "200":
+          description: SMS queued for delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendLeadSmsEnvelope"
 
 components:
   schemas:
@@ -3589,3 +3738,202 @@ components:
         created_at:
           type: string
       required: [id, lead_id, version, final_status, overall_score, result, created_at]
+
+    BillingState:
+      type: object
+      properties:
+        firm_id: { type: integer }
+        firm_name: { type: string }
+        stripe_configured: { type: boolean }
+        stripe_customer_id: { type: string, nullable: true }
+        stripe_subscription_id: { type: string, nullable: true }
+        subscription_status: { type: string, nullable: true }
+        current_period_end: { type: string, nullable: true }
+        plan_price_id: { type: string, nullable: true }
+      required:
+        - firm_id
+        - firm_name
+        - stripe_configured
+        - stripe_customer_id
+        - stripe_subscription_id
+        - subscription_status
+        - current_period_end
+        - plan_price_id
+
+    BillingStateEnvelope:
+      type: object
+      properties:
+        status: { type: string }
+        data: { $ref: "#/components/schemas/BillingState" }
+      required: [status, data]
+
+    BillingCheckoutBody:
+      type: object
+      properties:
+        price_id: { type: string, minLength: 1 }
+        success_url: { type: string, format: uri }
+        cancel_url: { type: string, format: uri }
+      required: [price_id, success_url, cancel_url]
+
+    BillingCheckoutSession:
+      type: object
+      properties:
+        url: { type: string }
+        session_id: { type: string }
+      required: [url, session_id]
+
+    BillingCheckoutEnvelope:
+      type: object
+      properties:
+        status: { type: string }
+        data: { $ref: "#/components/schemas/BillingCheckoutSession" }
+      required: [status, data]
+
+    BillingPortalBody:
+      type: object
+      properties:
+        return_url: { type: string, format: uri }
+      required: [return_url]
+
+    BillingPortalSession:
+      type: object
+      properties:
+        url: { type: string }
+      required: [url]
+
+    BillingPortalEnvelope:
+      type: object
+      properties:
+        status: { type: string }
+        data: { $ref: "#/components/schemas/BillingPortalSession" }
+      required: [status, data]
+
+    BillingInvoice:
+      type: object
+      properties:
+        id: { type: string }
+        number: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        amount_due: { type: integer }
+        amount_paid: { type: integer }
+        currency: { type: string }
+        created: { type: integer }
+        period_start: { type: integer }
+        period_end: { type: integer }
+        hosted_invoice_url: { type: string, nullable: true }
+        invoice_pdf: { type: string, nullable: true }
+      required:
+        - id
+        - amount_due
+        - amount_paid
+        - currency
+        - created
+        - period_start
+        - period_end
+
+    BillingInvoicesEnvelope:
+      type: object
+      properties:
+        status: { type: string }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/BillingInvoice" }
+      required: [status, data]
+
+    CallSummary:
+      type: object
+      properties:
+        id: { type: integer }
+        firm_id: { type: integer, nullable: true }
+        lead_id: { type: integer, nullable: true }
+        vapi_call_id: { type: string, nullable: true }
+        direction: { type: string, nullable: true }
+        from_number: { type: string, nullable: true }
+        to_number: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        started_at: { type: string, nullable: true }
+        ended_at: { type: string, nullable: true }
+        duration_seconds: { type: integer, nullable: true }
+        recording_url: { type: string, nullable: true }
+        created_at: { type: string }
+      required: [id, created_at]
+
+    CallsListPayload:
+      type: object
+      properties:
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/CallSummary" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+      required: [rows, page, page_size, total]
+
+    CallsListEnvelope:
+      type: object
+      properties:
+        status: { type: string }
+        data: { $ref: "#/components/schemas/CallsListPayload" }
+      required: [status, data]
+
+    CallDetail:
+      type: object
+      properties:
+        id: { type: integer }
+        firm_id: { type: integer, nullable: true }
+        lead_id: { type: integer, nullable: true }
+        lead_first_name: { type: string, nullable: true }
+        lead_last_name: { type: string, nullable: true }
+        vapi_call_id: { type: string, nullable: true }
+        direction: { type: string, nullable: true }
+        from_number: { type: string, nullable: true }
+        to_number: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        started_at: { type: string, nullable: true }
+        ended_at: { type: string, nullable: true }
+        duration_seconds: { type: integer, nullable: true }
+        recording_url: { type: string, nullable: true }
+        transcript:
+          description: Vapi transcript payload (provider-defined shape)
+          nullable: true
+        intake_result:
+          description: Decision-engine result payload
+          nullable: true
+        events:
+          description: Provider event log
+          nullable: true
+        error: { type: string, nullable: true }
+        created_at: { type: string }
+        updated_at: { type: string, nullable: true }
+      required: [id, created_at]
+
+    CallDetailEnvelope:
+      type: object
+      properties:
+        status: { type: string }
+        data: { $ref: "#/components/schemas/CallDetail" }
+      required: [status, data]
+
+    SendLeadSmsBody:
+      type: object
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 1600
+      required: [body]
+
+    SendLeadSmsResult:
+      type: object
+      properties:
+        sms_message_id: { type: integer }
+        telnyx_message_id: { type: string, nullable: true }
+        status: { type: string }
+      required: [sms_message_id, status]
+
+    SendLeadSmsEnvelope:
+      type: object
+      properties:
+        status: { type: string }
+        data: { $ref: "#/components/schemas/SendLeadSmsResult" }
+      required: [status, data]

@@ -20,6 +20,7 @@ import {
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { EnvelopeTimeline } from "@/components/envelope-timeline";
 import { BackgroundCheckHubCard } from "@/components/background-check-hub-card";
+import { SendSmsButton } from "@/components/send-sms-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
 interface IntelligenceScore {
@@ -412,8 +413,12 @@ export default function LeadDetail() {
             </Card>
 
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="flex items-center gap-2"><Phone className="h-4 w-4" />Contact Details</CardTitle>
+                <SendSmsButton
+                  leadId={lead.id}
+                  hasPhone={Boolean((lead.phone_primary || lead.phone)?.toString().trim())}
+                />
               </CardHeader>
               <CardContent className="space-y-0">
                 <FieldRow label="Primary Phone" value={lead.phone_primary || lead.phone} />

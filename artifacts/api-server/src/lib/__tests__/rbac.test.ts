@@ -823,3 +823,80 @@ describe("production NODE_ENV refuses the dev-mode bypass", () => {
     assert.equal(verdict.role, undefined);
   });
 });
+
+// Task #20: dev-mode bypass is now opt-in via MTOS_DEV_LOGIN=1, so the
+// default development loop exercises the real /auth/login + JWT path
+// (covering MFA, lockout, and token-version revocation). Spawn two child
+// processes to verify both halves of the gate without polluting this
+// process's import-time IS_DEV.
+describe("dev-mode bypass requires MTOS_DEV_LOGIN=1 (Task #20)", () => {
+  async function runDevAuthChild(extraEnv: Record<string, string>): Promise<{ status: number; code?: string; hasUser: boolean; role?: string }> {
+    const { spawnSync } = await import("node:child_process");
+    const path = await import("node:path");
+    const apiServerRoot = path.resolve(import.meta.dirname, "../../..");
+    const program = `
+      import("./src/lib/rbac.ts").then(async ({ authMiddleware }) => {
+        const req = { headers: {}, path: "/x", method: "GET", socket: { remoteAddress: "127.0.0.1" }, get: () => undefined, ip: "127.0.0.1" };
+        let status = 0; let body; let nextCalled = false;
+        const headers = {};
+        const res = {
+          status(n) { status = n; return this; },
+          json(b) { body = b; return this; },
+          setHeader(k, v) { headers[k.toLowerCase()] = v; },
+          getHeader(k) { return headers[k.toLowerCase()]; },
+        };
+        await new Promise((resolve) => {
+          const next = () => { nextCalled = true; resolve(); };
+          const r = authMiddleware(req, res, next);
+          if (r && typeof r.then === "function") r.then(() => resolve());
+          else if (status !== 0) resolve();
+        });
+        // eslint-disable-next-line no-console
+        console.log("__VERDICT__" + JSON.stringify({ status: nextCalled ? 200 : status, code: body && body.code, hasUser: req.user !== undefined, role: req.user && req.user.role }));
+      }).catch((e) => { console.error("CHILD_ERR:" + (e && e.message ? e.message : String(e))); process.exit(2); });
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "-e", program],
+      {
+        cwd: apiServerRoot,
+        env: {
+          ...process.env,
+          NODE_ENV: "development",
+          RBAC_DISABLE_AUDIT: "1",
+          ...extraEnv,
+        },
+        encoding: "utf-8",
+        timeout: 30_000,
+      },
+    );
+    if (result.status !== 0) {
+      throw new Error(
+        `child exited ${result.status}; stderr: ${result.stderr?.toString().slice(0, 500)}; stdout: ${result.stdout?.toString().slice(0, 500)}`,
+      );
+    }
+    const stdout = result.stdout ?? "";
+    const verdictLine = stdout.split(/\n/).map((l) => l.trim()).find((l) => l.startsWith("__VERDICT__")) ?? "";
+    if (!verdictLine) {
+      throw new Error(`no verdict marker in child stdout: ${stdout.slice(0, 500)}`);
+    }
+    return JSON.parse(verdictLine.slice("__VERDICT__".length));
+  }
+
+  test("MTOS_DEV_LOGIN unset under NODE_ENV=development ⇒ 401, no synthetic user", async () => {
+    // Pass an explicit empty string so we strip any pre-set value in the
+    // surrounding shell / .env (process.env spread above would otherwise
+    // re-inject MTOS_DEV_LOGIN if it happens to be set in the parent).
+    const verdict = await runDevAuthChild({ MTOS_DEV_LOGIN: "" });
+    assert.equal(verdict.status, 401, "default dev loop must require real auth");
+    assert.equal(verdict.code, "UNAUTHENTICATED");
+    assert.equal(verdict.hasUser, false, "no synthetic dev user when MTOS_DEV_LOGIN unset");
+  });
+
+  test("MTOS_DEV_LOGIN=1 under NODE_ENV=development ⇒ next() with synthetic admin", async () => {
+    const verdict = await runDevAuthChild({ MTOS_DEV_LOGIN: "1" });
+    assert.equal(verdict.status, 200, "explicit opt-in still bypasses for fast local iteration");
+    assert.equal(verdict.hasUser, true);
+    assert.equal(verdict.role, "admin");
+  });
+});

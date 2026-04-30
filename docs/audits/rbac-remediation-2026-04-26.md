@@ -576,7 +576,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **175 checked / 19 public / 156 protected / 0 unprotected.**
+Boot-time count: **189 checked / 26 public / 163 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -622,11 +622,17 @@ Boot-time count: **175 checked / 19 public / 156 protected / 0 unprotected.**
 | auth | POST | `/api/auth/refresh` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | POST | `/api/auth/register` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | GET | `/api/auth/users` | ✓ | ✓ |  |  |  | — | `users:list` | ✓ |
+| billing | POST | `/api/billing/checkout` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
+| billing | GET | `/api/billing/invoices` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
+| billing | POST | `/api/billing/portal` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
+| billing | GET | `/api/billing/state` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
 | buyers | DELETE | `/api/buyers/:id` | ✓ | ✓ |  |  |  | — | `buyers:manage` | ✓ |
 | buyers | GET | `/api/buyers/:id` | ✓ | ✓ |  |  |  | — | `buyers:view` | ✓ |
 | buyers | PUT | `/api/buyers/:id` | ✓ | ✓ |  |  |  | — | `buyers:manage` | ✓ |
 | buyers | GET | `/api/buyers/` | ✓ | ✓ |  |  |  | — | `buyers:view` | ✓ |
 | buyers | POST | `/api/buyers/` | ✓ | ✓ |  |  |  | — | `buyers:manage` | ✓ |
+| calls | GET | `/api/calls/:id` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| calls | GET | `/api/calls/` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | cases | POST | `/api/cases/:id/analyze` | ✓ | ✓ |  |  |  | — | `case:analyze` | ✓ |
 | cases | POST | `/api/cases/:id/upload` | ✓ | ✓ |  |  |  | — | `case:upload` | ✓ |
 | cases | GET | `/api/cases/:id` | ✓ | ✓ |  |  |  | — | `case:view:own`, `case:view:any` | ✓ |
@@ -723,6 +729,7 @@ Boot-time count: **175 checked / 19 public / 156 protected / 0 unprotected.**
 | leads | POST | `/api/leads/:id/intelligence` | ✓ | ✓ |  |  |  | — | `lead:qualify` | ✓ |
 | leads | PATCH | `/api/leads/:id/notes` | ✓ | ✓ |  |  |  | — | `lead:update` | ✓ |
 | leads | POST | `/api/leads/:id/qualify` | ✓ | ✓ |  |  |  | — | `lead:qualify` | ✓ |
+| leads | POST | `/api/leads/:id/send-sms` | ✓ | ✓ |  |  |  | — | `sms:send` | ✓ |
 | leads | DELETE | `/api/leads/:id` | ✓ | ✓ |  |  |  | — | `lead:delete` | ✓ |
 | leads | GET | `/api/leads/:id` | ✓ | ✓ |  |  |  | — | `lead:view:own`, `lead:view:any` | ✓ |
 | leads | PATCH | `/api/leads/:id` | ✓ | ✓ |  |  |  | — | `lead:update` | ✓ |
@@ -760,6 +767,10 @@ Boot-time count: **175 checked / 19 public / 156 protected / 0 unprotected.**
 | security | GET | `/api/security/stats` | ✓ | ✓ |  |  |  | — | `security:manage` | ✓ |
 | security | POST | `/api/security/test-alert` | ✓ | ✓ |  |  |  | — | `security:manage` | ✓ |
 | timeline | GET | `/api/timeline/lead/:id` | ✓ | ✓ |  |  |  | — | `timeline:view` | ✓ |
+| vapi-tools | POST | `/api/vapi-tools/check-eligibility` |  |  | ✓ |  |  | — | — | — |
+| vapi-tools | POST | `/api/vapi-tools/create-lead` |  |  | ✓ |  |  | — | — | — |
+| vapi-tools | POST | `/api/vapi-tools/escalate-to-human` |  |  | ✓ |  |  | — | — | — |
+| vapi-tools | POST | `/api/vapi-tools/lookup-lead` |  |  | ✓ |  |  | — | — | — |
 | vendors | DELETE | `/api/vendors/:id` | ✓ | ✓ |  |  |  | — | `vendors:delete` | ✓ |
 | vendors | GET | `/api/vendors/:id` | ✓ | ✓ |  |  |  | — | `vendors:view` | ✓ |
 | vendors | PATCH | `/api/vendors/:id` | ✓ | ✓ |  |  |  | — | `vendors:manage` | ✓ |
@@ -774,6 +785,9 @@ Boot-time count: **175 checked / 19 public / 156 protected / 0 unprotected.**
 | webhooks | POST | `/api/webhooks/_test/envelope-signed` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/docusign` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/dropbox-sign` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/stripe` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/telnyx/sms` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/vapi` |  |  | ✓ |  |  | — | — | — |
 | workflow-settings | GET | `/api/workflow-settings/_options/providers` | ✓ | ✓ |  |  |  | — | `workflow_settings:manage` | ✓ |
 | workflow-settings | GET | `/api/workflow-settings/:scope` | ✓ | ✓ |  |  |  | — | `workflow_settings:view` | ✓ |
 | workflow-settings | GET | `/api/workflow-settings/` | ✓ | ✓ |  |  |  | — | `workflow_settings:view` | ✓ |

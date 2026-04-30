@@ -83,6 +83,14 @@ export const leadsTable = pgTable("leads", {
   buyer_id: integer("buyer_id"),
   created_by_user_id: integer("created_by_user_id"),
 
+  // Single-firm shell for MVI; nullable for legacy rows.
+  firm_id: integer("firm_id"),
+
+  // SHA-256 lookup hash over normalized (tort_type|email|phone10) computed
+  // at insert/update time so dedup can short-circuit the decrypt-loop scan
+  // in lead-dedup.ts. Nullable for legacy rows backfilled lazily.
+  lookup_hash: text("lookup_hash"),
+
   custom_fields: jsonb("custom_fields").$type<Record<string, unknown>>().notNull().default({}),
 
   // Decision Engine — convexity scoring (computed on create/update)
@@ -111,6 +119,8 @@ export const leadsTable = pgTable("leads", {
   createdByIdx: index("leads_created_by_user_id_idx").on(t.created_by_user_id),
   statusCreatedIdx: index("leads_status_created_at_idx").on(t.status, t.created_at),
   tortStatusIdx: index("leads_tort_status_idx").on(t.tort_type, t.status),
+  firmIdx: index("leads_firm_id_idx").on(t.firm_id),
+  lookupHashIdx: index("leads_lookup_hash_idx").on(t.lookup_hash),
 }));
 
 export const insertLeadSchema = createInsertSchema(leadsTable).omit({

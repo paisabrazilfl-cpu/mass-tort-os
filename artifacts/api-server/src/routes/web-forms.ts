@@ -6,7 +6,7 @@ import { eq, sql } from "drizzle-orm";
 import { getFormConfig } from "../lib/form-config-service";
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
-import { encryptLeadFields } from "../lib/encryption";
+import { encryptLeadFields, rebindLeadEncryptionAad } from "../lib/encryption";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { resolveProvider, isResolved } from "../lib/provider-router";
@@ -14,6 +14,7 @@ import { getEmailAdapter } from "../lib/email/sendgrid";
 import { badRequest, notFound, serverError } from "../lib/http-errors";
 import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
 import { findExistingLeadForIntake } from "../lib/lead-dedup";
+import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { runBackgroundCheck } from "../lib/background-check";
 
 const router: IRouter = Router();
@@ -352,9 +353,17 @@ async function runWebFormPipeline(
           state: stateCode,
           notes: briefStory,
           tcpa_consent: tcpaConsented,
+          // Task #15: canonical dedup hash over plaintext (tort|email|phone10).
+          // Returns null if any component is missing — column stays NULL and
+          // the dedup helper falls back to the email/phone scan paths.
+          lookup_hash: leadLookupHash(config.label, emailValue, phone),
         } as typeof leadsTable.$inferInsert)
-        .returning({ id: leadsTable.id });
+        .returning();
       leadId = inserted[0]?.id ?? null;
+      // Task #8: rebind ciphertext AAD to the freshly-assigned lead.id.
+      if (inserted[0]) {
+        await rebindLeadEncryptionAad(db, leadsTable, inserted[0] as Record<string, unknown>, eq);
+      }
     }
   } catch (err) {
     logger.error({ err, tortId }, "web-form lead persist failed");

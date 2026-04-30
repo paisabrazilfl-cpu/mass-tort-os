@@ -28,8 +28,12 @@ import buyersRouter from "./buyers";
 import documentTemplatesRouter from "./document-templates";
 import workflowSettingsRouter from "./workflow-settings";
 import webhooksRouter from "./webhooks";
+import billingRouter from "./billing";
+import callsRouter from "./calls";
+import vapiToolsRouter from "./vapi-tools";
 import { authMiddleware } from "../lib/rbac";
 import { markPublic, labelRouter } from "../lib/route-protection";
+import { subscriptionGateMiddleware } from "../lib/subscription-gate";
 
 // =============================================================================
 // Router registry — keep this list in declaration order so the boot validator
@@ -45,6 +49,10 @@ markPublic(healthRouter, "health");
 markPublic(formsPublicRouter, "forms-public");
 markPublic(webFormsRouter, "web-forms");
 markPublic(webhooksRouter, "webhooks");
+// Vapi tool callbacks: PUBLIC because Vapi authenticates with a static
+// bearer token (the assistant's tool secret), not a session JWT. Each
+// handler verifies the bearer at request time against vault credentials.
+markPublic(vapiToolsRouter, "vapi-tools");
 // auth router carries a *mix* — login/refresh/register are public, the rest
 // are gated. The validator's AUTH_ROUTE_EXCEPTIONS list whitelists the public
 // three; everything else must include authMiddleware in its handler chain.
@@ -75,6 +83,8 @@ labelRouter(leadSourcesRouter, "lead-sources");
 labelRouter(buyersRouter, "buyers");
 labelRouter(documentTemplatesRouter, "document-templates");
 labelRouter(workflowSettingsRouter, "workflow-settings");
+labelRouter(billingRouter, "billing");
+labelRouter(callsRouter, "calls");
 
 const router: IRouter = Router();
 
@@ -92,7 +102,19 @@ router.use("/web-forms", webFormsRouter);
 // Provider webhooks must be PUBLIC (callbacks have no Bearer token).
 // Each handler verifies provider signatures internally and always returns 200.
 router.use("/webhooks", webhooksRouter);
+// Vapi tool callbacks live at /vapi-tools (top-level so the dump-route-
+// matrix mount-regex parser, which only captures the first path segment,
+// reports the correct mount path). They are public — bearer-gated per
+// handler against the active vapi integration row.
+router.use("/vapi-tools", vapiToolsRouter);
 router.use(authMiddleware);
+// Subscription gate runs immediately AFTER auth: blocks write methods on
+// protected routes when the firm's Stripe subscription is not in good
+// standing. The gate itself is a no-op until a Stripe integration is
+// configured (see lib/subscription-gate.ts).
+router.use(subscriptionGateMiddleware);
+router.use("/billing", billingRouter);
+router.use("/calls", callsRouter);
 router.use("/leads", leadsRouter);
 router.use("/documents", documentsRouter);
 router.use("/dashboard", dashboardRouter);

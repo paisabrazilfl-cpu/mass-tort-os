@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck,
   BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch,
   Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp, Scale, Building, FileSignature,
-  Grid3x3, Settings, Activity,
+  Grid3x3, Settings, Activity, CreditCard, Phone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +27,7 @@ export const navigation: NavSection[] = [
       { name: "Lead Import", href: "/lead-import", icon: FileUp },
       { name: "Cases", href: "/cases", icon: Briefcase },
       { name: "Job Queue", href: "/job-queue", icon: Activity },
+      { name: "Calls", href: "/calls", icon: Phone },
       { name: "Paralegals", href: "/paralegals", icon: UserCheck },
       { name: "Review Queue", href: "/review-queue", icon: ShieldAlert },
     ],
@@ -65,6 +66,7 @@ export const navigation: NavSection[] = [
     items: [
       { name: "Vendors", href: "/vendors", icon: Building2 },
       { name: "Integrations", href: "/integrations", icon: Plug },
+      { name: "Billing", href: "/billing", icon: CreditCard },
       { name: "Compliance", href: "/compliance", icon: Shield },
       { name: "Security", href: "/security", icon: ShieldCheck },
     ],

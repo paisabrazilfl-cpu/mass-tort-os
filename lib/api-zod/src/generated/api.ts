@@ -2041,3 +2041,187 @@ export const GetFaxResultResponse = zod.object({
  * @summary OCR fax processing queue stats
  */
 export const GetOcrQueueStatsResponse = zod.record(zod.string(), zod.number());
+
+/**
+ * @summary Stripe subscription state for the requester's firm
+ */
+export const GetBillingStateResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    firm_id: zod.number(),
+    firm_name: zod.string(),
+    stripe_configured: zod.boolean(),
+    stripe_customer_id: zod.string().nullable(),
+    stripe_subscription_id: zod.string().nullable(),
+    subscription_status: zod.string().nullable(),
+    current_period_end: zod.string().nullable(),
+    plan_price_id: zod.string().nullable(),
+  }),
+});
+
+/**
+ * @summary Create a Stripe Checkout session for the requester's firm
+ */
+
+export const CreateBillingCheckoutBody = zod.object({
+  price_id: zod.string().min(1),
+  success_url: zod.string().url(),
+  cancel_url: zod.string().url(),
+});
+
+export const CreateBillingCheckoutResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    url: zod.string(),
+    session_id: zod.string(),
+  }),
+});
+
+/**
+ * @summary Create a Stripe Customer Portal session
+ */
+export const CreateBillingPortalBody = zod.object({
+  return_url: zod.string().url(),
+});
+
+export const CreateBillingPortalResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    url: zod.string(),
+  }),
+});
+
+/**
+ * @summary Recent Stripe invoices for the requester's firm
+ */
+export const ListBillingInvoicesResponse = zod.object({
+  status: zod.string(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      number: zod.string().nullish(),
+      status: zod.string().nullish(),
+      amount_due: zod.number(),
+      amount_paid: zod.number(),
+      currency: zod.string(),
+      created: zod.number(),
+      period_start: zod.number(),
+      period_end: zod.number(),
+      hosted_invoice_url: zod.string().nullish(),
+      invoice_pdf: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary Paginated list of call_logs for the operator
+ */
+export const listCallsQueryPageDefault = 1;
+
+export const listCallsQueryPageSizeDefault = 25;
+export const listCallsQueryPageSizeMax = 100;
+
+export const listCallsQuerySearchMax = 60;
+
+export const ListCallsQueryParams = zod.object({
+  page: zod.coerce.number().min(1).default(listCallsQueryPageDefault),
+  page_size: zod.coerce
+    .number()
+    .min(1)
+    .max(listCallsQueryPageSizeMax)
+    .default(listCallsQueryPageSizeDefault),
+  status: zod
+    .enum(["queued", "in_progress", "completed", "failed", "no_answer"])
+    .optional(),
+  lead_id: zod.coerce.number().min(1).optional(),
+  search: zod.coerce.string().min(1).max(listCallsQuerySearchMax).optional(),
+});
+
+export const ListCallsResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    rows: zod.array(
+      zod.object({
+        id: zod.number(),
+        firm_id: zod.number().nullish(),
+        lead_id: zod.number().nullish(),
+        vapi_call_id: zod.string().nullish(),
+        direction: zod.string().nullish(),
+        from_number: zod.string().nullish(),
+        to_number: zod.string().nullish(),
+        status: zod.string().nullish(),
+        started_at: zod.string().nullish(),
+        ended_at: zod.string().nullish(),
+        duration_seconds: zod.number().nullish(),
+        recording_url: zod.string().nullish(),
+        created_at: zod.string(),
+      }),
+    ),
+    page: zod.number(),
+    page_size: zod.number(),
+    total: zod.number(),
+  }),
+});
+
+/**
+ * @summary Single call detail with transcript + intake_result
+ */
+
+export const GetCallParams = zod.object({
+  id: zod.coerce.number().min(1),
+});
+
+export const GetCallResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    id: zod.number(),
+    firm_id: zod.number().nullish(),
+    lead_id: zod.number().nullish(),
+    lead_first_name: zod.string().nullish(),
+    lead_last_name: zod.string().nullish(),
+    vapi_call_id: zod.string().nullish(),
+    direction: zod.string().nullish(),
+    from_number: zod.string().nullish(),
+    to_number: zod.string().nullish(),
+    status: zod.string().nullish(),
+    started_at: zod.string().nullish(),
+    ended_at: zod.string().nullish(),
+    duration_seconds: zod.number().nullish(),
+    recording_url: zod.string().nullish(),
+    transcript: zod
+      .unknown()
+      .nullish()
+      .describe("Vapi transcript payload (provider-defined shape)"),
+    intake_result: zod
+      .unknown()
+      .nullish()
+      .describe("Decision-engine result payload"),
+    events: zod.unknown().nullish().describe("Provider event log"),
+    error: zod.string().nullish(),
+    created_at: zod.string(),
+    updated_at: zod.string().nullish(),
+  }),
+});
+
+/**
+ * @summary Send an outbound SMS to the lead's primary phone via Telnyx
+ */
+
+export const SendLeadSmsParams = zod.object({
+  id: zod.coerce.number().min(1),
+});
+
+export const sendLeadSmsBodyBodyMax = 1600;
+
+export const SendLeadSmsBody = zod.object({
+  body: zod.string().min(1).max(sendLeadSmsBodyBodyMax),
+});
+
+export const SendLeadSmsResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    sms_message_id: zod.number(),
+    telnyx_message_id: zod.string().nullish(),
+    status: zod.string(),
+  }),
+});

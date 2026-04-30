@@ -16,11 +16,14 @@ import { runFullConflictCheck, checkAIClassificationConflict, routeToReview } fr
 import { withErrorFallback } from "../lib/error-fallback";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { encryptLeadFields, decryptLeadFields, decryptLeadArray } from "../lib/encryption";
+import { encryptLeadFields, decryptLeadFields, decryptLeadArray, rebindLeadEncryptionAad } from "../lib/encryption";
+import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { Permission, requirePermission, auditAction, canBypassOwnership, denyForbidden } from "../lib/rbac";
 import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
+import { sendSms } from "../lib/sms/telnyx";
+import { getFirmIdForUser } from "../lib/subscription-gate";
 
 // Thrown by buildLeadFilters when a date query param parses to Invalid Date.
 // Caught at each route call site and converted to a 400 with a structured
@@ -330,21 +333,32 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
     if (conflictCheck.output_state === "REVIEW_REQUIRED") {
       const [lead] = await db
         .insert(leadsTable)
-        .values(encryptLeadFields({
-          ...data,
-          name: fullName,
-          status: "review_required",
-          rejection_reason: `Conflict: ${conflictCheck.details.join("; ")}`,
-          exposure_start: data.exposure_start ?? null,
-          exposure_end: data.exposure_end ?? null,
-          diagnosis_type: data.diagnosis_type ?? null,
-          location_name: data.location_name ?? null,
-          created_by_user_id: req.user?.id ?? null,
-          notes: data.notes ?? null,
-          ad_spend: data.ad_spend ? String(data.ad_spend) : null,
-          source: data.source ?? null,
-        }) as any)
+        .values({
+          ...(encryptLeadFields({
+            ...data,
+            name: fullName,
+            status: "review_required",
+            rejection_reason: `Conflict: ${conflictCheck.details.join("; ")}`,
+            exposure_start: data.exposure_start ?? null,
+            exposure_end: data.exposure_end ?? null,
+            diagnosis_type: data.diagnosis_type ?? null,
+            location_name: data.location_name ?? null,
+            created_by_user_id: req.user?.id ?? null,
+            notes: data.notes ?? null,
+            ad_spend: data.ad_spend ? String(data.ad_spend) : null,
+            source: data.source ?? null,
+          }) as any),
+          // Task #15: canonical (tort|email|phone10) hash from PLAINTEXT inputs.
+          lookup_hash: leadLookupHash(
+            data.tort_type ?? null,
+            data.email ?? null,
+            data.phone_primary ?? data.phone ?? null,
+          ),
+        })
         .returning();
+
+      // Task #8: rebind ciphertext AAD to the freshly-assigned lead.id.
+      await rebindLeadEncryptionAad(db, leadsTable, lead, eq);
 
       try {
         const { reviewQueueTable } = await import("@workspace/db");
@@ -390,7 +404,7 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
       });
 
       res.status(201).json({
-        ...decryptLeadFields(lead),
+        ...decryptLeadFields(lead, String(lead.id)),
         _conflict: {
           output_state: "REVIEW_REQUIRED",
           conflict_type: conflictCheck.conflict_type,
@@ -408,20 +422,32 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
 
   const [lead] = await db
     .insert(leadsTable)
-    .values(encryptLeadFields({
-      ...data,
-      name: fullName,
-      status,
-      exposure_start: data.exposure_start ?? null,
-      exposure_end: data.exposure_end ?? null,
-      diagnosis_type: data.diagnosis_type ?? null,
-      location_name: data.location_name ?? null,
-      notes: data.notes ?? null,
-      ad_spend: data.ad_spend ? String(data.ad_spend) : null,
-      source: data.source ?? null,
-      created_by_user_id: req.user?.id ?? null,
-    }) as any)
+    .values({
+      ...(encryptLeadFields({
+        ...data,
+        name: fullName,
+        status,
+        exposure_start: data.exposure_start ?? null,
+        exposure_end: data.exposure_end ?? null,
+        diagnosis_type: data.diagnosis_type ?? null,
+        location_name: data.location_name ?? null,
+        notes: data.notes ?? null,
+        ad_spend: data.ad_spend ? String(data.ad_spend) : null,
+        source: data.source ?? null,
+        created_by_user_id: req.user?.id ?? null,
+      }) as any),
+      // Task #15: canonical (tort|email|phone10) hash from PLAINTEXT inputs.
+      lookup_hash: leadLookupHash(
+        data.tort_type ?? null,
+        data.email ?? null,
+        data.phone_primary ?? data.phone ?? null,
+      ),
+    })
     .returning();
+
+  // Task #8: rebind ciphertext AAD to the freshly-assigned lead.id so a
+  // future swap of these bytes into another row would fail AES-GCM verify.
+  await rebindLeadEncryptionAad(db, leadsTable, lead, eq);
 
   await auditLog("lead", String(lead.id), "created", { output_state: "ACCEPT", status });
 
@@ -446,7 +472,7 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
     },
   });
 
-  res.status(201).json(decryptLeadFields(lead));
+  res.status(201).json(decryptLeadFields(lead, String(lead.id)));
 });
 
 router.get("/:id", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW_ANY), auditAction("view_lead"), async (req, res) => {
@@ -478,7 +504,7 @@ router.get("/:id", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_V
     }
   }
 
-  res.json(decryptLeadFields(lead));
+  res.json(decryptLeadFields(lead, String(lead.id)));
 });
 
 /**
@@ -537,15 +563,22 @@ router.get("/:id/fax-results", requirePermission(Permission.LEAD_VIEW_OWN, Permi
   }
   if (!(await ensureLeadAccess(req, res, id))) return;
   const { faxResultsTable } = await import("@workspace/db");
-  const { desc, like } = await import("drizzle-orm");
+  const { desc, like, or, eq: eqOp } = await import("drizzle-orm");
   const { buildFaxResultsLikePattern } = await import("../lib/fax-results-matcher.js");
-  // fax_results has no lead_id column. The worker tags `source_file` with
-  // `med_records_request_lead_${id}_env_${envelope_id}.pdf` — the helper
-  // centralises that contract and prevents prefix-collision bugs (lead 1 vs 12).
+  // Task #16: prefer the canonical FK lead_id column populated at insert
+  // time (and via scripts/backfill-fax-results-lead-id.ts for legacy rows).
+  // Keep the source_file LIKE-pattern fallback so any row that escaped the
+  // backfill (e.g. inserted between deploy + backfill, or with a malformed
+  // filename the parser couldn't reverse) still surfaces in the UI.
   const rows = await db
     .select()
     .from(faxResultsTable)
-    .where(like(faxResultsTable.source_file, buildFaxResultsLikePattern(id)))
+    .where(
+      or(
+        eqOp(faxResultsTable.lead_id, id),
+        like(faxResultsTable.source_file, buildFaxResultsLikePattern(id)),
+      ),
+    )
     .orderBy(desc(faxResultsTable.created_at));
   res.json(rows);
 });
@@ -625,7 +658,9 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
     }
   }
 
-  const encryptedUpdate = encryptLeadFields(updateData);
+  // Task #8: bind AAD to lead.id on UPDATE so a swapped ciphertext from
+  // another row would fail AES-GCM auth verification on read.
+  const encryptedUpdate = encryptLeadFields(updateData, String(paramsParsed.data.id));
 
   // Capture old status BEFORE update so we can detect a transition to "approved".
   const [priorLead] = await db
@@ -660,7 +695,7 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
   const hasConflictRelevantChange = conflictFields.some(f => (body as Record<string, unknown>)[f] !== undefined);
   if (hasConflictRelevantChange) {
     try {
-      const decrypted = decryptLeadFields(lead);
+      const decrypted = decryptLeadFields(lead, String(lead.id));
       const ctx = {
         entity_type: "lead",
         entity_id: String(lead.id),
@@ -682,7 +717,7 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
     computeAndPersistLeadScore(lead.id).catch(() => {});
   }
 
-  res.json(decryptLeadFields(lead));
+  res.json(decryptLeadFields(lead, String(lead.id)));
 });
 
 router.delete("/:id", requirePermission(Permission.LEAD_DELETE), auditAction("delete_lead"), async (req, res) => {
@@ -810,7 +845,7 @@ router.post("/:id/intelligence", requirePermission(Permission.LEAD_QUALIFY), aud
       return;
     }
 
-    const decryptedLead = decryptLeadFields(lead);
+    const decryptedLead = decryptLeadFields(lead, String(lead.id));
 
     let documents: any[] = [];
     try {
@@ -858,7 +893,8 @@ router.patch("/:id/notes", requirePermission(Permission.LEAD_UPDATE), auditActio
       return;
     }
 
-    const encryptedUpdate = encryptLeadFields({ notes, updated_at: new Date() });
+    // Task #8: bind AAD to lead.id on the notes UPDATE.
+    const encryptedUpdate = encryptLeadFields({ notes, updated_at: new Date() }, String(leadId));
     const [lead] = await db
       .update(leadsTable)
       .set(encryptedUpdate)
@@ -876,5 +912,86 @@ router.patch("/:id/notes", requirePermission(Permission.LEAD_UPDATE), auditActio
     serverError(res, "Unable to save notes. Please retry.");
   }
 });
+
+// POST /api/leads/:id/send-sms — fire a one-off Telnyx SMS to the lead's
+// stored phone number. The phone column is encrypted, so we decrypt it
+// server-side and never echo the raw number back to the client. Persists
+// an sms_messages row scoped to the firm + lead so the delivery webhook
+// can update its status.
+router.post(
+  "/:id/send-sms",
+  requirePermission(Permission.SMS_SEND),
+  auditAction("send_lead_sms"),
+  async (req, res) => {
+    const leadId = Number(req.params.id);
+    if (!Number.isFinite(leadId)) {
+      httpBadRequest(res, "Invalid lead identifier");
+      return;
+    }
+
+    const body = (req.body ?? {}) as { body?: unknown };
+    const message = typeof body.body === "string" ? body.body.trim() : "";
+    if (!message) {
+      httpBadRequest(res, "body is required (the SMS text to send)");
+      return;
+    }
+    if (message.length > 1600) {
+      httpBadRequest(res, "body exceeds 1600 character limit");
+      return;
+    }
+
+    const ok = await ensureLeadAccess(req, res, leadId);
+    if (!ok) return;
+
+    const [leadRow] = await db
+      .select()
+      .from(leadsTable)
+      .where(eq(leadsTable.id, leadId));
+    if (!leadRow) {
+      notFound(res);
+      return;
+    }
+    const decrypted = decryptLeadFields(leadRow, String(leadRow.id));
+    const phone = typeof decrypted.phone === "string" ? decrypted.phone.trim() : "";
+    if (!phone) {
+      httpBadRequest(res, "Lead has no phone number on file");
+      return;
+    }
+
+    const user = req.user!;
+    const firmId = await getFirmIdForUser(user.id);
+
+    const result = await sendSms({
+      to: phone,
+      body: message,
+      firmId,
+      leadId,
+      createdByUserId: user.id,
+    });
+
+    if (!result.ok) {
+      // 502 because the upstream provider rejected — the request itself was valid.
+      logger.warn(
+        { lead_id: leadId, sms_message_id: result.smsMessageId, err: result.error },
+        "send_lead_sms failed",
+      );
+      res.status(502).json({
+        status: "error",
+        code: "SMS_SEND_FAILED",
+        message: result.error ?? "SMS provider rejected the message.",
+        sms_message_id: result.smsMessageId ?? null,
+      });
+      return;
+    }
+
+    res.json({
+      status: "ok",
+      data: {
+        sms_message_id: result.smsMessageId,
+        telnyx_message_id: result.telnyxMessageId,
+      },
+    });
+  },
+);
 
 export default router;
