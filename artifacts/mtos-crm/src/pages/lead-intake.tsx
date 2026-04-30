@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
+import { useQuery } from "@tanstack/react-query";
 import { useCreateLead, useQualifyLead, useGetFormConfigs } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { AlertTriangle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { apiFetchRaw } from "@/lib/api-fetch";
 
 const formSchema = z.object({
   first_name: z.string().min(2, "First name is required"),
@@ -63,7 +65,16 @@ export default function LeadIntake() {
   const tortCampaigns = (formConfigsResp?.tort_campaigns ?? [])
     .filter((c) => c.active)
     .map((c) => c.label);
-  
+
+  const { data: leadSources = [] } = useQuery<{ id: number; name: string }[]>({
+    queryKey: ["lead-sources"],
+    queryFn: async () => {
+      const res = await apiFetchRaw("/api/lead-sources");
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
   const createLead = useCreateLead();
   const qualifyLead = useQualifyLead();
 
@@ -589,9 +600,19 @@ export default function LeadIntake() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Source</FormLabel>
-                        <FormControl>
-                          <Input placeholder="Manual Intake" {...field} />
-                        </FormControl>
+                        <Select onValueChange={field.onChange} value={field.value || ""}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select lead source…" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="Manual Intake">Manual Intake</SelectItem>
+                            {leadSources.map(s => (
+                              <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                         <FormMessage />
                       </FormItem>
                     )}

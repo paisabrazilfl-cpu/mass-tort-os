@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS: EngineSettings = {
   convex_ratio_threshold: 5,
   concave_ratio_threshold: 1.5,
   concentration_warning_pct: 40,
+  ruin_auto_flag: false,
 };
 
 let cachedSettings: EngineSettings | null = null;
@@ -50,6 +51,7 @@ export async function getEngineSettings(): Promise<EngineSettings> {
         convex_ratio_threshold: Number(r.convex_ratio_threshold),
         concave_ratio_threshold: Number(r.concave_ratio_threshold),
         concentration_warning_pct: r.concentration_warning_pct,
+        ruin_auto_flag: r.ruin_auto_flag,
       };
     }
   } catch (e) {

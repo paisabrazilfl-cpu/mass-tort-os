@@ -44,6 +44,7 @@ export interface EngineSettings {
   convex_ratio_threshold: number;
   concave_ratio_threshold: number;
   concentration_warning_pct: number;
+  ruin_auto_flag: boolean;
 }
 
 export interface ScoreResult {
