@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, documentsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
-import { badRequest, notFound, serverError } from "../lib/http-errors";
+import { badRequest, notFound, serverError, errorEnvelope } from "../lib/http-errors";
 import {
   ListDocumentsQueryParams,
   CreateDocumentBody,
@@ -9,7 +9,7 @@ import {
   UpdateDocumentParams,
   DeleteDocumentParams,
 } from "@workspace/api-zod";
-import { redactPdf, highlightPdfRegions, getPdfPageCount } from "../lib/pdf-redaction";
+import { redactPdf, highlightPdfRegions, getPdfPageCount, RedactionNotImplementedError } from "../lib/pdf-redaction";
 import { Permission, requirePermission, auditAction } from "../lib/rbac";
 
 const router = Router();
@@ -117,7 +117,17 @@ router.post("/redact", requirePermission(Permission.DOCUMENTS_REDACT), auditActi
     const pdfBytes = Buffer.from(pdf_base64, "base64");
     const redacted = await redactPdf(pdfBytes, rules || []);
     res.json({ pdf_base64: Buffer.from(redacted).toString("base64"), pages: await getPdfPageCount(redacted) });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    // Distinguish "we cannot do this redaction mode" (caller-fixable) from
+    // "the redaction crashed" (server problem). The CRM client uses the
+    // stable `redaction_not_implemented` code to render an actionable
+    // message instead of a generic "internal error" dialog.
+    if (err instanceof RedactionNotImplementedError) {
+      req.log.warn({ err: err.message }, "Redaction request rejected — unsupported rule type");
+      errorEnvelope(res, 422, err.code, err.message);
+      return;
+    }
+    req.log.error({ err }, "PDF redaction failed");
     serverError(res, "PDF redaction failed");
   }
 });
