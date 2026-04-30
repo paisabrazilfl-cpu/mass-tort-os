@@ -30,7 +30,7 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **Role-Based Access Control (RBAC)**: JWT (HS256) authentication with role hierarchy and granular route-level access control.
 *   **Schema-vs-Database Workflow**: Uses `drizzle-kit push` for schema management.
 *   **Dialog Accessibility Convention**: Enforces accessibility standards for dialogs using Radix UI.
-*   **Web Auth Pipeline**: Manages user authentication, token refresh, and MFA.
+*   **Web Auth Pipeline**: Manages user authentication, token refresh, MFA, and email verification. New accounts (Task #56) are created in a pending state (`mtos_users.email_verified_at` NULL) and `POST /api/auth/register` returns 202 + `{ status: "pending_verification" }` instead of a JWT; users must follow a single-use signed link (24h expiry, SHA-256-hashed token in DB) consumed by `GET /api/auth/verify-email?token=...` before they can sign in. `/login` 403s with `code: "email_unverified"` for pending accounts. Reserved-email and rate-limit branches reuse existing 409/429 envelopes so the verification flow does not become an enumeration oracle. A boot-time backfill marks legacy users verified so existing accounts are not locked out.
 *   **Security Infrastructure**: Comprehensive security layer protecting ePHI/PII data, including token revocation, refresh tokens, MFA/TOTP, field-level encryption, rate limiting, and AI threat analysis.
 *   **API Server Bundle Size Budget**: Manages API server bundle size by externalizing heavy runtime dependencies.
 *   **Auto-Document Workflow**: Automates dispatch of e-sign packets and medical record faxes based on lead qualification.

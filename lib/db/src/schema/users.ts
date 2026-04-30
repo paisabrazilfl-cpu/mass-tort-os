@@ -17,6 +17,18 @@ export const usersTable = pgTable("mtos_users", {
   mfa_enabled: boolean("mfa_enabled").notNull().default(false),
   failed_login_attempts: integer("failed_login_attempts").notNull().default(0),
   locked_until: timestamp("locked_until"),
+  // Email verification gate (Task #56). Public registration creates a
+  // row in a "pending" state — `email_verified_at` IS NULL — and emails a
+  // single-use token. Login refuses any account whose `email_verified_at`
+  // is still NULL. The token itself is stored only as a SHA-256 hash so
+  // the plaintext lives in the recipient's inbox and nowhere else; the
+  // token row is invalidated by clearing both `*_token_hash` and
+  // `*_token_expires_at` once the link is consumed (single-use).
+  // Pre-existing rows (created before this column existed) are
+  // backfilled to verified at boot via backfillEmailVerifiedAt().
+  email_verified_at: timestamp("email_verified_at"),
+  email_verification_token_hash: text("email_verification_token_hash"),
+  email_verification_token_expires_at: timestamp("email_verification_token_expires_at"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });

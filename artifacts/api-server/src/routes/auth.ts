@@ -9,6 +9,8 @@ import {
   revokeAllUserTokens,
   getUserByEmail,
   getUserById,
+  getUserByVerificationToken,
+  markEmailVerified,
   createUser,
   listUsers,
   authMiddleware,
@@ -19,6 +21,11 @@ import {
   isAccountLocked,
   type UserRole,
 } from "../lib/rbac";
+import {
+  generateVerificationToken,
+  hashVerificationToken,
+  sendVerificationEmail,
+} from "../lib/email-verification";
 import { getDefaultFirmId } from "../lib/firm-bootstrap";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
@@ -196,6 +203,26 @@ router.post("/login", authRateLimit, async (req, res) => {
     }
   }
 
+  // Email verification gate (Task #56). The user has proven knowledge
+  // of the password (and TOTP, if enabled) — the credentials check
+  // ALWAYS runs first, so a wrong password against a pending account
+  // still 401s instead of 403ing. Only after the password+MFA legs
+  // succeed do we surface the verification-required state, which means
+  // the new branch is not an enumeration oracle for "does this email
+  // exist as a pending registration": a stranger guessing the password
+  // would see the same 401 they always have.
+  if (user.email_verified_at === null) {
+    await resetFailedAttempts(email);
+    await auditLog("user", String(user.id), "login_blocked_unverified", { email: user.email });
+    errorEnvelope(
+      res,
+      403,
+      "email_unverified",
+      "Please verify your email address before signing in. Check your inbox for the verification link.",
+    );
+    return;
+  }
+
   await resetFailedAttempts(email);
 
   const accessToken = generateToken({
@@ -248,6 +275,15 @@ router.post("/logout", authMiddleware, async (req, res) => {
   res.json({ message: "Logged out successfully. All tokens revoked." });
 });
 
+// Shared 202 envelope for the register endpoint. Returned for every
+// happy-path code path so the response shape is uniform regardless of
+// whether the email actually went out (the queue handles retries).
+const REGISTER_PENDING_BODY = {
+  status: "pending_verification",
+  message:
+    "Account created. Check your email for a verification link to finish signing up.",
+};
+
 router.post("/register", authRateLimit, async (req, res) => {
   const parsed = RegisterBody.safeParse(req.body);
   if (!parsed.success) { badRequest(res, parsed.error, "Email, password, and name required"); return; }
@@ -270,6 +306,12 @@ router.post("/register", authRateLimit, async (req, res) => {
 
   const assignedRole = "viewer";
 
+  // Treat verified and pending rows identically here. Returning a
+  // different status for "already pending verification" would let the
+  // endpoint be used to enumerate which addresses have a half-finished
+  // registration; the existing 409 already covers verified collisions
+  // and we keep it for both. Operators can manually requeue the
+  // verification email from the admin dashboard if needed.
   const existing = await getUserByEmail(email);
   if (existing) { res.status(409).json({ error: "Email already registered" }); return; }
 
@@ -283,17 +325,127 @@ router.post("/register", authRateLimit, async (req, res) => {
     res.status(503).json({ error: "Account creation temporarily unavailable" });
     return;
   }
-  const user = await createUser(email, name, assignedRole, passwordHash, firmId);
-  const accessToken = generateToken(user);
-  const refreshToken = await generateRefreshToken(user.id);
 
-  await auditLog("user", String(user.id), "registered", { email, role: assignedRole });
+  // Mint a single-use verification token, persist only its hash, and
+  // hand the plaintext to the email helper for delivery. The user row
+  // is created in the pending state (email_verified_at IS NULL); login
+  // will refuse it until the link is consumed.
+  const verification = generateVerificationToken();
+  const user = await createUser(
+    email,
+    name,
+    assignedRole,
+    passwordHash,
+    firmId,
+    { tokenHash: verification.hash, expiresAt: verification.expiresAt },
+  );
 
-  res.status(201).json({
+  // Fire-and-await email send. Failures here log and continue —
+  // sendVerificationEmail itself handles enqueue errors so this never
+  // throws back into the request, but we await it so the audit row is
+  // written after the send is at least attempted.
+  await sendVerificationEmail(email, name, verification.plaintext);
+
+  await auditLog("user", String(user.id), "registered_pending_verification", {
+    email,
+    role: assignedRole,
+  });
+
+  // 202 Accepted = "request received, action not complete". The
+  // frontend's RegisterPage uses this to switch into the "check your
+  // email" state instead of trying to read a JWT pair from the body.
+  res.status(202).json(REGISTER_PENDING_BODY);
+});
+
+// Inline schema for the verify-email query parameter. We require a
+// 64-character hex token (32 bytes * 2 hex chars) — anything that fails
+// this shape can't possibly match a stored hash, so we fail fast with
+// the same generic "invalid or expired" envelope to avoid an oracle.
+const VerifyEmailQuery = z.object({
+  token: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-f]{64}$/i, "token must be 64 hex characters"),
+});
+
+router.get("/verify-email", authRateLimit, async (req, res) => {
+  const parsed = VerifyEmailQuery.safeParse(req.query);
+  if (!parsed.success) {
+    errorEnvelope(
+      res,
+      400,
+      "invalid_token",
+      "This verification link is invalid or has expired. Please request a new one.",
+    );
+    return;
+  }
+
+  const { token } = parsed.data;
+  const tokenHash = hashVerificationToken(token);
+
+  const user = await getUserByVerificationToken(tokenHash);
+  if (!user) {
+    // One generic failure for "no match", "expired", and "already used"
+    // so the endpoint cannot be used to enumerate token state.
+    errorEnvelope(
+      res,
+      400,
+      "invalid_token",
+      "This verification link is invalid or has expired. Please request a new one.",
+    );
+    return;
+  }
+
+  // Atomically consume the single-use token. If two concurrent requests
+  // race, only one wins; the other gets the same 400 a stale link does.
+  const consumed = await markEmailVerified(user.id, tokenHash);
+  if (!consumed) {
+    errorEnvelope(
+      res,
+      400,
+      "invalid_token",
+      "This verification link is invalid or has expired. Please request a new one.",
+    );
+    return;
+  }
+
+  // Re-load the now-verified user via getUserById so we issue the JWT
+  // off the post-update token_version (defensive — markEmailVerified
+  // does not bump token_version, but a future change might).
+  const refreshed = (await getUserById(user.id)) ?? user;
+
+  const accessToken = generateToken({
+    id: refreshed.id,
+    email: refreshed.email,
+    name: refreshed.name,
+    role: refreshed.role as UserRole,
+    firm_id: refreshed.firm_id,
+    token_version: refreshed.token_version,
+  });
+  const refreshToken = await generateRefreshToken(refreshed.id);
+
+  await auditLog("user", String(refreshed.id), "email_verified", { email: refreshed.email }, {
+    ip_address:
+      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+      req.socket.remoteAddress,
+    user_agent: req.headers["user-agent"],
+  });
+
+  // Mirror the JWT-pair response shape the original /register handler
+  // used, so the verify-email page can drop these into the same auth
+  // store and immediately land the user on the dashboard.
+  res.status(200).json({
     token: accessToken,
     refresh_token: refreshToken,
     expires_in: 900,
-    user,
+    user: {
+      id: refreshed.id,
+      email: refreshed.email,
+      name: refreshed.name,
+      role: refreshed.role,
+      firm_id: refreshed.firm_id,
+      mfa_enabled: false,
+    },
   });
 });
 

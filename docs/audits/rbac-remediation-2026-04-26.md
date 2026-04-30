@@ -567,8 +567,11 @@ applies. A route is healthy iff one of the following is true:
 
 - **Public** — explicitly allow-listed via `markPublic(router, label)`
   (currently `health`, `forms-public`, `webhooks`, `web-forms`).
-- **Login-exception** — `POST /login`, `POST /refresh`, `POST /register`
-  on the `auth` router.
+- **Login-exception** — `POST /login`, `POST /refresh`, `POST /register`,
+  `GET /verify-email` on the `auth` router. The verify-email branch was
+  added by Task #56: `POST /register` no longer issues a JWT pair, and
+  the verification link is the bootstrap path that exchanges a single-use
+  hashed token for a session, so it must be reachable without auth.
 - **Auth + Gate** — has both an `__internal_markAuthMiddleware`-stamped
   `authMiddleware` and an `__internal_markGateMiddleware`-stamped
   `requireRole(...)` / `requirePermission(...)` in its layer chain.
@@ -576,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **195 checked / 31 public / 164 protected / 0 unprotected.**
+Boot-time count: **196 checked / 32 public / 164 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -622,6 +625,7 @@ Boot-time count: **195 checked / 31 public / 164 protected / 0 unprotected.**
 | auth | POST | `/api/auth/refresh` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | POST | `/api/auth/register` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | GET | `/api/auth/users` | ✓ | ✓ |  |  |  | — | `users:list` | ✓ |
+| auth | GET | `/api/auth/verify-email` |  |  |  |  | ✓ | — | — | ✓ |
 | billing | POST | `/api/billing/checkout` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
 | billing | GET | `/api/billing/firm-status` | ✓ |  |  | ✓ |  | — | — | ✓ |
 | billing | GET | `/api/billing/invoices` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |

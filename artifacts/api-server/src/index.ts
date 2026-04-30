@@ -1,7 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
-import { seedDefaultFirm } from "./lib/firm-bootstrap";
+import { seedDefaultFirm, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
 import { workerLoop } from "./worker";
 
 const NODE_ENV = process.env["NODE_ENV"];
@@ -72,6 +72,16 @@ app.listen(port, async (err) => {
     await seedDefaultFirm();
   } catch (e) {
     logger.error({ err: e }, "Default firm seed failed on boot");
+  }
+
+  // Email-verification backfill (Task #56). Marks legacy user rows as
+  // verified using their original created_at, so accounts that pre-date
+  // the verification gate keep working. Idempotent — only matches rows
+  // with no token hash and no existing verified_at.
+  try {
+    await backfillEmailVerifiedAt();
+  } catch (e) {
+    logger.error({ err: e }, "Email verification backfill failed on boot");
   }
 
   // In production (autoscale), the standalone worker workflow does not run —

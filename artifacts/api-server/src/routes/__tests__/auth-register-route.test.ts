@@ -1,10 +1,16 @@
 // Focused coverage for POST /api/auth/register.
 //
-// The route is wired into rbac-route-matrix's "reserved-email" check, but
-// that test asserts ONE branch (the system@mtos.local oracle-blocking
-// 409). This file pins the four user-visible outcomes the new
-// self-serve registration page depends on:
-//   (a) happy path -> 201 with { token, refresh_token, expires_in, user }.
+// Task #56 changed the success contract: registration no longer issues
+// a JWT pair. The route now creates a pending user (email_verified_at
+// NULL), enqueues a signed verification email, and replies 202 with
+// { status: "pending_verification", message } so the UI can flip into
+// the "check your inbox" panel without ever holding a token for an
+// unverified account.
+//
+// This file pins the four user-visible outcomes the self-serve
+// registration page depends on:
+//   (a) happy path -> 202 with { status: "pending_verification", message }
+//       and NO token / refresh_token / user fields.
 //   (b) duplicate-email collision -> 409 { error: "Email already registered" }.
 //   (c) weak password -> 400 with the verbatim complexity-rule string the
 //       UI surfaces inline.
@@ -45,10 +51,16 @@ const WEAK_EMAIL = `register-weak-${TS}@mtos.test`;
 const STRONG_PASSWORD = "Sup3r$ecret!Pa$$w0rd";
 
 interface RegisterResponse {
+  // Pending-verification 202 envelope (Task #56 happy path).
+  status?: unknown;
+  message?: unknown;
+  // Legacy success fields — these MUST NOT appear on a 202 response now.
+  // Kept on the type so assertions can still examine and reject them.
   token?: unknown;
   refresh_token?: unknown;
   expires_in?: unknown;
   user?: { id?: unknown; email?: unknown; name?: unknown; role?: unknown };
+  // 4xx error envelope.
   error?: unknown;
 }
 
@@ -101,37 +113,82 @@ after(async () => {
   await close();
 });
 
-test("(a) happy path: returns 201 with JWT pair, refresh token, viewer role, and bound user row", async () => {
+test("(a) happy path: returns 202 pending_verification envelope and creates an unverified user row (no JWT issued)", async () => {
   const resp = await registerProbe({
     email: HAPPY_EMAIL,
     password: STRONG_PASSWORD,
     name: "Happy Path",
   });
-  assert.equal(resp.status, 201, `expected 201, got ${resp.status} (body=${JSON.stringify(resp.body)})`);
-  assert.equal(typeof resp.body.token, "string", "JWT access token must be a string");
-  assert.ok(
-    typeof resp.body.token === "string" && resp.body.token.split(".").length === 3,
-    "access token must be a 3-segment JWT",
+  assert.equal(
+    resp.status,
+    202,
+    `expected 202, got ${resp.status} (body=${JSON.stringify(resp.body)})`,
   );
-  assert.equal(typeof resp.body.refresh_token, "string", "refresh token must be a string");
-  assert.equal(resp.body.expires_in, 900, "access token TTL must be 900s");
-  assert.ok(resp.body.user, "user payload must be present");
-  assert.equal(resp.body.user?.email, HAPPY_EMAIL);
-  assert.equal(resp.body.user?.name, "Happy Path");
-  // Server always assigns viewer; the request did not carry a role.
-  assert.equal(resp.body.user?.role, "viewer", "freshly-registered users must default to viewer role");
-  assert.equal(typeof resp.body.user?.id, "number");
+  assert.equal(
+    resp.body.status,
+    "pending_verification",
+    "response envelope must announce the pending-verification state so the UI can flip into the check-your-email panel",
+  );
+  assert.equal(typeof resp.body.message, "string", "message must be a UI-renderable string");
+  assert.match(
+    String(resp.body.message),
+    /verify|verification|email/i,
+    "message must reference email verification so the UI does not need to translate copy",
+  );
+  // CRITICAL: an unverified account must NOT be granted a session. If
+  // any of these fields ever leak back into the 202 envelope, the
+  // verification gate can be trivially bypassed.
+  assert.equal(resp.body.token, undefined, "no access token must be issued before verification");
+  assert.equal(
+    resp.body.refresh_token,
+    undefined,
+    "no refresh token must be issued before verification",
+  );
+  assert.equal(resp.body.user, undefined, "no user payload must be returned before verification");
+
+  // The row exists but is pending: email_verified_at must be NULL and a
+  // hashed verification token must be staged for /verify-email to consume.
+  const rows = await db.execute(
+    sql`SELECT email_verified_at, email_verification_token_hash, email_verification_token_expires_at FROM mtos_users WHERE email = ${HAPPY_EMAIL}`,
+  );
+  const r =
+    (
+      rows as unknown as {
+        rows?: Array<{
+          email_verified_at: unknown;
+          email_verification_token_hash: unknown;
+          email_verification_token_expires_at: unknown;
+        }>;
+      }
+    ).rows ?? [];
+  assert.equal(r.length, 1, "register must persist a user row even when issuing no token");
+  assert.equal(
+    r[0]?.email_verified_at,
+    null,
+    "freshly-registered users must start with email_verified_at = NULL",
+  );
+  assert.equal(
+    typeof r[0]?.email_verification_token_hash,
+    "string",
+    "register must stage a SHA-256 hash of the verification token (never the plaintext)",
+  );
+  assert.ok(
+    r[0]?.email_verification_token_expires_at,
+    "register must stamp an expiry on the verification token so it cannot be replayed indefinitely",
+  );
 });
 
 test("(b) duplicate email returns 409 { error: 'Email already registered' }", async () => {
   // Seed the dupe row via /register itself so we exercise the same write
-  // path the conflict guard reads from.
+  // path the conflict guard reads from. The seed call returns 202 now
+  // (pending verification) but the duplicate-detection branch only
+  // cares that the row exists — verification status is irrelevant.
   const seed = await registerProbe({
     email: DUPE_EMAIL,
     password: STRONG_PASSWORD,
     name: "Dupe Seed",
   });
-  assert.equal(seed.status, 201, `seed must succeed, got ${seed.status}`);
+  assert.equal(seed.status, 202, `seed must succeed, got ${seed.status}`);
 
   const dupe = await registerProbe({
     email: DUPE_EMAIL,

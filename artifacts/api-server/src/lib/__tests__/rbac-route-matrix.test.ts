@@ -185,13 +185,23 @@ describe("public allowlist (validateRouteTable policy)", () => {
     assert.ok(publicRouters.size > 0, "expected at least one public router in policy");
   });
 
-  test("auth router exceptions are exactly login / refresh / register", () => {
+  test("auth router exceptions are exactly login / refresh / register / verify-email", () => {
     if (!booted) throw new Error("app not booted");
     const exceptions = booted.policy
       .filter((p) => p.status === "auth-exception")
       .map((p) => `${p.method} ${p.path}`)
       .sort();
-    assert.deepEqual(exceptions, ["POST /login", "POST /refresh", "POST /register"]);
+    // GET /verify-email is the link-consumption endpoint added by Task #56.
+    // The user has no session yet — registration deliberately does not
+    // issue tokens — so this route must be reachable without a Bearer
+    // header. The single-use SHA-256-hashed token in the query string
+    // is the credential.
+    assert.deepEqual(exceptions, [
+      "GET /verify-email",
+      "POST /login",
+      "POST /refresh",
+      "POST /register",
+    ]);
   });
 
   test("EVERY non-public route is either auth-only or role-gated (no unprotected leaks)", () => {
@@ -869,18 +879,39 @@ describe("real login + MFA smoke test (Task #51 T005, blocker #20)", () => {
     const cleanupIds: number[] = [];
 
     try {
-      // 1. Register a fresh user — public registration always lands as viewer.
+      // 1. Register a fresh user — public registration always lands as
+      // viewer. As of Task #56 register returns 202 + pending_verification
+      // and does NOT issue a JWT pair; the user is persisted with
+      // email_verified_at = NULL until the verification link is consumed.
       const reg = await probe("POST", "/api/auth/register", {
         body: { email, password, name: "MFA Smoke" },
       });
-      assert.equal(reg.status, 201, `register must succeed, got ${reg.status} (${JSON.stringify(reg.body)})`);
-      const regBody = reg.body as { token?: string; user?: { id?: number; role?: string } };
-      assert.ok(regBody.token, "register must return an access token");
-      assert.equal(regBody.user?.role, "viewer", "public registration must assign viewer role");
-      const userId = regBody.user?.id;
-      if (typeof userId === "number") cleanupIds.push(userId);
+      assert.equal(
+        reg.status,
+        202,
+        `register must succeed (pending_verification), got ${reg.status} (${JSON.stringify(reg.body)})`,
+      );
+      const regBody = reg.body as { status?: string; token?: unknown };
+      assert.equal(regBody.status, "pending_verification");
+      assert.equal(regBody.token, undefined, "register must NOT return a token before verification");
 
-      // 2. Real /login: no dev bypass, password path returns a token.
+      // The verification email is async; this smoke test does not exercise
+      // the link-consumption endpoint (auth-verify-email-route.test.ts owns
+      // that contract). Mark the row verified directly so the rest of the
+      // login → MFA flow can proceed without a real inbox.
+      const userRows = await db.execute(
+        sql`UPDATE mtos_users SET email_verified_at = NOW(), email_verification_token_hash = NULL, email_verification_token_expires_at = NULL WHERE email = ${email} RETURNING id, role`,
+      );
+      const userRow = (
+        userRows as unknown as { rows?: Array<{ id: number; role: string }> }
+      ).rows?.[0];
+      assert.ok(userRow, "register must persist a user row even without issuing a token");
+      assert.equal(userRow!.role, "viewer", "public registration must assign viewer role");
+      cleanupIds.push(userRow!.id);
+
+      // 2. Real /login (now that the row is verified): password path
+      // returns a token. Without the verified flag the server would 403
+      // with code=email_unverified — exactly the new gate this task adds.
       const login1 = await probe("POST", "/api/auth/login", { body: { email, password } });
       assert.equal(login1.status, 200, `login must succeed, got ${login1.status} (${JSON.stringify(login1.body)})`);
       const login1Body = login1.body as { token?: string; mfa_required?: boolean };

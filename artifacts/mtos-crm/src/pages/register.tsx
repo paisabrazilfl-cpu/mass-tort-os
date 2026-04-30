@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "wouter";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { Loader2, MailCheck, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,13 +22,21 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Set when /api/auth/register returns 202 + pending_verification.
+  // Renders the post-submit "check your email" panel instead of the form.
+  // Survives only as long as this page is mounted — refresh sends the
+  // user back to the form (intentional: stale state would lie about
+  // whether the email was actually sent).
+  const [submittedEmail, setSubmittedEmail] = useState<string | null>(null);
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
 
   useEffect(() => {
     document.title = "Create account · MTOS";
   }, []);
 
   // If a session is already live (e.g. dev-bypass or returning user),
-  // skip the form and land on the dashboard.
+  // skip the form and land on the dashboard. The check-your-email panel
+  // is only shown to anonymous visitors who just submitted.
   useEffect(() => {
     if (status === "authed" && user) {
       navigate("/", { replace: true });
@@ -45,8 +53,9 @@ export default function RegisterPage() {
     setSubmitting(true);
     try {
       const result = await register(email.trim(), password, name.trim());
-      if (result.kind === "ok") {
-        navigate("/", { replace: true });
+      if (result.kind === "pending_verification") {
+        setSubmittedEmail(result.email);
+        setPendingMessage(result.message);
         return;
       }
       setError(result.message);
@@ -60,6 +69,36 @@ export default function RegisterPage() {
       <div className="flex min-h-[100dvh] items-center justify-center bg-background">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden="true" />
         <span className="sr-only">Loading…</span>
+      </div>
+    );
+  }
+
+  if (submittedEmail) {
+    return (
+      <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4 py-10">
+        <div className="w-full max-w-sm space-y-6 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <MailCheck className="h-6 w-6" aria-hidden="true" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-semibold tracking-tight">Check your email</h1>
+            <p className="text-sm text-muted-foreground" data-testid="register-pending-message">
+              {pendingMessage ??
+                "Account created. Check your email for a verification link to finish signing up."}
+            </p>
+          </div>
+          <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+            We sent a verification link to{" "}
+            <span className="font-medium text-foreground">{submittedEmail}</span>. Open it to
+            activate your account — the link expires in 24 hours.
+          </p>
+          <p className="text-center text-sm text-muted-foreground">
+            Already verified?{" "}
+            <Link href="/login" className="font-medium text-primary hover:underline">
+              Sign in
+            </Link>
+          </p>
+        </div>
       </div>
     );
   }

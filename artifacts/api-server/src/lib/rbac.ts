@@ -678,7 +678,21 @@ type UserCredentialsRow = AuthUser & {
   failed_login_attempts: number;
   locked_until: Date | null;
   token_version: number;
+  email_verified_at: Date | null;
 } & Record<string, unknown>;
+
+/**
+ * Optional verification fields for `createUser`. When supplied, the new
+ * row is created in a "pending" state — `email_verified_at` is left NULL
+ * and the verification token hash + expiry are stored. The caller is
+ * responsible for emailing the corresponding plaintext token. When
+ * omitted, the row is created already-verified (used by internal
+ * paths such as ensureSystemUser).
+ */
+export interface CreateUserPendingVerification {
+  tokenHash: string;
+  expiresAt: Date;
+}
 
 export async function createUser(
   email: string,
@@ -686,10 +700,20 @@ export async function createUser(
   role: UserRole,
   passwordHash: string,
   firmId: number,
+  pendingVerification?: CreateUserPendingVerification,
 ): Promise<AuthUser> {
+  const verifiedAt = pendingVerification ? null : new Date();
+  const tokenHash = pendingVerification?.tokenHash ?? null;
+  const tokenExpires = pendingVerification?.expiresAt ?? null;
   const result = await db.execute(sql`
-    INSERT INTO mtos_users (email, name, role, password_hash, firm_id)
-    VALUES (${email}, ${name}, ${role}, ${passwordHash}, ${firmId})
+    INSERT INTO mtos_users (
+      email, name, role, password_hash, firm_id,
+      email_verified_at, email_verification_token_hash, email_verification_token_expires_at
+    )
+    VALUES (
+      ${email}, ${name}, ${role}, ${passwordHash}, ${firmId},
+      ${verifiedAt}, ${tokenHash}, ${tokenExpires}
+    )
     RETURNING id, email, name, role, firm_id, token_version
   `);
   const rows = rowsOf<UserRow>(result);
@@ -698,11 +722,62 @@ export async function createUser(
 
 export async function getUserByEmail(email: string): Promise<UserCredentialsRow | null> {
   const result = await db.execute(sql`
-    SELECT id, email, name, role, firm_id, password_hash, mfa_enabled, totp_secret, failed_login_attempts, locked_until, token_version
+    SELECT id, email, name, role, firm_id, password_hash, mfa_enabled, totp_secret,
+           failed_login_attempts, locked_until, token_version, email_verified_at
     FROM mtos_users WHERE email = ${email} LIMIT 1
   `);
   const rows = rowsOf<UserCredentialsRow>(result);
   return rows[0] ?? null;
+}
+
+/**
+ * Look up a user by the SHA-256 hash of their email-verification token,
+ * but only return a row if the token is still within its expiry window
+ * AND the account is still pending (email_verified_at IS NULL). A
+ * second invocation of the same link, or a use after expiry, returns
+ * null so the verify-email handler can respond with a generic
+ * "invalid or expired" message instead of leaking which case applied.
+ *
+ * Comparison uses constant-time equality at the SQL layer (= on a
+ * fixed-length hex string) and the column itself is indexed implicitly
+ * via the row scan; for the volumes this single endpoint sees that is
+ * adequate. Single-use is enforced by the verify-email handler clearing
+ * both *_token_hash and *_token_expires_at on success.
+ */
+export async function getUserByVerificationToken(tokenHash: string): Promise<AuthUser | null> {
+  const result = await db.execute(sql`
+    SELECT id, email, name, role, firm_id, token_version
+    FROM mtos_users
+    WHERE email_verification_token_hash = ${tokenHash}
+      AND email_verification_token_expires_at IS NOT NULL
+      AND email_verification_token_expires_at > NOW()
+      AND email_verified_at IS NULL
+    LIMIT 1
+  `);
+  const rows = rowsOf<UserRow>(result);
+  return rows[0] ? (rows[0] as AuthUser) : null;
+}
+
+/**
+ * Mark a user as email-verified and clear the single-use token fields
+ * atomically. Returns true when exactly one row transitioned from
+ * pending → verified (the caller may then issue a JWT pair). Returns
+ * false when no row matched the predicate (race: another request
+ * already consumed this token, or the row was deleted).
+ */
+export async function markEmailVerified(userId: number, tokenHash: string): Promise<boolean> {
+  const result = await db.execute(sql`
+    UPDATE mtos_users
+    SET email_verified_at = NOW(),
+        email_verification_token_hash = NULL,
+        email_verification_token_expires_at = NULL,
+        updated_at = NOW()
+    WHERE id = ${userId}
+      AND email_verification_token_hash = ${tokenHash}
+      AND email_verified_at IS NULL
+    RETURNING id
+  `);
+  return rowsOf<{ id: number }>(result).length === 1;
 }
 
 export async function getUserById(id: number): Promise<AuthUser | null> {

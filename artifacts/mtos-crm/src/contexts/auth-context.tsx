@@ -31,7 +31,7 @@ export type LoginOutcome =
   | { kind: "error"; code: string; message: string };
 
 export type RegisterOutcome =
-  | { kind: "ok" }
+  | { kind: "pending_verification"; email: string; message: string }
   | { kind: "error"; code: string; message: string };
 
 type Ctx = {
@@ -41,6 +41,7 @@ type Ctx = {
   login: (email: string, password: string, totpCode?: string) => Promise<LoginOutcome>;
   register: (email: string, password: string, name: string) => Promise<RegisterOutcome>;
   verifyMfa: (totpCode: string) => Promise<LoginOutcome>;
+  verifyEmail: (token: string) => Promise<LoginOutcome>;
   cancelMfa: () => void;
   logout: () => Promise<void>;
 };
@@ -167,6 +168,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             message: "Too many attempts. Please wait a few minutes and try again.",
           };
         }
+        // 403 + code=email_unverified is the new login-time gate (Task #56).
+        // Handle this BEFORE the generic 4xx branch so we don't trample the
+        // server-supplied "verify your email" copy with the bad-credentials
+        // fallback. We only emit this when there is no totpCode in flight,
+        // because email_unverified is checked AFTER MFA on the server, so
+        // a 403 carrying a totp_code means something else (defensive).
+        if (
+          res.status === 403 &&
+          typeof body.code === "string" &&
+          body.code === "email_unverified"
+        ) {
+          return {
+            kind: "error",
+            code: "email_unverified",
+            message:
+              (typeof body.message === "string" && body.message) ||
+              "Please verify your email address before signing in. Check your inbox for the verification link.",
+          };
+        }
         if (!res.ok) {
           const code = (typeof body.code === "string" ? body.code : "") || "bad_credentials";
           if (totpCode) {
@@ -257,10 +277,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return { kind: "error", code, message };
         }
 
-        // Backend returns the freshly-created user row WITHOUT mfa_enabled
-        // (createUser RETURNING list omits it). New users always start with
-        // MFA off, so default it here so the context type stays honest.
-        const rawUser = body.user as (Omit<AuthUser, "mfa_enabled"> & { mfa_enabled?: boolean }) | undefined;
+        // Task #56: registration no longer issues a JWT pair. The
+        // backend creates a pending user row, emails a verification
+        // link, and responds 202 with a check-your-email envelope. The
+        // RegisterPage uses `pending_verification` to flip into a
+        // success panel that tells the user to look at their inbox.
+        const message =
+          (typeof body.message === "string" && body.message) ||
+          "Account created. Check your email for a verification link to finish signing up.";
+        return { kind: "pending_verification", email, message };
+      } catch {
+        return {
+          kind: "error",
+          code: "network",
+          message: "Network error — please check your connection and retry.",
+        };
+      }
+    },
+    [],
+  );
+
+  // Consume the email-verification link. Used by /verify-email page on
+  // mount to swap the single-use token for a JWT pair and immediately
+  // sign the user in. Mirrors the original register success path.
+  const verifyEmail = useCallback(
+    async (token: string): Promise<LoginOutcome> => {
+      try {
+        const res = await fetch(
+          `/api/auth/verify-email?token=${encodeURIComponent(token)}`,
+          { method: "GET" },
+        );
+        let body: Record<string, unknown> = {};
+        try {
+          body = (await res.json()) as Record<string, unknown>;
+        } catch {
+          /* tolerate empty body */
+        }
+        if (!res.ok) {
+          const code = (typeof body.code === "string" && body.code) || "invalid_token";
+          const message =
+            (typeof body.message === "string" && body.message) ||
+            (typeof body.error === "string" && body.error) ||
+            "This verification link is invalid or has expired.";
+          return { kind: "error", code, message };
+        }
+
+        const rawUser = body.user as
+          | (Omit<AuthUser, "mfa_enabled"> & { mfa_enabled?: boolean })
+          | undefined;
         const accessToken = typeof body.token === "string" ? body.token : null;
         const refreshToken = typeof body.refresh_token === "string" ? body.refresh_token : null;
         const expiresIn = typeof body.expires_in === "number" ? body.expires_in : 900;
@@ -268,7 +332,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return {
             kind: "error",
             code: "bad_response",
-            message: "Registration response was malformed. Please retry.",
+            message: "Verification response was malformed. Please retry the link.",
           };
         }
         const userPayload: AuthUser = { ...rawUser, mfa_enabled: rawUser.mfa_enabled ?? false };
@@ -332,6 +396,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         register,
         verifyMfa,
+        verifyEmail,
         cancelMfa,
         logout,
       }}

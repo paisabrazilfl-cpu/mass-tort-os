@@ -77,6 +77,11 @@ const AUTH_ROUTE_EXCEPTIONS = new Set([
   "POST /login",
   "POST /refresh",
   "POST /register",
+  // Email verification link consumption (Task #56). The user has no
+  // session yet — the whole point is to bootstrap one — so this must
+  // be reachable without a Bearer token. Single-use, short-lived,
+  // SHA-256-hashed token in the query string is the credential.
+  "GET /verify-email",
 ]);
 
 // Authenticated routes that legitimately do not need a role gate (caller's

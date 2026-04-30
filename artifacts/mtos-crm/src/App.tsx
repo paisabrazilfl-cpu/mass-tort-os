@@ -15,6 +15,7 @@ import { describeError } from "@/lib/api-fetch";
 import LoginPage from "@/pages/login";
 import LoginMfaPage from "@/pages/login-mfa";
 import RegisterPage from "@/pages/register";
+import VerifyEmailPage from "@/pages/verify-email";
 import Dashboard from "@/pages/dashboard";
 import Pipeline from "@/pages/pipeline";
 import Leads from "@/pages/leads";
@@ -136,6 +137,7 @@ function Router() {
       <Route path="/login" component={LoginPage} />
       <Route path="/login/mfa" component={LoginMfaPage} />
       <Route path="/register" component={RegisterPage} />
+      <Route path="/verify-email" component={VerifyEmailPage} />
       <Route>
         <RequireAuth>
           <AuthedRoutes />
