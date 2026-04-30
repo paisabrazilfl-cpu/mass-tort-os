@@ -1183,6 +1183,17 @@ export interface BillingStateEnvelope {
   data: BillingState;
 }
 
+export interface BillingFirmStatus {
+  subscription_status: string | null;
+  current_period_end: string | null;
+  has_firm: boolean;
+}
+
+export interface BillingFirmStatusEnvelope {
+  status: string;
+  data: BillingFirmStatus;
+}
+
 export interface BillingCheckoutBody {
   /** @minLength 1 */
   price_id: string;

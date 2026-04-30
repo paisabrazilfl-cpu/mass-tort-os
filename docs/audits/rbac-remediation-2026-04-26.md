@@ -576,7 +576,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **194 checked / 31 public / 163 protected / 0 unprotected.**
+Boot-time count: **195 checked / 31 public / 164 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -623,6 +623,7 @@ Boot-time count: **194 checked / 31 public / 163 protected / 0 unprotected.**
 | auth | POST | `/api/auth/register` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | GET | `/api/auth/users` | ✓ | ✓ |  |  |  | — | `users:list` | ✓ |
 | billing | POST | `/api/billing/checkout` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
+| billing | GET | `/api/billing/firm-status` | ✓ |  |  | ✓ |  | — | — | ✓ |
 | billing | GET | `/api/billing/invoices` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
 | billing | POST | `/api/billing/portal` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
 | billing | GET | `/api/billing/state` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |

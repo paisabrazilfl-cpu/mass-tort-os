@@ -16,7 +16,7 @@ import { Router } from "express";
 import { z } from "zod/v4";
 import { db, firmsTable, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { requirePermission, Permission } from "../lib/rbac";
+import { requirePermission, authMiddleware, Permission } from "../lib/rbac";
 import {
   createCheckoutSession,
   createPortalSession,
@@ -74,6 +74,31 @@ router.get(
     });
   },
 );
+
+// /firm-status — minimal subscription posture readable by ANY authenticated
+// user in the firm. Powers the global in-app billing banner that warns
+// every operator (not just admins) when their firm is past_due / canceled
+// / unpaid so write actions visibly fail with context. Returns ONLY the
+// non-sensitive status + period end; Stripe IDs stay behind BILLING_MANAGE
+// on /state.
+router.get("/firm-status", authMiddleware, async (req, res) => {
+  const firm = await getFirmForUser(req.user!.id);
+  if (!firm) {
+    res.json({
+      status: "ok",
+      data: { subscription_status: null, current_period_end: null, has_firm: false },
+    });
+    return;
+  }
+  res.json({
+    status: "ok",
+    data: {
+      subscription_status: firm.subscription_status,
+      current_period_end: firm.current_period_end,
+      has_firm: true,
+    },
+  });
+});
 
 const checkoutSchema = z.object({
   price_id: z.string().min(1),

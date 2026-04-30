@@ -37,6 +37,8 @@ export * from "./backgroundHubSourceSourceType";
 export * from "./billingCheckoutBody";
 export * from "./billingCheckoutEnvelope";
 export * from "./billingCheckoutSession";
+export * from "./billingFirmStatus";
+export * from "./billingFirmStatusEnvelope";
 export * from "./billingInvoice";
 export * from "./billingInvoicesEnvelope";
 export * from "./billingPortalBody";

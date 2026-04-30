@@ -2060,6 +2060,23 @@ export const GetBillingStateResponse = zod.object({
 });
 
 /**
+ * Powers the global in-app billing banner shown to every operator
+(not just admins) when their firm's subscription is past_due,
+canceled, or unpaid. Returns ONLY the non-sensitive status +
+period_end; Stripe IDs stay behind BILLING_MANAGE on /state.
+
+ * @summary Minimal subscription posture readable by ANY authenticated user
+ */
+export const GetBillingFirmStatusResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    subscription_status: zod.string().nullable(),
+    current_period_end: zod.string().nullable(),
+    has_firm: zod.boolean(),
+  }),
+});
+
+/**
  * @summary Create a Stripe Checkout session for the requester's firm
  */
 

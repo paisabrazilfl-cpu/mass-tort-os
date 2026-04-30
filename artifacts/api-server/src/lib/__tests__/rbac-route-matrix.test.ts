@@ -211,6 +211,7 @@ describe("public allowlist (validateRouteTable policy)", () => {
       "auth POST /mfa/disable",
       "auth POST /mfa/setup",
       "auth POST /mfa/verify",
+      "billing GET /firm-status",
       "forms GET /categories",
       "forms POST /validate/address",
       "forms POST /validate/email",

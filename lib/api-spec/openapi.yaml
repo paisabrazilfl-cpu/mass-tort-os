@@ -1574,6 +1574,24 @@ paths:
               schema:
                 $ref: "#/components/schemas/BillingStateEnvelope"
 
+  /billing/firm-status:
+    get:
+      operationId: getBillingFirmStatus
+      tags: [billing]
+      summary: Minimal subscription posture readable by ANY authenticated user
+      description: |
+        Powers the global in-app billing banner shown to every operator
+        (not just admins) when their firm's subscription is past_due,
+        canceled, or unpaid. Returns ONLY the non-sensitive status +
+        period_end; Stripe IDs stay behind BILLING_MANAGE on /state.
+      responses:
+        "200":
+          description: Firm subscription status envelope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingFirmStatusEnvelope"
+
   /billing/checkout:
     post:
       operationId: createBillingCheckout
@@ -3765,6 +3783,24 @@ components:
       properties:
         status: { type: string }
         data: { $ref: "#/components/schemas/BillingState" }
+      required: [status, data]
+
+    BillingFirmStatus:
+      type: object
+      properties:
+        subscription_status: { type: string, nullable: true }
+        current_period_end: { type: string, nullable: true }
+        has_firm: { type: boolean }
+      required:
+        - subscription_status
+        - current_period_end
+        - has_firm
+
+    BillingFirmStatusEnvelope:
+      type: object
+      properties:
+        status: { type: string }
+        data: { $ref: "#/components/schemas/BillingFirmStatus" }
       required: [status, data]
 
     BillingCheckoutBody:

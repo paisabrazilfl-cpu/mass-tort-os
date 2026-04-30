@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Sidebar } from "./sidebar";
 import { SidebarNav } from "./sidebar-nav";
 import { TopBar } from "./top-bar";
+import { BillingBanner } from "./billing-banner";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 interface LayoutProps {
@@ -27,6 +28,7 @@ export function Layout({ children }: LayoutProps) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onOpenSidebar={() => setSidebarOpen(true)} />
+        <BillingBanner />
         <main id="main" className="flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
             {children}

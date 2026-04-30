@@ -36,6 +36,8 @@ import { logger } from "../lib/logger";
 import { loadVapiCredentials } from "../lib/voice/vapi";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 import { encryptLeadFields, rebindLeadEncryptionAad } from "../lib/encryption";
+import { leadLookupHash } from "../lib/lead-lookup-hash";
+import { findExistingLeadForIntake } from "../lib/lead-dedup";
 
 const router = Router();
 
@@ -66,13 +68,20 @@ function normalizePhone(raw: string): string {
   return "";
 }
 
-function lookupHash(phoneE164: string, dob: string | null): string {
-  const norm = `${phoneE164}|${dob ?? ""}`.toLowerCase();
-  return crypto.createHash("sha256").update(norm).digest("hex");
-}
+// NOTE: We intentionally use the canonical `leadLookupHash(tort, email, phone)`
+// from lib/lead-lookup-hash.ts (and the `findExistingLeadForIntake` dedup
+// pipeline from lib/lead-dedup.ts) so Vapi-created leads share the SAME
+// dedup contract as CSV / intake-form / public-leads. A previous version
+// of this file hashed (phone|dob), which would have silently created
+// duplicate rows for leads visible to the rest of the pipeline because
+// `leads.lookup_hash` was being written with two different semantics.
 
 const lookupSchema = z.object({
   phone: z.string().min(7).max(32),
+  email: z.string().email().optional().nullable(),
+  tort_type: z.string().min(1).max(100).optional().nullable(),
+  // Accepted for back-compat with the assistant config; not used in the
+  // canonical hash (the (tort|email|phone10) triple is the contract).
   date_of_birth: z.string().optional().nullable(),
 });
 
@@ -91,9 +100,21 @@ router.post("/lookup-lead", async (req, res) => {
     res.status(200).json({ ok: false, code: "BAD_PHONE" });
     return;
   }
-  const dob = parsed.data.date_of_birth ?? null;
-  const hash = lookupHash(phoneE164, dob);
+  const tortType = (parsed.data.tort_type ?? "unknown").trim() || "unknown";
   try {
+    // Use the shared dedup pipeline. It tries (tort|email|phone10) hash
+    // first, then exact email, then a phone-decrypt scan — exactly what
+    // every other ingestion surface uses, so Vapi sees the same matches
+    // a CSV import would.
+    const match = await findExistingLeadForIntake({
+      tortType,
+      email: parsed.data.email ?? null,
+      phone: phoneE164,
+    });
+    if (!match) {
+      res.status(200).json({ ok: true, found: false });
+      return;
+    }
     const rows = await db
       .select({
         id: leadsTable.id,
@@ -102,7 +123,7 @@ router.post("/lookup-lead", async (req, res) => {
         status: leadsTable.status,
       })
       .from(leadsTable)
-      .where(eq(leadsTable.lookup_hash, hash))
+      .where(eq(leadsTable.id, match.leadId))
       .limit(1);
     const row = rows[0];
     if (!row) {
@@ -149,16 +170,21 @@ router.post("/create-lead", async (req, res) => {
     return;
   }
   const dob = parsed.data.date_of_birth ?? null;
-  const hash = lookupHash(phoneE164, dob);
+  // Canonical hash (matches CSV / form / public-leads). May be null when
+  // email is missing — that is correct: lookup_hash is intentionally NOT
+  // populated for partial inputs to avoid (tort, email, "")(tort, email, phone)
+  // collisions silently deduping unrelated rows.
+  const hash = leadLookupHash(parsed.data.tort_type, parsed.data.email ?? null, phoneE164);
   try {
-    // Dedupe — return the existing row if we already have one.
-    const existing = await db
-      .select({ id: leadsTable.id })
-      .from(leadsTable)
-      .where(eq(leadsTable.lookup_hash, hash))
-      .limit(1);
-    if (existing[0]) {
-      res.status(200).json({ ok: true, lead_id: existing[0].id, deduped: true });
+    // Dedupe through the shared pipeline so we hit the same matches every
+    // other ingestion surface would.
+    const existing = await findExistingLeadForIntake({
+      tortType: parsed.data.tort_type,
+      email: parsed.data.email ?? null,
+      phone: phoneE164,
+    });
+    if (existing) {
+      res.status(200).json({ ok: true, lead_id: existing.leadId, deduped: true });
       return;
     }
 

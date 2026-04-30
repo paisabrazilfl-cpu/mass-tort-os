@@ -27,6 +27,7 @@ import type {
   BackgroundHubSnapshot,
   BillingCheckoutBody,
   BillingCheckoutEnvelope,
+  BillingFirmStatusEnvelope,
   BillingInvoicesEnvelope,
   BillingPortalBody,
   BillingPortalEnvelope,
@@ -5800,6 +5801,86 @@ export function useGetBillingState<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetBillingStateQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Powers the global in-app billing banner shown to every operator
+(not just admins) when their firm's subscription is past_due,
+canceled, or unpaid. Returns ONLY the non-sensitive status +
+period_end; Stripe IDs stay behind BILLING_MANAGE on /state.
+
+ * @summary Minimal subscription posture readable by ANY authenticated user
+ */
+export const getGetBillingFirmStatusUrl = () => {
+  return `/api/billing/firm-status`;
+};
+
+export const getBillingFirmStatus = async (
+  options?: RequestInit,
+): Promise<BillingFirmStatusEnvelope> => {
+  return customFetch<BillingFirmStatusEnvelope>(getGetBillingFirmStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetBillingFirmStatusQueryKey = () => {
+  return [`/api/billing/firm-status`] as const;
+};
+
+export const getGetBillingFirmStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBillingFirmStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBillingFirmStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetBillingFirmStatusQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getBillingFirmStatus>>
+  > = ({ signal }) => getBillingFirmStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getBillingFirmStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetBillingFirmStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBillingFirmStatus>>
+>;
+export type GetBillingFirmStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Minimal subscription posture readable by ANY authenticated user
+ */
+
+export function useGetBillingFirmStatus<
+  TData = Awaited<ReturnType<typeof getBillingFirmStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBillingFirmStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetBillingFirmStatusQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

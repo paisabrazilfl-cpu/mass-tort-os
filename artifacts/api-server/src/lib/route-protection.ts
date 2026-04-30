@@ -93,6 +93,9 @@ const AUTH_ONLY_ROUTES = new Set([
   "forms GET /categories",
   "forms POST /validate/email",
   "forms POST /validate/address",
+  // billing router — minimal subscription posture for the global banner;
+  // any authenticated user can read it (no Stripe IDs surfaced).
+  "billing GET /firm-status",
 ]);
 
 interface RouteIssue {
