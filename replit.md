@@ -115,7 +115,7 @@ The `artifacts/api-server/src/lib/` directory is being audited module-by-module 
 
 The original Task #42 scope was a 36-page exhaustive frontend sweep. Per user direction (Apr 30, 2026), scope was narrowed to launch-critical pages only — the goal is a stable launch UI, not exhaustive coverage. Pages outside the launch path are deferred to a post-launch backlog (still tracked, just not in this sweep). Audit method: render the page in a real browser via Playwright, exercise the primary interaction, and check console / network / 4xx / 5xx; for auth pages where the in-browser route is shadowed by the dev-mode `IS_DEV` auto-auth bypass in `rbac.ts:432` (intentional, fails closed in production), the underlying auth surface is verified at the API layer with a real scrypt-hashed admin row + live `POST /api/auth/login`.
 
-**Cumulative defects this sweep**: 0 fixed, 0 logged. Every audited page passed.
+**Cumulative defects this sweep (frontend pages)**: 0 fixed, 0 logged on the frontend pages themselves — every audited page passed. (For full transparency, the broader audit window that included this sweep also shipped one backend integration fix in commit `1bd15e2` — DocuSign preset field naming aligned with the live adapter (`api_key` + `account_sid`) and a registry-vs-adapter consistency guardrail added; that was a backend, not frontend, defect and is reported here for traceability only.)
 
 | Page | Route | Verdict | Evidence |
 | :-- | :-- | :-- | :-- |
@@ -158,8 +158,8 @@ The original Task #42 scope was a 36-page exhaustive frontend sweep. Per user di
 **Standing gates at task end (all GREEN, evidence captured):**
 
 - `pnpm run typecheck` — Done (all 4 packages: api-server, mtos-crm, mockup-sandbox, scripts)
+- `pnpm --filter @workspace/api-server test` — `tests 210 / suites 33 / pass 210 / fail 0` (full api-server suite, ~40s)
 - `bash scripts/check-rbac-route-matrix.sh` — `OK: route protection matrix in sync (173 rows including header). Section 11 headline 172 checked / 19 public / 153 protected / 0 unprotected.`
-- `pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac{,-route-matrix,-route-matrix-headline}.test.ts` — `tests 117 / pass 117 / fail 0`
 - `pnpm --filter @workspace/db run drift` — `check-drift: OK — 32 tables in sync with database.`
 
 **Audit residue**: A temporary admin (`audit@mtos.local`, scrypt-hashed) was created for live API probing of the auth surface and deleted at sweep end (`DELETE 1`). No DB residue.
