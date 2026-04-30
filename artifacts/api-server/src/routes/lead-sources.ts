@@ -25,7 +25,7 @@ router.get("/", requirePermission(Permission.LEAD_SOURCES_VIEW), async (_req, re
 router.post("/", requirePermission(Permission.LEAD_SOURCES_MANAGE), async (req, res) => {
   const parsed = sourceSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
   const d = parsed.data;
@@ -59,7 +59,7 @@ router.put("/:id", requirePermission(Permission.LEAD_SOURCES_MANAGE), async (req
   }
   const parsed = sourceSchema.partial().safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
   const d = parsed.data;

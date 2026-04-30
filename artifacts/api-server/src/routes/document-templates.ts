@@ -55,7 +55,7 @@ router.get("/:id", requirePermission(Permission.TEMPLATES_VIEW), async (req, res
 router.post("/", requirePermission(Permission.TEMPLATES_MANAGE), auditAction("create_template"), async (req, res) => {
   const parsed = templateSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
   const data = parsed.data;
@@ -78,7 +78,7 @@ router.put("/:id", requirePermission(Permission.TEMPLATES_MANAGE), auditAction("
   const id = Number(req.params.id);
   const parsed = templateSchema.partial().safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
   const updates = { ...parsed.data, updated_at: new Date() } as any;
@@ -178,7 +178,7 @@ router.get("/assignments/by-template/:templateId", requirePermission(Permission.
 router.post("/assignments", requirePermission(Permission.TEMPLATES_MANAGE), auditAction("upsert_template_assignment"), async (req, res) => {
   const parsed = assignmentSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
   const d = parsed.data;

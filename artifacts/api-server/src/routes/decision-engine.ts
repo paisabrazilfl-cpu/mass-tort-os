@@ -54,7 +54,7 @@ const updateSettingsSchema = z.object({
 router.put("/settings", requirePermission(Permission.DECISION_ENGINE_MANAGE), async (req, res) => {
   const parsed = updateSettingsSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
   await updateEngineSettings(parsed.data);

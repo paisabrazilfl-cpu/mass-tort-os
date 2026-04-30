@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, vendorsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
-import { notFound } from "../lib/http-errors";
+import { badRequest, notFound } from "../lib/http-errors";
 import {
   CreateVendorBody,
   UpdateVendorBody,
@@ -25,7 +25,7 @@ router.get("/", requirePermission(Permission.VENDORS_VIEW), async (_req, res) =>
 router.post("/", requirePermission(Permission.VENDORS_MANAGE), auditAction("create_vendor"), async (req, res) => {
   const parsed = CreateVendorBody.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
 
@@ -49,7 +49,7 @@ router.post("/", requirePermission(Permission.VENDORS_MANAGE), auditAction("crea
 router.get("/:id", requirePermission(Permission.VENDORS_VIEW), async (req, res) => {
   const parsed = GetVendorParams.safeParse(req.params);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
 
@@ -69,13 +69,13 @@ router.get("/:id", requirePermission(Permission.VENDORS_VIEW), async (req, res) 
 router.patch("/:id", requirePermission(Permission.VENDORS_MANAGE), auditAction("update_vendor"), async (req, res) => {
   const paramsParsed = UpdateVendorParams.safeParse(req.params);
   if (!paramsParsed.success) {
-    res.status(400).json({ error: paramsParsed.error.message });
+    badRequest(res, "Invalid path parameters", paramsParsed.error.flatten());
     return;
   }
 
   const bodyParsed = UpdateVendorBody.safeParse(req.body);
   if (!bodyParsed.success) {
-    res.status(400).json({ error: bodyParsed.error.message });
+    badRequest(res, "Invalid request body", bodyParsed.error.flatten());
     return;
   }
 
@@ -97,7 +97,7 @@ router.patch("/:id", requirePermission(Permission.VENDORS_MANAGE), auditAction("
 router.delete("/:id", requirePermission(Permission.VENDORS_DELETE), auditAction("delete_vendor"), async (req, res) => {
   const parsed = DeleteVendorParams.safeParse(req.params);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
 

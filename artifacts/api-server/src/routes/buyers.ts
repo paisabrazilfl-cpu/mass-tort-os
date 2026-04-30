@@ -48,7 +48,7 @@ router.get("/:id", requirePermission(Permission.BUYERS_VIEW), async (req, res) =
 router.post("/", requirePermission(Permission.BUYERS_MANAGE), auditAction("create_buyer"), async (req, res) => {
   const parsed = buyerSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
   try {
@@ -71,7 +71,7 @@ router.put("/:id", requirePermission(Permission.BUYERS_MANAGE), auditAction("upd
   }
   const parsed = buyerSchema.partial().safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
   const updates = { ...parsed.data, updated_at: new Date() } as any;

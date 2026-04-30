@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, documentsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
-import { notFound, serverError } from "../lib/http-errors";
+import { badRequest, notFound, serverError } from "../lib/http-errors";
 import {
   ListDocumentsQueryParams,
   CreateDocumentBody,
@@ -17,7 +17,7 @@ const router = Router();
 router.get("/", requirePermission(Permission.DOCUMENTS_VIEW), async (req, res) => {
   const parsed = ListDocumentsQueryParams.safeParse(req.query);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
 
@@ -40,7 +40,7 @@ router.get("/", requirePermission(Permission.DOCUMENTS_VIEW), async (req, res) =
 router.post("/", requirePermission(Permission.DOCUMENTS_CREATE), auditAction("create_document"), async (req, res) => {
   const parsed = CreateDocumentBody.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
 
@@ -64,13 +64,13 @@ router.post("/", requirePermission(Permission.DOCUMENTS_CREATE), auditAction("cr
 router.patch("/:id", requirePermission(Permission.DOCUMENTS_UPDATE), auditAction("update_document"), async (req, res) => {
   const paramsParsed = UpdateDocumentParams.safeParse({ id: Number(req.params.id) });
   if (!paramsParsed.success) {
-    res.status(400).json({ error: paramsParsed.error.message });
+    badRequest(res, "Invalid path parameters", paramsParsed.error.flatten());
     return;
   }
 
   const bodyParsed = UpdateDocumentBody.safeParse(req.body);
   if (!bodyParsed.success) {
-    res.status(400).json({ error: bodyParsed.error.message });
+    badRequest(res, "Invalid request body", bodyParsed.error.flatten());
     return;
   }
 
@@ -101,7 +101,7 @@ router.patch("/:id", requirePermission(Permission.DOCUMENTS_UPDATE), auditAction
 router.delete("/:id", requirePermission(Permission.DOCUMENTS_DELETE), auditAction("delete_document"), async (req, res) => {
   const parsed = DeleteDocumentParams.safeParse({ id: Number(req.params.id) });
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
 

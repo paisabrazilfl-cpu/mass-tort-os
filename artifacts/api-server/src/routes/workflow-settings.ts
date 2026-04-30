@@ -6,6 +6,7 @@ import { auditAction } from "../lib/rbac";
 import { z } from "zod/v4";
 import { listEsignProviders } from "../lib/esign";
 import { listFaxProviders } from "../lib/fax";
+import { badRequest } from "../lib/http-errors";
 
 const router = Router();
 router.use(authMiddleware);
@@ -69,7 +70,7 @@ router.get("/:scope", requirePermission(Permission.WORKFLOW_SETTINGS_VIEW), asyn
 router.put("/", requirePermission(Permission.WORKFLOW_SETTINGS_MANAGE), auditAction("update_workflow_settings"), async (req, res) => {
   const parsed = settingsSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
   const d = parsed.data;
