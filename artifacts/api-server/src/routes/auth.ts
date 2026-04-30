@@ -19,6 +19,7 @@ import {
   incrementFailedAttempts,
   resetFailedAttempts,
   isAccountLocked,
+  stampLastLogin,
   type UserRole,
 } from "../lib/rbac";
 import {
@@ -224,6 +225,10 @@ router.post("/login", authRateLimit, async (req, res) => {
   }
 
   await resetFailedAttempts(email);
+  // Stamp last_login_at AFTER all gates pass (password + MFA + verified)
+  // so the column reflects only successful interactive logins. The admin
+  // Users page (Task #58) uses this to triage dormant accounts.
+  await stampLastLogin(user.id);
 
   const accessToken = generateToken({
     id: user.id,

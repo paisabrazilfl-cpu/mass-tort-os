@@ -31,6 +31,7 @@ import webhooksRouter from "./webhooks";
 import billingRouter from "./billing";
 import callsRouter from "./calls";
 import vapiToolsRouter from "./vapi-tools";
+import usersRouter from "./users";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -144,5 +145,6 @@ router.use("/lead-sources", leadSourcesRouter);
 router.use("/buyers", buyersRouter);
 router.use("/document-templates", documentTemplatesRouter);
 router.use("/workflow-settings", workflowSettingsRouter);
+router.use("/users", usersRouter);
 
 export default router;

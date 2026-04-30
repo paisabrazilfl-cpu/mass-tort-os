@@ -183,6 +183,11 @@ export const Permission = {
 
   // User admin
   USERS_LIST: "users:list",
+  // Permission to mutate other users' role assignments (Task #58). Only
+  // granted to the admin role via Object.values(Permission) below — we
+  // never add this to attorney/paralegal/viewer because role-elevation is
+  // a privileged operation that bypasses the registration default.
+  USERS_MANAGE: "users:manage",
 
   // Billing (Stripe)
   BILLING_MANAGE: "billing:manage",
@@ -791,6 +796,85 @@ export async function getUserById(id: number): Promise<AuthUser | null> {
 export async function listUsers(): Promise<AuthUser[]> {
   const result = await db.execute(sql`SELECT id, email, name, role, firm_id FROM mtos_users ORDER BY id`);
   return rowsOf<UserRow>(result) as AuthUser[];
+}
+
+/**
+ * Row shape returned by the admin Users page (Task #58). Includes the
+ * non-secret status fields admins need to triage accounts: MFA on/off,
+ * verification state, and last successful login timestamp. Excludes
+ * password_hash, totp_secret, and the verification token hash so this
+ * row can be sent to the browser as-is.
+ */
+export interface AdminUserRow {
+  id: number;
+  email: string;
+  name: string;
+  role: UserRole;
+  firm_id: number;
+  mfa_enabled: boolean;
+  email_verified_at: Date | null;
+  last_login_at: Date | null;
+  created_at: Date;
+  // Index signature so this row type satisfies the rowsOf<T extends
+  // Record<string, unknown>> constraint without losing field types.
+  [key: string]: unknown;
+}
+
+/**
+ * Fetch every user belonging to a single firm, ordered by created_at
+ * desc so newly-registered viewers (the common reason an admin opens
+ * this page) sort to the top. Scoped strictly by firm_id; a cross-firm
+ * read would be a privilege escalation.
+ */
+export async function listUsersByFirm(firmId: number): Promise<AdminUserRow[]> {
+  const result = await db.execute(sql`
+    SELECT id, email, name, role, firm_id, mfa_enabled,
+           email_verified_at, last_login_at, created_at
+    FROM mtos_users
+    WHERE firm_id = ${firmId}
+    ORDER BY created_at DESC, id DESC
+  `);
+  return rowsOf<AdminUserRow>(result);
+}
+
+/**
+ * Atomically rewrite a user's role AND bump token_version so any JWT
+ * issued against the previous role is rejected on the next request
+ * (see isTokenVersionRevoked + authMiddleware). Scoped by firm_id so
+ * an admin in firm A can never touch a user in firm B even if they
+ * guess the user id. Returns the updated row, or null when no row
+ * matched (wrong firm, bad id, or DB-level race).
+ */
+export async function updateUserRoleAndBumpVersion(
+  userId: number,
+  firmId: number,
+  newRole: UserRole,
+): Promise<AdminUserRow | null> {
+  const result = await db.execute(sql`
+    UPDATE mtos_users
+    SET role = ${newRole},
+        token_version = token_version + 1,
+        updated_at = NOW()
+    WHERE id = ${userId} AND firm_id = ${firmId}
+    RETURNING id, email, name, role, firm_id, mfa_enabled,
+              email_verified_at, last_login_at, created_at
+  `);
+  const rows = rowsOf<AdminUserRow>(result);
+  return rows[0] ?? null;
+}
+
+/**
+ * Stamp last_login_at on a user row. Called by the auth /login route
+ * after password (+ MFA) verification AND the email-verification gate
+ * have both succeeded — never on failed attempts, so the column is a
+ * faithful "last successful interactive login" signal admins can use to
+ * triage dormant accounts.
+ */
+export async function stampLastLogin(userId: number): Promise<void> {
+  await db.execute(sql`
+    UPDATE mtos_users SET last_login_at = NOW(), updated_at = NOW()
+    WHERE id = ${userId}
+  `);
 }
 
 export async function incrementFailedAttempts(email: string): Promise<{ attempts: number; locked: boolean }> {

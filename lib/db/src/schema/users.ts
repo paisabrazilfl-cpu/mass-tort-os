@@ -29,6 +29,13 @@ export const usersTable = pgTable("mtos_users", {
   email_verified_at: timestamp("email_verified_at"),
   email_verification_token_hash: text("email_verification_token_hash"),
   email_verification_token_expires_at: timestamp("email_verification_token_expires_at"),
+  // Last successful interactive login. Populated by the auth route after
+  // password (+ MFA) verification succeeds and the email-verification gate
+  // passes. Used by the admin Users page (Task #58) so an operator can see
+  // who is active and prune dormant accounts. Nullable so brand-new
+  // accounts that have never signed in render as "Never" instead of an
+  // arbitrary fallback timestamp.
+  last_login_at: timestamp("last_login_at"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });
