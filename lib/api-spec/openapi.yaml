@@ -1255,6 +1255,36 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+    delete:
+      operationId: deleteParalegal
+      tags: [paralegals]
+      summary: Delete a paralegal (unassigns all their leads first)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Paralegal deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  leads_unassigned:
+                    type: integer
+                required: [message, leads_unassigned]
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /paralegals/{id}/performance:
     get:
       operationId: getParalegalPerformance

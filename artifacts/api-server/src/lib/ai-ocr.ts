@@ -1,13 +1,9 @@
 /**
- * Claude Vision OCR for faxed pharmacy/medical records.
- * Replaces PaddleOCR (not available in Node.js) with Claude Haiku vision.
- *
+ * Vision OCR for faxed pharmacy/medical records.
  * Output: Legora Grid row format matching the MTOS OCR spec.
  */
-import { getAnthropicClient } from "@workspace/integrations-anthropic-ai";
+import { callLLM } from "./ai-provider";
 import { logger } from "./logger";
-
-const MODEL = "claude-haiku-4-5";
 
 export interface LegoraGridRow {
   rx_number: string;
@@ -48,41 +44,17 @@ export async function extractOcrData(
   ) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
   try {
-    const anthropic = await getAnthropicClient();
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 2048,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: validMime,
-                data: base64Data,
-              },
-            },
-            {
-              type: "text",
-              text: SYSTEM_PROMPT,
-            },
-          ],
-        },
-      ],
+    const raw = await callLLM({
+      module: "ai-ocr",
+      prompt: SYSTEM_PROMPT,
+      maxTokens: 2048,
+      imageBase64: base64Data,
+      imageMimeType: validMime,
     });
 
-    const content = response.content[0];
-    if (content.type !== "text") {
-      logger.warn("OCR: Claude returned non-text content");
-      return emptyRow();
-    }
-
-    const raw = content.text.trim();
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    const jsonMatch = raw.trim().match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      logger.warn({ raw }, "OCR: No JSON object in Claude response");
+      logger.warn({ raw }, "OCR: No JSON object in response");
       return { ...emptyRow(), raw_text: raw, confidence: 0.1 };
     }
 
@@ -93,7 +65,7 @@ export async function extractOcrData(
     );
     return parsed;
   } catch (err) {
-    logger.error({ err }, "OCR: Claude Vision extraction failed");
+    logger.error({ err }, "OCR: Vision extraction failed");
     return emptyRow();
   }
 }

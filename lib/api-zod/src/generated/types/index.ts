@@ -51,6 +51,7 @@ export * from "./createVendorBody";
 export * from "./customField";
 export * from "./customFieldType";
 export * from "./dashboardStats";
+export * from "./deleteParalegal200";
 export * from "./document";
 export * from "./documentDocumentType";
 export * from "./emailValidationResult";

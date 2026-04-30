@@ -5,7 +5,6 @@ packages:
   - scripts
 
 autoInstallPeers: false
-strictPeerDependencies: false
 
 catalog:
   '@replit/vite-plugin-cartographer': ^0.5.1
@@ -13,7 +12,7 @@ catalog:
   '@replit/vite-plugin-runtime-error-modal': ^0.0.6
   '@tailwindcss/vite': ^4.2.1
   '@tanstack/react-query': ^5.90.21
-  '@types/node': ^25.3.5
+  '@types/node': 25.3.5
   '@types/pdfkit': ^0.17.3
   '@types/react': ^19.2.14
   '@types/react-dom': ^19.2.3
@@ -48,3 +47,5 @@ onlyBuiltDependencies:
 overrides:
   '@esbuild-kit/esm-loader': npm:tsx@^4.21.0
   esbuild: 0.27.3
+
+strictPeerDependencies: false

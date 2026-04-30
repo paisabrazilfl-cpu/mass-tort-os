@@ -1,7 +1,5 @@
-import { getAnthropicClient } from "@workspace/integrations-anthropic-ai";
+import { callLLM } from "./ai-provider";
 import { logger } from "./logger";
-
-const MODEL = "claude-haiku-4-5";
 
 export interface DraftInput {
   template_type: string;
@@ -98,16 +96,12 @@ ${leadContext}
 Generate the complete document now.`;
 
   try {
-    const anthropic = await getAnthropicClient();
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 4096,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
+    const text = await callLLM({
+      module: "drafting-ai",
+      prompt: userPrompt,
+      maxTokens: 4096,
+      systemPrompt,
     });
-
-    const content = response.content[0];
-    const text = content.type === "text" ? content.text : "";
 
     const titleMap: Record<string, string> = {
       hipaa_authorization: "HIPAA Authorization Form",

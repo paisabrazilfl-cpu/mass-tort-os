@@ -1,23 +1,7 @@
 import { db, securityAlertsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./logger";
-
-// @anthropic-ai/sdk is heavy (~346 KB + iconv-lite transitive ~530 KB).
-// Loaded on demand inside getAnthropicClient() so booting the API server
-// (which has security-route handlers wired in but rarely calls them) doesn't
-// pay the cost. Externalized in build.mjs.
-type AnthropicCtor = typeof import("@anthropic-ai/sdk").default;
-let anthropicClient: InstanceType<AnthropicCtor> | undefined;
-async function getAnthropicClient(): Promise<InstanceType<AnthropicCtor>> {
-  if (!anthropicClient) {
-    const { default: Anthropic } = await import("@anthropic-ai/sdk");
-    anthropicClient = new Anthropic({
-      apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
-      baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
-    });
-  }
-  return anthropicClient;
-}
+import { callLLM } from "./ai-provider";
 
 interface ThreatAnalysis {
   threat_level: "critical" | "high" | "medium" | "low" | "false_positive";
@@ -65,14 +49,7 @@ Respond in JSON format only:
 }`;
 
   try {
-    const anthropic = await getAnthropicClient();
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5",
-      max_tokens: 1024,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const text = response.content[0].type === "text" ? response.content[0].text : "";
+    const text = await callLLM({ module: "threat-analyzer", prompt, maxTokens: 1024 });
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       throw new Error("No JSON found in AI response");

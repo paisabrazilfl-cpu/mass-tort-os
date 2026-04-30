@@ -35,6 +35,7 @@ import type {
   CreateVendorBody,
   CustomField,
   DashboardStats,
+  DeleteParalegal200,
   Document,
   EmailValidationResult,
   ErrorResponse,
@@ -4495,6 +4496,90 @@ export function useGetParalegal<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Delete a paralegal (unassigns all their leads first)
+ */
+export const getDeleteParalegalUrl = (id: number) => {
+  return `/api/paralegals/${id}`;
+};
+
+export const deleteParalegal = async (
+  id: number,
+  options?: RequestInit,
+): Promise<DeleteParalegal200> => {
+  return customFetch<DeleteParalegal200>(getDeleteParalegalUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteParalegalMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteParalegal>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteParalegal>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deleteParalegal"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteParalegal>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteParalegal(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteParalegalMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteParalegal>>
+>;
+
+export type DeleteParalegalMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Delete a paralegal (unassigns all their leads first)
+ */
+export const useDeleteParalegal = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteParalegal>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteParalegal>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDeleteParalegalMutationOptions(options));
+};
 
 /**
  * @summary Get paralegal performance breakdown

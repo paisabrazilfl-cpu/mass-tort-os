@@ -576,7 +576,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **172 checked / 19 public / 153 protected / 0 unprotected.**
+Boot-time count: **173 checked / 19 public / 154 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -740,6 +740,7 @@ Boot-time count: **172 checked / 19 public / 153 protected / 0 unprotected.**
 | ocr | GET | `/api/ocr/results` | ✓ | ✓ |  |  |  | — | `ocr:view` | ✓ |
 | ocr | POST | `/api/ocr/upload` | ✓ | ✓ |  |  |  | — | `ocr:upload` | ✓ |
 | paralegals | GET | `/api/paralegals/:id/performance` | ✓ | ✓ |  |  |  | — | `paralegal:view` | ✓ |
+| paralegals | DELETE | `/api/paralegals/:id` | ✓ | ✓ |  |  |  | — | `paralegal:manage` | ✓ |
 | paralegals | GET | `/api/paralegals/:id` | ✓ | ✓ |  |  |  | — | `paralegal:view` | ✓ |
 | paralegals | GET | `/api/paralegals/` | ✓ | ✓ |  |  |  | — | `paralegal:view` | ✓ |
 | paralegals | POST | `/api/paralegals/` | ✓ | ✓ |  |  |  | — | `paralegal:manage` | ✓ |

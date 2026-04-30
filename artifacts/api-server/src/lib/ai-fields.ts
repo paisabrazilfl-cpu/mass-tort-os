@@ -1,7 +1,5 @@
-import { getAnthropicClient } from "@workspace/integrations-anthropic-ai";
+import { callLLM } from "./ai-provider";
 import { logger } from "./logger";
-
-const MODEL = "claude-haiku-4-5";
 
 export interface MedicalRecordFields {
   patient_name: string;
@@ -47,24 +45,15 @@ export async function extractMedicalFields(
   ) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
   try {
-    const anthropic = await getAnthropicClient();
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 4096,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: validMime, data: base64Data } },
-          { type: "text", text: AIFIELDS_PROMPT },
-        ],
-      }],
+    const raw = await callLLM({
+      module: "ai-fields",
+      prompt: AIFIELDS_PROMPT,
+      maxTokens: 4096,
+      imageBase64: base64Data,
+      imageMimeType: validMime,
     });
 
-    const content = response.content[0];
-    if (content.type !== "text") return emptyFields();
-
-    const raw = content.text.trim();
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    const jsonMatch = raw.trim().match(/\{[\s\S]*\}/);
     if (!jsonMatch) return { ...emptyFields(), raw_text: raw, confidence: 0.1 };
 
     const parsed = JSON.parse(jsonMatch[0]) as MedicalRecordFields;
@@ -78,19 +67,13 @@ export async function extractMedicalFields(
 
 export async function analyzeDocumentText(text: string): Promise<MedicalRecordFields> {
   try {
-    const anthropic = await getAnthropicClient();
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 4096,
-      messages: [{
-        role: "user",
-        content: `${AIFIELDS_PROMPT}\n\nDocument text:\n${text.slice(0, 8000)}`,
-      }],
+    const raw = await callLLM({
+      module: "ai-fields",
+      prompt: `${AIFIELDS_PROMPT}\n\nDocument text:\n${text.slice(0, 8000)}`,
+      maxTokens: 4096,
     });
 
-    const content = response.content[0];
-    if (content.type !== "text") return emptyFields();
-    const jsonMatch = content.text.trim().match(/\{[\s\S]*\}/);
+    const jsonMatch = raw.trim().match(/\{[\s\S]*\}/);
     if (!jsonMatch) return emptyFields();
     return JSON.parse(jsonMatch[0]) as MedicalRecordFields;
   } catch (err) {

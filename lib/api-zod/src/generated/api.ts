@@ -1793,6 +1793,18 @@ export const GetParalegalResponse = zod.object({
 });
 
 /**
+ * @summary Delete a paralegal (unassigns all their leads first)
+ */
+export const DeleteParalegalParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DeleteParalegalResponse = zod.object({
+  message: zod.string(),
+  leads_unassigned: zod.number(),
+});
+
+/**
  * @summary Get paralegal performance breakdown
  */
 export const GetParalegalPerformanceParams = zod.object({

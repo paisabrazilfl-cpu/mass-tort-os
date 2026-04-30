@@ -1,8 +1,7 @@
-import { getAnthropicClient } from "@workspace/integrations-anthropic-ai";
+import { callLLM } from "./ai-provider";
 import { type ExtractedFeatures } from "./scoring";
 import { logger } from "./logger";
 
-const MODEL = "claude-haiku-4-5";
 const MAX_TEXT_LENGTH = 8000;
 
 export async function extractFeatures(text: string): Promise<ExtractedFeatures> {
@@ -25,26 +24,12 @@ DOCUMENT TEXT:
 ${truncated}`;
 
   try {
-    const anthropic = await getAnthropicClient();
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 8192,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const content = response.content[0];
-    if (content.type !== "text") {
-      logger.warn("AI extraction returned non-text content");
-      return {};
-    }
-
-    const raw = content.text.trim();
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    const raw = await callLLM({ module: "ai-extract", prompt, maxTokens: 8192 });
+    const jsonMatch = raw.trim().match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       logger.warn({ raw }, "AI extraction response has no JSON object");
       return {};
     }
-
     const parsed = JSON.parse(jsonMatch[0]) as ExtractedFeatures;
     logger.info({ features: parsed }, "AI extraction complete");
     return parsed;

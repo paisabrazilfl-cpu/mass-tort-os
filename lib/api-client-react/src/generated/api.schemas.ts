@@ -1279,6 +1279,11 @@ export type EscalateToFbi200 = {
   message: string;
 };
 
+export type DeleteParalegal200 = {
+  message: string;
+  leads_unassigned: number;
+};
+
 export type GetAuditTrailParams = {
   limit?: number;
   entity_type?: string;

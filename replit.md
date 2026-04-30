@@ -10,7 +10,7 @@ I prefer clear and direct communication. I value a development process that emph
 
 1. **Token-efficiency rule — deterministic logic first, AI second.** Wire as much internal `if / then / else`, lookup tables, regex, and rule-based branching into the system as possible BEFORE calling out to any AI provider. AI is a fallback for true natural-language / open-ended tasks (extraction from unstructured medical PDFs, summarization, drafting). Do not pay for an LLM round-trip when a deterministic rule can answer the question. Examples of work that must stay deterministic: field validation, scoring/qualification (already deterministic), tort-routing, taxonomy matching, dedup matching, conflict detection, status transitions, format normalization, simple classification with a known label set, address/phone/email format checks. Anywhere a rule can be expressed in code, write the rule in code.
 
-2. **OpenAI is the primary AI provider.** New AI call-sites must use OpenAI by default. Existing Anthropic call-sites (in `ai-extract.ts`, `ai-fields.ts`, `ai-ocr.ts`, `drafting-ai.ts`, `threat-analyzer.ts`, `lead-intelligence.ts`) will be migrated under a separate task per the "do not cause conflicts" rule — the migration must preserve current behavior on the same inputs and ship behind a per-module switch so we can roll back any one call-site without breaking the others.
+2. **OpenAI is the primary AI provider.** New AI call-sites must use OpenAI by default. All 6 existing Anthropic call-sites have been migrated (`ai-extract.ts`, `ai-fields.ts`, `ai-ocr.ts`, `drafting-ai.ts`, `threat-analyzer.ts`, `lead-intelligence.ts`) — each routes through the `callLLM` factory in `artifacts/api-server/src/lib/ai-provider.ts`. Per-module rollback: set `AI_PROVIDER_<MODULE>=anthropic` env var (e.g. `AI_PROVIDER_DRAFTING_AI=anthropic`). Global switch: `AI_PROVIDER=anthropic`. Anthropic SDK is retained in the codebase as the fallback provider. OpenAI is powered via Replit AI Integrations proxy (`@workspace/integrations-openai-ai-server` lib, model `gpt-5-mini`).
 
 3. **Do not cause conflicts.** When making changes that touch a working surface, leave that surface working at every commit. If a migration takes more than one commit, gate the new path behind a config flag with the old path still wired up; never half-land a swap.
 
@@ -98,7 +98,7 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 
 *   **Database**: PostgreSQL
 *   **ORM**: Drizzle ORM
-*   **AI**: Anthropic Claude
+*   **AI**: OpenAI (primary, via Replit AI Integrations proxy — `AI_INTEGRATIONS_OPENAI_BASE_URL` / `AI_INTEGRATIONS_OPENAI_API_KEY`); Anthropic Claude retained as per-module fallback. All 6 call-sites (`ai-extract`, `ai-fields`, `ai-ocr`, `drafting-ai`, `threat-analyzer`, `lead-intelligence`) now route through `artifacts/api-server/src/lib/ai-provider.ts` (`callLLM` factory). Per-module rollback: set `AI_PROVIDER_<MODULE>=anthropic` (e.g. `AI_PROVIDER_DRAFTING_AI=anthropic`). Global fallback: `AI_PROVIDER=anthropic`. Default: OpenAI.
 *   **Image Processing**: Sharp
 *   **Validation**: Zod
 *   **API Codegen**: Orval

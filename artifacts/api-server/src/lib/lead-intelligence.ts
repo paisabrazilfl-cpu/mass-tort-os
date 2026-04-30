@@ -1,7 +1,5 @@
-import { getAnthropicClient } from "@workspace/integrations-anthropic-ai";
+import { callLLM } from "./ai-provider";
 import { logger } from "./logger";
-
-const MODEL = "claude-haiku-4-5";
 
 export interface LeadIntelligenceInput {
   lead: Record<string, any>;
@@ -300,14 +298,7 @@ Respond in JSON format:
 
 Use precise legal/professional language. No hedging. Be direct and authoritative.`;
 
-    const anthropic = await getAnthropicClient();
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 300,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+    const text = await callLLM({ module: "lead-intelligence", prompt, maxTokens: 300 });
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);

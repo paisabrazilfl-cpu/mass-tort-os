@@ -108,6 +108,31 @@ router.get("/:id", requirePermission(Permission.PARALEGAL_VIEW), auditAction("vi
   });
 });
 
+router.delete("/:id", requirePermission(Permission.PARALEGAL_MANAGE), auditAction("delete_paralegal"), async (req, res) => {
+  const parsed = GetParalegalParams.safeParse({ id: req.params.id });
+  if (!parsed.success || !Number.isInteger(parsed.data.id) || parsed.data.id <= 0) {
+    res.status(400).json({ status: "error", code: "invalid_id", message: "Paralegal id must be a positive integer" });
+    return;
+  }
+  const id = parsed.data.id;
+  const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
+  if (!p) {
+    res.status(404).json({ status: "error", code: "not_found", message: "Paralegal not found" });
+    return;
+  }
+  // Null out leads.assigned_to so we never leave orphaned references,
+  // then delete the paralegal. Drizzle returns the updated rows so we can
+  // report the count to the caller without a separate SELECT.
+  const unassignedLeads = await db
+    .update(leadsTable)
+    .set({ assigned_to: null })
+    .where(eq(leadsTable.assigned_to, id))
+    .returning({ id: leadsTable.id });
+  const leadsUnassigned = unassignedLeads.length;
+  await db.delete(paralegalsTable).where(eq(paralegalsTable.id, id));
+  res.json({ message: `Paralegal "${p.name}" deleted`, leads_unassigned: leadsUnassigned });
+});
+
 router.get("/:id/performance", requirePermission(Permission.PARALEGAL_VIEW), auditAction("view_paralegal_performance"), async (req, res) => {
   const parsed = GetParalegalPerformanceParams.safeParse({ id: req.params.id });
   if (!parsed.success) {
