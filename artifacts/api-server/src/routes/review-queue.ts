@@ -180,6 +180,7 @@ router.patch("/:id", requirePermission(Permission.REVIEW_QUEUE_RESOLVE), auditAc
     if (Number.isFinite(leadId) && leadId > 0) {
       const result = await enqueueLeadFollowUpSms(leadId, followup_sms_body, {
         source: "review_queue_resolve",
+        firmId: req.user?.firm_id ?? null,
       });
       smsJobId = result.job_id;
       smsReason = result.reason;
