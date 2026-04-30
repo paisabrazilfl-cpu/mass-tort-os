@@ -6,55 +6,47 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/auth-context";
 
-function getNextPath(): string {
-  if (typeof window === "undefined") return "/";
-  const params = new URLSearchParams(window.location.search);
-  const next = params.get("next");
-  if (!next) return "/";
-  try {
-    const decoded = decodeURIComponent(next);
-    if (decoded.startsWith("/login")) return "/";
-    return decoded;
-  } catch {
-    return "/";
-  }
-}
+const PASSWORD_RULES = [
+  "At least 12 characters",
+  "At least one uppercase letter",
+  "At least one lowercase letter",
+  "At least one number",
+  "At least one special character (e.g. !@#$%)",
+];
 
-export default function LoginPage() {
-  const { login, status, user } = useAuth();
+export default function RegisterPage() {
+  const { register, status, user } = useAuth();
   const [, navigate] = useLocation();
   const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    document.title = "Sign in · MTOS";
+    document.title = "Create account · MTOS";
   }, []);
 
-  // If already authed (e.g. dev-bypass), bounce to next.
+  // If a session is already live (e.g. dev-bypass or returning user),
+  // skip the form and land on the dashboard.
   useEffect(() => {
     if (status === "authed" && user) {
-      navigate(getNextPath(), { replace: true });
+      navigate("/", { replace: true });
     }
   }, [status, user, navigate]);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!email.trim() || !password) {
-      setError("Email and password are required.");
+    if (!email.trim() || !name.trim() || !password) {
+      setError("Email, name, and password are required.");
       return;
     }
     setSubmitting(true);
     try {
-      const result = await login(email.trim(), password);
+      const result = await register(email.trim(), password, name.trim());
       if (result.kind === "ok") {
-        navigate(getNextPath(), { replace: true });
-        return;
-      }
-      if (result.kind === "mfa_required") {
-        navigate(`/login/mfa?next=${encodeURIComponent(getNextPath())}`, { replace: true });
+        navigate("/", { replace: true });
         return;
       }
       setError(result.message);
@@ -63,15 +55,11 @@ export default function LoginPage() {
     }
   };
 
-  // While booting, or if we've already detected an authed session and are about
-  // to redirect, render a centered spinner instead of the form to avoid a
-  // visible flash of the form (and a brief Switch race when wouter swaps
-  // routes after navigate()).
   if (status === "loading" || (status === "authed" && user)) {
     return (
       <div className="flex min-h-[100dvh] items-center justify-center bg-background">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden="true" />
-        <span className="sr-only">Signing you in…</span>
+        <span className="sr-only">Loading…</span>
       </div>
     );
   }
@@ -83,7 +71,7 @@ export default function LoginPage() {
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <ShieldCheck className="h-6 w-6" aria-hidden="true" />
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">Sign in to MTOS</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Create your MTOS account</h1>
           <p className="text-sm text-muted-foreground">
             Mass Tort OS · Command Center
           </p>
@@ -91,11 +79,24 @@ export default function LoginPage() {
 
         <form onSubmit={onSubmit} className="space-y-4" noValidate>
           <div className="space-y-2">
-            <Label htmlFor="login-email">Email</Label>
+            <Label htmlFor="register-name">Full name</Label>
             <Input
-              id="login-email"
+              id="register-name"
+              type="text"
+              autoComplete="name"
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={submitting}
+              aria-invalid={error ? true : undefined}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="register-email">Email</Label>
+            <Input
+              id="register-email"
               type="email"
-              autoComplete="username"
+              autoComplete="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -104,18 +105,31 @@ export default function LoginPage() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="login-password">Password</Label>
+            <Label htmlFor="register-password">Password</Label>
             <Input
-              id="login-password"
+              id="register-password"
               type="password"
-              autoComplete="current-password"
+              autoComplete="new-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={submitting}
               aria-invalid={error ? true : undefined}
+              aria-describedby="register-password-rules"
             />
+            <ul
+              id="register-password-rules"
+              className="list-disc space-y-0.5 pl-5 text-xs text-muted-foreground"
+            >
+              {PASSWORD_RULES.map((rule) => (
+                <li key={rule}>{rule}</li>
+              ))}
+            </ul>
           </div>
+
+          <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+            Your account starts in viewer mode — ask an admin to elevate it.
+          </p>
 
           {error && (
             <div
@@ -128,18 +142,15 @@ export default function LoginPage() {
 
           <Button type="submit" className="w-full" disabled={submitting}>
             {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
-            {submitting ? "Signing in…" : "Sign in"}
+            {submitting ? "Creating account…" : "Create account"}
           </Button>
         </form>
 
         <p className="text-center text-sm text-muted-foreground">
-          New to MTOS?{" "}
-          <Link href="/register" className="font-medium text-primary hover:underline">
-            Create account
+          Already have an account?{" "}
+          <Link href="/login" className="font-medium text-primary hover:underline">
+            Sign in
           </Link>
-        </p>
-        <p className="text-center text-xs text-muted-foreground">
-          Trouble signing in? Contact your MTOS administrator.
         </p>
       </div>
     </div>

@@ -30,11 +30,16 @@ export type LoginOutcome =
   | { kind: "mfa_required" }
   | { kind: "error"; code: string; message: string };
 
+export type RegisterOutcome =
+  | { kind: "ok" }
+  | { kind: "error"; code: string; message: string };
+
 type Ctx = {
   user: AuthUser | null;
   status: Status;
   pendingMfa: { email: string } | null;
   login: (email: string, password: string, totpCode?: string) => Promise<LoginOutcome>;
+  register: (email: string, password: string, name: string) => Promise<RegisterOutcome>;
   verifyMfa: (totpCode: string) => Promise<LoginOutcome>;
   cancelMfa: () => void;
   logout: () => Promise<void>;
@@ -214,6 +219,77 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [scheduleRefresh],
   );
 
+  const register = useCallback(
+    async (email: string, password: string, name: string): Promise<RegisterOutcome> => {
+      try {
+        const res = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password, name }),
+        });
+
+        let body: Record<string, unknown> = {};
+        try {
+          body = (await res.json()) as Record<string, unknown>;
+        } catch {
+          /* tolerate empty body */
+        }
+
+        if (!res.ok) {
+          // Backend returns { error: "..." } for 4xx (duplicate, password
+          // complexity, reserved-email collisions, and the
+          // authRateLimit's 429 all share this shape) and a richer
+          // { code, message } envelope for the validation_failed 400.
+          // Surface either user-readable string verbatim per the task
+          // contract — the server already returns copy fit for direct
+          // display, including the rate-limit message.
+          const code =
+            (typeof body.code === "string" && body.code) ||
+            (res.status === 429
+              ? "rate_limited"
+              : res.status === 409
+                ? "email_taken"
+                : "registration_failed");
+          const message =
+            (typeof body.error === "string" && body.error) ||
+            (typeof body.message === "string" && body.message) ||
+            "Could not create account.";
+          return { kind: "error", code, message };
+        }
+
+        // Backend returns the freshly-created user row WITHOUT mfa_enabled
+        // (createUser RETURNING list omits it). New users always start with
+        // MFA off, so default it here so the context type stays honest.
+        const rawUser = body.user as (Omit<AuthUser, "mfa_enabled"> & { mfa_enabled?: boolean }) | undefined;
+        const accessToken = typeof body.token === "string" ? body.token : null;
+        const refreshToken = typeof body.refresh_token === "string" ? body.refresh_token : null;
+        const expiresIn = typeof body.expires_in === "number" ? body.expires_in : 900;
+        if (!rawUser || !accessToken || !refreshToken) {
+          return {
+            kind: "error",
+            code: "bad_response",
+            message: "Registration response was malformed. Please retry.",
+          };
+        }
+        const userPayload: AuthUser = { ...rawUser, mfa_enabled: rawUser.mfa_enabled ?? false };
+
+        setTokens({ access: accessToken, refresh: refreshToken, userId: userPayload.id });
+        setUser(userPayload);
+        setStatus("authed");
+        setPendingMfa(null);
+        scheduleRefresh(expiresIn);
+        return { kind: "ok" };
+      } catch {
+        return {
+          kind: "error",
+          code: "network",
+          message: "Network error — please check your connection and retry.",
+        };
+      }
+    },
+    [scheduleRefresh],
+  );
+
   const verifyMfa = useCallback(
     async (totpCode: string): Promise<LoginOutcome> => {
       if (!pendingMfa) {
@@ -254,6 +330,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         status,
         pendingMfa: pendingMfa ? { email: pendingMfa.email } : null,
         login,
+        register,
         verifyMfa,
         cancelMfa,
         logout,
