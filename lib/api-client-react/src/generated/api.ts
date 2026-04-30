@@ -58,6 +58,7 @@ import type {
   ListDocumentsParams,
   ListLeadBackgroundCheckHubSnapshotsParams,
   ListLeadsParams,
+  ListQueueJobsParams,
   ListReviewQueueParams,
   NpiProvider,
   NpiSearchResponse,
@@ -71,7 +72,9 @@ import type {
   PipelineBreakdown,
   PipelineTrendPoint,
   QualificationResult,
+  QueueJob,
   QueueStats,
+  RequeueDeadLetterJob200,
   ResolveReviewBody,
   ReviewQueueItem,
   ReviewQueueStats,
@@ -1997,6 +2000,184 @@ export function useGetQueueStats<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary List jobs in the worker queue with optional status filter
+ */
+export const getListQueueJobsUrl = (params?: ListQueueJobsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/cases/worker/jobs?${stringifiedParams}`
+    : `/api/cases/worker/jobs`;
+};
+
+export const listQueueJobs = async (
+  params?: ListQueueJobsParams,
+  options?: RequestInit,
+): Promise<QueueJob[]> => {
+  return customFetch<QueueJob[]>(getListQueueJobsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListQueueJobsQueryKey = (params?: ListQueueJobsParams) => {
+  return [`/api/cases/worker/jobs`, ...(params ? [params] : [])] as const;
+};
+
+export const getListQueueJobsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listQueueJobs>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListQueueJobsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listQueueJobs>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListQueueJobsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listQueueJobs>>> = ({
+    signal,
+  }) => listQueueJobs(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listQueueJobs>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListQueueJobsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listQueueJobs>>
+>;
+export type ListQueueJobsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List jobs in the worker queue with optional status filter
+ */
+
+export function useListQueueJobs<
+  TData = Awaited<ReturnType<typeof listQueueJobs>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListQueueJobsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listQueueJobs>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListQueueJobsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Re-queue a dead-letter job for retry
+ */
+export const getRequeueDeadLetterJobUrl = (id: number) => {
+  return `/api/cases/worker/jobs/${id}/requeue`;
+};
+
+export const requeueDeadLetterJob = async (
+  id: number,
+  options?: RequestInit,
+): Promise<RequeueDeadLetterJob200> => {
+  return customFetch<RequeueDeadLetterJob200>(getRequeueDeadLetterJobUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRequeueDeadLetterJobMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requeueDeadLetterJob>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requeueDeadLetterJob>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["requeueDeadLetterJob"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requeueDeadLetterJob>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return requeueDeadLetterJob(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RequeueDeadLetterJobMutationResult = NonNullable<
+  Awaited<ReturnType<typeof requeueDeadLetterJob>>
+>;
+
+export type RequeueDeadLetterJobMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Re-queue a dead-letter job for retry
+ */
+export const useRequeueDeadLetterJob = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requeueDeadLetterJob>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requeueDeadLetterJob>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getRequeueDeadLetterJobMutationOptions(options));
+};
 
 /**
  * @summary Get full case detail with documents, analyses, and audit trail

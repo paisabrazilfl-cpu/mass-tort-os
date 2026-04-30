@@ -401,6 +401,19 @@ export interface QueueStats {
   [key: string]: number;
 }
 
+export interface QueueJob {
+  id: number;
+  job_type: string;
+  status: string;
+  error?: string | null;
+  retry_count: number;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  /** Extracted from payload when job_type relates to a case */
+  case_id?: string | null;
+}
+
 export type FaxResultStatus =
   (typeof FaxResultStatus)[keyof typeof FaxResultStatus];
 
@@ -1194,6 +1207,15 @@ export type ListDocumentsParams = {
 };
 
 export type CreateCaseBody = { [key: string]: unknown };
+
+export type ListQueueJobsParams = {
+  status?: string;
+  limit?: number;
+};
+
+export type RequeueDeadLetterJob200 = {
+  ok: boolean;
+};
 
 export type ListReviewQueueParams = {
   resolution?: string;

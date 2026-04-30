@@ -576,7 +576,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **173 checked / 19 public / 154 protected / 0 unprotected.**
+Boot-time count: **174 checked / 19 public / 155 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -633,6 +633,7 @@ Boot-time count: **173 checked / 19 public / 154 protected / 0 unprotected.**
 | cases | GET | `/api/cases/` | ✓ | ✓ |  |  |  | — | `case:view:own`, `case:view:any` | ✓ |
 | cases | POST | `/api/cases/` | ✓ | ✓ |  |  |  | — | `case:create` | ✓ |
 | cases | POST | `/api/cases/worker/jobs/:id/requeue` | ✓ | ✓ |  |  |  | — | `case:worker_admin` | ✓ |
+| cases | GET | `/api/cases/worker/jobs` | ✓ | ✓ |  |  |  | — | `case:worker_admin` | ✓ |
 | cases | GET | `/api/cases/worker/queue-stats` | ✓ | ✓ |  |  |  | — | `case:worker_admin` | ✓ |
 | compliance | GET | `/api/compliance/audit-summary` | ✓ | ✓ |  |  |  | — | `compliance:view` | ✓ |
 | compliance | GET | `/api/compliance/audit-trail` | ✓ | ✓ |  |  |  | — | `compliance:view` | ✓ |

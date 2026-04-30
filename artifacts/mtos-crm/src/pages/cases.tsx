@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { useListCases, useGetQueueStats, getGetQueueStatsQueryKey } from "@workspace/api-client-react";
+import { useListCases, useGetQueueStats } from "@workspace/api-client-react";
 import { format } from "date-fns";
 import { Briefcase, AlertCircle, CheckCircle, Clock, Search, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -63,17 +63,26 @@ export default function Cases() {
       </div>
 
       <div>
-        <h3 className="text-sm font-semibold tracking-wide text-muted-foreground uppercase mb-2">
-          Background Worker Queue
-        </h3>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold tracking-wide text-muted-foreground uppercase">
+            Background Worker Queue
+          </h3>
+          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setLocation("/job-queue")}>
+            View all jobs →
+          </Button>
+        </div>
         <p className="text-xs text-muted-foreground mb-3">
           Job-processor status across all queued case-analysis jobs (not the
-          same as case statuses below).
+          same as case statuses below). Click a card to filter by status.
         </p>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           {queueStats ? (
             Object.entries(queueStats).map(([key, count]) => (
-              <Card key={key} className="bg-card">
+              <Card
+                key={key}
+                className="bg-card cursor-pointer hover:shadow-md transition-all hover:ring-1 hover:ring-primary/30"
+                onClick={() => setLocation(`/job-queue?status=${key}`)}
+              >
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
                     Worker · {key}
@@ -82,6 +91,7 @@ export default function Cases() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold">{count}</div>
+                  <p className="text-xs text-primary mt-1">View jobs →</p>
                 </CardContent>
               </Card>
             ))

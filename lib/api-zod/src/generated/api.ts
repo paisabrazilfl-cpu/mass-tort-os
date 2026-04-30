@@ -592,6 +592,43 @@ export const CreateCaseBody = zod.record(zod.string(), zod.unknown());
 export const GetQueueStatsResponse = zod.record(zod.string(), zod.number());
 
 /**
+ * @summary List jobs in the worker queue with optional status filter
+ */
+export const listQueueJobsQueryLimitDefault = 100;
+
+export const ListQueueJobsQueryParams = zod.object({
+  status: zod.coerce.string().optional(),
+  limit: zod.coerce.number().default(listQueueJobsQueryLimitDefault),
+});
+
+export const ListQueueJobsResponseItem = zod.object({
+  id: zod.number(),
+  job_type: zod.string(),
+  status: zod.string(),
+  error: zod.string().nullish(),
+  retry_count: zod.number(),
+  created_at: zod.coerce.date(),
+  started_at: zod.coerce.date().nullish(),
+  completed_at: zod.coerce.date().nullish(),
+  case_id: zod
+    .string()
+    .nullish()
+    .describe("Extracted from payload when job_type relates to a case"),
+});
+export const ListQueueJobsResponse = zod.array(ListQueueJobsResponseItem);
+
+/**
+ * @summary Re-queue a dead-letter job for retry
+ */
+export const RequeueDeadLetterJobParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const RequeueDeadLetterJobResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+/**
  * @summary Get full case detail with documents, analyses, and audit trail
  */
 export const GetCaseParams = zod.object({

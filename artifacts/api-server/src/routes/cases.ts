@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, casesTable, analysisTable, caseDocumentsTable, auditLogTable } from "@workspace/db";
+import { db, casesTable, analysisTable, caseDocumentsTable, auditLogTable, jobQueueTable } from "@workspace/db";
 import { eq, or, desc } from "drizzle-orm";
 import { CreateCaseBody, UploadCaseFileBody } from "@workspace/api-zod";
 import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
@@ -174,6 +174,45 @@ router.get("/", requirePermission(Permission.CASE_VIEW_OWN, Permission.CASE_VIEW
 router.get("/worker/queue-stats", requirePermission(Permission.CASE_WORKER_ADMIN), async (req, res) => {
   const stats = await getQueueStats();
   res.json(stats);
+});
+
+router.get("/worker/jobs", requirePermission(Permission.CASE_WORKER_ADMIN), async (req, res) => {
+  const statusFilter = typeof req.query.status === "string" ? req.query.status : undefined;
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+
+  const rows = await db
+    .select({
+      id: jobQueueTable.id,
+      job_type: jobQueueTable.job_type,
+      status: jobQueueTable.status,
+      error: jobQueueTable.error,
+      retry_count: jobQueueTable.retry_count,
+      created_at: jobQueueTable.created_at,
+      started_at: jobQueueTable.started_at,
+      completed_at: jobQueueTable.completed_at,
+      payload: jobQueueTable.payload,
+    })
+    .from(jobQueueTable)
+    .where(statusFilter ? eq(jobQueueTable.status, statusFilter) : undefined)
+    .orderBy(desc(jobQueueTable.created_at))
+    .limit(limit);
+
+  const jobs = rows.map((row) => {
+    const payload = row.payload as Record<string, unknown> | null;
+    return {
+      id: row.id,
+      job_type: row.job_type,
+      status: row.status,
+      error: row.error ?? null,
+      retry_count: row.retry_count,
+      created_at: row.created_at,
+      started_at: row.started_at ?? null,
+      completed_at: row.completed_at ?? null,
+      case_id: (payload?.case_id as string | undefined) ?? null,
+    };
+  });
+
+  res.json(jobs);
 });
 
 // Admin: requeue a dead-lettered job after the underlying issue has been
