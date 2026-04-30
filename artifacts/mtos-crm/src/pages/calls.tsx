@@ -75,6 +75,13 @@ export default function CallsPage() {
   const [statusFilter, setStatusFilter] = useState<CallStatus | "all">("all");
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  // Date range filter (T006 round-4 / blocker reopened by architect): both
+  // bounds are inclusive against call_logs.started_at. Stored as
+  // <input type="date"> "YYYY-MM-DD" strings; the server parses to Date.
+  // start_date is broadened to start-of-day and end_date to end-of-day so
+  // the UI matches operator expectations ("show me calls on Apr 26").
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
 
   const [openCallId, setOpenCallId] = useState<number | null>(null);
 
@@ -82,11 +89,19 @@ export default function CallsPage() {
   // server-side; a 4xx is surfaced as `error`, not silently retried.
   // `placeholderData: keepPreviousData` keeps the table populated during pagination
   // (React Query v5 replacement for the old `keepPreviousData: true` flag).
+  // Convert "YYYY-MM-DD" inputs to ISO timestamps that bracket the chosen
+  // local-day so the server's started_at >=/<= comparison matches operator
+  // intent. We send ISO 8601 strings (orval generates `string` for these
+  // params per OpenAPI format: date-time).
+  const startIso = startDate ? new Date(`${startDate}T00:00:00`).toISOString() : undefined;
+  const endIso = endDate ? new Date(`${endDate}T23:59:59.999`).toISOString() : undefined;
   const listParams = {
     page,
     page_size: PAGE_SIZE,
     ...(statusFilter !== "all" ? { status: statusFilter } : {}),
     ...(search ? { search } : {}),
+    ...(startIso ? { start_date: startIso } : {}),
+    ...(endIso ? { end_date: endIso } : {}),
   };
   const listQ = useListCalls(listParams, {
     query: {
@@ -179,6 +194,53 @@ export default function CallsPage() {
                 </SelectContent>
               </Select>
             </div>
+            <div>
+              <Label htmlFor="call-start-date" className="text-xs text-muted-foreground">
+                Start date
+              </Label>
+              <Input
+                id="call-start-date"
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setPage(1);
+                  setStartDate(e.target.value);
+                }}
+                className="w-44"
+                data-testid="input-call-start-date"
+              />
+            </div>
+            <div>
+              <Label htmlFor="call-end-date" className="text-xs text-muted-foreground">
+                End date
+              </Label>
+              <Input
+                id="call-end-date"
+                type="date"
+                value={endDate}
+                onChange={(e) => {
+                  setPage(1);
+                  setEndDate(e.target.value);
+                }}
+                className="w-44"
+                data-testid="input-call-end-date"
+              />
+            </div>
+            {(startDate || endDate) && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setStartDate("");
+                  setEndDate("");
+                  setPage(1);
+                }}
+                data-testid="button-clear-date-range"
+              >
+                Clear dates
+              </Button>
+            )}
             <form onSubmit={applySearch} className="flex items-end gap-2">
               <div>
                 <Label className="text-xs text-muted-foreground">Search</Label>

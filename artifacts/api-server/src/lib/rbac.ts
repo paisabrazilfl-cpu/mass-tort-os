@@ -49,13 +49,26 @@ export interface AuthUser {
   email: string;
   name: string;
   role: UserRole;
+  // Single-firm shell (Task #51 T001): every authenticated user is bound
+  // to exactly one firm. Sourced from mtos_users.firm_id (NOT NULL FK)
+  // and embedded in the JWT so downstream routes don't have to re-query.
+  firm_id: number;
   token_version?: number;
+}
+
+export interface ReqFirm {
+  id: number;
+  name: string;
+  slug: string;
+  subscription_status: string | null;
+  current_period_end: Date | null;
 }
 
 declare global {
   namespace Express {
     interface Request {
       user?: AuthUser;
+      firm?: ReqFirm;
     }
   }
 }
@@ -343,7 +356,14 @@ export function canBypassOwnership(user: AuthUser | undefined | null): boolean {
 
 export function generateToken(user: AuthUser): string {
   return jwt.sign(
-    { id: user.id, email: user.email, name: user.name, role: user.role, tv: user.token_version ?? 0 },
+    {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      firm_id: user.firm_id,
+      tv: user.token_version ?? 0,
+    },
     JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_EXPIRY }
   );
@@ -456,7 +476,9 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
     // user runs locally. NODE_ENV=production still fails closed regardless.
     if (IS_DEV && process.env.MTOS_DEV_LOGIN === "1") {
       logger.warn({ path: req.path }, "Dev-mode auth bypass active — DO NOT use in production");
-      req.user = { id: 0, email: "dev@mtos.local", name: "Dev Admin", role: "admin" };
+      // Dev bypass anchors to firm_id=1 (the seedDefaultFirm slug='default'
+      // row created on boot). Production NEVER reaches this branch.
+      req.user = { id: 0, email: "dev@mtos.local", name: "Dev Admin", role: "admin", firm_id: 1 };
       next();
       return;
     }
@@ -499,7 +521,23 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
     return;
   }
 
-  req.user = { id: decoded.id, email: decoded.email, name: decoded.name, role: decoded.role };
+  // firm_id MUST be present in the JWT for the single-firm shell contract.
+  // Tokens issued before the firm_id claim was added (or hand-crafted
+  // tokens missing it) get a hard fail-closed — there is no safe default.
+  const firmId = (decoded as unknown as { firm_id?: number }).firm_id;
+  if (typeof firmId !== "number" || !Number.isFinite(firmId) || firmId <= 0) {
+    auditDenial(req, "missing_firm_claim", { decoded });
+    sendUnauthorized(res, "Token missing firm context — please re-login");
+    return;
+  }
+
+  req.user = {
+    id: decoded.id,
+    email: decoded.email,
+    name: decoded.name,
+    role: decoded.role,
+    firm_id: firmId,
+  };
   next();
 }
 
@@ -642,11 +680,17 @@ type UserCredentialsRow = AuthUser & {
   token_version: number;
 } & Record<string, unknown>;
 
-export async function createUser(email: string, name: string, role: UserRole, passwordHash: string): Promise<AuthUser> {
+export async function createUser(
+  email: string,
+  name: string,
+  role: UserRole,
+  passwordHash: string,
+  firmId: number,
+): Promise<AuthUser> {
   const result = await db.execute(sql`
-    INSERT INTO mtos_users (email, name, role, password_hash)
-    VALUES (${email}, ${name}, ${role}, ${passwordHash})
-    RETURNING id, email, name, role, token_version
+    INSERT INTO mtos_users (email, name, role, password_hash, firm_id)
+    VALUES (${email}, ${name}, ${role}, ${passwordHash}, ${firmId})
+    RETURNING id, email, name, role, firm_id, token_version
   `);
   const rows = rowsOf<UserRow>(result);
   return rows[0] as AuthUser;
@@ -654,7 +698,7 @@ export async function createUser(email: string, name: string, role: UserRole, pa
 
 export async function getUserByEmail(email: string): Promise<UserCredentialsRow | null> {
   const result = await db.execute(sql`
-    SELECT id, email, name, role, password_hash, mfa_enabled, totp_secret, failed_login_attempts, locked_until, token_version
+    SELECT id, email, name, role, firm_id, password_hash, mfa_enabled, totp_secret, failed_login_attempts, locked_until, token_version
     FROM mtos_users WHERE email = ${email} LIMIT 1
   `);
   const rows = rowsOf<UserCredentialsRow>(result);
@@ -663,14 +707,14 @@ export async function getUserByEmail(email: string): Promise<UserCredentialsRow 
 
 export async function getUserById(id: number): Promise<AuthUser | null> {
   const result = await db.execute(sql`
-    SELECT id, email, name, role, token_version FROM mtos_users WHERE id = ${id} LIMIT 1
+    SELECT id, email, name, role, firm_id, token_version FROM mtos_users WHERE id = ${id} LIMIT 1
   `);
   const rows = rowsOf<UserRow>(result);
   return rows[0] ? (rows[0] as AuthUser) : null;
 }
 
 export async function listUsers(): Promise<AuthUser[]> {
-  const result = await db.execute(sql`SELECT id, email, name, role FROM mtos_users ORDER BY id`);
+  const result = await db.execute(sql`SELECT id, email, name, role, firm_id FROM mtos_users ORDER BY id`);
   return rowsOf<UserRow>(result) as AuthUser[];
 }
 

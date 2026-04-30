@@ -27,4 +27,12 @@ export type ListCallsParams = {
    * @maxLength 60
    */
   search?: string;
+  /**
+   * Inclusive lower bound on call_logs.started_at (ISO-8601).
+   */
+  start_date?: Date;
+  /**
+   * Inclusive upper bound on call_logs.started_at (ISO-8601).
+   */
+  end_date?: Date;
 };

@@ -17,7 +17,9 @@ import {
   incrementFailedAttempts,
   resetFailedAttempts,
   isAccountLocked,
+  type UserRole,
 } from "../lib/rbac";
+import { getDefaultFirmId } from "../lib/firm-bootstrap";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { generateSecret, verifyTOTP, generateOTPAuthURL } from "../lib/totp";
@@ -196,7 +198,14 @@ router.post("/login", authRateLimit, async (req, res) => {
 
   await resetFailedAttempts(email);
 
-  const accessToken = generateToken({ id: user.id, email: user.email, name: user.name, role: user.role as any, token_version: user.token_version });
+  const accessToken = generateToken({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role as UserRole,
+    firm_id: user.firm_id,
+    token_version: user.token_version,
+  });
   const refreshToken = await generateRefreshToken(user.id);
 
   await auditLog("user", String(user.id), "login", { email: user.email }, {
@@ -265,7 +274,16 @@ router.post("/register", authRateLimit, async (req, res) => {
   if (existing) { res.status(409).json({ error: "Email already registered" }); return; }
 
   const passwordHash = await hashPassword(password);
-  const user = await createUser(email, name, assignedRole, passwordHash);
+  // Single-firm shell: every newly registered user is bound to the seeded
+  // default firm. Multi-firm onboarding flows would resolve the firm via
+  // an invite token / claim flow instead — out of scope for MVI.
+  const firmId = await getDefaultFirmId();
+  if (firmId === null) {
+    logger.error("register: no default firm row — seedDefaultFirm did not run");
+    res.status(503).json({ error: "Account creation temporarily unavailable" });
+    return;
+  }
+  const user = await createUser(email, name, assignedRole, passwordHash, firmId);
   const accessToken = generateToken(user);
   const refreshToken = await generateRefreshToken(user.id);
 

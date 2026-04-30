@@ -13,7 +13,7 @@
 import { Router } from "express";
 import { z } from "zod/v4";
 import { db, callLogsTable, leadsTable } from "@workspace/db";
-import { desc, eq, sql, and, or, ilike } from "drizzle-orm";
+import { desc, eq, sql, and, or, ilike, gte, lte } from "drizzle-orm";
 import { requirePermission, Permission } from "../lib/rbac";
 import { badRequest } from "../lib/http-errors";
 import { getFirmIdForUser } from "../lib/subscription-gate";
@@ -45,6 +45,10 @@ async function resolveFirmScope(
 
 const router = Router();
 
+// start_date / end_date are inclusive ISO-8601 timestamps applied to
+// call_logs.started_at. They're independent — operators can pass one
+// without the other (open-ended ranges). Invalid dates fail the schema
+// with a 400 instead of silently dropping the filter.
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   page_size: z.coerce.number().int().min(1).max(100).default(25),
@@ -53,6 +57,8 @@ const listQuerySchema = z.object({
     .optional(),
   lead_id: z.coerce.number().int().positive().optional(),
   search: z.string().trim().min(1).max(60).optional(),
+  start_date: z.coerce.date().optional(),
+  end_date: z.coerce.date().optional(),
 });
 
 router.get(
@@ -64,7 +70,7 @@ router.get(
       badRequest(res, "Invalid query", parsed.error.issues);
       return;
     }
-    const { page, page_size, status, lead_id, search } = parsed.data;
+    const { page, page_size, status, lead_id, search, start_date, end_date } = parsed.data;
     const offset = (page - 1) * page_size;
 
     const scope = await resolveFirmScope(req.user!.id);
@@ -83,6 +89,8 @@ router.get(
     }
     if (status) conds.push(eq(callLogsTable.status, status));
     if (lead_id) conds.push(eq(callLogsTable.lead_id, lead_id));
+    if (start_date) conds.push(gte(callLogsTable.started_at, start_date));
+    if (end_date) conds.push(lte(callLogsTable.started_at, end_date));
     if (search) {
       conds.push(
         or(

@@ -32,6 +32,7 @@ import billingRouter from "./billing";
 import callsRouter from "./calls";
 import vapiToolsRouter from "./vapi-tools";
 import { authMiddleware } from "../lib/rbac";
+import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
 import { subscriptionGateMiddleware } from "../lib/subscription-gate";
 
@@ -108,10 +109,14 @@ router.use("/webhooks", webhooksRouter);
 // handler against the active vapi integration row.
 router.use("/vapi-tools", vapiToolsRouter);
 router.use(authMiddleware);
-// Subscription gate runs immediately AFTER auth: blocks write methods on
-// protected routes when the firm's Stripe subscription is not in good
-// standing. The gate itself is a no-op until a Stripe integration is
-// configured (see lib/subscription-gate.ts).
+// Firm context loads req.firm from the firm_id JWT claim stamped by the
+// auth middleware. Mounted before the subscription gate so the gate (and
+// every downstream handler) can rely on req.firm being populated.
+router.use(firmContextMiddleware);
+// Subscription gate runs immediately AFTER auth + firm context: blocks
+// write methods on protected routes when the firm's Stripe subscription
+// is not in good standing. The gate itself is a no-op until a Stripe
+// integration is configured (see lib/subscription-gate.ts).
 router.use(subscriptionGateMiddleware);
 router.use("/billing", billingRouter);
 router.use("/calls", callsRouter);

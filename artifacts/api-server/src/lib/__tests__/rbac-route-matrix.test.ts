@@ -109,13 +109,13 @@ before(async () => {
   for (const role of ["admin", "attorney", "paralegal", "viewer"] as const) {
     const email = `rbac-matrix-${role}-${TS}@mtos.test`;
     const inserted = await db.execute(sql`
-      INSERT INTO mtos_users (email, name, role, password_hash, token_version)
-      VALUES (${email}, ${`Matrix ${role}`}, ${role}, ${"$2b$10$test.placeholder.hash.not.usable"}, 0)
+      INSERT INTO mtos_users (email, name, role, password_hash, token_version, firm_id)
+      VALUES (${email}, ${`Matrix ${role}`}, ${role}, ${"$2b$10$test.placeholder.hash.not.usable"}, 0, 1)
       RETURNING id
     `);
     const id = queryRows<{ id: number }>(inserted)[0]?.id;
     if (typeof id !== "number") throw new Error(`failed to insert ${role}`);
-    const token = generateToken({ id, email, name: `Matrix ${role}`, role });
+    const token = generateToken({ id, email, name: `Matrix ${role}`, role, firm_id: 1 });
     ephemeralUsers.push({ id, role, token, email });
   }
 });
@@ -491,15 +491,15 @@ describe("token revocation via DB token_version bump (HTTP path)", () => {
     const TS_REV = Date.now();
     const email = `rbac-revocation-${TS_REV}@mtos.test`;
     const inserted = await db.execute(sql`
-      INSERT INTO mtos_users (email, name, role, password_hash, token_version)
-      VALUES (${email}, ${"Revocation Probe"}, ${"attorney"}, ${"$2b$10$test.placeholder.hash.not.usable"}, 0)
+      INSERT INTO mtos_users (email, name, role, password_hash, token_version, firm_id)
+      VALUES (${email}, ${"Revocation Probe"}, ${"attorney"}, ${"$2b$10$test.placeholder.hash.not.usable"}, 0, 1)
       RETURNING id
     `);
     const id = queryRows<{ id: number }>(inserted)[0]?.id;
     if (typeof id !== "number") throw new Error("failed to insert revocation probe user");
 
     try {
-      const token = generateToken({ id, email, name: "Revocation Probe", role: "attorney" });
+      const token = generateToken({ id, email, name: "Revocation Probe", role: "attorney", firm_id: 1 });
 
       // Pre-bump: token works.
       const before = await probe("GET", "/api/auth/me", { token });
@@ -769,6 +769,7 @@ describe("cases ownership backfill smoke test (Task #22)", () => {
           // the verifyPassword path.
           password_hash:
             "abcdef0123456789abcdef0123456789:" + "0".repeat(128),
+          firm_id: 1,
         })
         .returning({ id: usersTable.id });
       poisonRowId = poison[0]?.id ?? null;

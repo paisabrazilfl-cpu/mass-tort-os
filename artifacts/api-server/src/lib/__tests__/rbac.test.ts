@@ -33,6 +33,7 @@ function mkUser(role: UserRole, overrides: Partial<AuthUser> = {}): AuthUser {
     email: `${role}@test.local`,
     name: `${role} user`,
     role,
+    firm_id: 1,
     ...overrides,
   };
 }
@@ -687,7 +688,7 @@ describe("authMiddleware — expired token", () => {
     const jwt = (jwtMod as unknown as { default: typeof jwtMod }).default ?? jwtMod;
     const secret = process.env["SESSION_SECRET"] ?? "mtos-dev-secret";
     const expired = jwt.sign(
-      { id: 99, email: "expired@mtos.local", name: "Expired", role: "admin", tv: 0 },
+      { id: 99, email: "expired@mtos.local", name: "Expired", role: "admin", firm_id: 1, tv: 0 },
       secret,
       { expiresIn: "-1s" },
     );
@@ -705,7 +706,7 @@ describe("authMiddleware — expired token", () => {
   test("freshly issued token is NOT rejected by signature/expiry checks", async () => {
     // Without a DB the token-version lookup fails closed, but the message
     // must not be invalid_or_expired_token for a well-formed signature.
-    const fresh = generateToken({ id: 999, email: "fresh@mtos.local", name: "Fresh", role: "admin" });
+    const fresh = generateToken({ id: 999, email: "fresh@mtos.local", name: "Fresh", role: "admin", firm_id: 1 });
     const req = makeReq({ headers: { authorization: `Bearer ${fresh}` } });
     const res = makeRes();
     await runMiddleware(authMiddleware, req, res);

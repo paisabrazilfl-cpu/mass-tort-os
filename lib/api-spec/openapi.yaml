@@ -1666,6 +1666,14 @@ paths:
         - in: query
           name: search
           schema: { type: string, minLength: 1, maxLength: 60 }
+        - in: query
+          name: start_date
+          description: Inclusive lower bound on call_logs.started_at (ISO-8601).
+          schema: { type: string, format: date-time }
+        - in: query
+          name: end_date
+          description: Inclusive upper bound on call_logs.started_at (ISO-8601).
+          schema: { type: string, format: date-time }
       responses:
         "200":
           description: Paginated call list

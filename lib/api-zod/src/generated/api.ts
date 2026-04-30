@@ -2152,6 +2152,14 @@ export const ListCallsQueryParams = zod.object({
     .optional(),
   lead_id: zod.coerce.number().min(1).optional(),
   search: zod.coerce.string().min(1).max(listCallsQuerySearchMax).optional(),
+  start_date: zod
+    .date()
+    .optional()
+    .describe("Inclusive lower bound on call_logs.started_at (ISO-8601)."),
+  end_date: zod
+    .date()
+    .optional()
+    .describe("Inclusive upper bound on call_logs.started_at (ISO-8601)."),
 });
 
 export const ListCallsResponse = zod.object({

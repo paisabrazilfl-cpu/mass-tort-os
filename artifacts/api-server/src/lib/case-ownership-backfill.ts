@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { db, casesTable, auditLogTable, usersTable } from "@workspace/db";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger";
+import { getDefaultFirmId } from "./firm-bootstrap";
 
 export const SYSTEM_USER_EMAIL = "system@mtos.local";
 const SYSTEM_USER_NAME = "System (Backfill)";
@@ -41,6 +42,16 @@ export async function ensureSystemUser(): Promise<number> {
   // concurrent caller created the row between our SELECT and INSERT.
   // Returns no row when a conflict happened — we then re-select and
   // validate the row that the other caller wrote.
+  // Single-firm shell: every user row needs a firm anchor. Use the seeded
+  // default firm; if it isn't there yet (extremely rare — boot ordering
+  // bug), skip the system-user create and return null so the caller can
+  // log+continue.
+  const firmId = await getDefaultFirmId();
+  if (firmId === null) {
+    throw new Error(
+      "case-ownership-backfill: no default firm — seedDefaultFirm must run before ensureSystemUser",
+    );
+  }
   const inserted = await db
     .insert(usersTable)
     .values({
@@ -48,6 +59,7 @@ export async function ensureSystemUser(): Promise<number> {
       name: SYSTEM_USER_NAME,
       role: "admin",
       password_hash: await makeUnknownPasswordHash(),
+      firm_id: firmId,
     })
     .onConflictDoNothing({ target: usersTable.email })
     .returning({ id: usersTable.id });

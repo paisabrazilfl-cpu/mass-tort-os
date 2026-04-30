@@ -1,14 +1,16 @@
 import { pgTable, serial, varchar, text, timestamp, integer, boolean } from "drizzle-orm/pg-core";
+import { firmsTable } from "./firms";
 
 export const usersTable = pgTable("mtos_users", {
   id: serial("id").primaryKey(),
   email: varchar("email", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 255 }).notNull(),
   role: varchar("role", { length: 20 }).notNull().default("viewer"),
-  // Single-firm shell for MVI. Every user belongs to exactly one firm.
-  // Nullable at the column level so the migration can backfill safely;
-  // application code treats missing firm_id as a fatal config error.
-  firm_id: integer("firm_id"),
+  // Single-firm shell for MVI. Every user belongs to exactly one firm; the
+  // FK + NOT NULL is the relational invariant the auth contract relies on
+  // (req.user.firm_id is sourced from this column on every login). Backfill
+  // for legacy rows runs in seedDefaultFirm() on boot.
+  firm_id: integer("firm_id").notNull().references(() => firmsTable.id),
   password_hash: text("password_hash").notNull(),
   token_version: integer("token_version").notNull().default(0),
   totp_secret: text("totp_secret"),
