@@ -3,6 +3,7 @@ import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
 import { dispatchCriticalAlert } from "./security-alerts";
+import { verifyToken } from "./rbac";
 
 // Task #7 FP-tuning: the previous `or|and` + `[=<>]` pattern matched
 // natural-language paralegal notes ("Joe AND wife both diagnosed = severe")
@@ -61,15 +62,22 @@ const IP_RATE_WINDOW = 60_000;
 const BRUTE_FORCE_THRESHOLD = 100;
 const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 
-// Task #7: requests carrying credentials (Bearer JWT) are still attacker-
-// shaped IF they later fail authMiddleware, but they are at least claiming
-// to be internal. We use this signal to (a) raise the rate ceiling and
-// (b) skip body-payload deep-scans where free-text fields (notes, email
-// body, intake transcripts) trigger the bulk of false positives. URL +
-// query are still scanned regardless.
+// Task #7 (round-8 hardening): a request only counts as "internal" if it
+// carries a Bearer token whose JWT signature actually verifies. Raw
+// header presence alone is spoofable by any unauthenticated caller and
+// would let an attacker skip the body deep-scan and inflate the rate
+// ceiling. We verify cheaply (HS256 verify is ~microseconds) before any
+// IDS classification decision. URL + query are scanned regardless.
 function hasInternalCredentials(req: Request): boolean {
   const auth = req.headers["authorization"];
-  return typeof auth === "string" && auth.toLowerCase().startsWith("bearer ");
+  if (typeof auth !== "string" || !auth.toLowerCase().startsWith("bearer ")) {
+    return false;
+  }
+  const token = auth.slice(7).trim();
+  if (!token) return false;
+  // verifyToken returns null for any malformed/unsigned/expired token,
+  // so spoofed Bearer headers fall back to anonymous-traffic limits.
+  return verifyToken(token) !== null;
 }
 
 function getClientIp(req: Request): string {
