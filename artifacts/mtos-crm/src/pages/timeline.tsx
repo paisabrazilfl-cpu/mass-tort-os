@@ -1,11 +1,19 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Clock, Search, Calendar, Stethoscope, Shield, FileText, AlertTriangle, User } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
+
+interface LeadOption {
+  id: number;
+  first_name: string | null;
+  last_name: string | null;
+  tort_type: string | null;
+  status: string | null;
+}
 
 interface TimelineEvent {
   date: string;
@@ -33,17 +41,40 @@ const categoryConfig: Record<string, { icon: typeof Clock; color: string; bg: st
   document: { icon: FileText, color: "text-orange-600", bg: "bg-orange-100 border-orange-300" },
 };
 
+function leadLabel(l: LeadOption): string {
+  const name = [l.first_name, l.last_name].filter(Boolean).join(" ").trim() || "Unnamed lead";
+  const tort = l.tort_type ? ` — ${l.tort_type}` : "";
+  return `${name} (#${l.id})${tort}`;
+}
+
 export default function Timeline() {
   const { toast } = useToast();
   const [leadId, setLeadId] = useState("");
+  const [leads, setLeads] = useState<LeadOption[]>([]);
+  const [leadsLoading, setLeadsLoading] = useState(true);
   const [timeline, setTimeline] = useState<TimelineData | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const loadTimeline = async () => {
-    if (!leadId) return;
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiFetchRaw("/api/leads?limit=500");
+        if (res.ok) {
+          const items = await res.json();
+          if (Array.isArray(items)) setLeads(items);
+        }
+      } finally {
+        setLeadsLoading(false);
+      }
+    })();
+  }, []);
+
+  const loadTimeline = async (id?: string) => {
+    const target = id ?? leadId;
+    if (!target) return;
     setLoading(true);
     try {
-      const res = await apiFetchRaw(`/api/timeline/lead/${leadId}`);
+      const res = await apiFetchRaw(`/api/timeline/lead/${target}`);
       if (!res.ok) throw new Error("Failed");
       setTimeline(await res.json());
     } catch {
@@ -60,13 +91,36 @@ export default function Timeline() {
 
       <Card>
         <CardContent className="pt-6">
-          <div className="flex gap-2 max-w-md">
-            <Input placeholder="Enter Lead ID" value={leadId} onChange={(e) => setLeadId(e.target.value)} onKeyDown={(e) => e.key === "Enter" && loadTimeline()} />
-            <Button onClick={loadTimeline} disabled={loading}>
+          <div className="flex gap-2 max-w-2xl">
+            <Select
+              value={leadId}
+              onValueChange={(v) => {
+                setLeadId(v);
+                void loadTimeline(v);
+              }}
+              disabled={leadsLoading || loading}
+            >
+              <SelectTrigger className="flex-1" data-testid="select-timeline-lead">
+                <SelectValue placeholder={leadsLoading ? "Loading leads…" : leads.length === 0 ? "No leads available" : "Pick a lead"} />
+              </SelectTrigger>
+              <SelectContent>
+                {leads.map((l) => (
+                  <SelectItem key={l.id} value={String(l.id)}>
+                    {leadLabel(l)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button onClick={() => loadTimeline()} disabled={loading || !leadId}>
               <Search className="h-4 w-4 mr-2" />
-              {loading ? "Loading..." : "Build Timeline"}
+              {loading ? "Loading..." : "Rebuild"}
             </Button>
           </div>
+          {!leadsLoading && leads.length === 0 && (
+            <p className="text-xs text-muted-foreground mt-2">
+              No leads in the system yet. Add one from the New Intake page first.
+            </p>
+          )}
         </CardContent>
       </Card>
 

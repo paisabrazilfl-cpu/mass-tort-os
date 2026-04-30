@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -112,7 +113,10 @@ export default function WorkflowSettingsPage() {
       {hint && <p className="text-xs text-muted-foreground mt-1">{hint}</p>}
       {opts.length === 0 && (
         <div className="flex items-center gap-1 text-xs text-amber-600 mt-1">
-          <AlertTriangle className="h-3 w-3" /> No active integrations of this type. Add one on the Integrations page.
+          <AlertTriangle className="h-3 w-3" /> No active integrations of this type.{" "}
+          <Link href="/integrations" className="underline hover:text-amber-700" data-testid="link-add-integration">
+            Add one on the Integrations page →
+          </Link>
         </div>
       )}
       {opts.length > 0 && value === null && (() => {
