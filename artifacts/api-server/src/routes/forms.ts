@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, leadsTable, leadBackgroundCheckSnapshotsTable } from "@workspace/db";
 import { desc, eq } from "drizzle-orm";
 import { runBackgroundCheckHub } from "../lib/bg-hub/hub";
+import { sanitizeHubResultForPersistence } from "../lib/bg-hub/snapshot-sanitizer";
 import { BG_HUB_VERSION, type BackgroundHubResult } from "../lib/bg-hub/types";
 import { encryptLeadFields, decryptLeadFields } from "../lib/encryption";
 import { validateEmail } from "../lib/email-validator";
@@ -1033,12 +1034,17 @@ router.post(
       // Persist a snapshot row (history ledger). Failure to persist is logged
       // but does not block the response — the hub result is still useful.
       try {
+        // Sanitize before persisting. The on-the-fly response below still
+        // returns the full plaintext result to the operator; only the
+        // at-rest copy in `lead_background_check_snapshots` is masked.
+        // See lib/bg-hub/snapshot-sanitizer.ts for the masking strategy.
+        const sanitized = sanitizeHubResultForPersistence(result);
         await db.insert(leadBackgroundCheckSnapshotsTable).values({
           lead_id: leadId,
           version: BG_HUB_VERSION,
           final_status: result.final_status,
           overall_score: result.overall_score,
-          result,
+          result: sanitized,
         });
       } catch (persistErr) {
         req.log.error({ err: persistErr, leadId }, "bg-hub: snapshot persist failed");
