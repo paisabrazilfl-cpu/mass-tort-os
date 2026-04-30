@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { MessageSquare, Loader2 } from "lucide-react";
-import { apiFetch } from "@/lib/api-fetch";
+import { useSendLeadSms } from "@workspace/api-client-react";
 
 interface SendSmsButtonProps {
   leadId: number;
@@ -21,14 +21,6 @@ interface SendSmsButtonProps {
   variant?: "default" | "outline" | "ghost" | "secondary";
   className?: string;
   onSent?: () => void;
-}
-
-interface SendSmsResponse {
-  status: "ok";
-  data: {
-    sms_message_id: number;
-    telnyx_message_id?: string;
-  };
 }
 
 export function SendSmsButton({
@@ -42,11 +34,11 @@ export function SendSmsButton({
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
-  const [sending, setSending] = useState(false);
+  const sendSmsMutation = useSendLeadSms();
+  const sending = sendSmsMutation.isPending;
 
   const reset = () => {
     setBody("");
-    setSending(false);
   };
 
   async function handleSend() {
@@ -55,11 +47,10 @@ export function SendSmsButton({
       toast({ title: "Message is empty", variant: "destructive" });
       return;
     }
-    setSending(true);
     try {
-      const res = await apiFetch<SendSmsResponse>(`/api/leads/${leadId}/send-sms`, {
-        method: "POST",
-        body: JSON.stringify({ body: trimmed }),
+      const res = await sendSmsMutation.mutateAsync({
+        id: leadId,
+        data: { body: trimmed },
       });
       toast({
         title: "SMS queued",
@@ -74,8 +65,6 @@ export function SendSmsButton({
         description: err instanceof Error ? err.message : "Unknown error",
         variant: "destructive",
       });
-    } finally {
-      setSending(false);
     }
   }
 
