@@ -29,7 +29,12 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { createUser, generateToken } from "../../lib/rbac.js";
 
-process.env["RBAC_DISABLE_AUDIT"] = "1";
+// Audit writes stay ENABLED in this suite — test (g) below asserts the
+// `role_changed` audit row shape (entity=user, before/after) per task
+// #58 acceptance, which means we need real INSERTs into `audit_log`.
+// The few rows produced by tests (a)-(g) are scoped to ephemeral user
+// ids and torn down in after().
+delete process.env["RBAC_DISABLE_AUDIT"];
 // Subscription/billing gate off — this suite asserts the role-management
 // permission and self-edit guards, not billing posture. The gate has its
 // own coverage in subscription-gate.test.ts. Without this, every PATCH
@@ -132,6 +137,18 @@ before(async () => {
 });
 
 after(async () => {
+  // Audit rows first (FK-free, but tied to entity_id strings we can
+  // rebuild from the ephemeral ids). Deleting them keeps the
+  // audit_log table tidy across repeated test runs.
+  const ids = [adminId, viewerId, targetId, otherFirmUserId].filter((n) => n > 0);
+  if (ids.length > 0) {
+    const idStrings = ids.map((n) => String(n));
+    await db
+      .execute(
+        sql`DELETE FROM audit_log WHERE entity_type = 'user' AND entity_id = ANY(${idStrings})`,
+      )
+      .catch(() => {});
+  }
   await db
     .execute(
       sql`DELETE FROM mtos_users WHERE email IN (${ADMIN_EMAIL}, ${VIEWER_EMAIL}, ${TARGET_EMAIL}, ${OTHER_FIRM_EMAIL})`,
@@ -301,4 +318,58 @@ test("(f) PATCH with role='admin' is rejected by zod (admin elevation is out-of-
     beforeRow.token_version,
     "rejected admin-elevation must NOT bump token_version (no partial state)",
   );
+});
+
+test("(g) successful role change writes audit row with entity=user, action=role_changed, before/after payload", async () => {
+  // Move target paralegal→attorney so we have a deterministic
+  // before/after pair for this test (test (c) already moved the row
+  // viewer→paralegal earlier in the suite). The audit row we assert
+  // on below is the one this PATCH writes — there may be earlier
+  // role_changed rows for the same entity_id from test (c), so we
+  // ORDER BY created_at DESC and take the most recent one.
+  const res = await fetch(`${baseUrl}/api/users/${targetId}/role`, {
+    method: "PATCH",
+    headers: {
+      authorization: `Bearer ${adminToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ role: "attorney" }),
+  });
+  assert.equal(res.status, 200, `expected 200, got ${res.status}`);
+
+  const auditRows = await db.execute(
+    sql`SELECT entity_type, entity_id, action, details
+        FROM audit_log
+        WHERE entity_type = 'user'
+          AND entity_id = ${String(targetId)}
+          AND action = 'role_changed'
+        ORDER BY occurred_at DESC
+        LIMIT 1`,
+  );
+  const row =
+    (auditRows as unknown as {
+      rows?: Array<{
+        entity_type: string;
+        entity_id: string;
+        action: string;
+        details: Record<string, unknown> | null;
+      }>;
+    }).rows?.[0];
+
+  assert.ok(row, "expected exactly one audit row for the role_changed event");
+  assert.equal(row.entity_type, "user", "audit entity_type must be 'user'");
+  assert.equal(row.entity_id, String(targetId), "audit entity_id must reference the target user");
+  assert.equal(row.action, "role_changed", "audit action must be 'role_changed' (compliance contract)");
+
+  const details = row.details as {
+    before?: { role?: string };
+    after?: { role?: string };
+    actor_user_id?: number;
+    firm_id?: number;
+  } | null;
+  assert.ok(details, "audit details payload must not be null");
+  assert.equal(details.before?.role, "paralegal", "audit payload must record the prior role");
+  assert.equal(details.after?.role, "attorney", "audit payload must record the new role");
+  assert.equal(details.actor_user_id, adminId, "audit payload must record the acting admin");
+  assert.equal(details.firm_id, 1, "audit payload must record the firm scope");
 });
