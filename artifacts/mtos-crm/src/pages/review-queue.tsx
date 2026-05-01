@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { ChevronDown, ChevronRight, Check, X, Search, AlertTriangle } from "lucide-react";
+import { ChevronDown, ChevronRight, Check, X, Search, AlertTriangle, MessageSquare } from "lucide-react";
 
 import {
   useListReviewQueue,
@@ -32,8 +32,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+
+const MAX_FOLLOWUP_SMS_LEN = 1600;
 
 function getConflictBadge(conflictType: string) {
   switch (conflictType) {
@@ -82,26 +93,56 @@ function getFailsafeText(mode: string) {
 
 function ReviewQueueRow({ item }: { item: ReviewQueueItem }) {
   const [expanded, setExpanded] = useState(false);
+  const [smsDialogOpen, setSmsDialogOpen] = useState(false);
+  const [smsBody, setSmsBody] = useState("");
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
   const resolveMutation = useResolveReviewItem();
 
-  const handleResolve = (resolution: "accepted" | "rejected") => {
+  // Task #51 T004: Accept-on-lead flow can optionally fire a Telnyx SMS
+  // follow-up to the lead. The backend (workflow-engine.enqueueLeadFollowUpSms)
+  // only acts when resolution=accepted AND entity_type=lead AND body is
+  // non-empty, so for any other path we skip the dialog and resolve immediately.
+  const supportsSmsFollowup = item.entity_type === "lead";
+
+  const submitResolution = (
+    resolution: "accepted" | "rejected",
+    followupSmsBody?: string,
+  ) => {
     // Stamp the resolution with the authenticated reviewer's identity. The
     // previous hardcoded "admin" string broke audit trails (every resolution
     // looked like it came from the same actor regardless of who clicked).
     const resolvedBy = user?.name?.trim() || user?.email || "system";
+    const trimmed = followupSmsBody?.trim() ?? "";
     resolveMutation.mutate(
       {
         id: item.id,
-        data: { resolution, resolved_by: resolvedBy },
+        data: {
+          resolution,
+          resolved_by: resolvedBy,
+          ...(trimmed ? { followup_sms_body: trimmed } : {}),
+        },
       },
       {
-        onSuccess: () => {
+        onSuccess: (data) => {
+          // Honour the backend's actual enqueue verdict — even if we asked for
+          // a follow-up SMS, the route can return job_id=null when the lead id
+          // is invalid or the queue insert fails. Tell the operator the truth
+          // so they don't assume an SMS went out when it didn't (architect note).
+          const smsJobId = data?.followup_sms_job_id ?? null;
+          let description: string;
+          if (trimmed && smsJobId !== null) {
+            description = `Review item ${item.id} accepted — follow-up SMS queued (job ${smsJobId}).`;
+          } else if (trimmed && smsJobId === null) {
+            description = `Review item ${item.id} accepted — but the follow-up SMS could not be queued. Check the audit log.`;
+          } else {
+            description = `Review item ${item.id} has been ${resolution}.`;
+          }
           toast({
             title: `Item ${resolution}`,
-            description: `Review item ${item.id} has been ${resolution}.`,
+            description,
+            variant: trimmed && smsJobId === null ? "destructive" : "default",
           });
           queryClient.invalidateQueries({
             queryKey: getListReviewQueueQueryKey(),
@@ -109,6 +150,8 @@ function ReviewQueueRow({ item }: { item: ReviewQueueItem }) {
           queryClient.invalidateQueries({
             queryKey: getGetReviewQueueStatsQueryKey(),
           });
+          setSmsDialogOpen(false);
+          setSmsBody("");
         },
         onError: () => {
           toast({
@@ -119,6 +162,15 @@ function ReviewQueueRow({ item }: { item: ReviewQueueItem }) {
         },
       }
     );
+  };
+
+  const handleResolve = (resolution: "accepted" | "rejected") => {
+    if (resolution === "accepted" && supportsSmsFollowup) {
+      setSmsBody("");
+      setSmsDialogOpen(true);
+      return;
+    }
+    submitResolution(resolution);
   };
 
   return (
@@ -267,6 +319,56 @@ function ReviewQueueRow({ item }: { item: ReviewQueueItem }) {
           </TableCell>
         </TableRow>
       )}
+      <Dialog
+        open={smsDialogOpen}
+        onOpenChange={(open) => {
+          if (resolveMutation.isPending) return;
+          setSmsDialogOpen(open);
+          if (!open) setSmsBody("");
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4" /> Accept lead {item.entity_id}
+            </DialogTitle>
+            <DialogDescription>
+              Optionally queue a Telnyx SMS follow-up to the lead. Leave blank
+              to accept without sending anything.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Textarea
+              placeholder="Hi, this is a quick follow-up about your case…"
+              value={smsBody}
+              onChange={(e) =>
+                setSmsBody(e.target.value.slice(0, MAX_FOLLOWUP_SMS_LEN))
+              }
+              maxLength={MAX_FOLLOWUP_SMS_LEN}
+              rows={5}
+              disabled={resolveMutation.isPending}
+            />
+            <div className="text-xs text-muted-foreground text-right">
+              {smsBody.length} / {MAX_FOLLOWUP_SMS_LEN}
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => submitResolution("accepted")}
+              disabled={resolveMutation.isPending}
+            >
+              Skip SMS &amp; Accept
+            </Button>
+            <Button
+              onClick={() => submitResolution("accepted", smsBody)}
+              disabled={resolveMutation.isPending || smsBody.trim().length === 0}
+            >
+              <MessageSquare className="mr-1 h-4 w-4" /> Accept &amp; Send SMS
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

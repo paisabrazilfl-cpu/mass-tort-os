@@ -521,7 +521,25 @@ export interface ResolveReviewBody {
   resolution: ResolveReviewBodyResolution;
   resolution_notes?: string;
   resolved_by?: string;
+  /**
+   * Optional Telnyx SMS body to enqueue when resolution=accepted AND
+entity_type=lead. Empty/whitespace = no SMS sent. Max 1600 chars
+(matches workflow-engine.enqueueLeadFollowUpSms validation).
+
+   * @maxLength 1600
+   */
+  followup_sms_body?: string;
 }
+
+export type ResolveReviewResponse = ReviewQueueItem & {
+  /** Job id of the enqueued send_workflow_sms job when a follow-up
+SMS was both requested AND successfully enqueued. Null in all
+other cases (no SMS requested, invalid lead id, or enqueue
+error). When null after a non-empty followup_sms_body was
+submitted, surface "accepted but SMS not queued" to the user.
+ */
+  followup_sms_job_id?: number | null;
+};
 
 export interface NpiProvider {
   npi: string;

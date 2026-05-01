@@ -145,6 +145,7 @@ export * from "./queueStats";
 export * from "./requeueDeadLetterJob200";
 export * from "./resolveReviewBody";
 export * from "./resolveReviewBodyResolution";
+export * from "./resolveReviewResponse";
 export * from "./reviewQueueItem";
 export * from "./reviewQueueItemDetails";
 export * from "./reviewQueueStats";

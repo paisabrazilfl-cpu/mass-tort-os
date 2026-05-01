@@ -86,6 +86,7 @@ import type {
   QueueStats,
   RequeueDeadLetterJob200,
   ResolveReviewBody,
+  ResolveReviewResponse,
   ReviewQueueItem,
   ReviewQueueStats,
   RunBackgroundCheckBody,
@@ -2619,8 +2620,8 @@ export const resolveReviewItem = async (
   id: number,
   resolveReviewBody: ResolveReviewBody,
   options?: RequestInit,
-): Promise<ReviewQueueItem> => {
-  return customFetch<ReviewQueueItem>(getResolveReviewItemUrl(id), {
+): Promise<ResolveReviewResponse> => {
+  return customFetch<ResolveReviewResponse>(getResolveReviewItemUrl(id), {
     ...options,
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...options?.headers },

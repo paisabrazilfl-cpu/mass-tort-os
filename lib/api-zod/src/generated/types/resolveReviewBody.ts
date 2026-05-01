@@ -11,4 +11,12 @@ export interface ResolveReviewBody {
   resolution: ResolveReviewBodyResolution;
   resolution_notes?: string;
   resolved_by?: string;
+  /**
+   * Optional Telnyx SMS body to enqueue when resolution=accepted AND
+entity_type=lead. Empty/whitespace = no SMS sent. Max 1600 chars
+(matches workflow-engine.enqueueLeadFollowUpSms validation).
+
+   * @maxLength 1600
+   */
+  followup_sms_body?: string;
 }

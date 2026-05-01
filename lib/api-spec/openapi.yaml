@@ -722,11 +722,15 @@ paths:
               $ref: "#/components/schemas/ResolveReviewBody"
       responses:
         "200":
-          description: Resolved review item
+          description: |
+            Resolved review item, plus an optional `followup_sms_job_id` when
+            the resolution requested a Telnyx SMS follow-up. Null means either
+            no SMS was requested or the enqueue failed (check server logs and
+            the `audit_log` row for the failure reason).
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ReviewQueueItem"
+                $ref: "#/components/schemas/ResolveReviewResponse"
 
   /npi/search:
     get:
@@ -2704,7 +2708,29 @@ components:
           type: string
         resolved_by:
           type: string
+        followup_sms_body:
+          type: string
+          description: |
+            Optional Telnyx SMS body to enqueue when resolution=accepted AND
+            entity_type=lead. Empty/whitespace = no SMS sent. Max 1600 chars
+            (matches workflow-engine.enqueueLeadFollowUpSms validation).
+          maxLength: 1600
       required: [resolution]
+
+    ResolveReviewResponse:
+      allOf:
+        - $ref: "#/components/schemas/ReviewQueueItem"
+        - type: object
+          properties:
+            followup_sms_job_id:
+              type: integer
+              nullable: true
+              description: |
+                Job id of the enqueued send_workflow_sms job when a follow-up
+                SMS was both requested AND successfully enqueued. Null in all
+                other cases (no SMS requested, invalid lead id, or enqueue
+                error). When null after a non-empty followup_sms_body was
+                submitted, surface "accepted but SMS not queued" to the user.
 
     NpiProvider:
       type: object

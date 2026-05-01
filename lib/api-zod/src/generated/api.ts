@@ -789,29 +789,49 @@ export const ResolveReviewItemParams = zod.object({
   id: zod.coerce.number(),
 });
 
+export const resolveReviewItemBodyFollowupSmsBodyMax = 1600;
+
 export const ResolveReviewItemBody = zod.object({
   resolution: zod.enum(["accepted", "rejected", "escalated"]),
   resolution_notes: zod.string().optional(),
   resolved_by: zod.string().optional(),
+  followup_sms_body: zod
+    .string()
+    .max(resolveReviewItemBodyFollowupSmsBodyMax)
+    .optional()
+    .describe(
+      "Optional Telnyx SMS body to enqueue when resolution=accepted AND\nentity_type=lead. Empty\/whitespace = no SMS sent. Max 1600 chars\n(matches workflow-engine.enqueueLeadFollowUpSms validation).\n",
+    ),
 });
 
-export const ResolveReviewItemResponse = zod.object({
-  id: zod.number(),
-  entity_type: zod.string(),
-  entity_id: zod.string(),
-  conflict_type: zod.string(),
-  severity: zod.string(),
-  failsafe_mode: zod.string(),
-  source_module: zod.string(),
-  summary: zod.string(),
-  details: zod.object({}).passthrough().optional(),
-  resolution: zod.string(),
-  resolution_notes: zod.string().nullish(),
-  resolved_by: zod.string().nullish(),
-  resolved_at: zod.string().nullish(),
-  retry_count: zod.number(),
-  created_at: zod.string(),
-});
+export const ResolveReviewItemResponse = zod
+  .object({
+    id: zod.number(),
+    entity_type: zod.string(),
+    entity_id: zod.string(),
+    conflict_type: zod.string(),
+    severity: zod.string(),
+    failsafe_mode: zod.string(),
+    source_module: zod.string(),
+    summary: zod.string(),
+    details: zod.object({}).passthrough().optional(),
+    resolution: zod.string(),
+    resolution_notes: zod.string().nullish(),
+    resolved_by: zod.string().nullish(),
+    resolved_at: zod.string().nullish(),
+    retry_count: zod.number(),
+    created_at: zod.string(),
+  })
+  .and(
+    zod.object({
+      followup_sms_job_id: zod
+        .number()
+        .nullish()
+        .describe(
+          'Job id of the enqueued send_workflow_sms job when a follow-up\nSMS was both requested AND successfully enqueued. Null in all\nother cases (no SMS requested, invalid lead id, or enqueue\nerror). When null after a non-empty followup_sms_body was\nsubmitted, surface \"accepted but SMS not queued\" to the user.\n',
+        ),
+    }),
+  );
 
 /**
  * @summary Search the NPI Registry for doctors and providers
