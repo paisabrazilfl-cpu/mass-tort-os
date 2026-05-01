@@ -128,3 +128,6 @@ channel = "stable-25_05"
 
 [userenv.shared]
 ENCRYPTION_KEY = "32a6446807d6701f0646e6c6d79642ad66720fcd68bfc42cc14fa5c4835a6e1a"
+
+[userenv.development]
+MTOS_DISABLE_BILLING_GATE = "1"
