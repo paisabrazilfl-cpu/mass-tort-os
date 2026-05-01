@@ -48,3 +48,9 @@ id = "cDzfGnxH2I5VaQMMVMjK5"
 uri = "file://exports/CONTENTS.txt"
 type = "text"
 title = "Archive contents & unpack instructions"
+
+[[outputs]]
+id = "7Ciqk5JfPMPb4wopGncw7"
+uri = "file://exports/mtos-crm-source-20260501-123800.tar.gz"
+type = "unspecified"
+title = "Mass Tort OS CRM — Full Source (3.4 MB, 728 files)"
