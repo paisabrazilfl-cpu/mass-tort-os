@@ -109,15 +109,21 @@ router.patch(
       return;
     }
 
+    // Audit shape per task #58 spec: entity=user, action=role_changed,
+    // with explicit before/after payload so a future compliance reader
+    // can reconstruct exactly what changed without hitting the user
+    // table again. `previous_role` comes from the same UPDATE statement
+    // (CTE), so the pair is guaranteed atomic w.r.t. the role change.
     await auditLog(
       "user",
       String(updated.id),
-      "user_role_changed",
+      "role_changed",
       {
         actor_user_id: actor.id,
         actor_email: actor.email,
         target_email: updated.email,
-        new_role: updated.role,
+        before: { role: updated.previous_role },
+        after: { role: updated.role },
         firm_id: firmId,
       },
       {
@@ -131,13 +137,18 @@ router.patch(
       {
         actor_user_id: actor.id,
         target_user_id: updated.id,
+        previous_role: updated.previous_role,
         new_role: updated.role,
         firm_id: firmId,
       },
       "User role changed by admin",
     );
 
-    res.json({ status: "ok", data: updated });
+    // Strip the audit-only field from the API response so downstream
+    // consumers don't accidentally start to depend on it.
+    const { previous_role: _previous, ...response } = updated;
+    void _previous;
+    res.json({ status: "ok", data: response });
   },
 );
 

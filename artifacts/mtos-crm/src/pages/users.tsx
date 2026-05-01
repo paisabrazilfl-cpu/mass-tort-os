@@ -233,6 +233,7 @@ export default function Users() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[60px]">ID</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead>Email</TableHead>
                     <TableHead>Role</TableHead>
@@ -248,6 +249,9 @@ export default function Users() {
                     const isSelf = row.id === user?.id;
                     return (
                       <TableRow key={row.id}>
+                        <TableCell className="text-xs text-muted-foreground tabular-nums">
+                          {row.id}
+                        </TableCell>
                         <TableCell className="font-medium">
                           {row.name}
                           {isSelf && (

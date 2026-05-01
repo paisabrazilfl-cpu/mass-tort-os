@@ -854,17 +854,32 @@ export async function updateUserRoleAndBumpVersion(
   userId: number,
   firmId: number,
   newRole: UserRole,
-): Promise<AdminUserRow | null> {
+): Promise<(AdminUserRow & { previous_role: UserRole }) | null> {
+  // CTE captures the prior role in the same statement as the UPDATE so
+  // the audit log can record an honest before/after pair without a
+  // separate read-modify-write cycle (which would race with another
+  // admin editing the same row, or fail-open on the DELETE-then-UPDATE
+  // edge case). The firm_id predicate lives in `prev` so a wrong-firm
+  // id resolves to "no prev row → no UPDATE → null return", which the
+  // route then surfaces as a uniform 404.
   const result = await db.execute(sql`
+    WITH prev AS (
+      SELECT id, role AS old_role
+      FROM mtos_users
+      WHERE id = ${userId} AND firm_id = ${firmId}
+    )
     UPDATE mtos_users
     SET role = ${newRole},
         token_version = token_version + 1,
         updated_at = NOW()
-    WHERE id = ${userId} AND firm_id = ${firmId}
-    RETURNING id, email, name, role, firm_id, mfa_enabled,
-              email_verified_at, last_login_at, created_at
+    FROM prev
+    WHERE mtos_users.id = prev.id
+    RETURNING mtos_users.id, mtos_users.email, mtos_users.name, mtos_users.role,
+              mtos_users.firm_id, mtos_users.mfa_enabled,
+              mtos_users.email_verified_at, mtos_users.last_login_at,
+              mtos_users.created_at, prev.old_role AS previous_role
   `);
-  const rows = rowsOf<AdminUserRow>(result);
+  const rows = rowsOf<AdminUserRow & { previous_role: UserRole }>(result);
   return rows[0] ?? null;
 }
 
