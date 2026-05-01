@@ -65,6 +65,7 @@ export const navigation: NavSection[] = [
     section: "Configuration",
     items: [
       { name: "Vendors", href: "/vendors", icon: Building2 },
+      { name: "Firm Settings", href: "/firm-settings", icon: Building },
       { name: "Integrations", href: "/integrations", icon: Plug },
       { name: "Billing", href: "/billing", icon: CreditCard },
       { name: "Compliance", href: "/compliance", icon: Shield },

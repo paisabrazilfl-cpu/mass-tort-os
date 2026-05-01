@@ -185,7 +185,7 @@ describe("public allowlist (validateRouteTable policy)", () => {
     assert.ok(publicRouters.size > 0, "expected at least one public router in policy");
   });
 
-  test("auth router exceptions are exactly login / refresh / register / verify-email", () => {
+  test("auth router exceptions are exactly login / refresh / register / verify-email / invite-info", () => {
     if (!booted) throw new Error("app not booted");
     const exceptions = booted.policy
       .filter((p) => p.status === "auth-exception")
@@ -196,7 +196,14 @@ describe("public allowlist (validateRouteTable policy)", () => {
     // issue tokens — so this route must be reachable without a Bearer
     // header. The single-use SHA-256-hashed token in the query string
     // is the credential.
+    //
+    // GET /invite-info is the firm-invite prefill lookup added by Task
+    // #57. Same shape as verify-email: no session yet, the SHA-256
+    // hashed token in the query string is the credential, and the
+    // response carries no token / hash material — only firm name and
+    // optional email prefill so the /register page can render context.
     assert.deepEqual(exceptions, [
+      "GET /invite-info",
       "GET /verify-email",
       "POST /login",
       "POST /refresh",

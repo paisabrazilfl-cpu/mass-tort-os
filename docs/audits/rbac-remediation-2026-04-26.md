@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **196 checked / 32 public / 164 protected / 0 unprotected.**
+Boot-time count: **201 checked / 33 public / 168 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -606,6 +606,8 @@ Boot-time count: **196 checked / 32 public / 164 protected / 0 unprotected.**
 
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
+| (root) | PATCH | `/api/:id/role` | ✓ | ✓ |  |  |  | — | `users:manage` | ✓ |
+| (root) | GET | `/api/` | ✓ | ✓ |  |  |  | — | `users:list` | ✓ |
 | analytics | GET | `/api/analytics/conversion-funnel` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/overview` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/paralegal-leaderboard` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
@@ -616,6 +618,9 @@ Boot-time count: **196 checked / 32 public / 164 protected / 0 unprotected.**
 | analytics | GET | `/api/analytics/predictive/model` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/tort-breakdown` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | auth | POST | `/api/auth/change-password` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| auth | GET | `/api/auth/firm-invites` | ✓ | ✓ |  |  |  | — | `invites:manage` | ✓ |
+| auth | POST | `/api/auth/firm-invites` | ✓ | ✓ |  |  |  | — | `invites:manage` | ✓ |
+| auth | GET | `/api/auth/invite-info` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | POST | `/api/auth/login` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | POST | `/api/auth/logout` | ✓ |  |  | ✓ |  | — | — | ✓ |
 | auth | GET | `/api/auth/me` | ✓ |  |  | ✓ |  | — | — | ✓ |

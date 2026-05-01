@@ -27,6 +27,7 @@ export * from "./document_envelopes";
 export * from "./workflow_settings";
 export * from "./template_files";
 export * from "./firms";
+export * from "./firm_invites";
 export * from "./call_logs";
 export * from "./lead_dispositions";
 export * from "./sms_messages";

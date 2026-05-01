@@ -34,6 +34,7 @@ import Compliance from "@/pages/compliance";
 import FormEngine from "@/pages/form-engine";
 import Vendors from "@/pages/vendors";
 import Security from "@/pages/security";
+import FirmSettings from "@/pages/firm-settings";
 import DocReview from "@/pages/doc-review";
 import Timeline from "@/pages/timeline";
 import Drafting from "@/pages/drafting";
@@ -106,6 +107,7 @@ function AuthedRoutes() {
           <Route path="/form-engine" component={FormEngine} />
           <Route path="/vendors" component={Vendors} />
           <Route path="/security" component={Security} />
+          <Route path="/firm-settings" component={FirmSettings} />
           <Route path="/doc-review" component={DocReview} />
           <Route path="/timeline" component={Timeline} />
           <Route path="/drafting" component={Drafting} />

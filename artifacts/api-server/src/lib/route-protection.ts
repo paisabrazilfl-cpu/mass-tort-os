@@ -82,6 +82,12 @@ const AUTH_ROUTE_EXCEPTIONS = new Set([
   // be reachable without a Bearer token. Single-use, short-lived,
   // SHA-256-hashed token in the query string is the credential.
   "GET /verify-email",
+  // Firm-invite prefill lookup (Task #57). The recipient of an invite
+  // link has no session yet — the whole point is to bootstrap one in
+  // the right firm — so the /register page can call this anonymously
+  // to render the firm name + email prefill. The token in the query
+  // string is the credential; the response carries no token / hash.
+  "GET /invite-info",
 ]);
 
 // Authenticated routes that legitimately do not need a role gate (caller's

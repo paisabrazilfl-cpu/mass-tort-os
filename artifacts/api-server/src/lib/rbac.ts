@@ -189,6 +189,11 @@ export const Permission = {
   // a privileged operation that bypasses the registration default.
   USERS_MANAGE: "users:manage",
 
+  // Firm invites — admin generates a one-time link bound to their firm
+  // so a new self-serve registration lands in the right tenant instead
+  // of falling back to the seeded default firm. Strictly admin-only.
+  INVITES_MANAGE: "invites:manage",
+
   // Billing (Stripe)
   BILLING_MANAGE: "billing:manage",
 

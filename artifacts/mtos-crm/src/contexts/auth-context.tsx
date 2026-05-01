@@ -39,7 +39,12 @@ type Ctx = {
   status: Status;
   pendingMfa: { email: string } | null;
   login: (email: string, password: string, totpCode?: string) => Promise<LoginOutcome>;
-  register: (email: string, password: string, name: string) => Promise<RegisterOutcome>;
+  register: (
+    email: string,
+    password: string,
+    name: string,
+    inviteToken?: string,
+  ) => Promise<RegisterOutcome>;
   verifyMfa: (totpCode: string) => Promise<LoginOutcome>;
   verifyEmail: (token: string) => Promise<LoginOutcome>;
   cancelMfa: () => void;
@@ -240,12 +245,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const register = useCallback(
-    async (email: string, password: string, name: string): Promise<RegisterOutcome> => {
+    async (
+      email: string,
+      password: string,
+      name: string,
+      inviteToken?: string,
+    ): Promise<RegisterOutcome> => {
       try {
+        // Task #57: when the user arrived via /register?invite=<token>,
+        // pass it through verbatim so the server binds the new account
+        // to the invite's firm (and atomically claims the invite).
+        // Empty/whitespace tokens are dropped so the server's optional
+        // schema doesn't reject "" with a hex-shape error.
+        const trimmedInvite = inviteToken?.trim();
+        const payload: Record<string, unknown> = { email, password, name };
+        if (trimmedInvite) {
+          payload.invite_token = trimmedInvite;
+        }
         const res = await fetch("/api/auth/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password, name }),
+          body: JSON.stringify(payload),
         });
 
         let body: Record<string, unknown> = {};

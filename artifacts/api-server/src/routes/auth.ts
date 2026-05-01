@@ -28,6 +28,13 @@ import {
   sendVerificationEmail,
 } from "../lib/email-verification";
 import { getDefaultFirmId } from "../lib/firm-bootstrap";
+import {
+  createInvite,
+  getInvitePreviewByToken,
+  listInvitesForFirm,
+  lockInviteByToken,
+  attachInviteUser,
+} from "../lib/firm-invites";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { generateSecret, verifyTOTP, generateOTPAuthURL } from "../lib/totp";
@@ -63,6 +70,22 @@ const RegisterBody = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(1).max(1024),
   name: z.string().trim().min(1).max(200),
+  // Optional firm-invite claim. When supplied AND the token still
+  // matches an outstanding row, the new user is bound to the invite's
+  // firm instead of the seeded default firm. Hex-only because tokens
+  // are crypto.randomBytes(32).toString("hex"); anything else can't
+  // possibly match a stored hash so we shape-validate up front.
+  invite_token: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-f]{64}$/i, "invite_token must be 64 hex characters")
+    .optional(),
+});
+const InviteInfoQuery = z.object({
+  token: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-f]{64}$/i, "token must be 64 hex characters"),
 });
 const ChangePasswordBody = z.object({
   current_password: z.string().min(1).max(1024),
@@ -292,7 +315,7 @@ const REGISTER_PENDING_BODY = {
 router.post("/register", authRateLimit, async (req, res) => {
   const parsed = RegisterBody.safeParse(req.body);
   if (!parsed.success) { badRequest(res, parsed.error, "Email, password, and name required"); return; }
-  const { email, password, name } = parsed.data;
+  const { email, password, name, invite_token } = parsed.data;
 
   // Block public registration of reserved/system addresses. Compared
   // case-insensitively because email addresses are case-insensitive in
@@ -320,16 +343,51 @@ router.post("/register", authRateLimit, async (req, res) => {
   const existing = await getUserByEmail(email);
   if (existing) { res.status(409).json({ error: "Email already registered" }); return; }
 
-  const passwordHash = await hashPassword(password);
-  // Single-firm shell: every newly registered user is bound to the seeded
-  // default firm. Multi-firm onboarding flows would resolve the firm via
-  // an invite token / claim flow instead — out of scope for MVI.
-  const firmId = await getDefaultFirmId();
-  if (firmId === null) {
-    logger.error("register: no default firm row — seedDefaultFirm did not run");
-    res.status(503).json({ error: "Account creation temporarily unavailable" });
-    return;
+  // Resolve the firm BEFORE creating any user state. There are two
+  // mutually exclusive paths here, both authoritative:
+  //
+  //   1. invite_token present → atomically lock the invite via
+  //      lockInviteByToken (UPDATE ... WHERE claimed_at IS NULL ...
+  //      RETURNING). The row's claimed_at flips inside that single
+  //      statement, so concurrent registrations racing the same token
+  //      both run this UPDATE but only ONE returns a row; the loser
+  //      gets the same generic 4xx an invalid token would. There is no
+  //      window between "we believed the token was valid" and "we acted
+  //      on it" — the lock IS the acting. If it returns null, we MUST
+  //      NOT fall back to the default firm: the user explicitly clicked
+  //      an invite link, and silently routing them to a different firm
+  //      would be a worse failure than rejecting the request.
+  //
+  //   2. invite_token absent → fall back to the seeded default firm so
+  //      existing single-tenant deployments keep working.
+  //
+  // Errors here surface as a generic message so the endpoint cannot be
+  // used to distinguish wrong / expired / already-claimed tokens.
+  let firmId: number;
+  let lockedInviteId: number | null = null;
+  if (invite_token) {
+    const locked = await lockInviteByToken(invite_token);
+    if (!locked) {
+      res.status(400).json({
+        status: "error",
+        code: "invalid_invite",
+        message: "This invite link is invalid or has expired. Ask the administrator for a new one.",
+      });
+      return;
+    }
+    firmId = locked.firm_id;
+    lockedInviteId = locked.id;
+  } else {
+    const defaultFirm = await getDefaultFirmId();
+    if (defaultFirm === null) {
+      logger.error("register: no default firm row — seedDefaultFirm did not run");
+      res.status(503).json({ error: "Account creation temporarily unavailable" });
+      return;
+    }
+    firmId = defaultFirm;
   }
+
+  const passwordHash = await hashPassword(password);
 
   // Mint a single-use verification token, persist only its hash, and
   // hand the plaintext to the email helper for delivery. The user row
@@ -345,6 +403,22 @@ router.post("/register", authRateLimit, async (req, res) => {
     { tokenHash: verification.hash, expiresAt: verification.expiresAt },
   );
 
+  // Step 2 of the two-phase claim: stitch the new user.id onto the row
+  // already locked by lockInviteByToken. Best-effort — the invite is
+  // ALREADY consumed (claimed_at was set above), so a failure here does
+  // not allow reuse and does not warrant rolling back the user. The
+  // audit row written below carries firm_id + via_invite for recovery.
+  if (lockedInviteId !== null) {
+    try {
+      await attachInviteUser(lockedInviteId, user.id);
+    } catch (err) {
+      logger.warn(
+        { user_id: user.id, firm_id: firmId, invite_id: lockedInviteId, err },
+        "register: attachInviteUser failed; invite remains consumed but claimed_by_user_id was not stitched",
+      );
+    }
+  }
+
   // Fire-and-await email send. Failures here log and continue —
   // sendVerificationEmail itself handles enqueue errors so this never
   // throws back into the request, but we await it so the audit row is
@@ -354,6 +428,8 @@ router.post("/register", authRateLimit, async (req, res) => {
   await auditLog("user", String(user.id), "registered_pending_verification", {
     email,
     role: assignedRole,
+    firm_id: firmId,
+    via_invite: Boolean(invite_token),
   });
 
   // 202 Accepted = "request received, action not complete". The
@@ -361,6 +437,143 @@ router.post("/register", authRateLimit, async (req, res) => {
   // email" state instead of trying to read a JWT pair from the body.
   res.status(202).json(REGISTER_PENDING_BODY);
 });
+
+/**
+ * Anonymous prefill lookup for an invite link. The /register page reads
+ * `?invite=...` from the URL and calls this to (a) confirm the invite
+ * is still valid and (b) prefill the email field + render the firm
+ * name. Returns a generic 404 envelope for invalid / expired / claimed
+ * tokens so the endpoint cannot be used to enumerate invite state.
+ *
+ * Public on purpose: the user has the invite token but does not yet
+ * have a session (the whole flow exists to bootstrap one). The token
+ * is the credential.
+ */
+router.get("/invite-info", authRateLimit, async (req, res) => {
+  const parsed = InviteInfoQuery.safeParse(req.query);
+  if (!parsed.success) {
+    errorEnvelope(
+      res,
+      404,
+      "invalid_invite",
+      "This invite link is invalid or has expired.",
+    );
+    return;
+  }
+  const preview = await getInvitePreviewByToken(parsed.data.token);
+  if (!preview) {
+    errorEnvelope(
+      res,
+      404,
+      "invalid_invite",
+      "This invite link is invalid or has expired.",
+    );
+    return;
+  }
+  res.json({
+    firm_name: preview.firm_name,
+    email_prefill: preview.email_prefill,
+    expires_at: preview.expires_at.toISOString(),
+  });
+});
+
+// Inline schema for the admin "create invite" body. email_prefill is
+// optional convenience; the actual claim is keyed by the token, not the
+// address, so a recipient can register with any email.
+const CreateInviteBody = z.object({
+  email_prefill: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .email()
+    .max(254)
+    .optional()
+    .or(z.literal("")),
+});
+
+/**
+ * List the requester's firm's outstanding + historical invites. Admin
+ * only. Each row exposes status (pending / claimed / expired) but never
+ * the plaintext token — the link is only surfaced once, on creation.
+ */
+router.get(
+  "/firm-invites",
+  authMiddleware,
+  requirePermission(Permission.INVITES_MANAGE),
+  async (req, res) => {
+    const firmId = req.user!.firm_id;
+    if (firmId == null) {
+      res.status(400).json({ error: "User is not bound to a firm" });
+      return;
+    }
+    const rows = await listInvitesForFirm(firmId);
+    const now = Date.now();
+    res.json({
+      invites: rows.map((r) => {
+        // Single-use semantics live on `claimed_at` (see firm-invites.ts);
+        // claimed_by_user_id is set in a follow-up update post user-insert
+        // and may briefly be null on a "claimed" row. List status follows
+        // the authoritative column so the UI never shows a consumed
+        // invite as still pending.
+        const claimed = r.claimed_at !== null;
+        const expired = !claimed && r.expires_at.getTime() <= now;
+        return {
+          id: r.id,
+          email_prefill: r.email_prefill,
+          expires_at: r.expires_at.toISOString(),
+          claimed_by_user_id: r.claimed_by_user_id,
+          claimed_at: r.claimed_at ? r.claimed_at.toISOString() : null,
+          created_by_user_id: r.created_by_user_id,
+          created_at: r.created_at.toISOString(),
+          status: claimed ? "claimed" : expired ? "expired" : "pending",
+        };
+      }),
+    });
+  },
+);
+
+/**
+ * Mint a new firm invite. Admin only. The plaintext token is returned
+ * EXACTLY once in this response — it is never persisted in plaintext
+ * and never re-readable from /firm-invites GET. The caller renders a
+ * shareable URL (`/register?invite=<token>`) for the admin to hand off.
+ */
+router.post(
+  "/firm-invites",
+  authMiddleware,
+  requirePermission(Permission.INVITES_MANAGE),
+  async (req, res) => {
+    const parsed = CreateInviteBody.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      badRequest(res, parsed.error, "Invalid invite payload");
+      return;
+    }
+    const firmId = req.user!.firm_id;
+    if (firmId == null) {
+      res.status(400).json({ error: "User is not bound to a firm" });
+      return;
+    }
+    const emailPrefillRaw = parsed.data.email_prefill;
+    const emailPrefill =
+      emailPrefillRaw && emailPrefillRaw.length > 0 ? emailPrefillRaw : null;
+    const created = await createInvite({
+      firmId,
+      createdByUserId: req.user!.id,
+      emailPrefill,
+    });
+    await auditLog("firm_invite", String(created.id), "created", {
+      firm_id: firmId,
+      email_prefill: emailPrefill,
+      created_by: req.user!.id,
+    });
+    res.status(201).json({
+      id: created.id,
+      token: created.plaintext,
+      expires_at: created.expiresAt.toISOString(),
+      email_prefill: emailPrefill,
+    });
+  },
+);
 
 // Inline schema for the verify-email query parameter. We require a
 // 64-character hex token (32 bytes * 2 hex chars) — anything that fails

@@ -182,6 +182,21 @@ describe("ROLE_PERMISSIONS catalogue", () => {
     }
   });
 
+  test("only admin can mint firm invites (Task #57)", () => {
+    // INVITES_MANAGE gates the admin "Invite a teammate" surface on
+    // /firm-settings. Any non-admin role accidentally picking this up
+    // would let attorneys / paralegals / viewers create accounts that
+    // bind to their own firm, so make the negative cases load-bearing.
+    assert.equal(ROLE_PERMISSIONS.admin.has(Permission.INVITES_MANAGE), true);
+    for (const role of ["attorney", "paralegal", "viewer"] as const) {
+      assert.equal(
+        ROLE_PERMISSIONS[role].has(Permission.INVITES_MANAGE),
+        false,
+        `${role} must not have invites:manage`,
+      );
+    }
+  });
+
   test("paralegal can perform read-tier work on newly migrated surfaces", () => {
     for (const p of [
       Permission.NEWS_VIEW,
