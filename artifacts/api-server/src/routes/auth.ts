@@ -12,7 +12,7 @@ import {
   getUserByVerificationToken,
   markEmailVerified,
   createUser,
-  listUsers,
+  listUsersByFirm,
   authMiddleware,
   Permission,
   requirePermission,
@@ -783,8 +783,15 @@ router.get("/me", authMiddleware, async (req, res) => {
   });
 });
 
-router.get("/users", authMiddleware, requirePermission(Permission.USERS_LIST), async (_req, res) => {
-  const users = await listUsers();
+// Legacy endpoint — kept for backward compatibility but firm-scoped to
+// match the modern /api/users surface (Task #58). Previously this called
+// the global listUsers() which returned every user across every firm
+// under USERS_LIST, a cross-tenant enumeration leak in a multi-firm
+// world. Now the response is restricted to the caller's own firm via
+// the same listUsersByFirm helper used by /api/users.
+router.get("/users", authMiddleware, requirePermission(Permission.USERS_LIST), async (req, res) => {
+  const firmId = req.user!.firm_id;
+  const users = await listUsersByFirm(firmId);
   res.json(users);
 });
 
