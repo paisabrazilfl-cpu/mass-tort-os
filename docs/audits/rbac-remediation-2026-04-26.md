@@ -606,8 +606,6 @@ Boot-time count: **201 checked / 33 public / 168 protected / 0 unprotected.**
 
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
-| (root) | PATCH | `/api/:id/role` | ✓ | ✓ |  |  |  | — | `users:manage` | ✓ |
-| (root) | GET | `/api/` | ✓ | ✓ |  |  |  | — | `users:list` | ✓ |
 | analytics | GET | `/api/analytics/conversion-funnel` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/overview` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/paralegal-leaderboard` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
@@ -777,6 +775,8 @@ Boot-time count: **201 checked / 33 public / 168 protected / 0 unprotected.**
 | security | GET | `/api/security/stats` | ✓ | ✓ |  |  |  | — | `security:manage` | ✓ |
 | security | POST | `/api/security/test-alert` | ✓ | ✓ |  |  |  | — | `security:manage` | ✓ |
 | timeline | GET | `/api/timeline/lead/:id` | ✓ | ✓ |  |  |  | — | `timeline:view` | ✓ |
+| users | PATCH | `/api/users/:id/role` | ✓ | ✓ |  |  |  | — | `users:manage` | ✓ |
+| users | GET | `/api/users/` | ✓ | ✓ |  |  |  | — | `users:list` | ✓ |
 | vapi-tools | POST | `/api/vapi-tools/check-eligibility` |  |  | ✓ |  |  | — | — | — |
 | vapi-tools | POST | `/api/vapi-tools/create-lead` |  |  | ✓ |  |  | — | — | — |
 | vapi-tools | POST | `/api/vapi-tools/escalate-to-human` |  |  | ✓ |  |  | — | — | — |

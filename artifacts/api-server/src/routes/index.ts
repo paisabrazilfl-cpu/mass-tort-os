@@ -87,6 +87,7 @@ labelRouter(documentTemplatesRouter, "document-templates");
 labelRouter(workflowSettingsRouter, "workflow-settings");
 labelRouter(billingRouter, "billing");
 labelRouter(callsRouter, "calls");
+labelRouter(usersRouter, "users");
 
 const router: IRouter = Router();
 

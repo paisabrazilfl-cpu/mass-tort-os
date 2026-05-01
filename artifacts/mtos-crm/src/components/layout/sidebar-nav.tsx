@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import {
-  LayoutDashboard, Users, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck,
+  LayoutDashboard, Users, UserCog, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck,
   BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch,
   Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp, Scale, Building, FileSignature,
   Grid3x3, Settings, Activity, CreditCard, Phone,
@@ -66,6 +66,7 @@ export const navigation: NavSection[] = [
     items: [
       { name: "Vendors", href: "/vendors", icon: Building2 },
       { name: "Firm Settings", href: "/firm-settings", icon: Building },
+      { name: "Users", href: "/users", icon: UserCog },
       { name: "Integrations", href: "/integrations", icon: Plug },
       { name: "Billing", href: "/billing", icon: CreditCard },
       { name: "Compliance", href: "/compliance", icon: Shield },

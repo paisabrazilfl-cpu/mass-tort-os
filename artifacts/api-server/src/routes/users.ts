@@ -19,8 +19,14 @@ const ROLE_VALUES: readonly UserRole[] = ["admin", "attorney", "paralegal", "vie
 const UpdateUserRoleParams = z.object({
   id: z.coerce.number().int().positive(),
 });
+// Admin role is intentionally NOT assignable through this endpoint.
+// Promoting a user to admin is a higher-trust operation handled out-of-band
+// (DB or a dedicated, separately-audited tool). Allowing it here would let a
+// compromised admin token silently mint additional admins, defeating the
+// "sole-admin self-edit guard" below. Keep the enum tight to the three
+// roles this page is meant to manage.
 const UpdateUserRoleBody = z.object({
-  role: z.enum(["admin", "attorney", "paralegal", "viewer"]),
+  role: z.enum(["attorney", "paralegal", "viewer"]),
 });
 
 router.get(
