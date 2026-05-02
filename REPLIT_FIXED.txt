@@ -1,6 +1,7 @@
 modules = ["nodejs-24", "python-3.11", "postgresql-16"]
 
 [deployment]
+router = "application"
 deploymentTarget = "autoscale"
 build = ["sh", "-c", "pnpm --filter @workspace/api-spec run codegen && pnpm --filter @workspace/mtos-crm run build && pnpm --filter @workspace/api-server run build"]
 run = ["node", "--enable-source-maps", "artifacts/api-server/dist/server/index.mjs"]
@@ -70,20 +71,12 @@ isValidation = true
 name = "rbac-test"
 author = "agent"
 
-[workflows.workflow.metadata]
-outputType = "console"
-
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts src/lib/__tests__/rbac-route-matrix.test.ts src/lib/__tests__/rbac-route-matrix-headline.test.ts src/lib/__tests__/firm-context.test.ts src/lib/__tests__/firm-invites.test.ts src/routes/__tests__/vapi-tools-eligibility-mapping.test.ts src/routes/__tests__/leads-fax-results-route.test.ts src/routes/__tests__/auth-register-route.test.ts src/routes/__tests__/users-route.test.ts"
 
-[agent]
-stack = "PNPM_WORKSPACE"
-expertMode = true
-
-[postMerge]
-path = "scripts/post-merge.sh"
-timeoutMs = 60000
+[workflows.workflow.metadata]
+isValidation = true
 
 [[ports]]
 localPort = 8080
