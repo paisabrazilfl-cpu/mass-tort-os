@@ -1,3 +1,5 @@
+import path from "node:path";
+import { existsSync } from "node:fs";
 import express, { type Express } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -122,6 +124,55 @@ app.use("/api", (req: express.Request, res: express.Response) => {
     status: "error",
     code: "not_found",
     message: `No API route matches ${req.method} ${req.path}`,
+  });
+});
+
+// Production SPA serving — when deployed to Replit Autoscale (or any
+// single-process target), this same Express server also serves the built
+// React CRM bundle. In dev, the Vite dev server runs separately on its
+// own port and this block is a no-op (publicDir does not exist yet).
+//
+// Resolution: the API server is bundled to artifacts/api-server/dist/server/
+// at runtime, so the CRM build sits at ../../mtos-crm/dist/public relative
+// to that. We also try a project-root path so the same logic works whether
+// invoked from the bundled dist or via tsx in tests.
+const candidateSpaDirs = [
+  path.resolve(process.cwd(), "artifacts/mtos-crm/dist/public"),
+  path.resolve(process.cwd(), "../mtos-crm/dist/public"),
+];
+const spaDir = candidateSpaDirs.find((p) => existsSync(p));
+
+if (spaDir) {
+  logger.info({ spa_dir: spaDir }, "Serving CRM SPA static bundle");
+  app.use(express.static(spaDir, {
+    index: false,
+    maxAge: "1h",
+    setHeaders: (res, filePath) => {
+      // index.html must never be cached — it's the SPA entry and must
+      // always reflect the latest deployed bundle hash.
+      if (filePath.endsWith("index.html")) {
+        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      }
+    },
+  }));
+
+  // SPA fallback: any non-API GET that didn't match a static file gets
+  // index.html so the React Router can take over client-side. POSTs and
+  // other non-GET methods to unknown paths fall through to a JSON 404
+  // below to avoid masking real client bugs.
+  app.get(/^(?!\/api\/).*/, (_req: express.Request, res: express.Response) => {
+    res.sendFile(path.join(spaDir, "index.html"));
+  });
+}
+
+// Final 404 for non-API non-static paths (e.g. POST to an unknown URL).
+// Returns JSON so any accidental cross-origin call gets a parseable
+// response instead of an HTML page.
+app.use((req: express.Request, res: express.Response) => {
+  res.status(404).json({
+    status: "error",
+    code: "not_found",
+    message: `No route matches ${req.method} ${req.path}`,
   });
 });
 

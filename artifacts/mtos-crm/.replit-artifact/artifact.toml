@@ -17,15 +17,6 @@ localPort = 24540
 [services.development]
 run = "pnpm --filter @workspace/mtos-crm run dev"
 
-[services.production]
-build = [ "pnpm", "--filter", "@workspace/mtos-crm", "run", "build" ]
-publicDir = "artifacts/mtos-crm/dist/public"
-serve = "static"
-
-[[services.production.rewrites]]
-from = "/*"
-to = "/index.html"
-
 [services.env]
 PORT = "24540"
 BASE_PATH = "/"

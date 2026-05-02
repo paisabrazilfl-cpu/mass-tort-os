@@ -101,6 +101,10 @@ localPort = 8083
 externalPort = 5000
 
 [[ports]]
+localPort = 9876
+externalPort = 6000
+
+[[ports]]
 localPort = 9999
 externalPort = 4200
 exposeLocalhost = true
