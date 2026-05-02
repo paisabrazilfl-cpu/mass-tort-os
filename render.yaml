@@ -14,7 +14,7 @@ services:
     autoDeploy: true
     healthCheckPath: /api/healthz
     buildCommand: |
-      corepack enable
+      npm install -g pnpm@10.26.1
       pnpm install --frozen-lockfile
       pnpm --filter @workspace/api-spec run codegen
       pnpm --filter @workspace/mtos-crm run build
@@ -44,7 +44,7 @@ services:
     branch: main
     autoDeploy: true
     buildCommand: |
-      corepack enable
+      npm install -g pnpm@10.26.1
       pnpm install --frozen-lockfile
       pnpm --filter @workspace/api-spec run codegen
       pnpm --filter @workspace/api-server run build:worker
