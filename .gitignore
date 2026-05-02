@@ -52,3 +52,11 @@ Thumbs.db
 artifacts/api-server/vault/
 exports/
 attached_assets/
+
+# Render / deploy
+.render/
+
+# Local environment
+.env
+.env.local
+.env.*.local
