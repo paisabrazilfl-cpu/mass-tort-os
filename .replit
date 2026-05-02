@@ -3,6 +3,8 @@ modules = ["nodejs-24", "python-3.11", "postgresql-16"]
 [deployment]
 router = "application"
 deploymentTarget = "autoscale"
+build = ["sh", "-c", "pnpm --filter @workspace/api-spec run codegen && pnpm --filter @workspace/mtos-crm run build && pnpm --filter @workspace/api-server run build"]
+run = ["node", "--enable-source-maps", "artifacts/api-server/dist/server/index.mjs"]
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
@@ -69,61 +71,16 @@ isValidation = true
 name = "rbac-test"
 author = "agent"
 
-[workflows.workflow.metadata]
-outputType = "console"
-
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts src/lib/__tests__/rbac-route-matrix.test.ts src/lib/__tests__/rbac-route-matrix-headline.test.ts src/lib/__tests__/firm-context.test.ts src/lib/__tests__/firm-invites.test.ts src/routes/__tests__/vapi-tools-eligibility-mapping.test.ts src/routes/__tests__/leads-fax-results-route.test.ts src/routes/__tests__/auth-register-route.test.ts src/routes/__tests__/users-route.test.ts"
 
-[agent]
-stack = "PNPM_WORKSPACE"
-expertMode = true
-
-[postMerge]
-path = "scripts/post-merge.sh"
-timeoutMs = 60000
+[workflows.workflow.metadata]
+isValidation = true
 
 [[ports]]
 localPort = 8080
-externalPort = 8080
-
-[[ports]]
-localPort = 8081
 externalPort = 80
-
-[[ports]]
-localPort = 8082
-externalPort = 3003
-
-[[ports]]
-localPort = 8083
-externalPort = 5000
-
-[[ports]]
-localPort = 9876
-externalPort = 6000
-
-[[ports]]
-localPort = 9999
-externalPort = 4200
-exposeLocalhost = true
-
-[[ports]]
-localPort = 18099
-externalPort = 3002
-
-[[ports]]
-localPort = 24540
-externalPort = 3000
-
-[[ports]]
-localPort = 24541
-externalPort = 3001
-
-[[ports]]
-localPort = 24542
-externalPort = 5173
 
 [nix]
 channel = "stable-25_05"
