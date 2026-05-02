@@ -8,7 +8,7 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { idsMiddleware } from "./lib/ids";
-import { validateRouteTable } from "./lib/route-protection";
+import { markPublic, validateRouteTable } from "./lib/route-protection";
 
 const app: Express = express();
 
@@ -159,10 +159,14 @@ if (spaDir) {
   // SPA fallback: any non-API GET that didn't match a static file gets
   // index.html so the React Router can take over client-side. POSTs and
   // other non-GET methods to unknown paths fall through to a JSON 404
-  // below to avoid masking real client bugs.
-  app.get(/^(?!\/api\/).*/, (_req: express.Request, res: express.Response) => {
+  // below to avoid masking real client bugs. Mounted on a markPublic'd
+  // sub-router so the route-protection validator recognises it as a
+  // deliberately public route (serving the React shell, no PII, no auth).
+  const spaRouter = markPublic(express.Router(), "spa");
+  spaRouter.get(/^(?!\/api\/).*/, (_req: express.Request, res: express.Response) => {
     res.sendFile(path.join(spaDir, "index.html"));
   });
+  app.use(spaRouter);
 }
 
 // Final 404 for non-API non-static paths (e.g. POST to an unknown URL).
