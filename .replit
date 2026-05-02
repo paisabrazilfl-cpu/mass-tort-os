@@ -3,8 +3,6 @@ modules = ["nodejs-24", "python-3.11", "postgresql-16"]
 [deployment]
 router = "application"
 deploymentTarget = "autoscale"
-build = ["sh", "-c", "pnpm --filter @workspace/api-spec run codegen && pnpm --filter @workspace/mtos-crm run build && pnpm --filter @workspace/api-server run build"]
-run = ["node", "--enable-source-maps", "artifacts/api-server/dist/server/index.mjs"]
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
@@ -78,10 +76,6 @@ args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/li
 [workflows.workflow.metadata]
 isValidation = true
 
-[[ports]]
-localPort = 8080
-externalPort = 80
-
 [nix]
 channel = "stable-25_05"
 
@@ -92,3 +86,11 @@ ENCRYPTION_KEY = "32a6446807d6701f0646e6c6d79642ad66720fcd68bfc42cc14fa5c4835a6e
 
 [userenv.development]
 MTOS_DISABLE_BILLING_GATE = "1"
+
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000

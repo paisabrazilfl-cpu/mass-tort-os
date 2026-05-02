@@ -13,10 +13,17 @@ paths = ["/api"]
 run = "pnpm --filter @workspace/api-server run dev"
 
 [services.production]
-build = ["sh", "-c", "pnpm --filter @workspace/api-spec run codegen && pnpm --filter @workspace/mtos-crm run build && pnpm --filter @workspace/api-server run build"]
-run = ["node", "--enable-source-maps", "artifacts/api-server/dist/server/index.mjs"]
 
-[services.production.env]
+[services.production.build]
+args = ["sh", "-c", "pnpm --filter @workspace/api-spec run codegen && pnpm --filter @workspace/mtos-crm run build && pnpm --filter @workspace/api-server run build"]
+
+[services.production.build.env]
+NODE_ENV = "production"
+
+[services.production.run]
+args = ["node", "--enable-source-maps", "artifacts/api-server/dist/server/index.mjs"]
+
+[services.production.run.env]
 PORT = "8080"
 NODE_ENV = "production"
 
