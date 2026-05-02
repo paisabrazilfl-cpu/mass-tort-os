@@ -41,7 +41,7 @@ export const smsMessagesTable = pgTable(
     firmIdx: index("sms_messages_firm_id_idx").on(t.firm_id),
     telnyxIdIdx: index("sms_messages_telnyx_message_id_idx").on(t.telnyx_message_id),
     statusCreatedIdx: index("sms_messages_status_created_at_idx").on(t.status, t.created_at),
-    firmSentAtIdx: index("sms_messages_firm_sent_at_idx").on(t.firm_id, t.sent_at.desc()),
+    firmSentAtIdx: index("sms_messages_firm_sent_at_idx").on(t.firm_id, t.sent_at),
   }),
 );
 
