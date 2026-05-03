@@ -31,5 +31,6 @@ export * from "./firm_invites";
 export * from "./call_logs";
 export * from "./lead_dispositions";
 export * from "./sms_messages";
+export * from "./admin_dark_room_links";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";
