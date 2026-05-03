@@ -4,7 +4,6 @@ import { SidebarNav } from "./sidebar-nav";
 import { TopBar } from "./top-bar";
 import { BillingBanner } from "./billing-banner";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { DarkRoomPanel } from "@/components/dark-room-panel";
 
 interface LayoutProps {
   children: ReactNode;
@@ -35,7 +34,6 @@ export function Layout({ children }: LayoutProps) {
             {children}
           </div>
         </main>
-        <DarkRoomPanel />
       </div>
     </div>
   );

@@ -3,11 +3,12 @@ import {
   LayoutDashboard, Users, UserCog, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck,
   BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch,
   Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp, Scale, Building, FileSignature,
-  Grid3x3, Settings, Activity, CreditCard, Phone,
+  Grid3x3, Settings, Activity, CreditCard, Phone, Skull,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/auth-context";
 
-type NavItem = { name: string; href: string; icon: typeof LayoutDashboard };
+type NavItem = { name: string; href: string; icon: typeof LayoutDashboard; adminOnly?: boolean };
 type NavSection = { section: string; items: NavItem[] };
 
 export const navigation: NavSection[] = [
@@ -80,6 +81,12 @@ export const navigation: NavSection[] = [
       { name: "Financial", href: "/financial-news", icon: TrendingUp },
     ],
   },
+  {
+    section: "BOS-OMEGA",
+    items: [
+      { name: "Dark Room", href: "/dark-room", icon: Skull, adminOnly: true },
+    ],
+  },
 ];
 
 interface SidebarNavProps {
@@ -88,12 +95,26 @@ interface SidebarNavProps {
 
 export function SidebarNav({ onNavigate }: SidebarNavProps) {
   const [location] = useLocation();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
+  const visibleGroups = navigation
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((it) => !it.adminOnly || isAdmin),
+    }))
+    .filter((group) => group.items.length > 0);
 
   return (
     <nav className="flex-1 overflow-y-auto px-2 py-2" aria-label="Primary">
-      {navigation.map((group) => (
-        <div key={group.section} className="mb-2">
-          <div className="px-2 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
+      {visibleGroups.map((group) => {
+        const isDarkRoom = group.section === "BOS-OMEGA";
+        return (
+        <div key={group.section} className={cn("mb-2", isDarkRoom && "mt-4 border-t border-red-900/40 pt-2")}>
+          <div className={cn(
+            "px-2 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider",
+            isDarkRoom ? "text-red-500" : "text-sidebar-foreground/50",
+          )}>
             {group.section}
           </div>
           <div className="space-y-0.5">
@@ -128,7 +149,8 @@ export function SidebarNav({ onNavigate }: SidebarNavProps) {
             })}
           </div>
         </div>
-      ))}
+        );
+      })}
     </nav>
   );
 }

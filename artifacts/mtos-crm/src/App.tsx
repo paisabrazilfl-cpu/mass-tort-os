@@ -54,6 +54,7 @@ import WorkflowSettingsPage from "@/pages/workflow-settings";
 import WebFormsPage from "@/pages/web-forms";
 import JobQueue from "@/pages/job-queue";
 import CallsPage from "@/pages/calls";
+import DarkRoomPage from "@/pages/dark-room";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
 // 401s are handled separately by api-fetch's auth-failure callback.
@@ -128,6 +129,7 @@ function AuthedRoutes() {
           <Route path="/workflow-settings" component={WorkflowSettingsPage} />
           <Route path="/web-forms" component={WebFormsPage} />
           <Route path="/job-queue" component={JobQueue} />
+          <Route path="/dark-room" component={DarkRoomPage} />
           <Route component={NotFound} />
         </Switch>
       </RouteErrorBoundary>
