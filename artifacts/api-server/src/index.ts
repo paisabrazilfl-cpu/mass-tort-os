@@ -8,9 +8,17 @@ const NODE_ENV = process.env["NODE_ENV"];
 const IS_DEV = NODE_ENV === "development";
 const IS_PROD_LIKE = NODE_ENV === "production" || NODE_ENV === "staging";
 
-const REQUIRED_ENV_PROD = ["DATABASE_URL", "SESSION_SECRET", "ENCRYPTION_KEY"] as const;
+const REQUIRED_ENV_PROD = ["DATABASE_URL", "SESSION_SECRET"] as const;
 if (IS_PROD_LIKE) {
-  const missing = REQUIRED_ENV_PROD.filter((k) => !process.env[k] || String(process.env[k]).trim() === "");
+  const missing: string[] = REQUIRED_ENV_PROD.filter(
+    (k) => !process.env[k] || String(process.env[k]).trim() === "",
+  );
+  const hasEncryptionKey =
+    Boolean(process.env["ENCRYPTION_KEY_V1"]?.trim()) ||
+    Boolean(process.env["ENCRYPTION_KEY"]?.trim());
+  if (!hasEncryptionKey) {
+    missing.push("ENCRYPTION_KEY_V1 (or legacy ENCRYPTION_KEY)");
+  }
   if (missing.length > 0) {
     logger.fatal({ missing, node_env: NODE_ENV }, "FATAL: required environment variables missing");
     throw new Error(
@@ -47,7 +55,9 @@ app.listen(port, async (err) => {
       node_env: NODE_ENV ?? "(unset)",
       dev_mode: IS_DEV,
       has_session_secret: Boolean(process.env["SESSION_SECRET"]),
-      has_encryption_key: Boolean(process.env["ENCRYPTION_KEY"]),
+      has_encryption_key:
+        Boolean(process.env["ENCRYPTION_KEY_V1"]) ||
+        Boolean(process.env["ENCRYPTION_KEY"]),
       has_database_url: Boolean(process.env["DATABASE_URL"]),
     },
     "MTOS API server listening",
