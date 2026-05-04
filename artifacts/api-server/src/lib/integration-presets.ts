@@ -5,7 +5,7 @@ export interface IntegrationPreset {
   category: string;
   description: string;
   docs_url: string;
-  fields: Array<"api_key" | "api_url" | "webhook_url" | "account_sid" | "client_id" | "client_secret">;
+  fields: Array<"api_key" | "api_url" | "webhook_url" | "account_sid" | "client_id" | "client_secret" | "access_id" | "access_password" | "fax_number" | "sender_email">;
   score: number;
   recommended?: boolean;
   pricing: "free" | "freemium" | "usage" | "subscription" | "enterprise";

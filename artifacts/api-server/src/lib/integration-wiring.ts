@@ -31,7 +31,7 @@
  * Sourced from (audit performed pre-migration):
  *   - lib/email/sendgrid.ts          → sendgrid
  *   - lib/esign/index.ts ADAPTERS    → docusign, dropbox_sign
- *   - lib/fax/index.ts ADAPTERS      → (none currently wired)
+ *   - lib/fax/index.ts ADAPTERS      → srfax
  *   - lib/lead-webhook-dispatcher.ts → n8n, zapier, make (type=automation)
  *   - lib/ai-{extract,fields,ocr}.ts,
  *     lib/drafting-ai.ts             → anthropic (live_no_vault — SDK auth)
@@ -74,6 +74,7 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   sendgrid: ["api_key"],
   docusign: ["api_key", "account_sid"],
   dropbox_sign: ["api_key"],
+  srfax: ["access_id", "access_password", "fax_number"],
 };
 
 export type WiringStatus = "live" | "live_no_vault" | "vault_only";
@@ -99,6 +100,12 @@ const REGISTRY: Record<string, WiringInfo> = {
   dropbox_sign: {
     status: "live",
     note: "Sends e-signature envelopes via Dropbox Sign (HelloSign) API.",
+  },
+
+  // Fax
+  srfax: {
+    status: "live",
+    note: "Sends faxes via SRFax JSON API (HIPAA-compliant, healthcare focused).",
   },
 
   // Automation — receive lead.created events
@@ -192,7 +199,7 @@ export function assertWiringRegistryConsistency(): void {
     {
       klass: "fax",
       adapterProviders: listFaxProviders(),
-      expectInRegistry: [],
+      expectInRegistry: ["srfax"],
     },
   ];
 
