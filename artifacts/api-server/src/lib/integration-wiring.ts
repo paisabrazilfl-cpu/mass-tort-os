@@ -127,6 +127,10 @@ const REGISTRY: Record<string, WiringInfo> = {
     status: "live_no_vault",
     note: "Powers AI extraction, OCR, and drafting via the Replit AI Integrations SDK. Credentials saved here are NOT consumed — the SDK manages auth itself.",
   },
+  openai: {
+    status: "live_no_vault",
+    note: "Default AI provider for extraction, OCR, drafting, and lead intelligence via the Replit AI Integrations SDK. Credentials saved here are NOT consumed — the SDK manages auth itself.",
+  },
 };
 
 const DEFAULT_VAULT_ONLY: WiringInfo = {
