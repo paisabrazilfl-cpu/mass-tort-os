@@ -59,10 +59,7 @@ export const PRESET_INTEGRATIONS: IntegrationPreset[] = [
   { provider: "brevo", name: "Brevo (Sendinblue)", type: "email", category: "Email", description: "Email + SMS + CRM in one — generous free tier.", docs_url: "https://developers.brevo.com", fields: ["api_key"], score: 6, pricing: "freemium" },
 
   // ──────────────────────────── FAX (medical records) ────────────────────────────
-  { provider: "telnyx_fax", name: "Telnyx Fax", type: "fax", category: "Fax", description: "T.38 fax API — modern REST, transparent per-page pricing, HIPAA BAA available.", docs_url: "https://developers.telnyx.com/docs/programmable-fax", fields: ["api_key"], score: 9, recommended: true, pricing: "usage", notes: "Best modern fax API for medical record requests." },
-  { provider: "phaxio", name: "Phaxio (by Sinch)", type: "fax", category: "Fax", description: "Battle-tested fax API, HIPAA compliant, simple pricing.", docs_url: "https://www.phaxio.com/docs", fields: ["api_key"], score: 8, pricing: "usage" },
-  { provider: "documo", name: "Documo (mFax)", type: "fax", category: "Fax", description: "Modern fax + document workflow with web UI and API.", docs_url: "https://docs.documo.com", fields: ["api_key"], score: 8, pricing: "subscription" },
-  { provider: "srfax", name: "SRFax", type: "fax", category: "Fax", description: "HIPAA-compliant fax with healthcare focus.", docs_url: "https://www.srfax.com/api", fields: ["api_key"], score: 7, pricing: "subscription" },
+  { provider: "srfax", name: "SRFax", type: "fax", category: "Fax", description: "HIPAA-compliant fax with healthcare focus. Includes a fax number — easiest setup for medical records requests.", docs_url: "https://www.srfax.com/api", fields: ["access_id", "access_password", "fax_number"], score: 9, recommended: true, pricing: "subscription" },
   { provider: "efax", name: "eFax Corporate", type: "fax", category: "Fax", description: "Legacy enterprise fax — still required by many older medical facilities.", docs_url: "https://www.efaxcorporate.com/api", fields: ["api_key"], score: 6, pricing: "subscription" },
 
   // ──────────────────────────── OCR / DOCUMENT AI ────────────────────────────
