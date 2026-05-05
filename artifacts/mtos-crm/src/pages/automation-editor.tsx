@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { getLucide } from "@/lib/lucide-icon";
@@ -288,7 +288,7 @@ function EditorInner() {
               aria-label="Collapse palette"
               className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
             >
-              <PanelLeftClose className="h-4 w-4" />
+              <ChevronsLeft className="h-4 w-4" />
             </button>
           </div>
           {Object.entries(grouped).map(([cat, list]) => (
@@ -332,7 +332,7 @@ function EditorInner() {
               aria-label="Expand palette"
               className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
             >
-              <PanelLeftOpen className="h-4 w-4" />
+              <ChevronsRight className="h-4 w-4" />
             </button>
           </div>
         )}
@@ -389,7 +389,7 @@ function EditorInner() {
               aria-label="Collapse panel"
               className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
             >
-              <PanelRightClose className="h-4 w-4" />
+              <ChevronsRight className="h-4 w-4" />
             </button>
           </div>
           {!selected ? (
@@ -455,7 +455,7 @@ function EditorInner() {
               aria-label="Expand panel"
               className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
             >
-              <PanelRightOpen className="h-4 w-4" />
+              <ChevronsLeft className="h-4 w-4" />
             </button>
           </div>
         )}

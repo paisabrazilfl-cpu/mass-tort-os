@@ -1,6 +1,6 @@
 import { useAuth } from "@/contexts/auth-context";
 import { SidebarNav } from "./sidebar-nav";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { ChevronsLeft, ChevronsRight } from "lucide-react";
 
 function initials(name?: string | null, email?: string | null): string {
   const source = (name?.trim() || email || "").trim();
@@ -31,7 +31,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
           aria-label="Expand sidebar"
           className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-sidebar-accent/60 text-sidebar-foreground/80"
         >
-          <PanelLeftOpen className="h-4 w-4" />
+          <ChevronsRight className="h-4 w-4" />
         </button>
       </aside>
     );
@@ -43,12 +43,9 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
       aria-label="Sidebar"
     >
       <div className="flex h-14 items-center justify-between border-b border-sidebar-border px-4">
-        <div className="flex items-center">
-          <span className="font-bold text-lg tracking-tight text-sidebar-foreground">MTOS</span>
-          <span className="ml-2 rounded-md bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
-            v1.0
-          </span>
-        </div>
+        <span className="font-bold text-lg tracking-tight text-sidebar-foreground">
+          MTOS<span className="text-primary">v1.0</span>
+        </span>
         <button
           type="button"
           onClick={onToggleCollapsed}
@@ -56,7 +53,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
           aria-label="Collapse sidebar"
           className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-sidebar-accent/60 text-sidebar-foreground/70"
         >
-          <PanelLeftClose className="h-4 w-4" />
+          <ChevronsLeft className="h-4 w-4" />
         </button>
       </div>
       <SidebarNav />
