@@ -22,6 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetchRaw } from "@/lib/api-fetch";
+import { getLucide } from "@/lib/lucide-icon";
 
 interface NodeParamSpec {
   key: string; label: string;
@@ -271,17 +272,22 @@ function EditorInner() {
               </button>
               {openCat[cat] && (
                 <div className="pb-1">
-                  {list.map((d) => (
-                    <button
-                      key={d.type}
-                      onClick={() => addNode(d)}
-                      title={d.description}
-                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted flex items-center gap-2"
-                    >
-                      <span className={`inline-block w-2 h-2 rounded-full ${d.color}`} />
-                      <span className="truncate">{d.label}</span>
-                    </button>
-                  ))}
+                  {list.map((d) => {
+                    const Icon = getLucide(d.icon);
+                    return (
+                      <button
+                        key={d.type}
+                        onClick={() => addNode(d)}
+                        title={d.description}
+                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted flex items-center gap-2"
+                      >
+                        <span className={`inline-flex h-5 w-5 items-center justify-center rounded text-white ${d.color}`}>
+                          <Icon className="h-3 w-3" />
+                        </span>
+                        <span className="truncate">{d.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -294,14 +300,21 @@ function EditorInner() {
             nodes={nodes.map((n) => {
               const def = catalogByType[n.data?.nodeType];
               const colorClass = def?.color ?? "bg-slate-600";
+              const Icon = getLucide(def?.icon);
               return {
                 ...n,
                 data: {
                   ...n.data,
                   label: (
                     <div className="text-left">
-                      <div className={`text-[10px] uppercase tracking-wider text-white px-2 py-0.5 ${colorClass} rounded-t`}>{def?.category ?? "node"}</div>
-                      <div className="px-2 py-1.5 text-xs font-medium">{n.data?.label ?? def?.label ?? n.data?.nodeType}</div>
+                      <div className={`flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-white px-2 py-0.5 ${colorClass} rounded-t`}>
+                        <Icon className="h-3 w-3" aria-hidden="true" />
+                        <span>{def?.category ?? "node"}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium">
+                        <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                        <span>{n.data?.label ?? def?.label ?? n.data?.nodeType}</span>
+                      </div>
                     </div>
                   ),
                 },
@@ -343,9 +356,19 @@ function EditorInner() {
           ) : (
             <div className="p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{selectedDef?.category}</div>
-                  <div className="font-semibold">{selectedDef?.label ?? selected.data?.nodeType}</div>
+                <div className="flex items-center gap-2">
+                  {(() => {
+                    const Icon = getLucide(selectedDef?.icon);
+                    return (
+                      <span className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-white ${selectedDef?.color ?? "bg-slate-600"}`}>
+                        <Icon className="h-4 w-4" aria-hidden="true" />
+                      </span>
+                    );
+                  })()}
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{selectedDef?.category}</div>
+                    <div className="font-semibold">{selectedDef?.label ?? selected.data?.nodeType}</div>
+                  </div>
                 </div>
                 <Button size="sm" variant="ghost" className="text-destructive" onClick={deleteSelected}><Trash2 className="h-4 w-4" /></Button>
               </div>
