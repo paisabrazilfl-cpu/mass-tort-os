@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { useForceLightSkin } from "@/hooks/use-force-light-skin";
 import { useLocation } from "wouter";
 import { ArrowLeft, Loader2, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ function getNextPath(): string {
 }
 
 export default function LoginMfaPage() {
+  useForceLightSkin();
   const { pendingMfa, verifyMfa, cancelMfa } = useAuth();
   const [, navigate] = useLocation();
   const [code, setCode] = useState("");

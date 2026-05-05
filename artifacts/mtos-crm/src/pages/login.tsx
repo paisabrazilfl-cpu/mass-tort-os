@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { useForceLightSkin } from "@/hooks/use-force-light-skin";
 import { Link, useLocation } from "wouter";
 import { Loader2, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ function getNextPath(): string {
 }
 
 export default function LoginPage() {
+  useForceLightSkin();
   const { login, status, user } = useAuth();
   const [, navigate] = useLocation();
   const [email, setEmail] = useState("");

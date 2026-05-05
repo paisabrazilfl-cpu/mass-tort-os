@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useForceLightSkin } from "@/hooks/use-force-light-skin";
 import { Link, useLocation } from "wouter";
 import { Loader2, MailCheck, ShieldCheck, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,7 @@ type InviteState =
   | { kind: "invalid" };
 
 export default function RegisterPage() {
+  useForceLightSkin();
   const { register, status, user } = useAuth();
   const [, navigate] = useLocation();
   const [email, setEmail] = useState("");

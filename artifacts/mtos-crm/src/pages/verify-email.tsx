@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useForceLightSkin } from "@/hooks/use-force-light-skin";
 import { Link, useLocation } from "wouter";
 import { Loader2, MailCheck, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ function readToken(): string | null {
 }
 
 export default function VerifyEmailPage() {
+  useForceLightSkin();
   const { verifyEmail, status } = useAuth();
   const [, navigate] = useLocation();
   const [state, setState] = useState<VerifyState>({ kind: "verifying" });
