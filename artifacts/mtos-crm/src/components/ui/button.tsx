@@ -24,41 +24,49 @@ import { cn } from "@/lib/utils"
 const buttonVariants = cva(
   [
     "relative inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium select-none",
-    "transition-[transform,box-shadow,background-color,color,border-color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
+    "transition-[transform,box-shadow,background-color,color,border-color,filter] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)]",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
     "disabled:pointer-events-none disabled:opacity-50",
-    "active:scale-[0.97]",
+    // 3D press: drop down a hair + shrink + collapse shadow so it "sinks" into the surface.
+    "active:translate-y-px active:scale-[0.98] active:shadow-[0_1px_0_hsl(0_0%_100%/0.15)_inset,0_1px_1px_hsl(0_0%_0%/0.08)] active:brightness-95",
     "[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   ].join(" "),
   {
     variants: {
       variant: {
-        // Solid primary: gradient + inner highlight + soft shadow that lifts on hover.
+        // Solid primary — full 3D treatment:
+        //  • gradient fill (top brighter, bottom darker)
+        //  • bright inner top highlight (specular edge)
+        //  • dark inner bottom edge (occlusion)
+        //  • crisp 1px hairline shadow + soft contact shadow + colored ambient halo
+        //  • lifts further on hover, sinks on active
         default: [
-          "text-primary-foreground border border-primary/60",
-          "bg-[linear-gradient(180deg,hsl(var(--primary)/0.96),hsl(var(--primary))_55%,hsl(var(--primary)/0.92))]",
-          "shadow-[0_1px_0_hsl(0_0%_100%/0.18)_inset,0_1px_2px_hsl(0_0%_0%/0.12),0_4px_12px_-4px_hsl(var(--primary)/0.45)]",
-          "hover:shadow-[0_1px_0_hsl(0_0%_100%/0.22)_inset,0_2px_4px_hsl(0_0%_0%/0.18),0_8px_20px_-6px_hsl(var(--primary)/0.55)]",
-          "hover:-translate-y-px",
+          "text-primary-foreground border border-primary/70",
+          "bg-[linear-gradient(180deg,hsl(var(--primary)/1.05)_0%,hsl(var(--primary))_55%,hsl(var(--primary)/0.85)_100%)]",
+          "shadow-[0_1px_0_hsl(0_0%_100%/0.45)_inset,0_-1px_0_hsl(0_0%_0%/0.18)_inset,0_1px_1.5px_hsl(0_0%_0%/0.18),0_2px_4px_hsl(0_0%_0%/0.12),0_8px_18px_-6px_hsl(var(--primary)/0.55)]",
+          "hover:-translate-y-[1px] hover:brightness-[1.04]",
+          "hover:shadow-[0_1px_0_hsl(0_0%_100%/0.5)_inset,0_-1px_0_hsl(0_0%_0%/0.18)_inset,0_2px_3px_hsl(0_0%_0%/0.2),0_6px_10px_hsl(0_0%_0%/0.14),0_14px_28px_-8px_hsl(var(--primary)/0.65)]",
         ].join(" "),
         destructive: [
-          "text-destructive-foreground border border-destructive/60",
-          "bg-[linear-gradient(180deg,hsl(var(--destructive)/0.96),hsl(var(--destructive))_55%,hsl(var(--destructive)/0.92))]",
-          "shadow-[0_1px_0_hsl(0_0%_100%/0.18)_inset,0_1px_2px_hsl(0_0%_0%/0.12),0_4px_12px_-4px_hsl(var(--destructive)/0.45)]",
-          "hover:shadow-[0_1px_0_hsl(0_0%_100%/0.22)_inset,0_2px_4px_hsl(0_0%_0%/0.18),0_8px_20px_-6px_hsl(var(--destructive)/0.55)]",
-          "hover:-translate-y-px",
+          "text-destructive-foreground border border-destructive/70",
+          "bg-[linear-gradient(180deg,hsl(var(--destructive)/1.05)_0%,hsl(var(--destructive))_55%,hsl(var(--destructive)/0.85)_100%)]",
+          "shadow-[0_1px_0_hsl(0_0%_100%/0.45)_inset,0_-1px_0_hsl(0_0%_0%/0.18)_inset,0_1px_1.5px_hsl(0_0%_0%/0.18),0_2px_4px_hsl(0_0%_0%/0.12),0_8px_18px_-6px_hsl(var(--destructive)/0.55)]",
+          "hover:-translate-y-[1px] hover:brightness-[1.04]",
+          "hover:shadow-[0_1px_0_hsl(0_0%_100%/0.5)_inset,0_-1px_0_hsl(0_0%_0%/0.18)_inset,0_2px_3px_hsl(0_0%_0%/0.2),0_6px_10px_hsl(0_0%_0%/0.14),0_14px_28px_-8px_hsl(var(--destructive)/0.65)]",
         ].join(" "),
-        // Outline: hairline border + tiny shadow + becomes filled-tinted on hover.
+        // Outline / secondary — softer 3D, glass-like (Big Sur style).
         outline: [
-          "border border-border bg-background/60 backdrop-blur-sm text-foreground",
-          "shadow-[0_1px_0_hsl(0_0%_100%/0.04)_inset,0_1px_2px_hsl(0_0%_0%/0.08)]",
-          "hover:bg-accent/40 hover:border-border hover:text-accent-foreground",
+          "border border-border/90 bg-[linear-gradient(180deg,hsl(0_0%_100%)_0%,hsl(220_14%_98%)_100%)] backdrop-blur-sm text-foreground",
+          "shadow-[0_1px_0_hsl(0_0%_100%/0.9)_inset,0_-1px_0_hsl(220_13%_88%/0.5)_inset,0_1px_1px_hsl(0_0%_0%/0.06),0_2px_5px_-2px_hsl(0_0%_0%/0.08)]",
+          "hover:-translate-y-[1px] hover:bg-[linear-gradient(180deg,hsl(0_0%_100%)_0%,hsl(220_14%_96%)_100%)]",
+          "hover:shadow-[0_1px_0_hsl(0_0%_100%/0.9)_inset,0_-1px_0_hsl(220_13%_85%/0.6)_inset,0_2px_3px_hsl(0_0%_0%/0.1),0_6px_12px_-4px_hsl(0_0%_0%/0.12)]",
         ].join(" "),
         secondary: [
           "border border-border/80 text-secondary-foreground",
-          "bg-[linear-gradient(180deg,hsl(var(--secondary)/0.95),hsl(var(--secondary)))]",
-          "shadow-[0_1px_0_hsl(0_0%_100%/0.06)_inset,0_1px_2px_hsl(0_0%_0%/0.08)]",
-          "hover:bg-[linear-gradient(180deg,hsl(var(--secondary)),hsl(var(--secondary)/0.85))]",
+          "bg-[linear-gradient(180deg,hsl(var(--secondary)/1.1)_0%,hsl(var(--secondary))_55%,hsl(var(--secondary)/0.85)_100%)]",
+          "shadow-[0_1px_0_hsl(0_0%_100%/0.7)_inset,0_-1px_0_hsl(0_0%_0%/0.08)_inset,0_1px_1.5px_hsl(0_0%_0%/0.1),0_2px_5px_-2px_hsl(0_0%_0%/0.1)]",
+          "hover:-translate-y-[1px] hover:brightness-[1.02]",
+          "hover:shadow-[0_1px_0_hsl(0_0%_100%/0.8)_inset,0_-1px_0_hsl(0_0%_0%/0.1)_inset,0_2px_3px_hsl(0_0%_0%/0.12),0_6px_12px_-4px_hsl(0_0%_0%/0.14)]",
         ].join(" "),
         ghost: "border border-transparent text-foreground hover:bg-accent/50 hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
