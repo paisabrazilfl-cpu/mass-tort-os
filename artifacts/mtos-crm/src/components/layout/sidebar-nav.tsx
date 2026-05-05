@@ -133,19 +133,26 @@ export function SidebarNav({ onNavigate }: SidebarNavProps) {
                   href={item.href}
                   onClick={onNavigate}
                   className={cn(
+                    "group relative flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium outline-none",
+                    "transition-[background-color,color,box-shadow,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                    "focus-visible:ring-2 focus-visible:ring-sidebar-ring/70 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
                     isActive
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
-                    "group flex items-center rounded-md px-2 py-1 text-xs font-medium",
+                      ? [
+                          // Apple-style active pill: gradient + inner highlight + soft shadow.
+                          "text-sidebar-primary-foreground",
+                          "bg-[linear-gradient(180deg,hsl(var(--sidebar-primary)/0.96),hsl(var(--sidebar-primary))_60%,hsl(var(--sidebar-primary)/0.9))]",
+                          "shadow-[0_1px_0_hsl(0_0%_100%/0.18)_inset,0_1px_2px_hsl(0_0%_0%/0.18),0_4px_10px_-4px_hsl(var(--sidebar-primary)/0.5)]",
+                        ].join(" ")
+                      : "text-sidebar-foreground/85 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground hover:translate-x-px",
                   )}
                   aria-current={isActive ? "page" : undefined}
                 >
                   <item.icon
                     className={cn(
+                      "mr-2.5 h-4 w-4 flex-shrink-0 transition-colors",
                       isActive
-                        ? "text-sidebar-accent-foreground"
-                        : "text-sidebar-foreground/70 group-hover:text-sidebar-accent-foreground",
-                      "mr-2.5 h-4 w-4 flex-shrink-0",
+                        ? "text-sidebar-primary-foreground"
+                        : "text-sidebar-foreground/55 group-hover:text-sidebar-accent-foreground",
                     )}
                     aria-hidden="true"
                   />
