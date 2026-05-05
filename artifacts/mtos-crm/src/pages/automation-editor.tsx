@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { getLucide } from "@/lib/lucide-icon";
@@ -79,6 +79,15 @@ function EditorInner() {
       window.localStorage.setItem("mtos:automation:paletteOpen", paletteOpen ? "1" : "0");
     }
   }, [paletteOpen]);
+  const [configOpen, setConfigOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem("mtos:automation:configOpen") !== "0";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("mtos:automation:configOpen", configOpen ? "1" : "0");
+    }
+  }, [configOpen]);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Load workflow + catalog
@@ -370,7 +379,19 @@ function EditorInner() {
         </div>
 
         {/* Config panel */}
-        <div className="w-80 border-l bg-background overflow-y-auto">
+        {configOpen ? (
+        <div className="w-80 border-l bg-background overflow-y-auto relative">
+          <div className="sticky top-0 z-10 flex items-center justify-end bg-background/95 backdrop-blur px-2 py-1 border-b">
+            <button
+              type="button"
+              onClick={() => setConfigOpen(false)}
+              title="Collapse panel"
+              aria-label="Collapse panel"
+              className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
+            >
+              <PanelRightClose className="h-4 w-4" />
+            </button>
+          </div>
           {!selected ? (
             <div className="p-4 text-sm text-muted-foreground">
               <div className="font-medium mb-1">No node selected</div>
@@ -425,6 +446,19 @@ function EditorInner() {
             </div>
           )}
         </div>
+        ) : (
+          <div className="w-8 border-l bg-muted/20 flex flex-col items-center pt-2">
+            <button
+              type="button"
+              onClick={() => setConfigOpen(true)}
+              title="Expand panel"
+              aria-label="Expand panel"
+              className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
+            >
+              <PanelRightOpen className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Run drawer */}
