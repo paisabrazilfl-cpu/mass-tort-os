@@ -84,7 +84,18 @@ function EditorInner() {
         setName(wf.name); setDescription(wf.description ?? ""); setEnabled(!!wf.enabled);
         setTags(wf.tags ?? []);
         const g = wf.graph ?? { nodes: [], edges: [] };
-        setNodes((g.nodes ?? []).map((n: any) => ({ ...n, position: n.position ?? { x: 100, y: 100 } })));
+        // Server stores the catalog node type on `n.type` (e.g. "trigger.manual").
+        // ReactFlow's `type` field, however, must point to a registered renderer
+        // — we use the built-in "default" everywhere. Translate by stashing the
+        // catalog type on `data.nodeType` and resetting the rf-level type so
+        // saved graphs round-trip cleanly through the editor.
+        setNodes((g.nodes ?? []).map((n: any) => ({
+          ...n,
+          type: "default",
+          position: n.position ?? { x: 100, y: 100 },
+          style: n.style ?? { borderRadius: 8, border: "1px solid #334155", padding: 0, width: 200 },
+          data: { ...(n.data ?? {}), nodeType: n.data?.nodeType ?? n.type, params: n.data?.params ?? {} },
+        })));
         setEdges((g.edges ?? []).map((e: any) => ({ ...e, markerEnd: { type: MarkerType.ArrowClosed } })));
         setCatalog(cat.nodes ?? []);
         const cats = new Set<string>((cat.nodes ?? []).map((n: NodeDef) => n.category));
@@ -106,7 +117,18 @@ function EditorInner() {
   const onNodesChange = useCallback((c: NodeChange[]) => setNodes((ns) => applyNodeChanges(c, ns)), []);
   const onEdgesChange = useCallback((c: EdgeChange[]) => setEdges((es) => applyEdgeChanges(c, es)), []);
   const onConnect = useCallback((c: Connection) => setEdges((es) => addEdge({ ...c, id: uid("e"), markerEnd: { type: MarkerType.ArrowClosed } }, es)), []);
-  const onNodeClick = useCallback((_: any, n: Node) => setSelected(n), []);
+  // The node passed to onNodeClick is the *rendered* one (whose data.label has
+  // been replaced with a JSX element for the canvas badge). Look the original
+  // node up from state so the config panel sees the plain string label and
+  // raw params, not React elements.
+  const onNodeClick = useCallback((_: any, n: Node) => {
+    setSelected((_prev) => null);
+    setNodes((curr) => {
+      const original = curr.find((x) => x.id === n.id) ?? n;
+      setSelected(original);
+      return curr;
+    });
+  }, []);
   const onPaneClick = useCallback(() => setSelected(null), []);
 
   function addNode(def: NodeDef) {
