@@ -23,10 +23,10 @@ function applyTheme(t: ThemeId) {
 }
 
 function readInitialTheme(): ThemeId {
-  if (typeof window === "undefined") return "dark-blue";
+  if (typeof window === "undefined") return "light";
   const saved = window.localStorage.getItem(STORAGE_KEY) as ThemeId | null;
   if (saved === "light" || saved === "dark-blue" || saved === "dark-red") return saved;
-  return "dark-blue";
+  return "light";
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -51,7 +51,7 @@ export function useTheme(): ThemeContextValue {
 }
 
 export const THEME_OPTIONS: { id: ThemeId; label: string; swatch: string }[] = [
+  { id: "light", label: "Light", swatch: "linear-gradient(135deg,#f1f5f9,#0ea5e9)" },
   { id: "dark-blue", label: "Dark Blue", swatch: "linear-gradient(135deg,#0b1220,#0ea5e9)" },
   { id: "dark-red", label: "Dark Red", swatch: "linear-gradient(135deg,#0b0f17,#ef4444)" },
-  { id: "light", label: "Light", swatch: "linear-gradient(135deg,#f1f5f9,#0ea5e9)" },
 ];
