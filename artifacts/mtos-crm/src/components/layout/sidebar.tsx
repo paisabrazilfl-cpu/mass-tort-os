@@ -1,5 +1,6 @@
 import { useAuth } from "@/contexts/auth-context";
 import { SidebarNav } from "./sidebar-nav";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 function initials(name?: string | null, email?: string | null): string {
   const source = (name?.trim() || email || "").trim();
@@ -9,19 +10,54 @@ function initials(name?: string | null, email?: string | null): string {
   return source.slice(0, 2).toUpperCase();
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+}
+
+export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
   const { user } = useAuth();
+
+  if (collapsed) {
+    return (
+      <aside
+        className="hidden md:flex h-full w-10 flex-col bg-sidebar border-r border-sidebar-border items-center pt-3"
+        aria-label="Sidebar (collapsed)"
+      >
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          title="Expand sidebar"
+          aria-label="Expand sidebar"
+          className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-sidebar-accent/60 text-sidebar-foreground/80"
+        >
+          <PanelLeftOpen className="h-4 w-4" />
+        </button>
+      </aside>
+    );
+  }
 
   return (
     <aside
       className="hidden md:flex h-full w-64 flex-col bg-sidebar border-r border-sidebar-border"
       aria-label="Sidebar"
     >
-      <div className="flex h-14 items-center border-b border-sidebar-border px-4">
-        <span className="font-bold text-lg tracking-tight text-sidebar-foreground">MTOS</span>
-        <span className="ml-2 rounded-md bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
-          v1.0
-        </span>
+      <div className="flex h-14 items-center justify-between border-b border-sidebar-border px-4">
+        <div className="flex items-center">
+          <span className="font-bold text-lg tracking-tight text-sidebar-foreground">MTOS</span>
+          <span className="ml-2 rounded-md bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
+            v1.0
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          title="Collapse sidebar"
+          aria-label="Collapse sidebar"
+          className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-sidebar-accent/60 text-sidebar-foreground/70"
+        >
+          <PanelLeftClose className="h-4 w-4" />
+        </button>
       </div>
       <SidebarNav />
       <div className="p-4 border-t border-sidebar-border">
