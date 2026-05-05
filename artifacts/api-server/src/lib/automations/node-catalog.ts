@@ -14,7 +14,10 @@ export type NodeCategory =
   | "data"
   | "crm"
   | "integration"
+  | "communication"
   | "ai"
+  | "documents"
+  | "forms"
   | "script"
   | "io"
   | "utility";
@@ -75,6 +78,71 @@ export const NODE_CATALOG: NodeDefinition[] = [
     params: [
       { key: "tort", label: "Tort filter (optional)", type: "string" },
     ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.form_submitted", label: "On Web Form Submitted", category: "trigger",
+    description: "Fires when a published web form receives a submission.",
+    icon: "AppWindow", color: "bg-emerald-600",
+    params: [
+      { key: "formId", label: "Form id (optional — all if blank)", type: "string" },
+      { key: "tort", label: "Tort filter (optional)", type: "string" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.inbound_call", label: "On Inbound Call", category: "trigger",
+    description: "Fires when an inbound phone call is logged.",
+    icon: "PhoneIncoming", color: "bg-emerald-600",
+    params: [
+      { key: "didNumber", label: "DID/number filter (optional)", type: "string" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.inbound_sms", label: "On Inbound SMS", category: "trigger",
+    description: "Fires when an inbound text message is received.",
+    icon: "MessageCircle", color: "bg-emerald-600",
+    params: [
+      { key: "keyword", label: "Keyword filter (optional)", type: "string" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.inbound_email", label: "On Inbound Email", category: "trigger",
+    description: "Fires when an inbound email is received at a monitored address.",
+    icon: "MailOpen", color: "bg-emerald-600",
+    params: [
+      { key: "toAddress", label: "Recipient filter (optional)", type: "string" },
+      { key: "subjectContains", label: "Subject contains (optional)", type: "string" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.inbound_fax", label: "On Inbound Fax", category: "trigger",
+    description: "Fires when an inbound fax is received.",
+    icon: "Printer", color: "bg-emerald-600",
+    params: [
+      { key: "didNumber", label: "Fax DID filter (optional)", type: "string" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.document_signed", label: "On Document Signed", category: "trigger",
+    description: "Fires when a Dropbox Sign / DocuSign packet is fully executed.",
+    icon: "FileCheck2", color: "bg-emerald-600",
+    params: [
+      { key: "templateId", label: "Template id filter (optional)", type: "string" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.case_status_changed", label: "On Case Status Change", category: "trigger",
+    description: "Fires when a case moves between pipeline stages.",
+    icon: "GitBranch", color: "bg-emerald-600",
+    params: [
+      { key: "fromStatus", label: "From status (optional)", type: "string" },
+      { key: "toStatus", label: "To status (optional)", type: "string" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.ocr_completed", label: "On OCR Completed", category: "trigger",
+    description: "Fires when an OCR job finishes for an uploaded medical record.",
+    icon: "ScanText", color: "bg-emerald-600",
+    params: [], inputs: 0, outputs: 1,
   },
 
   // ──────────────── Logic ────────────────
@@ -215,6 +283,294 @@ export const NODE_CATALOG: NodeDefinition[] = [
       { key: "entityType", label: "Entity type", type: "string", required: true },
       { key: "entityId", label: "Entity id", type: "string", required: true },
       { key: "details", label: "Details (JSON)", type: "json" },
+    ],
+  },
+  {
+    type: "crm.assign_paralegal", label: "Assign Paralegal", category: "crm",
+    description: "Assign a paralegal to a lead or case via the routing engine.",
+    icon: "UserCheck", color: "bg-violet-600",
+    params: [
+      { key: "entity", label: "Entity", type: "select", required: true, options: [
+        { label: "Lead", value: "lead" }, { label: "Case", value: "case" },
+      ]},
+      { key: "id", label: "Entity id", type: "string", required: true },
+      { key: "paralegalId", label: "Paralegal id (blank = auto)", type: "string" },
+    ],
+  },
+  {
+    type: "crm.set_lead_status", label: "Set Lead Status", category: "crm",
+    description: "Move a lead to a new pipeline status.",
+    icon: "GitBranch", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true },
+      { key: "status", label: "Status", type: "string", required: true, placeholder: "qualified | working | rejected" },
+    ],
+  },
+  {
+    type: "crm.send_to_review_queue", label: "Send to Review Queue", category: "crm",
+    description: "Push the entity into the manual review queue for an operator.",
+    icon: "ShieldAlert", color: "bg-violet-600",
+    params: [
+      { key: "entity", label: "Entity", type: "select", required: true, options: [
+        { label: "Lead", value: "lead" }, { label: "Case", value: "case" }, { label: "Document", value: "document" },
+      ]},
+      { key: "id", label: "Entity id", type: "string", required: true },
+      { key: "reason", label: "Reason", type: "text" },
+      { key: "priority", label: "Priority", type: "select", default: "normal", options: [
+        { label: "Low", value: "low" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" }, { label: "Urgent", value: "urgent" },
+      ]},
+    ],
+  },
+  {
+    type: "crm.background_check", label: "Run Background Check", category: "crm",
+    description: "Fan out across the 9-lane background check hub for a lead.",
+    icon: "Shield", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true },
+      { key: "lanes", label: "Lanes (JSON array, blank = all)", type: "json", placeholder: '["courtlistener","ofac","npi"]' },
+    ], outputs: ["clear", "flagged", "error"],
+  },
+  {
+    type: "crm.npi_lookup", label: "NPI Lookup", category: "crm",
+    description: "Resolve a healthcare provider via the NPPES NPI registry.",
+    icon: "Stethoscope", color: "bg-violet-600",
+    params: [
+      { key: "npi", label: "NPI number (or path)", type: "string", required: true, placeholder: "input.npi" },
+    ],
+  },
+  {
+    type: "crm.decision_engine", label: "Decision Engine Score", category: "crm",
+    description: "Run the deterministic decision engine and return scoring + routing.",
+    icon: "Scale", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true },
+      { key: "tort", label: "Tort code (optional)", type: "string" },
+    ], outputs: ["qualified", "rejected", "review"],
+  },
+  {
+    type: "crm.create_calendar_event", label: "Create Calendar Event", category: "crm",
+    description: "Create a calendar/timeline event for a lead, case, or user.",
+    icon: "Clock", color: "bg-violet-600",
+    params: [
+      { key: "title", label: "Title", type: "string", required: true },
+      { key: "startsAt", label: "Starts at (ISO)", type: "string", required: true },
+      { key: "endsAt", label: "Ends at (ISO)", type: "string" },
+      { key: "entity", label: "Linked entity", type: "select", default: "lead", options: [
+        { label: "Lead", value: "lead" }, { label: "Case", value: "case" }, { label: "User", value: "user" },
+      ]},
+      { key: "id", label: "Entity id", type: "string", required: true },
+      { key: "notes", label: "Notes", type: "text" },
+    ],
+  },
+
+  // ──────────────── Communication (SMS / Calls / MMS / Voicemail) ────────────────
+  {
+    type: "comm.send_sms", label: "Send SMS (Text)", category: "communication",
+    description: "Send an SMS via the configured SMS provider (Telnyx).",
+    icon: "MessageSquare", color: "bg-pink-600",
+    params: [
+      { key: "to", label: "To number (E.164)", type: "string", required: true, placeholder: "+15555550100" },
+      { key: "from", label: "From number (optional)", type: "string" },
+      { key: "body", label: "Message", type: "text", required: true },
+    ],
+  },
+  {
+    type: "comm.send_mms", label: "Send MMS", category: "communication",
+    description: "Send a multimedia message with an attachment.",
+    icon: "Image", color: "bg-pink-600",
+    params: [
+      { key: "to", label: "To number", type: "string", required: true },
+      { key: "body", label: "Message", type: "text" },
+      { key: "mediaUrl", label: "Media URL", type: "string", required: true },
+    ],
+  },
+  {
+    type: "comm.make_call", label: "Make Outbound Call", category: "communication",
+    description: "Initiate an outbound voice call (optionally connect to an AI agent).",
+    icon: "PhoneCall", color: "bg-pink-600",
+    params: [
+      { key: "to", label: "To number", type: "string", required: true },
+      { key: "from", label: "From number (optional)", type: "string" },
+      { key: "agentId", label: "AI voice agent id (optional)", type: "string", help: "If set, the call connects to a Vapi/AI voice agent." },
+      { key: "twiml", label: "TwiML / script (optional)", type: "text" },
+    ], outputs: ["answered", "no_answer", "failed"],
+  },
+  {
+    type: "comm.send_voicemail", label: "Drop Voicemail", category: "communication",
+    description: "Drop a pre-recorded voicemail to the recipient's mailbox.",
+    icon: "Voicemail", color: "bg-pink-600",
+    params: [
+      { key: "to", label: "To number", type: "string", required: true },
+      { key: "audioUrl", label: "Audio URL (mp3/wav)", type: "string", required: true },
+    ],
+  },
+  {
+    type: "comm.send_calendar_invite", label: "Send Calendar Invite", category: "communication",
+    description: "Send an iCal calendar invite via email.",
+    icon: "CalendarPlus", color: "bg-pink-600",
+    params: [
+      { key: "to", label: "To email", type: "string", required: true },
+      { key: "title", label: "Title", type: "string", required: true },
+      { key: "startsAt", label: "Starts at (ISO)", type: "string", required: true },
+      { key: "endsAt", label: "Ends at (ISO)", type: "string" },
+      { key: "location", label: "Location / link", type: "string" },
+      { key: "body", label: "Message body", type: "text" },
+    ],
+  },
+
+  // ──────────────── Documents ────────────────
+  {
+    type: "documents.render_template", label: "Render Doc Template", category: "documents",
+    description: "Render a document template with variables → PDF/DOCX in the file vault.",
+    icon: "FileSignature", color: "bg-indigo-600",
+    params: [
+      { key: "templateId", label: "Template id", type: "string", required: true },
+      { key: "variables", label: "Variables (JSON)", type: "json", required: true },
+      { key: "format", label: "Format", type: "select", default: "pdf", options: [
+        { label: "PDF", value: "pdf" }, { label: "DOCX", value: "docx" },
+      ]},
+    ],
+  },
+  {
+    type: "documents.send_dropbox_sign", label: "Send via Dropbox Sign", category: "documents",
+    description: "Send a packet for e-signature via Dropbox Sign.",
+    icon: "FileSignature", color: "bg-indigo-600",
+    params: [
+      { key: "templateId", label: "Template id", type: "string", required: true },
+      { key: "signerEmail", label: "Signer email", type: "string", required: true },
+      { key: "signerName", label: "Signer name", type: "string", required: true },
+      { key: "fields", label: "Pre-fill fields (JSON)", type: "json" },
+    ],
+  },
+  {
+    type: "documents.send_docusign", label: "Send via DocuSign", category: "documents",
+    description: "Send a packet for e-signature via DocuSign.",
+    icon: "FileSignature", color: "bg-indigo-600",
+    params: [
+      { key: "templateId", label: "DocuSign template id", type: "string", required: true },
+      { key: "signerEmail", label: "Signer email", type: "string", required: true },
+      { key: "signerName", label: "Signer name", type: "string", required: true },
+      { key: "fields", label: "Tab values (JSON)", type: "json" },
+    ],
+  },
+  {
+    type: "documents.fax_medical_records", label: "Fax Medical Records", category: "documents",
+    description: "Send a medical records request fax to a provider.",
+    icon: "Printer", color: "bg-indigo-600",
+    params: [
+      { key: "providerFax", label: "Provider fax number", type: "string", required: true },
+      { key: "leadId", label: "Lead id (for cover sheet)", type: "string", required: true },
+      { key: "templateId", label: "Cover-sheet template id", type: "string" },
+      { key: "attachments", label: "Attachment object keys (JSON array)", type: "json" },
+    ], outputs: ["sent", "failed"],
+  },
+  {
+    type: "documents.ocr_extract", label: "OCR Extract", category: "documents",
+    description: "Run OCR on an uploaded document and return extracted text.",
+    icon: "ScanText", color: "bg-indigo-600",
+    params: [
+      { key: "documentId", label: "Document id (or path)", type: "string", required: true },
+      { key: "language", label: "Language", type: "string", default: "en" },
+    ],
+  },
+  {
+    type: "documents.medical_extract", label: "AI Medical Record Extract", category: "documents",
+    description: "Use AI to extract structured fields (diagnoses, medications, dates) from a medical record.",
+    icon: "Brain", color: "bg-indigo-600",
+    params: [
+      { key: "documentId", label: "Document id", type: "string", required: true },
+      { key: "schema", label: "Field schema (JSON)", type: "json" },
+    ],
+  },
+
+  // ──────────────── Forms ────────────────
+  {
+    type: "forms.publish", label: "Publish Web Form", category: "forms",
+    description: "Publish or re-publish a form built in the Form Engine.",
+    icon: "AppWindow", color: "bg-teal-600",
+    params: [
+      { key: "formId", label: "Form id", type: "string", required: true },
+      { key: "version", label: "Version label (optional)", type: "string" },
+    ],
+  },
+  {
+    type: "forms.embed_script", label: "Get Embed Script", category: "forms",
+    description: "Return the embeddable JavaScript snippet for a published form.",
+    icon: "Code2", color: "bg-teal-600",
+    params: [
+      { key: "formId", label: "Form id", type: "string", required: true },
+    ],
+  },
+  {
+    type: "forms.validate_submission", label: "Validate Form Submission", category: "forms",
+    description: "Run TCPA / TrustedForm / field validation against a payload.",
+    icon: "ShieldCheck", color: "bg-teal-600",
+    params: [
+      { key: "formId", label: "Form id", type: "string", required: true },
+      { key: "payload", label: "Payload (JSON)", type: "json", required: true },
+    ], outputs: ["valid", "invalid"],
+  },
+  {
+    type: "forms.create_lead_from_submission", label: "Create Lead from Submission", category: "forms",
+    description: "Run the standard lead-intake pipeline (dedup + create/update) for a form payload.",
+    icon: "UserPlus", color: "bg-teal-600",
+    params: [
+      { key: "formId", label: "Form id", type: "string", required: true },
+      { key: "payload", label: "Payload (JSON)", type: "json", required: true },
+    ],
+  },
+
+  // ──────────────── AI Agents (extended) ────────────────
+  {
+    type: "ai.agent", label: "AI Agent (Autonomous)", category: "ai",
+    description: "Run an autonomous LLM agent with tool access (CRM, search, etc).",
+    icon: "Bot", color: "bg-fuchsia-600",
+    params: [
+      { key: "goal", label: "Goal / instructions", type: "text", required: true },
+      { key: "tools", label: "Allowed tools (JSON array)", type: "json", placeholder: '["crm.update_lead","comm.send_sms","io.sql_query"]' },
+      { key: "maxSteps", label: "Max steps", type: "number", default: 10 },
+      { key: "model", label: "Model", type: "select", default: "gpt-4o", options: [
+        { label: "GPT-4o", value: "gpt-4o" }, { label: "GPT-4o mini", value: "gpt-4o-mini" },
+        { label: "Claude 3.5 Sonnet", value: "claude-3-5-sonnet" },
+      ]},
+    ], outputs: ["success", "max_steps", "error"],
+  },
+  {
+    type: "ai.classify", label: "AI Classify", category: "ai",
+    description: "Classify text into one of N labels.",
+    icon: "Tag", color: "bg-fuchsia-600",
+    params: [
+      { key: "text", label: "Text path", type: "string", required: true },
+      { key: "labels", label: "Labels (JSON array)", type: "json", required: true, placeholder: '["urgent","normal","spam"]' },
+    ],
+  },
+  {
+    type: "ai.chat_response", label: "AI Chat Response", category: "ai",
+    description: "Generate a contextual chat reply to an inbound message.",
+    icon: "MessageCircle", color: "bg-fuchsia-600",
+    params: [
+      { key: "message", label: "Inbound message path", type: "string", required: true, placeholder: "input.body" },
+      { key: "persona", label: "Persona / system prompt", type: "text" },
+      { key: "history", label: "Conversation history path (optional)", type: "string" },
+    ],
+  },
+  {
+    type: "ai.voice_agent", label: "AI Voice Agent (Vapi)", category: "ai",
+    description: "Connect a phone call to a configured Vapi/AI voice agent.",
+    icon: "Phone", color: "bg-fuchsia-600",
+    params: [
+      { key: "agentId", label: "Vapi agent id", type: "string", required: true },
+      { key: "callId", label: "Call id (or path)", type: "string", required: true },
+      { key: "metadata", label: "Metadata (JSON)", type: "json" },
+    ], outputs: ["completed", "failed"],
+  },
+  {
+    type: "ai.transcribe", label: "AI Transcribe Audio", category: "ai",
+    description: "Transcribe a voicemail or call recording to text.",
+    icon: "Mic", color: "bg-fuchsia-600",
+    params: [
+      { key: "audioUrl", label: "Audio URL", type: "string", required: true },
+      { key: "language", label: "Language", type: "string", default: "en" },
     ],
   },
 

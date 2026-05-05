@@ -8,7 +8,10 @@ interface ThemeContextValue {
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
-const STORAGE_KEY = "mtos:theme";
+// v3 — bumped to invalidate stale dark-blue/dark-red preferences saved
+// before "light" became the default skin.
+const STORAGE_KEY = "mtos:theme:v3";
+const LEGACY_KEYS = ["mtos:theme", "mtos:theme:v2"];
 
 function applyTheme(t: ThemeId) {
   const root = document.documentElement;
@@ -24,6 +27,11 @@ function applyTheme(t: ThemeId) {
 
 function readInitialTheme(): ThemeId {
   if (typeof window === "undefined") return "light";
+  // Drop any legacy keys so old "dark-blue" doesn't keep overriding the
+  // light default for users who set it before light became the default.
+  for (const k of LEGACY_KEYS) {
+    try { window.localStorage.removeItem(k); } catch {}
+  }
   const saved = window.localStorage.getItem(STORAGE_KEY) as ThemeId | null;
   if (saved === "light" || saved === "dark-blue" || saved === "dark-red") return saved;
   return "light";

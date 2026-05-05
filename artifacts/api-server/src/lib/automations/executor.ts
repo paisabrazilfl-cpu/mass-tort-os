@@ -185,6 +185,14 @@ const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>> = {
   "trigger.webhook": async (s) => s.input,
   "trigger.schedule": async (s) => s.input,
   "trigger.lead_created": async (s) => s.input,
+  "trigger.form_submitted": async (s) => s.input,
+  "trigger.inbound_call": async (s) => s.input,
+  "trigger.inbound_sms": async (s) => s.input,
+  "trigger.inbound_email": async (s) => s.input,
+  "trigger.inbound_fax": async (s) => s.input,
+  "trigger.document_signed": async (s) => s.input,
+  "trigger.case_status_changed": async (s) => s.input,
+  "trigger.ocr_completed": async (s) => s.input,
 
   // ───────── Logic
   "logic.if": async (s) => {
@@ -417,6 +425,73 @@ const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>> = {
   },
   "io.read_file": async (s) => stubIntegration("read_file", s),
   "io.write_file": async (s) => stubIntegration("write_file", s),
+
+  // ───────── CRM (extended)
+  "crm.assign_paralegal": async (s) => stubIntegration("assign_paralegal", s),
+  "crm.set_lead_status": async (s) => {
+    const idRaw = resolveOrLiteral(s, s.node.data?.params?.leadId);
+    const leadId = Number(idRaw);
+    const status = String(s.node.data?.params?.status ?? "");
+    if (!leadId || !status) throw new Error("crm.set_lead_status requires leadId and status");
+    const [row] = await db.update(leadsTable)
+      .set({ qualification_status: status, updated_at: new Date() } as any)
+      .where(eq(leadsTable.id, leadId)).returning();
+    return { lead: row };
+  },
+  "crm.send_to_review_queue": async (s) => stubIntegration("send_to_review_queue", s),
+  "crm.background_check": async (s) => {
+    const out = await stubIntegration("background_check", s);
+    return { __branch: "clear", value: out };
+  },
+  "crm.npi_lookup": async (s) => stubIntegration("npi_lookup", s),
+  "crm.decision_engine": async (s) => {
+    const out = await stubIntegration("decision_engine", s);
+    return { __branch: "review", value: out };
+  },
+  "crm.create_calendar_event": async (s) => stubIntegration("create_calendar_event", s),
+
+  // ───────── Communication
+  "comm.send_sms": async (s) => stubIntegration("send_sms", s),
+  "comm.send_mms": async (s) => stubIntegration("send_mms", s),
+  "comm.make_call": async (s) => {
+    const out = await stubIntegration("make_call", s);
+    return { __branch: "answered", value: out };
+  },
+  "comm.send_voicemail": async (s) => stubIntegration("send_voicemail", s),
+  "comm.send_calendar_invite": async (s) => stubIntegration("send_calendar_invite", s),
+
+  // ───────── Documents
+  "documents.render_template": async (s) => stubIntegration("render_template", s),
+  "documents.send_dropbox_sign": async (s) => stubIntegration("send_dropbox_sign", s),
+  "documents.send_docusign": async (s) => stubIntegration("send_docusign", s),
+  "documents.fax_medical_records": async (s) => {
+    const out = await stubIntegration("fax_medical_records", s);
+    return { __branch: "sent", value: out };
+  },
+  "documents.ocr_extract": async (s) => stubIntegration("ocr_extract", s),
+  "documents.medical_extract": async (s) => stubIntegration("medical_extract", s),
+
+  // ───────── Forms
+  "forms.publish": async (s) => stubIntegration("forms_publish", s),
+  "forms.embed_script": async (s) => stubIntegration("forms_embed_script", s),
+  "forms.validate_submission": async (s) => {
+    const out = await stubIntegration("forms_validate_submission", s);
+    return { __branch: "valid", value: out };
+  },
+  "forms.create_lead_from_submission": async (s) => stubIntegration("forms_create_lead_from_submission", s),
+
+  // ───────── AI (extended)
+  "ai.agent": async (s) => {
+    const out = await stubIntegration("ai_agent", s);
+    return { __branch: "success", value: out };
+  },
+  "ai.classify": async (s) => stubIntegration("ai_classify", s),
+  "ai.chat_response": async (s) => stubIntegration("ai_chat_response", s),
+  "ai.voice_agent": async (s) => {
+    const out = await stubIntegration("ai_voice_agent", s);
+    return { __branch: "completed", value: out };
+  },
+  "ai.transcribe": async (s) => stubIntegration("ai_transcribe", s),
 
   // ───────── Utility
   "utility.log": async (s) => {
