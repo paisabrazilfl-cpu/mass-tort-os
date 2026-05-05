@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, UserCog, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck,
   BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch,
   Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp, Scale, Building, FileSignature,
-  Grid3x3, Settings, Activity, CreditCard, Phone, Skull,
+  Grid3x3, Settings, Activity, CreditCard, Phone, Skull, Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -41,6 +41,12 @@ export const navigation: NavSection[] = [
       { name: "Doc Templates", href: "/document-templates", icon: FileSignature },
       { name: "Assignment Matrix", href: "/template-assignments", icon: Grid3x3 },
       { name: "Workflow Settings", href: "/workflow-settings", icon: Settings },
+    ],
+  },
+  {
+    section: "Automation",
+    items: [
+      { name: "Automations", href: "/automations", icon: Workflow },
     ],
   },
   {

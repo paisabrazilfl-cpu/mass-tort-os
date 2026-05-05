@@ -28,6 +28,7 @@ The project is structured as a pnpm monorepo using TypeScript, targeting Node.js
 *   **Background Check Hub**: A unified operator action that fans out across nine verification lanes, wrapping existing validators and providing honest status reporting.
 *   **Outbound Lead Webhooks**: Dispatches `lead.created` events to configured automation integrations with HMAC-SHA256 signing.
 *   **System-Wide Audit Hardening**: Implements structured error responses for Zod validation failures, improved skeleton loading for 404s, pre-flight checks for job queueing, and robust error handling for lead import.
+*   **Automation Workflows (n8n-style)**: Internal drag-and-drop workflow engine (React Flow editor at `/automations`). 37-node catalog across triggers/logic/data/CRM/integrations/AI/scripts (JS via vm; Python/Bash/PowerShell via spawn)/IO/utility. Graph executor (`lib/automations/executor.ts`) walks edges with branch handling via `sourceHandle`, MAX_STEPS=200. Persists to `automation_workflows` + `automation_runs`. RBAC perms `automations:view|manage|execute`. Routes mounted at `/api/automations` (CRUD + node-catalog + run + run history). Supports JSON import/export.
 
 # External Dependencies
 

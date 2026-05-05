@@ -33,6 +33,7 @@ import callsRouter from "./calls";
 import vapiToolsRouter from "./vapi-tools";
 import usersRouter from "./users";
 import adminDarkRoomRouter from "./admin-dark-room";
+import automationsRouter from "./automations";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -90,6 +91,7 @@ labelRouter(billingRouter, "billing");
 labelRouter(callsRouter, "calls");
 labelRouter(usersRouter, "users");
 labelRouter(adminDarkRoomRouter, "admin-dark-room");
+labelRouter(automationsRouter, "automations");
 
 const router: IRouter = Router();
 
@@ -150,5 +152,6 @@ router.use("/document-templates", documentTemplatesRouter);
 router.use("/workflow-settings", workflowSettingsRouter);
 router.use("/users", usersRouter);
 router.use("/admin/dark-room", adminDarkRoomRouter);
+router.use("/automations", automationsRouter);
 
 export default router;

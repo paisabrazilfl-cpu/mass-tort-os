@@ -202,6 +202,11 @@ export const Permission = {
 
   // SMS (Telnyx outbound)
   SMS_SEND: "sms:send",
+
+  // Automations (visual workflow engine)
+  AUTOMATIONS_VIEW: "automations:view",
+  AUTOMATIONS_MANAGE: "automations:manage",
+  AUTOMATIONS_EXECUTE: "automations:execute",
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];

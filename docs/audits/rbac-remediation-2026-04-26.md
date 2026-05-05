@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **205 checked / 33 public / 172 protected / 0 unprotected.**
+Boot-time count: **214 checked / 33 public / 181 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -633,6 +633,15 @@ Boot-time count: **205 checked / 33 public / 172 protected / 0 unprotected.**
 | auth | POST | `/api/auth/register` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | GET | `/api/auth/users` | ✓ | ✓ |  |  |  | — | `users:list` | ✓ |
 | auth | GET | `/api/auth/verify-email` |  |  |  |  | ✓ | — | — | ✓ |
+| automations | POST | `/api/automations/:id/run` | ✓ | ✓ |  |  |  | — | `automations:execute` | ✓ |
+| automations | GET | `/api/automations/:id/runs` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
+| automations | DELETE | `/api/automations/:id` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
+| automations | GET | `/api/automations/:id` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
+| automations | PUT | `/api/automations/:id` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
+| automations | GET | `/api/automations/` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
+| automations | GET | `/api/automations/node-catalog` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
+| automations | POST | `/api/automations/` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
+| automations | GET | `/api/automations/runs/:runId` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | billing | POST | `/api/billing/checkout` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
 | billing | GET | `/api/billing/firm-status` | ✓ |  |  | ✓ |  | — | — | ✓ |
 | billing | GET | `/api/billing/invoices` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
