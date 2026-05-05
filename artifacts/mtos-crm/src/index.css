@@ -117,6 +117,34 @@
   --radius: 0.25rem;
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * Dark Red skin: layered on top of `.dark` (so it inherits the dark base
+ * vars) and only overrides the accent/primary/chart hues to red. Applied
+ * by the theme context as `<html class="dark theme-dark-red">`.
+ * ──────────────────────────────────────────────────────────────────────── */
+.theme-dark-red {
+  --ring: 0 85% 55%;
+  --primary: 0 85% 55%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 0 70% 18%;
+  --accent-foreground: 0 90% 70%;
+  --destructive: 0 90% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --chart-1: 0 85% 55%;
+  --chart-2: 0 60% 40%;
+  --chart-3: 25 85% 55%;
+  --chart-4: 340 75% 55%;
+  --chart-5: 15 75% 50%;
+  --sidebar-primary: 0 85% 55%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-ring: 0 85% 55%;
+}
+
+/* `.theme-light` and `.theme-dark-blue` are no-op markers — the actual
+ * variables already live on `:root` (light) and `.dark` (dark blue). They
+ * exist so the theme context can attach a single, explicit class for
+ * styling hooks and for the theme switcher's active-state lookup. */
+
 .dark {
   --background: 225 15% 6%;
   --foreground: 210 20% 90%;

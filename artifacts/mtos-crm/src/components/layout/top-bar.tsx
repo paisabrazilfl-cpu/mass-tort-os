@@ -1,4 +1,4 @@
-import { Menu, LogOut, User as UserIcon } from "lucide-react";
+import { Menu, LogOut, User as UserIcon, Palette, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme, THEME_OPTIONS } from "@/contexts/theme-context";
 
 interface TopBarProps {
   onOpenSidebar: () => void;
@@ -26,6 +27,7 @@ function initials(name?: string | null, email?: string | null): string {
 
 export function TopBar({ onOpenSidebar }: TopBarProps) {
   const { user, logout } = useAuth();
+  const { theme, setTheme } = useTheme();
   const displayName = user?.name?.trim() || user?.email || "Signed in";
 
   return (
@@ -47,6 +49,33 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-9 w-9" aria-label="Change theme" data-testid="theme-switcher">
+              <Palette className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuLabel className="text-xs">Theme</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {THEME_OPTIONS.map((opt) => (
+              <DropdownMenuItem
+                key={opt.id}
+                onSelect={(e) => { e.preventDefault(); setTheme(opt.id); }}
+                data-testid={`theme-option-${opt.id}`}
+              >
+                <span
+                  aria-hidden="true"
+                  className="mr-2 inline-block h-4 w-4 rounded-full border border-border"
+                  style={{ background: opt.swatch }}
+                />
+                <span className="flex-1">{opt.label}</span>
+                {theme === opt.id && <Check className="ml-2 h-3.5 w-3.5" aria-hidden="true" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
