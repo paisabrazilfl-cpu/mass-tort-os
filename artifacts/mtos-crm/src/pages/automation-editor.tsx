@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { getLucide } from "@/lib/lucide-icon";
@@ -70,6 +70,15 @@ function EditorInner() {
   const [runOpen, setRunOpen] = useState(false);
   const [runInput, setRunInput] = useState("{}");
   const [running, setRunning] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem("mtos:automation:paletteOpen") !== "0";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("mtos:automation:paletteOpen", paletteOpen ? "1" : "0");
+    }
+  }, [paletteOpen]);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Load workflow + catalog
@@ -259,8 +268,20 @@ function EditorInner() {
 
       <div className="flex flex-1 min-h-0">
         {/* Node palette */}
-        <div className="w-64 border-r bg-muted/20 overflow-y-auto">
-          <div className="p-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Drag a node into the canvas</div>
+        {paletteOpen ? (
+        <div className="w-64 border-r bg-muted/20 overflow-y-auto relative">
+          <div className="p-2 flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Drag a node into the canvas</span>
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(false)}
+              title="Collapse palette"
+              aria-label="Collapse palette"
+              className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          </div>
           {Object.entries(grouped).map(([cat, list]) => (
             <div key={cat} className="border-t">
               <button
@@ -293,6 +314,19 @@ function EditorInner() {
             </div>
           ))}
         </div>
+        ) : (
+          <div className="w-8 border-r bg-muted/20 flex flex-col items-center pt-2">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              title="Expand palette"
+              aria-label="Expand palette"
+              className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </button>
+          </div>
+        )}
 
         {/* Canvas */}
         <div className="flex-1 relative" ref={wrapperRef}>
