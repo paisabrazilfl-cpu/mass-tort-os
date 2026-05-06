@@ -241,6 +241,25 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
 
   const data = parsed.data;
 
+  // Normalize hospital_fax to E.164 via shared validator. A 4xx is returned
+  // for malformed numbers so a typo never lands as plain text on the lead
+  // (which would later surface as a misleading "no fax on file" error in
+  // the auto-dispatch pipeline).
+  if (data.hospital_fax?.trim()) {
+    const { normalizeFaxNumber } = await import("../lib/fax/normalize");
+    const norm = normalizeFaxNumber(data.hospital_fax);
+    if (!norm.ok) {
+      res.status(400).json({
+        status: "error",
+        code: "INVALID_HOSPITAL_FAX",
+        message: norm.message,
+        field: "hospital_fax",
+      });
+      return;
+    }
+    data.hospital_fax = norm.e164;
+  }
+
   const hospitalMissing: string[] = [];
   if (!data.hospital_name?.trim()) hospitalMissing.push("hospital_name");
   if (!data.hospital_fax?.trim()) hospitalMissing.push("hospital_fax");
@@ -641,7 +660,24 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
   if (body.physician_full_address !== undefined) updateData.physician_full_address = body.physician_full_address;
   if (body.physician_contact_info !== undefined) updateData.physician_contact_info = body.physician_contact_info;
   if (body.hospital_name !== undefined) updateData.hospital_name = body.hospital_name;
-  if (body.hospital_fax !== undefined) updateData.hospital_fax = body.hospital_fax;
+  if (body.hospital_fax !== undefined) {
+    if (body.hospital_fax === null || body.hospital_fax === "") {
+      updateData.hospital_fax = null;
+    } else {
+      const { normalizeFaxNumber } = await import("../lib/fax/normalize");
+      const norm = normalizeFaxNumber(body.hospital_fax);
+      if (!norm.ok) {
+        res.status(400).json({
+          status: "error",
+          code: "INVALID_HOSPITAL_FAX",
+          message: norm.message,
+          field: "hospital_fax",
+        });
+        return;
+      }
+      updateData.hospital_fax = norm.e164;
+    }
+  }
   if (body.hospital_contact_info !== undefined) updateData.hospital_contact_info = body.hospital_contact_info;
   if (body.tcpa_consent !== undefined) updateData.tcpa_consent = body.tcpa_consent;
   if (body.trustedform_cert_url !== undefined) updateData.trustedform_cert_url = body.trustedform_cert_url;

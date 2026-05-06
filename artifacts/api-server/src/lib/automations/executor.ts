@@ -502,17 +502,31 @@ const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>> = {
 
       // envelope_id=0 marks "no upstream HIPAA envelope" — the fax cover sheet
       // and fax_results.source_file template both accept a numeric placeholder.
-      await handleFaxMedRecordsRequest({
+      const result = await handleFaxMedRecordsRequest({
         lead_id: leadId,
         envelope_id: 0,
         explicit_integration_id: Number.isFinite(explicitIntegrationId as number) ? (explicitIntegrationId as number) : null,
         override_fax: overrideFax,
       });
-      return { __branch: "sent", value: { lead_id: leadId, status: "sent" } };
+      return {
+        __branch: result.ok ? "sent" : "failed",
+        value: {
+          lead_id: leadId,
+          status: result.status,
+          fax_results_id: result.faxResultId,
+          external_fax_id: result.externalFaxId,
+          provider: result.provider,
+          to: result.to,
+        },
+      };
     } catch (err: any) {
       const message = err?.message ?? String(err);
+      // Try to parse the fax_results.id we appended to the error message
+      // so downstream nodes can still link to the timeline row.
+      const m = /fax_results\.id=(\d+)/.exec(message);
+      const faxResultId = m ? Number(m[1]) : null;
       logger.warn({ runId: s.ctx.runId, leadId, err: message }, "documents.fax_medical_records failed");
-      return { __branch: "failed", value: { error: "send_failed", message } };
+      return { __branch: "failed", value: { error: "send_failed", message, fax_results_id: faxResultId, lead_id: leadId } };
     }
   },
   "documents.ocr_extract": async (s) => stubIntegration("ocr_extract", s),

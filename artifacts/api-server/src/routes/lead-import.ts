@@ -8,6 +8,7 @@ import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { runFullConflictCheck } from "../lib/conflict-engine";
 import { logger } from "../lib/logger";
 import { serverError } from "../lib/http-errors";
+import { normalizeFaxNumber as normalizeFaxNumberSync } from "../lib/fax/normalize";
 
 const router = Router();
 
@@ -55,6 +56,8 @@ const COLUMN_ALIASES: Record<string, string> = {
   "hospital": "hospital_name",
   "hospital name": "hospital_name",
   "hospital fax": "hospital_fax",
+  "fax": "hospital_fax",
+  "doctor fax": "hospital_fax",
   "medications": "medications",
   "meds": "medications",
   "npi": "npi_number",
@@ -149,6 +152,17 @@ function mapRowToLead(row: Record<string, string>, columnMapping: Record<string,
     if (value !== undefined && value !== "") {
       if (leadField === "diagnosis_confirmed" || leadField === "was_at_location" || leadField === "tcpa_consent") {
         lead[leadField] = ["true", "yes", "1", "y"].includes(value.toLowerCase());
+      } else if (leadField === "hospital_fax") {
+        // Run the imported fax through the shared E.164 normalizer. If it
+        // can't be parsed we drop it (with a marker on the row) rather than
+        // store garbage that would later fail in auto-dispatch.
+        const norm = normalizeFaxNumberSync(value);
+        if (norm.ok) {
+          lead.hospital_fax = norm.e164;
+        } else {
+          lead.hospital_fax = null;
+          lead._import_warnings = [...(lead._import_warnings ?? []), `hospital_fax_invalid:${norm.message}`];
+        }
       } else {
         lead[leadField] = value;
       }

@@ -436,7 +436,48 @@ export async function handleSendEsignPacket(payload: SendEsignPacketPayload): Pr
 // HANDLER: fax_med_records_request
 // ────────────────────────────────────────────────────────────────────────────
 
-export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload): Promise<void> {
+export interface FaxMedRecordsResult {
+  ok: boolean;
+  faxResultId: number;
+  externalFaxId: string | null;
+  status: "done" | "error";
+  provider: string | null;
+  to: string | null;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+/**
+ * Pre-creates a fax_results row in "error" state so the lead's "Doctor
+ * Faxes" timeline shows the failed attempt even when we can't reach the
+ * adapter. Returns the row id for the caller to surface.
+ */
+async function recordFaxFailure(
+  leadId: number,
+  envelopeId: number,
+  errorCode: string,
+  errorMessage: string,
+): Promise<number> {
+  const [row] = await db
+    .insert(faxResultsTable)
+    .values({
+      source_file: FAX_SOURCE_FILE_TEMPLATE(leadId, envelopeId),
+      vault_path: "outbound:med_records_request",
+      status: "error",
+      raw_text: `[${errorCode}] ${errorMessage}`,
+      processed_at: new Date(),
+    })
+    .returning();
+  await auditLog("fax", String(row.id), "send_failed_preflight", {
+    lead_id: leadId,
+    envelope_id: envelopeId,
+    code: errorCode,
+    message: errorMessage,
+  });
+  return row.id;
+}
+
+export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload): Promise<FaxMedRecordsResult> {
   const { lead_id, envelope_id, explicit_integration_id, override_fax } = payload;
 
   const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead_id));
@@ -446,7 +487,8 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
   // this is an ephemeral one-shot dispatch path.
   const targetFax = override_fax || lead.hospital_fax;
   if (!targetFax) {
-    throw new Error(`Lead ${lead_id} has no hospital_fax on file — cannot send fax.`);
+    const id = await recordFaxFailure(lead_id, envelope_id, "no_fax_on_file", "Lead has no hospital_fax on file");
+    throw new Error(`Lead ${lead_id} has no hospital_fax on file — cannot send fax. (fax_results.id=${id})`);
   }
 
   const resolved = await resolveProvider("fax", {
@@ -460,12 +502,14 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
       reason: resolved.reason,
       details: resolved.details,
     });
-    throw new Error(`No fax provider configured (${resolved.reason}). Pick one on the Workflow Settings page.`);
+    const id = await recordFaxFailure(lead_id, envelope_id, "no_provider", `No fax provider configured (${resolved.reason})`);
+    throw new Error(`No fax provider configured (${resolved.reason}). Pick one on the Workflow Settings page. (fax_results.id=${id})`);
   }
 
   const adapter = getFaxAdapter(resolved.provider);
   if (!adapter) {
-    throw new Error(`No fax adapter wired for provider "${resolved.provider}".`);
+    const id = await recordFaxFailure(lead_id, envelope_id, "no_adapter", `No fax adapter wired for provider "${resolved.provider}"`);
+    throw new Error(`No fax adapter wired for provider "${resolved.provider}". (fax_results.id=${id})`);
   }
 
   const coverPdf = await buildMedRecordsCoverLetter(lead, envelope_id);
@@ -521,8 +565,18 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
       message: outcome.message,
       retryable: outcome.retryable,
     });
-    if (outcome.retryable) throw new Error(`Fax provider transient error: ${outcome.message}`);
-    return;
+    // Embed `fax_results.id=...` in the throw message so the executor's
+    // catch path can parse it back out and surface `fax_results_id` in the
+    // failed branch payload — same convention used by the preflight throws
+    // above. Without this the timeline shows the error row but the
+    // automation node loses the back-reference.
+    if (outcome.retryable) {
+      throw new Error(`Fax provider transient error: ${outcome.message} (fax_results.id=${faxRow.id})`);
+    }
+    // Non-retryable provider failures are still failures — surface them so
+    // automation/job callers can branch and so the operator sees an error
+    // (not a misleading "sent") in the timeline.
+    throw new Error(`Fax provider rejected request: [${outcome.code}] ${outcome.message} (fax_results.id=${faxRow.id})`);
   }
 
   await db
@@ -546,6 +600,15 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
     { fax_id: faxRow.id, lead_id, envelope_id, provider: resolved.provider, external_id: outcome.externalFaxId, to: targetFax },
     "Med records fax sent",
   );
+
+  return {
+    ok: true,
+    faxResultId: faxRow.id,
+    externalFaxId: outcome.externalFaxId,
+    status: "done",
+    provider: resolved.provider,
+    to: targetFax,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────────────

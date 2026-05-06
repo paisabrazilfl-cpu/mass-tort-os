@@ -279,18 +279,30 @@ async function runWebFormPipeline(
     tcpaConsentVal === "true" ||
     tcpaConsentVal === "on";
   // Optional doctor's / hospital fax — used by the automation engine to
-  // auto-dispatch a medical-records-request fax. Validated through the
+  // auto-dispatch a medical-records-request fax. Validated HARD through the
   // shared E.164 normalizer so a bad number can never reach the fax adapter.
+  // The field is optional, but if present it must be valid (4xx) — silently
+  // dropping bad input would let typos sit on the lead and surface as
+  // "no fax on file" hours later when the automation tries to dispatch.
   let hospitalFaxE164: string | null = null;
   if (cfg.fields.some((f) => f.key === "hospital_fax")) {
     const raw = body.hospital_fax;
     if (raw != null && String(raw).trim()) {
       const { normalizeFaxNumber } = await import("../lib/fax/normalize");
       const norm = normalizeFaxNumber(String(raw));
-      if (norm.ok) hospitalFaxE164 = norm.e164;
-      // Soft-validate: a bad fax must NOT reject the whole submission
-      // (the field is optional). The pipeline records a non-fatal note
-      // so an operator can correct it later via the CRM.
+      if (!norm.ok) {
+        // The pipeline runs from a public route handler that surfaces
+        // step errors via the standard PipelineResult envelope. Push the
+        // failure on a synthetic FAX_VALIDATION step and short-circuit.
+        const stepFax: PipelineStep = {
+          name: "FAX_VALIDATION",
+          status: "failed",
+          errors: [`INVALID_HOSPITAL_FAX:${norm.message}`],
+        };
+        pipeline.push(stepFax);
+        return failed(pipeline, "FAX_VALIDATION", norm.message);
+      }
+      hospitalFaxE164 = norm.e164;
     }
   }
 

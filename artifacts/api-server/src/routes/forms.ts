@@ -471,6 +471,19 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
       }
     }
 
+    // Normalize hospital_fax to E.164 in-place via the shared validator —
+    // a malformed number becomes a step1 error rather than landing on the
+    // lead row and silently breaking auto-fax dispatch later.
+    if (data.hospital_fax && typeof data.hospital_fax === "string" && data.hospital_fax.trim()) {
+      const { normalizeFaxNumber } = await import("../lib/fax/normalize");
+      const norm = normalizeFaxNumber(data.hospital_fax);
+      if (!norm.ok) {
+        step1.errors.push("INVALID_HOSPITAL_FAX");
+      } else {
+        data.hospital_fax = norm.e164;
+      }
+    }
+
     if (step1.errors.length > 0) {
       step1.status = "failed";
       pipeline.push(step1);
@@ -804,7 +817,7 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
       physician_full_address: data.physician_full_address,
       physician_contact_info: data.physician_contact_info,
       hospital_name: data.hospital_name,
-      hospital_fax: data.hospital_fax,
+      hospital_fax: data.hospital_fax, // already normalized to E.164 in STEP 1 below
       hospital_contact_info: data.hospital_contact_info,
       medications: data.medications ?? null,
       tcpa_consent: true,
