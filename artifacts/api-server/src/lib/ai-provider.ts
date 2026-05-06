@@ -14,6 +14,7 @@
 import { logger } from "./logger";
 import { getLlmAdapter, fallbackAdapter, type LlmCompletionResult, type SupportedMime } from "./ai";
 import { resolveProvider, isResolved, type ProviderCategory } from "./provider-router";
+import type { DecryptedCredentials } from "../routes/integrations";
 
 export type LLMModule =
   | "ai-extract"
@@ -42,15 +43,9 @@ export interface LLMRequest {
   model?: string;
 }
 
-interface ResolvedLlm {
-  provider: string;
-  // null when env-managed (anthropic/openai via Replit AI SDK)
-  credentials: import("./ai").LlmAdapter extends infer A
-    ? Parameters<Extract<A, { complete: any }>["complete"]>[0]
-    : never;
-}
-
-async function resolveLlmForModule(module: LLMModule): Promise<{ providerName: string; creds: any | null }> {
+async function resolveLlmForModule(
+  module: LLMModule,
+): Promise<{ providerName: string; creds: DecryptedCredentials | null }> {
   const moduleOverride = process.env[MODULE_ENV_KEY[module]]?.toLowerCase();
   if (moduleOverride) return { providerName: moduleOverride, creds: null };
 

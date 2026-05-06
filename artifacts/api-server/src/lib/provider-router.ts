@@ -1,5 +1,5 @@
 import { db, integrationsTable, workflowSettingsTable, buyersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { getIntegrationCredentialsById, DecryptedCredentials } from "../routes/integrations";
 import { logger } from "./logger";
 
@@ -41,6 +41,45 @@ const FIELD_BY_CATEGORY: Record<ProviderCategory, keyof typeof workflowSettingsT
   llm_default: "llm_default_provider_integration_id",
   llm_drafting: "llm_drafting_provider_integration_id",
 };
+
+/**
+ * Pre-existing default provider per category. When workflow_settings has
+ * no FK chosen for a category, we look for an active integration row of
+ * this provider so we preserve the legacy hard-wired behavior (lead SMS
+ * always went through Telnyx, fax through srfax, etc) instead of failing
+ * with `no_integration_configured`. Operators can override on the
+ * Workflow Settings page.
+ */
+const DEFAULT_PROVIDER_BY_CATEGORY: Record<ProviderCategory, string | null> = {
+  esign: "dropbox_sign",
+  fax: "srfax",
+  email: "sendgrid",
+  sms: "telnyx",
+  voice: "vapi",
+  llm_default: null,   // ai-provider.ts handles env fallback to anthropic
+  llm_drafting: null,
+};
+
+async function findActiveIntegrationByProvider(provider: string): Promise<number | null> {
+  // Provider uniqueness is NOT enforced at the schema level (multiple
+  // historical rows for the same provider can coexist after re-onboarding).
+  // Filter by status="active" and pick the most recently created row so
+  // fallback resolution is deterministic and never selects a stale/inactive
+  // integration. Returns null if NO active row exists — callers then surface
+  // `no_integration_configured` to the admin UI.
+  const rows = await db
+    .select({ id: integrationsTable.id })
+    .from(integrationsTable)
+    .where(
+      and(
+        eq(integrationsTable.provider, provider),
+        eq(integrationsTable.status, "active"),
+      ),
+    )
+    .orderBy(desc(integrationsTable.created_at))
+    .limit(1);
+  return rows[0]?.id ?? null;
+}
 
 async function getGlobalSettings() {
   const [row] = await db
@@ -98,6 +137,18 @@ export async function resolveProvider(
       const field = FIELD_BY_CATEGORY[category];
       const val = (settings as any)[field];
       if (typeof val === "number") integrationId = val;
+    }
+  }
+
+  if (!integrationId) {
+    // Null FK on workflow_settings: preserve legacy default by looking
+    // up an active integration row matching the category's default
+    // provider. If even that is missing, fall through to the explicit
+    // miss reason so the admin UI can prompt the operator.
+    const defaultProvider = DEFAULT_PROVIDER_BY_CATEGORY[category];
+    if (defaultProvider) {
+      const found = await findActiveIntegrationByProvider(defaultProvider);
+      if (found) integrationId = found;
     }
   }
 

@@ -34,6 +34,7 @@ import { badRequest, notFound } from "../lib/http-errors";
 import { verifyWebhook as verifyStripeWebhook } from "../lib/payments/stripe";
 import { verifyVapiSignature } from "../lib/voice/vapi-webhook";
 import { verifyTelnyxSignature } from "../lib/sms/telnyx";
+import { getEmailVerifier, getSmsVerifier, type VerifyContext, type SignatureStatus } from "../lib/webhook-verifiers";
 import { invalidateStripeConfiguredCache } from "../lib/subscription-gate";
 import type Stripe from "stripe";
 
@@ -769,6 +770,40 @@ function pickFirstString(o: AnyJson | undefined, keys: string[]): string | undef
   return undefined;
 }
 
+/** Build a VerifyContext from the express request. Uses captured rawBody. */
+function buildVerifyCtx(req: import("express").Request): VerifyContext {
+  const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol;
+  const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "";
+  const fullUrl = `${proto}://${host}${req.originalUrl}`;
+  const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody ?? Buffer.from("");
+  // Form-encoded bodies (Twilio) — express.urlencoded() populates req.body as object.
+  const formBody = (req.is("application/x-www-form-urlencoded") && looksJsonObject(req.body))
+    ? Object.fromEntries(Object.entries(req.body).map(([k, v]) => [k, String(v)]))
+    : undefined;
+  return { rawBody, headers: req.headers, fullUrl, formBody };
+}
+
+/**
+ * Resolve the active integration row for a provider, load its
+ * decrypted credentials, and return the integration_id alongside.
+ * Both can be null when the operator hasn't onboarded the provider —
+ * the webhook still 200s but signature_status falls through to
+ * "unverified".
+ */
+async function loadProviderForWebhook(provider: string): Promise<{
+  integrationId: number | null;
+  creds: import("./integrations").DecryptedCredentials | null;
+}> {
+  const rows = await db
+    .select({ id: integrationsTable.id, status: integrationsTable.status })
+    .from(integrationsTable)
+    .where(eq(integrationsTable.provider, provider));
+  const active = rows.find((r) => r.status === "active");
+  if (!active) return { integrationId: null, creds: null };
+  const creds = await getIntegrationCredentialsById(active.id);
+  return { integrationId: active.id, creds };
+}
+
 router.post("/email/:provider", async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
   if (!EMAIL_EVENT_PROVIDERS.has(provider)) {
@@ -781,8 +816,18 @@ router.post("/email/:provider", async (req, res) => {
     ? [req.body]
     : [];
 
-  const rows = await db.select().from(integrationsTable).where(eq(integrationsTable.provider, provider));
-  const integrationId = rows.find((r) => r.status === "active")?.id ?? null;
+  const { integrationId, creds } = await loadProviderForWebhook(provider);
+
+  // Verify ONCE per request — provider sigs cover the whole rawBody.
+  const verifier = getEmailVerifier(provider);
+  let signatureStatus: SignatureStatus = "unverified";
+  if (verifier) signatureStatus = verifier(buildVerifyCtx(req), creds);
+  if (signatureStatus === "invalid") {
+    logger.warn({ provider }, "email webhook signature INVALID — persisting event flagged");
+    await auditLog("email_webhook_invalid_signature", provider, String(integrationId ?? "none"), {
+      header_keys: Object.keys(req.headers),
+    });
+  }
 
   for (const evt of events) {
     const externalId = pickFirstString(evt, ["MessageID", "messageId", "message_id", "id", "sg_message_id"]);
@@ -791,18 +836,20 @@ router.post("/email/:provider", async (req, res) => {
     try {
       await db.insert(emailEventsTable).values({
         integration_id: integrationId,
+        firm_id: null,   // email correlation requires an outbound email_messages table; not yet shipped
+        lead_id: null,
         provider,
         external_message_id: externalId,
         event_type: eventType.slice(0, 64),
         recipient_email: recipient?.slice(0, 320),
-        signature_status: "unverified",
+        signature_status: signatureStatus,
         raw_payload: evt,
       });
     } catch (err) {
       logger.warn({ err, provider }, "email_events insert failed");
     }
   }
-  res.json({ ok: true, received: events.length });
+  res.json({ ok: true, received: events.length, signature_status: signatureStatus });
 });
 
 router.post("/fax/:provider", async (req, res) => {
@@ -813,21 +860,25 @@ router.post("/fax/:provider", async (req, res) => {
   }
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
 
-  const rows = await db.select().from(integrationsTable).where(eq(integrationsTable.provider, provider));
-  const integrationId = rows.find((r) => r.status === "active")?.id ?? null;
+  const { integrationId } = await loadProviderForWebhook(provider);
+  // No documented common signature schemes for srfax/efax/phaxio/documo/telnyx_fax
+  // (Telnyx Fax uses the same Ed25519 scheme as its SMS API but the v2 raw fax
+  // webhook is opt-in and rarely configured). Mark unverified.
+  const signatureStatus: SignatureStatus = "unverified";
 
   const externalId =
     pickFirstString(evt, ["faxId", "id", "fax_id", "FaxID"]) ??
-    pickFirstString((evt as any)?.data, ["id", "fax_id"]);
+    pickFirstString((evt as { data?: AnyJson }).data, ["id", "fax_id"]);
   const eventType =
     pickFirstString(evt, ["event", "EventType", "type"]) ??
-    pickFirstString((evt as any)?.data, ["event_type"]) ??
+    pickFirstString((evt as { data?: AnyJson }).data, ["event_type"]) ??
     "unknown";
   const status =
     pickFirstString(evt, ["status", "Status"]) ??
-    pickFirstString((evt as any)?.data, ["status"]);
+    pickFirstString((evt as { data?: AnyJson }).data, ["status"]);
   const pages = (() => {
-    const v = (evt as any).pages ?? (evt as any).Pages ?? (evt as any)?.data?.pages;
+    const data = (evt as { data?: AnyJson; pages?: unknown; Pages?: unknown });
+    const v = data.pages ?? data.Pages ?? (data.data && (data.data as AnyJson).pages);
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
   })();
@@ -835,32 +886,73 @@ router.post("/fax/:provider", async (req, res) => {
   try {
     await db.insert(faxEventsTable).values({
       integration_id: integrationId,
+      firm_id: null,   // fax correlation requires an outbound fax_messages table; not yet shipped
+      lead_id: null,
       provider,
       external_fax_id: externalId,
       event_type: eventType.slice(0, 64),
       status: status?.slice(0, 64),
       pages,
-      signature_status: "unverified",
+      signature_status: signatureStatus,
       raw_payload: evt,
     });
   } catch (err) {
     logger.warn({ err, provider }, "fax_events insert failed");
   }
-  res.json({ ok: true });
+  res.json({ ok: true, signature_status: signatureStatus });
 });
 
 router.post("/sms/:provider", async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
-  if (!SMS_EVENT_PROVIDERS.has(provider)) {
-    // twilio / telnyx have dedicated handlers above; route by name only for the new providers.
+  // twilio is allowed here so its signature scheme is enforced via the
+  // shared verifier registry; bandwidth/plivo/messagebird/sinch are
+  // the new providers without dedicated handlers above.
+  const allowed = new Set([...SMS_EVENT_PROVIDERS, "twilio"]);
+  if (!allowed.has(provider)) {
     notFound(res, "unknown_sms_provider");
     return;
   }
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
-  // We don't yet have a per-provider SMS-event table separate from
-  // sms_messages; persist as audit_log so the receipt is durable.
-  await auditLog("sms_provider_webhook", provider, "received", { raw: evt });
-  res.json({ ok: true });
+
+  const { integrationId, creds } = await loadProviderForWebhook(provider);
+  const verifier = getSmsVerifier(provider);
+  let signatureStatus: SignatureStatus = "unverified";
+  if (verifier) signatureStatus = verifier(buildVerifyCtx(req), creds);
+  if (signatureStatus === "invalid") {
+    logger.warn({ provider }, "sms webhook signature INVALID — refusing to mutate sms_messages");
+    await auditLog("sms_webhook_invalid_signature", provider, String(integrationId ?? "none"), {});
+    res.json({ ok: true, signature_status: "invalid" });
+    return;
+  }
+
+  // Correlate inbound delivery report → sms_messages row by external id
+  // so the persisted update lights up the lead history view.
+  const externalId =
+    pickFirstString(evt, ["MessageSid", "message_id", "id", "messageId"]);
+  const status = pickFirstString(evt, ["MessageStatus", "status", "EventType"]);
+  if (externalId && status && signatureStatus !== "invalid") {
+    try {
+      // sms_messages.telnyx_message_id is the only external-id column
+      // currently; for non-telnyx providers we skip the row update and
+      // persist only an audit_log record until a generic
+      // external_message_id column is added.
+      if (provider === "telnyx") {
+        await db
+          .update(smsMessagesTable)
+          .set({ status, updated_at: new Date() })
+          .where(eq(smsMessagesTable.telnyx_message_id, externalId));
+      }
+    } catch (err) {
+      logger.warn({ err, provider, externalId }, "sms_messages status update failed");
+    }
+  }
+
+  await auditLog("sms_provider_webhook", provider, "received", {
+    signature_status: signatureStatus,
+    external_id: externalId ?? null,
+    status: status ?? null,
+  });
+  res.json({ ok: true, signature_status: signatureStatus });
 });
 
 router.post("/voice/:provider", async (req, res) => {
@@ -870,8 +962,14 @@ router.post("/voice/:provider", async (req, res) => {
     return;
   }
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
-  await auditLog("voice_provider_webhook", provider, "received", { raw: evt });
-  res.json({ ok: true });
+  // Voice providers (retell/bland/elevenlabs/synthflow) use webhook
+  // secrets that aren't yet captured in the integration vault preset;
+  // mark unverified and rely on auditing for traceability.
+  await auditLog("voice_provider_webhook", provider, "received", {
+    raw: evt,
+    signature_status: "unverified",
+  });
+  res.json({ ok: true, signature_status: "unverified" });
 });
 
 export default router;

@@ -9,10 +9,47 @@
  * is only loaded by request-handlers (no boot-time cycle).
  */
 import { logger } from "../logger";
-import type { VoiceAdapter, VoiceListOutcome } from "./types";
+import type { VoiceAdapter, VoiceListOutcome, VoiceCallOutcome } from "./types";
 
 export const vapiVoiceAdapter: VoiceAdapter = {
   provider: "vapi",
+
+  async startCall(creds, req): Promise<VoiceCallOutcome> {
+    const apiKey = creds.api_key?.trim();
+    if (!apiKey) return { ok: false, retryable: false, code: "no_api_key", message: "Vapi api_key missing" };
+    const cfg = (creds.config && typeof creds.config === "object" ? creds.config : {}) as Record<string, unknown>;
+    const phoneNumberId = typeof cfg.phone_number_id === "string" ? cfg.phone_number_id : undefined;
+    const payload: Record<string, unknown> = {
+      assistantId: req.assistantId,
+      customer: { number: req.to },
+    };
+    if (phoneNumberId) payload.phoneNumberId = phoneNumberId;
+    if (req.context) payload.assistantOverrides = { variableValues: req.context };
+    if (req.metadata) payload.metadata = req.metadata;
+    let resp: Response;
+    try {
+      resp = await fetch("https://api.vapi.ai/call", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      logger.error({ err, provider: "vapi" }, "vapi startCall network error");
+      return { ok: false, retryable: true, code: "network_error", message: String((err as Error).message) };
+    }
+    const json: { id?: string } = await resp.json().catch(() => ({}));
+    if (!resp.ok || !json?.id) {
+      const body = JSON.stringify(json).slice(0, 200);
+      return {
+        ok: false,
+        retryable: resp.status === 429 || resp.status >= 500,
+        code: `http_${resp.status}`,
+        message: `vapi startCall: HTTP ${resp.status} ${body}`,
+      };
+    }
+    return { ok: true, externalCallId: String(json.id), rawResponse: json };
+  },
+
   async listAssistants(creds): Promise<VoiceListOutcome> {
     const apiKey = creds.api_key?.trim();
     if (!apiKey) return { ok: false, retryable: false, code: "no_api_key", message: "Vapi api_key missing" };

@@ -16,11 +16,17 @@ export const googleGeminiAdapter: LlmAdapter = {
     const model = req.model || googleGeminiAdapter.defaultModel;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-    const parts: any[] = [{ text: req.prompt }];
+    type GeminiPart = { text: string } | { inline_data: { mime_type: string; data: string } };
+    type GeminiPayload = {
+      contents: Array<{ role: string; parts: GeminiPart[] }>;
+      generationConfig: { maxOutputTokens: number; temperature?: number };
+      systemInstruction?: { role: string; parts: GeminiPart[] };
+    };
+    const parts: GeminiPart[] = [{ text: req.prompt }];
     if (req.imageBase64 && req.imageMimeType) {
       parts.unshift({ inline_data: { mime_type: req.imageMimeType, data: req.imageBase64 } });
     }
-    const payload: any = {
+    const payload: GeminiPayload = {
       contents: [{ role: "user", parts }],
       generationConfig: { maxOutputTokens: req.maxTokens },
     };
@@ -49,8 +55,13 @@ export const googleGeminiAdapter: LlmAdapter = {
       };
     }
 
-    const json: any = await resp.json().catch(() => ({}));
-    const text = json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? "";
+    type GeminiResponse = {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+    };
+    const json = (await resp.json().catch(() => ({}))) as GeminiResponse;
+    const text =
+      json?.candidates?.[0]?.content?.parts?.map((p) => p?.text ?? "").join("") ?? "";
     return {
       ok: true,
       text,

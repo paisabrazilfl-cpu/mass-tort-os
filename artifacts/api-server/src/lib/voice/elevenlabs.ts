@@ -1,4 +1,4 @@
-import type { VoiceAdapter, VoiceListOutcome } from "./types";
+import type { VoiceAdapter, VoiceListOutcome, VoiceCallOutcome } from "./types";
 import { logger } from "../logger";
 
 /**
@@ -8,6 +8,44 @@ import { logger } from "../logger";
  */
 export const elevenlabsAdapter: VoiceAdapter = {
   provider: "elevenlabs",
+
+  async startCall(creds, req): Promise<VoiceCallOutcome> {
+    const apiKey = creds.api_key?.trim();
+    if (!apiKey) return { ok: false, retryable: false, code: "no_api_key", message: "ElevenLabs api_key missing" };
+    const cfg = (creds.config && typeof creds.config === "object" ? creds.config : {}) as Record<string, unknown>;
+    const phoneNumberId = typeof cfg.phone_number_id === "string" ? cfg.phone_number_id : undefined;
+    if (!phoneNumberId) {
+      return { ok: false, retryable: false, code: "no_phone_number_id", message: "ElevenLabs requires config.phone_number_id." };
+    }
+    const payload: Record<string, unknown> = {
+      agent_id: req.assistantId,
+      agent_phone_number_id: phoneNumberId,
+      to_number: req.to,
+    };
+    if (req.context) payload.conversation_initiation_client_data = { dynamic_variables: req.context };
+    let resp: Response;
+    try {
+      resp = await fetch("https://api.elevenlabs.io/v1/convai/twilio/outbound-call", {
+        method: "POST",
+        headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      logger.error({ err, provider: "elevenlabs" }, "elevenlabs startCall network error");
+      return { ok: false, retryable: true, code: "network_error", message: String((err as Error).message) };
+    }
+    const json: { conversation_id?: string; callSid?: string } = await resp.json().catch(() => ({}));
+    const externalId = json.conversation_id ?? json.callSid;
+    if (!resp.ok || !externalId) {
+      return {
+        ok: false,
+        retryable: resp.status === 429 || resp.status >= 500,
+        code: `http_${resp.status}`,
+        message: `elevenlabs startCall: HTTP ${resp.status}`,
+      };
+    }
+    return { ok: true, externalCallId: String(externalId), rawResponse: json };
+  },
 
   async listAssistants(creds): Promise<VoiceListOutcome> {
     const apiKey = creds.api_key?.trim();

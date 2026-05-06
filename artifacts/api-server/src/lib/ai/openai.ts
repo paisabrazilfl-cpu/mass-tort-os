@@ -1,15 +1,23 @@
 import type { LlmAdapter, LlmCompletionOutcome } from "./types";
 import { logger } from "../logger";
+import type OpenAI from "openai";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
 type OpenAIModule = typeof import("@workspace/integrations-openai-ai-server");
-let envClient: OpenAIModule["openai"] | undefined;
+type OpenAIClient = OpenAIModule["openai"];
+let envClient: OpenAIClient | undefined;
 
-async function getEnvClient(): Promise<OpenAIModule["openai"]> {
+async function getEnvClient(): Promise<OpenAIClient> {
   if (!envClient) {
     const mod = await import("@workspace/integrations-openai-ai-server");
     envClient = mod.openai;
   }
   return envClient;
+}
+
+interface OpenAIErrorShape {
+  status?: number;
+  message?: string;
 }
 
 /**
@@ -23,17 +31,17 @@ export const openaiAdapter: LlmAdapter = {
 
   async complete(creds, req): Promise<LlmCompletionOutcome> {
     try {
-      const vaultKey = creds?.api_key?.trim();
-      let client: any;
+      const vaultKey = typeof creds?.api_key === "string" ? creds.api_key.trim() : "";
+      let client: OpenAI | OpenAIClient;
       if (vaultKey) {
-        const OpenAI = (await import("openai")).default;
-        client = new OpenAI({ apiKey: vaultKey });
+        const OpenAICtor = (await import("openai")).default;
+        client = new OpenAICtor({ apiKey: vaultKey });
       } else {
         client = await getEnvClient();
       }
 
       const model = req.model || openaiAdapter.defaultModel;
-      const messages: Array<{ role: "system" | "user"; content: any }> = [];
+      const messages: ChatCompletionMessageParam[] = [];
       if (req.systemPrompt) messages.push({ role: "system", content: req.systemPrompt });
       if (req.imageBase64 && req.imageMimeType) {
         messages.push({
@@ -62,14 +70,15 @@ export const openaiAdapter: LlmAdapter = {
           output_tokens: response.usage?.completion_tokens,
         },
       };
-    } catch (err: any) {
-      const status = err?.status ?? 0;
+    } catch (err) {
+      const e = err as OpenAIErrorShape;
+      const status = e?.status ?? 0;
       logger.error({ err, status, provider: "openai" }, "openai complete failed");
       return {
         ok: false,
         retryable: status === 429 || status >= 500,
         code: status ? `http_${status}` : "sdk_error",
-        message: String(err?.message ?? err),
+        message: String(e?.message ?? err),
       };
     }
   },

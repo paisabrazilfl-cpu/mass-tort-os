@@ -22,7 +22,7 @@ import { Permission, requirePermission, auditAction, canBypassOwnership, denyFor
 import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
-import { sendSms } from "../lib/sms/telnyx";
+import { sendSmsViaRouter } from "../lib/sms/send";
 import { getFirmIdForUser } from "../lib/subscription-gate";
 
 // Thrown by buildLeadFilters when a date query param parses to Invalid Date.
@@ -993,7 +993,7 @@ router.post(
     const user = req.user!;
     const firmId = await getFirmIdForUser(user.id);
 
-    const result = await sendSms({
+    const result = await sendSmsViaRouter({
       to: phone,
       body: message,
       firmId,
@@ -1004,7 +1004,7 @@ router.post(
     if (!result.ok) {
       // 502 because the upstream provider rejected — the request itself was valid.
       logger.warn(
-        { lead_id: leadId, sms_message_id: result.smsMessageId, err: result.error },
+        { lead_id: leadId, sms_message_id: result.smsMessageId, provider: result.provider, err: result.error },
         "send_lead_sms failed",
       );
       res.status(502).json({
@@ -1012,6 +1012,7 @@ router.post(
         code: "SMS_SEND_FAILED",
         message: result.error ?? "SMS provider rejected the message.",
         sms_message_id: result.smsMessageId ?? null,
+        provider: result.provider ?? null,
       });
       return;
     }
