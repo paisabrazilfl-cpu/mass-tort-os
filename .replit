@@ -1,6 +1,7 @@
 modules = ["nodejs-24", "python-3.11", "postgresql-16"]
 
 [deployment]
+router = "application"
 deploymentTarget = "autoscale"
 
 [deployment.env]
@@ -105,3 +106,6 @@ externalPort = 3000
 [[ports]]
 localPort = 24541
 externalPort = 3002
+
+[agent]
+expertMode = true
