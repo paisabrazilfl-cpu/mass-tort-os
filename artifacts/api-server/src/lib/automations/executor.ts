@@ -159,12 +159,17 @@ const MAX_STEPS = 200;
 
 function resolvePath(obj: any, path: string): any {
   if (!path) return undefined;
-  // Strip leading "input." / "vars." — the caller supplies bindings.
-  const parts = path
-    .replace(/^input\./, "")
-    .replace(/^vars\./, "")
-    .split(/[.[\]]/)
-    .filter(Boolean);
+  // Callers pass `{ input, vars }` as `obj`, and `path` may start with
+  // either `input.` / `vars.` (the documented authoring convention shown
+  // in the node catalog, e.g. `"input.lead.id"`) or be a bare path
+  // already rooted at `obj`. We DO NOT strip the prefix — `input` and
+  // `vars` are real keys on the wrapper, so walking them directly is
+  // what makes `input.lead.id` resolve to `obj.input.lead.id`. (The
+  // earlier strip-then-walk-wrapper logic was a bug: `obj.lead` was
+  // undefined, so the documented `input.X` notation always returned
+  // `undefined` — exposed by the form→fax smoke test where the fax
+  // node read leadId as NaN and short-circuited to `failed`.)
+  const parts = path.split(/[.[\]]/).filter(Boolean);
   let cur = obj;
   for (const p of parts) {
     if (cur == null) return undefined;
