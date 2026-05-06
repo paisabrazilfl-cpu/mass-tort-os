@@ -89,14 +89,9 @@ export const sendgridAdapter: EmailAdapter = {
   },
 };
 
-const ADAPTERS: Record<string, EmailAdapter> = {
-  [sendgridAdapter.provider]: sendgridAdapter,
-};
-
-export function getEmailAdapter(provider: string): EmailAdapter | null {
-  return ADAPTERS[provider] || null;
-}
-
-export function listEmailProviders(): string[] {
-  return Object.keys(ADAPTERS);
-}
+// The canonical ADAPTERS map and lookup helpers now live in
+// ./index.ts so new providers (postmark/resend/mailgun/aws_ses/brevo)
+// can register without circular imports. We re-export from there for
+// backwards compatibility with any caller that still does
+// `import { getEmailAdapter } from ".../email/sendgrid"`.
+export { getEmailAdapter, listEmailProviders } from "./index";

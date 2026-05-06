@@ -48,9 +48,12 @@
  *   the UI cannot silently mislead operators about what is wired.
  */
 
-import { listEmailProviders } from "./email/sendgrid";
+import { listEmailProviders } from "./email";
 import { listEsignProviders } from "./esign";
 import { listFaxProviders } from "./fax";
+import { listSmsProviders } from "./sms";
+import { listVoiceProviders } from "./voice";
+import { listLlmProviders } from "./ai";
 import { PRESET_INTEGRATIONS } from "./integration-presets";
 
 /**
@@ -71,10 +74,50 @@ import { PRESET_INTEGRATIONS } from "./integration-presets";
  * in lib/{email,esign,fax}/<provider>.ts.
  */
 const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
+  // Email
   sendgrid: ["api_key"],
+  postmark: ["api_key"],
+  resend: ["api_key"],
+  mailgun: ["api_key"],
+  aws_ses: ["api_key", "client_secret"],
+  brevo: ["api_key"],
+
+  // E-Signature
   docusign: ["api_key", "account_sid"],
   dropbox_sign: ["api_key"],
+
+  // Fax
   srfax: ["access_id", "access_password", "fax_number"],
+  efax: ["api_key"],
+  phaxio: ["api_key", "client_secret"],
+  documo: ["api_key"],
+  telnyx_fax: ["api_key"],
+
+  // SMS
+  twilio: ["api_key", "account_sid"],
+  telnyx: ["api_key"],
+  bandwidth: ["api_key"],
+  plivo: ["api_key", "account_sid"],
+  messagebird: ["api_key"],
+  sinch: ["api_key"],
+
+  // Voice AI
+  vapi: ["api_key"],
+  retell_ai: ["api_key"],
+  bland_ai: ["api_key"],
+  elevenlabs: ["api_key"],
+  synthflow: ["api_key"],
+
+  // AI / LLM (vault-consuming providers — anthropic/openai are env-managed)
+  google_gemini: ["api_key"],
+  openrouter: ["api_key"],
+  groq: ["api_key"],
+  deepseek: ["api_key"],
+  perplexity: ["api_key"],
+  mistral: ["api_key"],
+  cohere: ["api_key"],
+  xai_grok: ["api_key"],
+  fireworks_ai: ["api_key"],
 };
 
 export type WiringStatus = "live" | "live_no_vault" | "vault_only";
@@ -87,26 +130,49 @@ export interface WiringInfo {
 
 const REGISTRY: Record<string, WiringInfo> = {
   // Email
-  sendgrid: {
-    status: "live",
-    note: "Sends transactional email via SendGrid v3 mail/send API.",
-  },
+  sendgrid: { status: "live", note: "Sends transactional email via SendGrid v3 mail/send API." },
+  postmark: { status: "live", note: "Sends transactional email via Postmark email API." },
+  resend: { status: "live", note: "Sends transactional email via Resend email API." },
+  mailgun: { status: "live", note: "Sends transactional email via Mailgun v3 messages API. Requires config.domain." },
+  aws_ses: { status: "live", note: "Sends transactional email via AWS SES v2 (SigV4-signed). Requires config.region." },
+  brevo: { status: "live", note: "Sends transactional email via Brevo v3 SMTP API." },
 
   // E-Signature
-  docusign: {
-    status: "live",
-    note: "Sends e-signature envelopes via DocuSign eSignature REST API.",
-  },
-  dropbox_sign: {
-    status: "live",
-    note: "Sends e-signature envelopes via Dropbox Sign (HelloSign) API.",
-  },
+  docusign: { status: "live", note: "Sends e-signature envelopes via DocuSign eSignature REST API." },
+  dropbox_sign: { status: "live", note: "Sends e-signature envelopes via Dropbox Sign (HelloSign) API." },
 
   // Fax
-  srfax: {
-    status: "live",
-    note: "Sends faxes via SRFax JSON API (HIPAA-compliant, healthcare focused).",
-  },
+  srfax: { status: "live", note: "Sends faxes via SRFax JSON API (HIPAA-compliant, healthcare focused)." },
+  efax: { status: "live", note: "Sends faxes via eFax Developer REST API." },
+  phaxio: { status: "live", note: "Sends faxes via Phaxio (Sinch) v2.1 API. Requires api_key + client_secret." },
+  documo: { status: "live", note: "Sends faxes via Documo (mFax) v1 API." },
+  telnyx_fax: { status: "live", note: "Sends faxes via Telnyx Programmable Fax v2. Requires config.connection_id." },
+
+  // SMS
+  twilio: { status: "live", note: "Sends SMS via Twilio Programmable Messaging. Requires account_sid + auth token (api_key) + config.from_number." },
+  telnyx: { status: "live", note: "Sends SMS via Telnyx v2 messages API. client_secret carries Ed25519 webhook public key." },
+  bandwidth: { status: "live", note: "Sends SMS via Bandwidth Messaging v2. Requires api_key=user:secret + config.account_id/application_id/from_number." },
+  plivo: { status: "live", note: "Sends SMS via Plivo Message API. Requires account_sid + auth token (api_key) + config.from_number." },
+  messagebird: { status: "live", note: "Sends SMS via Bird (MessageBird) REST API. Requires config.from_number." },
+  sinch: { status: "live", note: "Sends SMS via Sinch XMS batches. Requires config.service_plan_id + from_number; optional config.region (us/eu)." },
+
+  // Voice AI
+  vapi: { status: "live", note: "Voice AI agent via Vapi REST API + signed webhooks." },
+  retell_ai: { status: "live", note: "Voice AI agent via Retell AI list-agents + REST API." },
+  bland_ai: { status: "live", note: "Voice AI agent via Bland AI v1 pathway API." },
+  elevenlabs: { status: "live", note: "Voice AI agent via ElevenLabs Conversational + voices APIs." },
+  synthflow: { status: "live", note: "Voice AI agent via Synthflow v2 assistants API." },
+
+  // AI / LLM (vault-consuming providers)
+  google_gemini: { status: "live", note: "LLM completions via Gemini v1beta generateContent." },
+  openrouter: { status: "live", note: "LLM completions via OpenRouter unified chat completions API." },
+  groq: { status: "live", note: "LLM completions via Groq /openai/v1/chat/completions." },
+  deepseek: { status: "live", note: "LLM completions via DeepSeek v1 chat completions." },
+  perplexity: { status: "live", note: "LLM completions via Perplexity chat completions." },
+  mistral: { status: "live", note: "LLM completions via Mistral v1 chat completions." },
+  cohere: { status: "live", note: "LLM completions via Cohere v2 chat." },
+  xai_grok: { status: "live", note: "LLM completions via xAI Grok v1 chat completions." },
+  fireworks_ai: { status: "live", note: "LLM completions via Fireworks AI inference v1 chat completions." },
 
   // Automation — receive lead.created events
   n8n: {
@@ -122,14 +188,15 @@ const REGISTRY: Record<string, WiringInfo> = {
     note: "Receives lead.created webhook events. Set api_key to enable HMAC-SHA256 signing.",
   },
 
-  // AI / LLM — used via Replit AI Integrations SDK (env auth, NOT the vault)
+  // AI / LLM — env-managed via Replit AI Integrations SDK (auth from env, not vault).
+  // Vault credentials are accepted as overrides but the env client is used by default.
   anthropic: {
     status: "live_no_vault",
-    note: "Powers AI extraction, OCR, and drafting via the Replit AI Integrations SDK. Credentials saved here are NOT consumed — the SDK manages auth itself.",
+    note: "Hard fallback LLM. Uses the Replit AI Integrations SDK by default (env auth); a vault api_key is accepted as an override but is optional.",
   },
   openai: {
     status: "live_no_vault",
-    note: "Default AI provider for extraction, OCR, drafting, and lead intelligence via the Replit AI Integrations SDK. Credentials saved here are NOT consumed — the SDK manages auth itself.",
+    note: "Default LLM. Uses the Replit AI Integrations SDK by default (env auth); a vault api_key is accepted as an override but is optional.",
   },
 };
 
@@ -189,7 +256,7 @@ export function assertWiringRegistryConsistency(): void {
     {
       klass: "email",
       adapterProviders: listEmailProviders(),
-      expectInRegistry: ["sendgrid"],
+      expectInRegistry: ["sendgrid", "postmark", "resend", "mailgun", "aws_ses", "brevo"],
     },
     {
       klass: "esign",
@@ -199,7 +266,24 @@ export function assertWiringRegistryConsistency(): void {
     {
       klass: "fax",
       adapterProviders: listFaxProviders(),
-      expectInRegistry: ["srfax"],
+      expectInRegistry: ["srfax", "efax", "phaxio", "documo", "telnyx_fax"],
+    },
+    {
+      klass: "sms",
+      adapterProviders: listSmsProviders(),
+      expectInRegistry: ["twilio", "telnyx", "bandwidth", "plivo", "messagebird", "sinch"],
+    },
+    {
+      klass: "voice",
+      adapterProviders: listVoiceProviders(),
+      expectInRegistry: ["vapi", "retell_ai", "bland_ai", "elevenlabs", "synthflow"],
+    },
+    {
+      klass: "llm",
+      // anthropic and openai are env-managed (live_no_vault) — they ship in
+      // the LLM ADAPTERS map but the REGISTRY entry stays "live_no_vault".
+      adapterProviders: listLlmProviders().filter((p) => p !== "anthropic" && p !== "openai"),
+      expectInRegistry: ["google_gemini", "openrouter", "groq", "deepseek", "perplexity", "mistral", "cohere", "xai_grok", "fireworks_ai"],
     },
   ];
 

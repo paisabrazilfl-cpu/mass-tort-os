@@ -6,6 +6,10 @@ import { auditAction } from "../lib/rbac";
 import { z } from "zod/v4";
 import { listEsignProviders } from "../lib/esign";
 import { listFaxProviders } from "../lib/fax";
+import { listEmailProviders } from "../lib/email";
+import { listSmsProviders } from "../lib/sms";
+import { listVoiceProviders } from "../lib/voice";
+import { listLlmProviders } from "../lib/ai";
 import { badRequest } from "../lib/http-errors";
 
 const router = Router();
@@ -16,6 +20,10 @@ const settingsSchema = z.object({
   esign_provider_integration_id: z.number().int().nullish(),
   fax_provider_integration_id: z.number().int().nullish(),
   email_provider_integration_id: z.number().int().nullish(),
+  sms_provider_integration_id: z.number().int().nullish(),
+  voice_provider_integration_id: z.number().int().nullish(),
+  llm_default_provider_integration_id: z.number().int().nullish(),
+  llm_drafting_provider_integration_id: z.number().int().nullish(),
   default_email_from_name: z.string().max(255).nullish(),
   default_email_from_address: z.email().nullish(),
   default_fax_from_number: z.string().max(50).nullish(),
@@ -46,6 +54,10 @@ router.get("/:scope", requirePermission(Permission.WORKFLOW_SETTINGS_VIEW), asyn
       esign_provider_integration_id: null,
       fax_provider_integration_id: null,
       email_provider_integration_id: null,
+      sms_provider_integration_id: null,
+      voice_provider_integration_id: null,
+      llm_default_provider_integration_id: null,
+      llm_drafting_provider_integration_id: null,
       default_email_from_name: null,
       default_email_from_address: null,
       default_fax_from_number: null,
@@ -97,6 +109,11 @@ router.put("/", requirePermission(Permission.WORKFLOW_SETTINGS_MANAGE), auditAct
 /**
  * Helper for the CRM: list active integrations grouped by category so the admin
  * UI can render dropdowns for each provider slot.
+ *
+ * `adapter_implemented` is true when the provider has a working in-process
+ * adapter (lib/<klass>/<provider>.ts). For the LLM categories anthropic and
+ * openai are env-managed via the Replit AI SDK and remain selectable even
+ * without a vault row — they show up as a synthetic option per group.
  */
 router.get("/_options/providers", requirePermission(Permission.WORKFLOW_SETTINGS_MANAGE), async (_req, res) => {
   const all = await db
@@ -105,31 +122,29 @@ router.get("/_options/providers", requirePermission(Permission.WORKFLOW_SETTINGS
     .where(eq(integrationsTable.status, "active"));
   const supportedEsign = new Set(listEsignProviders());
   const supportedFax = new Set(listFaxProviders());
-  const esign = all
-    .filter((r) => r.type === "esign")
-    .map((r) => ({
-      id: r.id,
-      name: r.name,
-      provider: r.provider,
-      adapter_implemented: supportedEsign.has(r.provider),
-    }));
-  const fax = all
-    .filter((r) => r.type === "fax")
-    .map((r) => ({
-      id: r.id,
-      name: r.name,
-      provider: r.provider,
-      adapter_implemented: supportedFax.has(r.provider),
-    }));
-  const email = all
-    .filter((r) => r.type === "email" || r.provider === "sendgrid")
-    .map((r) => ({
-      id: r.id,
-      name: r.name,
-      provider: r.provider,
-      adapter_implemented: r.provider === "sendgrid",
-    }));
-  res.json({ esign, fax, email });
+  const supportedEmail = new Set(listEmailProviders());
+  const supportedSms = new Set(listSmsProviders());
+  const supportedVoice = new Set(listVoiceProviders());
+  const supportedLlm = new Set(listLlmProviders());
+
+  const map = (klass: string, supported: Set<string>) =>
+    all
+      .filter((r) => r.type === klass)
+      .map((r) => ({
+        id: r.id,
+        name: r.name,
+        provider: r.provider,
+        adapter_implemented: supported.has(r.provider),
+      }));
+
+  res.json({
+    esign: map("esign", supportedEsign),
+    fax: map("fax", supportedFax),
+    email: map("email", supportedEmail),
+    sms: map("sms", supportedSms),
+    voice: map("voice", supportedVoice),
+    llm: map("ai", supportedLlm),
+  });
 });
 
 export default router;

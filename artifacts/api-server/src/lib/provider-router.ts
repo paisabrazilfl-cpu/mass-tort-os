@@ -3,7 +3,14 @@ import { eq } from "drizzle-orm";
 import { getIntegrationCredentialsById, DecryptedCredentials } from "../routes/integrations";
 import { logger } from "./logger";
 
-export type ProviderCategory = "esign" | "fax" | "email" | "sms";
+export type ProviderCategory =
+  | "esign"
+  | "fax"
+  | "email"
+  | "sms"
+  | "voice"
+  | "llm_default"
+  | "llm_drafting";
 
 export interface ResolvedProvider {
   integration_id: number;
@@ -29,7 +36,10 @@ const FIELD_BY_CATEGORY: Record<ProviderCategory, keyof typeof workflowSettingsT
   esign: "esign_provider_integration_id",
   fax: "fax_provider_integration_id",
   email: "email_provider_integration_id",
-  sms: "esign_provider_integration_id", // sms not yet a top-level setting; fall through to user picking explicitly
+  sms: "sms_provider_integration_id",
+  voice: "voice_provider_integration_id",
+  llm_default: "llm_default_provider_integration_id",
+  llm_drafting: "llm_drafting_provider_integration_id",
 };
 
 async function getGlobalSettings() {
@@ -73,7 +83,7 @@ export async function resolveProvider(
           ? buyer?.fax_provider_integration_id
           : category === "email"
           ? buyer?.email_provider_integration_id
-          : null;
+          : null; // sms/voice/llm_* have no per-buyer overrides yet — fall through to global
       if (buyerField) integrationId = buyerField;
     }
 

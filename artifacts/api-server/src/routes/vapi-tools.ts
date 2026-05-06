@@ -35,7 +35,7 @@ import { z } from "zod/v4";
 import { db, leadsTable, leadDispositionsTable, reviewQueueTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
-import { loadVapiCredentials } from "../lib/voice/vapi";
+import { loadVapiCredentials } from "../lib/voice/vapi-webhook";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 import { encryptLeadFields, rebindLeadEncryptionAad } from "../lib/encryption";
 import { leadLookupHash } from "../lib/lead-lookup-hash";

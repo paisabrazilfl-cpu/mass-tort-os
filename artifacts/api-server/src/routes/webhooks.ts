@@ -21,6 +21,8 @@ import {
   callLogsTable,
   smsMessagesTable,
   leadDispositionsTable,
+  emailEventsTable,
+  faxEventsTable,
 } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import crypto from "crypto";
@@ -30,7 +32,7 @@ import { onEnvelopeSigned } from "../lib/workflow-engine";
 import { getIntegrationCredentialsById } from "./integrations";
 import { badRequest, notFound } from "../lib/http-errors";
 import { verifyWebhook as verifyStripeWebhook } from "../lib/payments/stripe";
-import { verifyVapiSignature } from "../lib/voice/vapi";
+import { verifyVapiSignature } from "../lib/voice/vapi-webhook";
 import { verifyTelnyxSignature } from "../lib/sms/telnyx";
 import { invalidateStripeConfiguredCache } from "../lib/subscription-gate";
 import type Stripe from "stripe";
@@ -727,6 +729,148 @@ router.post("/_test/envelope-signed", async (req, res) => {
     rawType: "test.signed",
     raw: { triggered_by: "admin_test_endpoint" },
   });
+  res.json({ ok: true });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Generic provider-event webhook ingest for Email / SMS / Fax / Voice.
+//
+// Each ingest endpoint:
+//   - Resolves the active integration row for the provider.
+//   - Verifies the signature when the provider documents a well-known
+//     scheme we have implemented; otherwise records signature_status
+//     as "unverified" so operators can audit.
+//   - Persists a row to email_events / fax_events / sms_messages so
+//     downstream automation can react. Always 200s the provider.
+//
+// Detailed signature-verification handlers continue to live above
+// (Stripe, Dropbox Sign, DocuSign, Vapi, Telnyx SMS). The generic
+// handlers below are intentionally permissive so operators can
+// onboard a provider quickly even if signing isn't configured yet.
+// ─────────────────────────────────────────────────────────────────
+
+const EMAIL_EVENT_PROVIDERS = new Set(["sendgrid", "postmark", "resend", "mailgun", "aws_ses", "brevo"]);
+const FAX_EVENT_PROVIDERS = new Set(["srfax", "efax", "phaxio", "documo", "telnyx_fax"]);
+const SMS_EVENT_PROVIDERS = new Set(["bandwidth", "plivo", "messagebird", "sinch"]);
+const VOICE_EVENT_PROVIDERS = new Set(["retell_ai", "bland_ai", "elevenlabs", "synthflow"]);
+
+type AnyJson = Record<string, unknown>;
+
+function looksJsonObject(v: unknown): v is AnyJson {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function pickFirstString(o: AnyJson | undefined, keys: string[]): string | undefined {
+  if (!o) return undefined;
+  for (const k of keys) {
+    const v = (o as any)[k];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return undefined;
+}
+
+router.post("/email/:provider", async (req, res) => {
+  const provider = String(req.params.provider || "").toLowerCase();
+  if (!EMAIL_EVENT_PROVIDERS.has(provider)) {
+    notFound(res, "unknown_email_provider");
+    return;
+  }
+  const events: AnyJson[] = Array.isArray(req.body)
+    ? (req.body as AnyJson[])
+    : looksJsonObject(req.body)
+    ? [req.body]
+    : [];
+
+  const rows = await db.select().from(integrationsTable).where(eq(integrationsTable.provider, provider));
+  const integrationId = rows.find((r) => r.status === "active")?.id ?? null;
+
+  for (const evt of events) {
+    const externalId = pickFirstString(evt, ["MessageID", "messageId", "message_id", "id", "sg_message_id"]);
+    const eventType = pickFirstString(evt, ["RecordType", "event", "type", "EventType"]) ?? "unknown";
+    const recipient = pickFirstString(evt, ["Recipient", "recipient", "email", "To"]);
+    try {
+      await db.insert(emailEventsTable).values({
+        integration_id: integrationId,
+        provider,
+        external_message_id: externalId,
+        event_type: eventType.slice(0, 64),
+        recipient_email: recipient?.slice(0, 320),
+        signature_status: "unverified",
+        raw_payload: evt,
+      });
+    } catch (err) {
+      logger.warn({ err, provider }, "email_events insert failed");
+    }
+  }
+  res.json({ ok: true, received: events.length });
+});
+
+router.post("/fax/:provider", async (req, res) => {
+  const provider = String(req.params.provider || "").toLowerCase();
+  if (!FAX_EVENT_PROVIDERS.has(provider)) {
+    notFound(res, "unknown_fax_provider");
+    return;
+  }
+  const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
+
+  const rows = await db.select().from(integrationsTable).where(eq(integrationsTable.provider, provider));
+  const integrationId = rows.find((r) => r.status === "active")?.id ?? null;
+
+  const externalId =
+    pickFirstString(evt, ["faxId", "id", "fax_id", "FaxID"]) ??
+    pickFirstString((evt as any)?.data, ["id", "fax_id"]);
+  const eventType =
+    pickFirstString(evt, ["event", "EventType", "type"]) ??
+    pickFirstString((evt as any)?.data, ["event_type"]) ??
+    "unknown";
+  const status =
+    pickFirstString(evt, ["status", "Status"]) ??
+    pickFirstString((evt as any)?.data, ["status"]);
+  const pages = (() => {
+    const v = (evt as any).pages ?? (evt as any).Pages ?? (evt as any)?.data?.pages;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  })();
+
+  try {
+    await db.insert(faxEventsTable).values({
+      integration_id: integrationId,
+      provider,
+      external_fax_id: externalId,
+      event_type: eventType.slice(0, 64),
+      status: status?.slice(0, 64),
+      pages,
+      signature_status: "unverified",
+      raw_payload: evt,
+    });
+  } catch (err) {
+    logger.warn({ err, provider }, "fax_events insert failed");
+  }
+  res.json({ ok: true });
+});
+
+router.post("/sms/:provider", async (req, res) => {
+  const provider = String(req.params.provider || "").toLowerCase();
+  if (!SMS_EVENT_PROVIDERS.has(provider)) {
+    // twilio / telnyx have dedicated handlers above; route by name only for the new providers.
+    notFound(res, "unknown_sms_provider");
+    return;
+  }
+  const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
+  // We don't yet have a per-provider SMS-event table separate from
+  // sms_messages; persist as audit_log so the receipt is durable.
+  await auditLog("sms_provider_webhook", provider, "received", { raw: evt });
+  res.json({ ok: true });
+});
+
+router.post("/voice/:provider", async (req, res) => {
+  const provider = String(req.params.provider || "").toLowerCase();
+  if (!VOICE_EVENT_PROVIDERS.has(provider)) {
+    notFound(res, "unknown_voice_provider");
+    return;
+  }
+  const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
+  await auditLog("voice_provider_webhook", provider, "received", { raw: evt });
   res.json({ ok: true });
 });
 

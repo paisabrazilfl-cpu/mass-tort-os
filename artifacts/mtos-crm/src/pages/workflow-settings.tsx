@@ -13,13 +13,24 @@ import { apiFetchRaw } from "@/lib/api-fetch";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface ProviderOption { id: number; name: string; provider: string; adapter_implemented: boolean }
-interface ProviderOptions { esign: ProviderOption[]; fax: ProviderOption[]; email: ProviderOption[] }
+interface ProviderOptions {
+  esign: ProviderOption[];
+  fax: ProviderOption[];
+  email: ProviderOption[];
+  sms: ProviderOption[];
+  voice: ProviderOption[];
+  llm: ProviderOption[];
+}
 
 interface Settings {
   scope: string;
   esign_provider_integration_id: number | null;
   fax_provider_integration_id: number | null;
   email_provider_integration_id: number | null;
+  sms_provider_integration_id: number | null;
+  voice_provider_integration_id: number | null;
+  llm_default_provider_integration_id: number | null;
+  llm_drafting_provider_integration_id: number | null;
   default_email_from_name: string | null;
   default_email_from_address: string | null;
   default_fax_from_number: string | null;
@@ -37,6 +48,10 @@ const DEFAULTS: Settings = {
   esign_provider_integration_id: null,
   fax_provider_integration_id: null,
   email_provider_integration_id: null,
+  sms_provider_integration_id: null,
+  voice_provider_integration_id: null,
+  llm_default_provider_integration_id: null,
+  llm_drafting_provider_integration_id: null,
   default_email_from_name: null,
   default_email_from_address: null,
   default_fax_from_number: null,
@@ -52,7 +67,7 @@ const DEFAULTS: Settings = {
 export default function WorkflowSettingsPage() {
   const { toast } = useToast();
   const [s, setS] = useState<Settings>(DEFAULTS);
-  const [options, setOptions] = useState<ProviderOptions>({ esign: [], fax: [], email: [] });
+  const [options, setOptions] = useState<ProviderOptions>({ esign: [], fax: [], email: [], sms: [], voice: [], llm: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -186,6 +201,34 @@ export default function WorkflowSettingsPage() {
             options={options.email}
             onChange={(v) => setS({ ...s, email_provider_integration_id: v })}
             hint="Used for paralegal failure notifications and any non-e-signature email."
+          />
+          <ProviderPicker
+            label="SMS Provider"
+            value={s.sms_provider_integration_id}
+            options={options.sms}
+            onChange={(v) => setS({ ...s, sms_provider_integration_id: v })}
+            hint="Used to send transactional SMS to leads (Twilio, Telnyx, Bandwidth, Plivo, MessageBird, Sinch)."
+          />
+          <ProviderPicker
+            label="Voice AI Provider"
+            value={s.voice_provider_integration_id}
+            options={options.voice}
+            onChange={(v) => setS({ ...s, voice_provider_integration_id: v })}
+            hint="Used for AI-driven outbound voice calls (Vapi, Retell AI, Bland AI, ElevenLabs, Synthflow)."
+          />
+          <ProviderPicker
+            label="LLM — Default"
+            value={s.llm_default_provider_integration_id}
+            options={options.llm}
+            onChange={(v) => setS({ ...s, llm_default_provider_integration_id: v })}
+            hint="Used for AI extraction, OCR, threat analysis, and lead intelligence. Anthropic env client is the hard fallback."
+          />
+          <ProviderPicker
+            label="LLM — Drafting"
+            value={s.llm_drafting_provider_integration_id}
+            options={options.llm}
+            onChange={(v) => setS({ ...s, llm_drafting_provider_integration_id: v })}
+            hint="Used for client communication drafting. Falls back to the Default LLM if not set."
           />
         </CardContent>
       </Card>

@@ -33,5 +33,7 @@ export * from "./lead_dispositions";
 export * from "./sms_messages";
 export * from "./admin_dark_room_links";
 export * from "./automations";
+export * from "./email_events";
+export * from "./fax_events";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";

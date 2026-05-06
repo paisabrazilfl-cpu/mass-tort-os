@@ -1,150 +1,50 @@
 /**
- * Vapi voice adapter — outbound API calls and inbound signature verify.
+ * Vapi VoiceAdapter shape used by lib/voice/index.ts and the workflow
+ * Voice provider router (`listAssistants` + verify scripts).
  *
- * Vapi authenticates webhooks two different ways depending on how the
- * assistant was configured:
- *   1. HMAC-SHA256 of the raw body using the secret on the integration
- *      vault (`api_key` reused as the signing secret), header
- *      `X-Vapi-Signature` (hex digest, lowercase).
- *   2. Static bearer token sent as `Authorization: Bearer <token>` —
- *      used when the assistant is configured to send tool callbacks.
- *
- * We accept EITHER successfully — operators can pick whichever they
- * prefer in the Vapi dashboard. A request with neither valid HMAC nor
- * matching bearer is rejected.
- *
- * The vault row uses field `api_key` (Vapi private API key, used both
- * for outbound calls and as the HMAC signing secret) and an optional
- * `client_secret` field used as the static bearer for tool callbacks.
+ * NOTE: Webhook signature verification + tool-bearer auth used to live
+ * here, but those helpers depend on routes/integrations which depends
+ * back on integration-wiring and lib/voice — a real import cycle that
+ * TDZ-traps the adapter. They now live in `./vapi-webhook.ts`, which
+ * is only loaded by request-handlers (no boot-time cycle).
  */
-import { db, integrationsTable } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
-import crypto from "crypto";
-import { getIntegrationCredentialsById } from "../../routes/integrations";
 import { logger } from "../logger";
+import type { VoiceAdapter, VoiceListOutcome } from "./types";
 
-export interface VapiCredentials {
-  apiKey: string;
-  toolBearer: string | null;
-  integrationId: number;
-}
-
-export async function loadVapiCredentials(): Promise<VapiCredentials | null> {
-  const rows = await db
-    .select({ id: integrationsTable.id })
-    .from(integrationsTable)
-    .where(
-      and(
-        eq(integrationsTable.provider, "vapi"),
-        eq(integrationsTable.status, "active"),
-      ),
-    )
-    .limit(1);
-  const row = rows[0];
-  if (!row) return null;
-
-  const creds = await getIntegrationCredentialsById(row.id);
-  if (!creds) return null;
-  if (creds._decryption_errors && creds._decryption_errors.length) {
-    logger.error(
-      { fields: creds._decryption_errors, integration_id: row.id },
-      "vapi credential decryption failed",
-    );
-    return null;
-  }
-  const apiKey = typeof creds.api_key === "string" ? creds.api_key.trim() : "";
-  if (!apiKey) return null;
-  const toolBearer =
-    typeof creds.client_secret === "string" && creds.client_secret.trim().length > 0
-      ? creds.client_secret.trim()
-      : null;
-  return { apiKey, toolBearer, integrationId: row.id };
-}
-
-export interface SignatureCheckResult {
-  ok: boolean;
-  reason?: "no_credentials" | "no_signature" | "bad_signature";
-}
-
-/**
- * Verify a Vapi webhook request. Accepts either a valid HMAC signature
- * over the raw body OR a matching static bearer token. Returns
- * { ok: true } when accepted; otherwise { ok: false, reason }.
- *
- * NEVER throws — webhook handlers must always 200 OK so the provider
- * stops retrying. The caller decides whether to mutate state based on
- * the boolean.
- */
-export async function verifyVapiSignature(
-  rawBody: Buffer,
-  headers: Record<string, string | string[] | undefined>,
-): Promise<SignatureCheckResult> {
-  const creds = await loadVapiCredentials();
-  if (!creds) return { ok: false, reason: "no_credentials" };
-
-  // Path 1: HMAC signature
-  const sigHeader = pickHeader(headers, "x-vapi-signature");
-  if (sigHeader) {
-    const expected = crypto
-      .createHmac("sha256", creds.apiKey)
-      .update(rawBody)
-      .digest("hex");
-    if (timingSafeEqualHex(expected, sigHeader.trim().toLowerCase())) {
-      return { ok: true };
+export const vapiVoiceAdapter: VoiceAdapter = {
+  provider: "vapi",
+  async listAssistants(creds): Promise<VoiceListOutcome> {
+    const apiKey = creds.api_key?.trim();
+    if (!apiKey) return { ok: false, retryable: false, code: "no_api_key", message: "Vapi api_key missing" };
+    let resp: Response;
+    try {
+      resp = await fetch("https://api.vapi.ai/assistant?limit=10", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+    } catch (err) {
+      logger.error({ err, provider: "vapi" }, "vapi network error");
+      return { ok: false, retryable: true, code: "network_error", message: String((err as Error).message) };
     }
-    return { ok: false, reason: "bad_signature" };
-  }
-
-  // Path 2: bearer token
-  const auth = pickHeader(headers, "authorization");
-  if (auth?.toLowerCase().startsWith("bearer ") && creds.toolBearer) {
-    const token = auth.slice(7).trim();
-    if (timingSafeEqualString(token, creds.toolBearer)) {
-      return { ok: true };
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      return {
+        ok: false,
+        retryable: resp.status === 429 || resp.status >= 500,
+        code: `http_${resp.status}`,
+        message: `vapi: HTTP ${resp.status} ${body.slice(0, 200)}`,
+      };
     }
-    return { ok: false, reason: "bad_signature" };
-  }
+    const json: any = await resp.json().catch(() => ([]));
+    const list: any[] = Array.isArray(json) ? json : json?.items ?? [];
+    return {
+      ok: true,
+      assistants: list.map((a: any) => ({ id: String(a?.id ?? ""), name: a?.name })),
+      rawResponse: json,
+    };
+  },
+};
 
-  return { ok: false, reason: "no_signature" };
-}
-
-/**
- * Authenticate an inbound tool callback. Vapi tool callbacks always
- * use the static bearer (the API key is too sensitive to bake into
- * the assistant config). Used by routes/vapi-tools.ts.
- */
-export async function verifyVapiToolBearer(
-  headers: Record<string, string | string[] | undefined>,
-): Promise<boolean> {
-  const creds = await loadVapiCredentials();
-  if (!creds?.toolBearer) return false;
-  const auth = pickHeader(headers, "authorization");
-  if (!auth?.toLowerCase().startsWith("bearer ")) return false;
-  const token = auth.slice(7).trim();
-  return timingSafeEqualString(token, creds.toolBearer);
-}
-
-function pickHeader(
-  headers: Record<string, string | string[] | undefined>,
-  name: string,
-): string | undefined {
-  const value = headers[name] ?? headers[name.toLowerCase()];
-  if (Array.isArray(value)) return value[0];
-  return value;
-}
-
-function timingSafeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  try {
-    return crypto.timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
-  } catch {
-    return false;
-  }
-}
-
-function timingSafeEqualString(a: string, b: string): boolean {
-  const aBuf = Buffer.from(a);
-  const bBuf = Buffer.from(b);
-  if (aBuf.length !== bBuf.length) return false;
-  return crypto.timingSafeEqual(aBuf, bBuf);
-}
+// NOTE: webhook helpers (loadVapiCredentials, verifyVapiSignature,
+// verifyVapiToolBearer) live in ./vapi-webhook and must be imported
+// from there directly. Re-exporting them here would re-introduce the
+// boot-time import cycle through routes/integrations.

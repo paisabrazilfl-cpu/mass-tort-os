@@ -1,5 +1,19 @@
+/**
+ * Module-aware LLM dispatcher.
+ *
+ * Resolution order (first non-empty wins):
+ *   1. Per-module env override         (AI_PROVIDER_<MODULE>)
+ *   2. Global env default              (AI_PROVIDER)
+ *   3. workflow_settings.llm_drafting_provider_integration_id  (drafting-ai only)
+ *   4. workflow_settings.llm_default_provider_integration_id   (everything else)
+ *   5. Hard fallback: anthropic via the env-managed Replit AI SDK
+ *
+ * On a non-retryable error from the chosen provider we automatically fall
+ * back to anthropic so a misconfigured vault doesn't block intake.
+ */
 import { logger } from "./logger";
-import type { Message } from "@anthropic-ai/sdk/resources/index.js";
+import { getLlmAdapter, fallbackAdapter, type LlmCompletionResult, type SupportedMime } from "./ai";
+import { resolveProvider, isResolved, type ProviderCategory } from "./provider-router";
 
 export type LLMModule =
   | "ai-extract"
@@ -18,44 +32,6 @@ const MODULE_ENV_KEY: Record<LLMModule, string> = {
   "lead-intelligence": "AI_PROVIDER_LEAD_INTELLIGENCE",
 };
 
-function resolveProvider(module: LLMModule): "openai" | "anthropic" {
-  const moduleEnvKey = MODULE_ENV_KEY[module];
-  const moduleOverride = process.env[moduleEnvKey]?.toLowerCase();
-  if (moduleOverride === "anthropic" || moduleOverride === "openai") {
-    return moduleOverride;
-  }
-  const globalDefault = process.env["AI_PROVIDER"]?.toLowerCase();
-  if (globalDefault === "anthropic" || globalDefault === "openai") {
-    return globalDefault;
-  }
-  return "openai";
-}
-
-type AnthropicCtor = typeof import("@anthropic-ai/sdk").default;
-let anthropicClient: InstanceType<AnthropicCtor> | undefined;
-async function getAnthropicClient(): Promise<InstanceType<AnthropicCtor>> {
-  if (!anthropicClient) {
-    const { default: Anthropic } = await import("@anthropic-ai/sdk");
-    anthropicClient = new Anthropic({
-      apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
-      baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
-    });
-  }
-  return anthropicClient;
-}
-
-type OpenAIModule = typeof import("@workspace/integrations-openai-ai-server");
-let openaiClientHolder: OpenAIModule["openai"] | undefined;
-async function getOpenAIClient(): Promise<OpenAIModule["openai"]> {
-  if (!openaiClientHolder) {
-    const mod = await import("@workspace/integrations-openai-ai-server");
-    openaiClientHolder = mod.openai;
-  }
-  return openaiClientHolder;
-}
-
-type SupportedMime = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-
 export interface LLMRequest {
   module: LLMModule;
   prompt: string;
@@ -63,61 +39,65 @@ export interface LLMRequest {
   systemPrompt?: string;
   imageBase64?: string;
   imageMimeType?: SupportedMime;
+  model?: string;
 }
 
-export async function callLLM({ module, prompt, maxTokens, systemPrompt, imageBase64, imageMimeType }: LLMRequest): Promise<string> {
-  const provider = resolveProvider(module);
-  logger.debug({ module, provider, hasImage: !!imageBase64, hasSystem: !!systemPrompt }, "callLLM dispatching");
+interface ResolvedLlm {
+  provider: string;
+  // null when env-managed (anthropic/openai via Replit AI SDK)
+  credentials: import("./ai").LlmAdapter extends infer A
+    ? Parameters<Extract<A, { complete: any }>["complete"]>[0]
+    : never;
+}
 
-  if (provider === "anthropic") {
-    const anthropic = await getAnthropicClient();
-    type AnthropicContent = Parameters<typeof anthropic.messages.create>[0]["messages"][0]["content"];
+async function resolveLlmForModule(module: LLMModule): Promise<{ providerName: string; creds: any | null }> {
+  const moduleOverride = process.env[MODULE_ENV_KEY[module]]?.toLowerCase();
+  if (moduleOverride) return { providerName: moduleOverride, creds: null };
 
-    let content: AnthropicContent;
-    if (imageBase64 && imageMimeType) {
-      content = [
-        { type: "image", source: { type: "base64", media_type: imageMimeType, data: imageBase64 } },
-        { type: "text", text: prompt },
-      ];
-    } else {
-      content = prompt;
-    }
+  const globalDefault = process.env["AI_PROVIDER"]?.toLowerCase();
+  if (globalDefault) return { providerName: globalDefault, creds: null };
 
-    const params: Parameters<typeof anthropic.messages.create>[0] = {
-      model: "claude-haiku-4-5",
-      max_tokens: maxTokens,
-      messages: [{ role: "user", content }],
-    };
-    if (systemPrompt) params.system = systemPrompt;
+  const category: ProviderCategory = module === "drafting-ai" ? "llm_drafting" : "llm_default";
+  const resolved = await resolveProvider(category);
+  if (isResolved(resolved)) {
+    return { providerName: resolved.provider, creds: resolved.credentials };
+  }
+  return { providerName: "openai", creds: null };
+}
 
-    const response = (await anthropic.messages.create(params)) as Message;
-    const block = response.content[0];
-    return block.type === "text" ? block.text : "";
+export async function callLLM({
+  module, prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model,
+}: LLMRequest): Promise<string> {
+  const { providerName, creds } = await resolveLlmForModule(module);
+  let adapter = getLlmAdapter(providerName);
+  if (!adapter) {
+    logger.warn({ module, providerName }, "Unknown LLM provider — falling back to anthropic");
+    adapter = fallbackAdapter;
   }
 
-  const client = await getOpenAIClient();
+  logger.debug({ module, provider: adapter.provider, hasImage: !!imageBase64 }, "callLLM dispatching");
 
-  type OAIMessage = Parameters<typeof client.chat.completions.create>[0]["messages"][0];
-  type OAIContent = OAIMessage["content"];
-
-  let userContent: OAIContent;
-  if (imageBase64 && imageMimeType) {
-    userContent = [
-      { type: "image_url", image_url: { url: `data:${imageMimeType};base64,${imageBase64}` } },
-      { type: "text", text: prompt },
-    ];
-  } else {
-    userContent = prompt;
-  }
-
-  const messages: OAIMessage[] = [];
-  if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-  messages.push({ role: "user", content: userContent });
-
-  const response = await client.chat.completions.create({
-    model: "gpt-5-mini",
-    max_tokens: maxTokens,
-    messages,
+  const out = await adapter.complete(creds, {
+    prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model,
   });
-  return response.choices[0]?.message?.content ?? "";
+
+  if (out.ok) return (out as LlmCompletionResult).text;
+
+  if (out.retryable) {
+    logger.warn({ module, provider: adapter.provider, code: out.code }, "LLM retryable error — single retry");
+    const retry = await adapter.complete(creds, { prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model });
+    if (retry.ok) return (retry as LlmCompletionResult).text;
+  }
+
+  if (adapter.provider !== fallbackAdapter.provider) {
+    logger.warn(
+      { module, primary_provider: adapter.provider, code: out.code, message: out.message },
+      "LLM non-retryable error — falling back to anthropic env client",
+    );
+    const fb = await fallbackAdapter.complete(null, { prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model });
+    if (fb.ok) return (fb as LlmCompletionResult).text;
+    throw new Error(`LLM ${adapter.provider} failed (${out.code}) and anthropic fallback also failed: ${fb.message}`);
+  }
+
+  throw new Error(`LLM ${adapter.provider} failed: ${out.code} ${out.message}`);
 }
