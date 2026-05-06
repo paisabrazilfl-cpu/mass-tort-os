@@ -187,8 +187,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Store a value in workflow variables.",
     icon: "Variable", color: "bg-sky-600",
     params: [
-      { key: "name", label: "Variable name", type: "string", required: true },
-      { key: "value", label: "Value (JSON or expression)", type: "json", required: true },
+      { key: "name", label: "Variable name", type: "string", required: true, placeholder: "qualifiedScore" },
+      { key: "value", label: "Value (JSON or expression)", type: "json", required: true, placeholder: '{"score":85,"tier":"A"}' },
     ],
   },
   {
@@ -205,7 +205,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     icon: "Scissors", color: "bg-sky-600",
     params: [
       { key: "text", label: "Text path", type: "string", placeholder: "input.body", required: true },
-      { key: "pattern", label: "Pattern", type: "string", required: true },
+      { key: "pattern", label: "Pattern", type: "string", required: true, placeholder: "\\b\\d{3}-\\d{2}-\\d{4}\\b" },
       { key: "flags", label: "Flags", type: "string", default: "g" },
     ],
   },
@@ -267,7 +267,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Append a timeline note to a lead or case.",
     icon: "StickyNote", color: "bg-violet-600",
     params: [
-      { key: "entity", label: "Entity", type: "select", options: [
+      { key: "entity", label: "Entity", type: "select", default: "lead", options: [
         { label: "Lead", value: "lead" }, { label: "Case", value: "case" },
       ], required: true },
       { key: "id", label: "Entity id", type: "string", required: true, placeholder: "input.lead.id" },
@@ -290,7 +290,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Assign a paralegal to a lead or case via the routing engine.",
     icon: "UserCheck", color: "bg-violet-600",
     params: [
-      { key: "entity", label: "Entity", type: "select", required: true, options: [
+      { key: "entity", label: "Entity", type: "select", required: true, default: "lead", options: [
         { label: "Lead", value: "lead" }, { label: "Case", value: "case" },
       ]},
       { key: "id", label: "Entity id", type: "string", required: true, placeholder: "input.lead.id" },
@@ -311,7 +311,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Push the entity into the manual review queue for an operator.",
     icon: "ShieldAlert", color: "bg-violet-600",
     params: [
-      { key: "entity", label: "Entity", type: "select", required: true, options: [
+      { key: "entity", label: "Entity", type: "select", required: true, default: "lead", options: [
         { label: "Lead", value: "lead" }, { label: "Case", value: "case" }, { label: "Document", value: "document" },
       ]},
       { key: "id", label: "Entity id", type: "string", required: true, placeholder: "input.lead.id" },
@@ -458,9 +458,9 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Send a medical records request fax to a provider.",
     icon: "Printer", color: "bg-indigo-600",
     params: [
-      { key: "leadId", label: "Lead id (or path like input.lead.id)", type: "string", required: true },
-      { key: "providerFax", label: "Override fax number (defaults to lead.hospital_fax)", type: "string" },
-      { key: "integrationId", label: "Explicit fax integration id (optional)", type: "string" },
+      { key: "leadId", label: "Lead id (or path like input.lead.id)", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "providerFax", label: "Override fax number (defaults to lead.hospital_fax)", type: "string", help: "Leave blank to use the provider fax stored on the lead." },
+      { key: "integrationId", label: "Explicit fax integration id (optional)", type: "string", help: "Leave blank to use the firm's default fax integration." },
     ], outputs: ["sent", "failed"],
   },
   {
