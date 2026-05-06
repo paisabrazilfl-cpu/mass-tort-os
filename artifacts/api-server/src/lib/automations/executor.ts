@@ -465,8 +465,55 @@ const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>> = {
   "documents.send_dropbox_sign": async (s) => stubIntegration("send_dropbox_sign", s),
   "documents.send_docusign": async (s) => stubIntegration("send_docusign", s),
   "documents.fax_medical_records": async (s) => {
-    const out = await stubIntegration("fax_medical_records", s);
-    return { __branch: "sent", value: out };
+    // Real wiring: pull leadId from params (literal or `input./vars.` path),
+    // resolve the target fax number from either an explicit `providerFax`
+    // override or the lead's `hospital_fax` column, validate via the shared
+    // E.164 normalizer, and hand off to the existing fax_med_records job
+    // handler — which builds the cover sheet, writes a fax_results row, and
+    // dispatches via the firm's resolved fax provider (SRFax). Branches
+    // "sent" / "failed" so an automation graph can react to either outcome
+    // without crashing the whole run.
+    const idRaw = resolveOrLiteral(s, s.node.data?.params?.leadId);
+    const leadId = Number(idRaw);
+    if (!Number.isFinite(leadId) || leadId <= 0) {
+      return { __branch: "failed", value: { error: "invalid_lead_id", lead_id: idRaw } };
+    }
+    const explicitFax = s.node.data?.params?.providerFax
+      ? String(resolveOrLiteral(s, s.node.data.params.providerFax) ?? "").trim()
+      : "";
+    const explicitIntegrationId = s.node.data?.params?.integrationId
+      ? Number(resolveOrLiteral(s, s.node.data.params.integrationId))
+      : null;
+
+    try {
+      const { normalizeFaxNumber } = await import("../fax/normalize");
+      const { handleFaxMedRecordsRequest } = await import("../workflow-handlers");
+
+      // Validate any explicit override (does NOT mutate the lead row — the
+      // override is passed ephemerally to the handler).
+      let overrideFax: string | null = null;
+      if (explicitFax) {
+        const norm = normalizeFaxNumber(explicitFax);
+        if (!norm.ok) {
+          return { __branch: "failed", value: { error: "invalid_fax_number", message: norm.message } };
+        }
+        overrideFax = norm.e164;
+      }
+
+      // envelope_id=0 marks "no upstream HIPAA envelope" — the fax cover sheet
+      // and fax_results.source_file template both accept a numeric placeholder.
+      await handleFaxMedRecordsRequest({
+        lead_id: leadId,
+        envelope_id: 0,
+        explicit_integration_id: Number.isFinite(explicitIntegrationId as number) ? (explicitIntegrationId as number) : null,
+        override_fax: overrideFax,
+      });
+      return { __branch: "sent", value: { lead_id: leadId, status: "sent" } };
+    } catch (err: any) {
+      const message = err?.message ?? String(err);
+      logger.warn({ runId: s.ctx.runId, leadId, err: message }, "documents.fax_medical_records failed");
+      return { __branch: "failed", value: { error: "send_failed", message } };
+    }
   },
   "documents.ocr_extract": async (s) => stubIntegration("ocr_extract", s),
   "documents.medical_extract": async (s) => stubIntegration("medical_extract", s),

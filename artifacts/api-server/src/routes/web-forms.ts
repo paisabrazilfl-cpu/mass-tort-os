@@ -278,6 +278,22 @@ async function runWebFormPipeline(
     tcpaConsentVal === true ||
     tcpaConsentVal === "true" ||
     tcpaConsentVal === "on";
+  // Optional doctor's / hospital fax — used by the automation engine to
+  // auto-dispatch a medical-records-request fax. Validated through the
+  // shared E.164 normalizer so a bad number can never reach the fax adapter.
+  let hospitalFaxE164: string | null = null;
+  if (cfg.fields.some((f) => f.key === "hospital_fax")) {
+    const raw = body.hospital_fax;
+    if (raw != null && String(raw).trim()) {
+      const { normalizeFaxNumber } = await import("../lib/fax/normalize");
+      const norm = normalizeFaxNumber(String(raw));
+      if (norm.ok) hospitalFaxE164 = norm.e164;
+      // Soft-validate: a bad fax must NOT reject the whole submission
+      // (the field is optional). The pipeline records a non-fatal note
+      // so an operator can correct it later via the CRM.
+    }
+  }
+
   try {
     const phone = String(body.phone ?? "").trim() || null;
     const briefStory = body.brief_description ? String(body.brief_description).slice(0, 5000) : null;
@@ -317,6 +333,7 @@ async function runWebFormPipeline(
       if (encrypted.phone) setExpr.phone = sql`COALESCE(${leadsTable.phone}, ${encrypted.phone})`;
       if (stateCode) setExpr.state = sql`COALESCE(${leadsTable.state}, ${stateCode})`;
       if (briefStory) setExpr.notes = sql`COALESCE(${leadsTable.notes}, ${briefStory})`;
+      if (hospitalFaxE164) setExpr.hospital_fax = sql`COALESCE(${leadsTable.hospital_fax}, ${hospitalFaxE164})`;
       // tcpa_consent is the one field that should ratchet UP — once
       // consented, stay consented. Never demote to false.
       if (tcpaConsented) setExpr.tcpa_consent = sql`${leadsTable.tcpa_consent} OR true`;
@@ -352,6 +369,7 @@ async function runWebFormPipeline(
           phone: encrypted.phone,
           state: stateCode,
           notes: briefStory,
+          hospital_fax: hospitalFaxE164,
           tcpa_consent: tcpaConsented,
           // Task #15: canonical dedup hash over plaintext (tort|email|phone10).
           // Returns null if any component is missing — column stays NULL and
@@ -448,6 +466,35 @@ async function runWebFormPipeline(
         source: `web_form_${tortId}`,
         created_at: new Date().toISOString(),
       },
+    });
+
+    // Fan out to internal automation workflows whose entry node is
+    // `trigger.form_submitted`. The submission payload + lead reference
+    // become the trigger input, so a graph can wire `documents.fax_medical_records`
+    // straight to "input.lead.id" and have the doctor's-fax dispatch
+    // happen automatically when the web form is submitted.
+    const { dispatchTrigger } = await import("../lib/automations/dispatch");
+    void dispatchTrigger("trigger.form_submitted", {
+      input: {
+        tort_id: tortId,
+        tort_label: config.label,
+        submission: body,
+        lead: {
+          id: leadId,
+          first_name: firstName,
+          last_name: lastName,
+          email: emailValue || null,
+          state: stateCode,
+          tort_type: config.label,
+          hospital_fax: hospitalFaxE164,
+        },
+      },
+      // Web-form submissions are tenant-less at intake (the lead has no
+      // firm_id yet — assignment happens later). Fan out to every enabled
+      // workflow of this trigger across all firms; operators are
+      // responsible for filtering inside the graph (e.g. on `tort_id`).
+      firmId: "any",
+      source: `web_form_${tortId}`,
     });
   }
 

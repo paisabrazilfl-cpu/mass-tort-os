@@ -42,6 +42,15 @@ interface FaxMedRecordsPayload {
   lead_id: number;
   envelope_id: number;
   explicit_integration_id?: number | null;
+  /**
+   * Optional ephemeral override for the destination fax number. When set,
+   * the dispatch uses this value instead of `leads.hospital_fax` WITHOUT
+   * persisting back to the lead row. Already-normalized E.164 expected
+   * (callers should run `normalizeFaxNumber()` first). Used by the
+   * `documents.fax_medical_records` automation node so an operator can
+   * one-shot a different provider without overwriting the lead's fax.
+   */
+  override_fax?: string | null;
 }
 
 interface SendWorkflowEmailPayload {
@@ -428,12 +437,14 @@ export async function handleSendEsignPacket(payload: SendEsignPacketPayload): Pr
 // ────────────────────────────────────────────────────────────────────────────
 
 export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload): Promise<void> {
-  const { lead_id, envelope_id, explicit_integration_id } = payload;
+  const { lead_id, envelope_id, explicit_integration_id, override_fax } = payload;
 
   const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead_id));
   if (!lead) throw new Error(`Lead ${lead_id} not found`);
 
-  const targetFax = lead.hospital_fax;
+  // Caller-supplied override takes precedence but is NEVER persisted —
+  // this is an ephemeral one-shot dispatch path.
+  const targetFax = override_fax || lead.hospital_fax;
   if (!targetFax) {
     throw new Error(`Lead ${lead_id} has no hospital_fax on file — cannot send fax.`);
   }

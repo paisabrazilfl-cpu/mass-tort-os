@@ -458,10 +458,9 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Send a medical records request fax to a provider.",
     icon: "Printer", color: "bg-indigo-600",
     params: [
-      { key: "providerFax", label: "Provider fax number", type: "string", required: true },
-      { key: "leadId", label: "Lead id (for cover sheet)", type: "string", required: true },
-      { key: "templateId", label: "Cover-sheet template id", type: "string" },
-      { key: "attachments", label: "Attachment object keys (JSON array)", type: "json" },
+      { key: "leadId", label: "Lead id (or path like input.lead.id)", type: "string", required: true },
+      { key: "providerFax", label: "Override fax number (defaults to lead.hospital_fax)", type: "string" },
+      { key: "integrationId", label: "Explicit fax integration id (optional)", type: "string" },
     ], outputs: ["sent", "failed"],
   },
   {

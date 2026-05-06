@@ -139,6 +139,17 @@ export function buildDefaultWebFormConfig(tort: TortDefinition): WebFormConfig {
         ]
       : []),
     {
+      key: "hospital_fax",
+      label: "Doctor's or hospital fax number (optional)",
+      type: "tel",
+      section: "story",
+      required: false,
+      placeholder: "(555) 555-5555",
+      max_length: 20,
+      helper_text:
+        "If you know the fax number for your treating doctor or hospital, we can request your medical records faster.",
+    },
+    {
       key: "brief_description",
       label: "Briefly describe what happened (optional)",
       type: "textarea",
