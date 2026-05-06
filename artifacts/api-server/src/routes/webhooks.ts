@@ -1029,15 +1029,20 @@ router.post("/voice/:provider", async (req, res) => {
       "").trim();
   if (voiceSecret && voiceSig) {
     try {
-      const raw =
-        Buffer.isBuffer(req.body) ? req.body :
-        typeof req.body === "string" ? Buffer.from(req.body, "utf8") :
-        Buffer.from(JSON.stringify(req.body ?? {}), "utf8");
-      const expected = crypto.createHmac("sha256", voiceSecret).update(raw).digest("hex");
-      const a = Buffer.from(expected, "utf8");
-      const b = Buffer.from(voiceSig, "utf8");
-      if (a.length === b.length && crypto.timingSafeEqual(a, b)) signatureStatus = "verified";
-      else signatureStatus = "invalid";
+      // Use the captured rawBody buffer (express.json verify hook in
+      // app.ts attaches `rawBody` to the request) — re-stringifying
+      // req.body would yield different bytes than the provider signed,
+      // and produce a false-invalid HMAC. Fall through to "invalid"
+      // when rawBody is absent so we never silently accept.
+      const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+      if (!rawBody || rawBody.length === 0) {
+        signatureStatus = "invalid";
+      } else {
+        const expected = crypto.createHmac("sha256", voiceSecret).update(rawBody).digest("hex");
+        const a = Buffer.from(expected, "utf8");
+        const b = Buffer.from(voiceSig, "utf8");
+        signatureStatus = a.length === b.length && crypto.timingSafeEqual(a, b) ? "verified" : "invalid";
+      }
     } catch {
       signatureStatus = "invalid";
     }

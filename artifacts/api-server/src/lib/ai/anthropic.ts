@@ -79,4 +79,55 @@ export const anthropicAdapter: LlmAdapter = {
       };
     }
   },
+
+  /**
+   * Native multi-turn chat: maps the normalized turns onto Anthropic's
+   * { system, messages: [{role, content}] } shape so context is
+   * preserved across turns without the runChat() prompt-flattening
+   * fallback.
+   */
+  async chat(creds, req): Promise<LlmCompletionOutcome> {
+    try {
+      let client: InstanceType<AnthropicCtor>;
+      const vaultKey = creds?.api_key?.trim();
+      if (vaultKey) {
+        const { default: Anthropic } = await import("@anthropic-ai/sdk");
+        client = new Anthropic({ apiKey: vaultKey });
+      } else {
+        client = await getEnvClient();
+      }
+      const model = req.model || anthropicAdapter.defaultModel;
+      const systemTurns = req.messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
+      const turns = req.messages
+        .filter((m) => m.role !== "system")
+        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+      const params: Parameters<typeof client.messages.create>[0] = {
+        model,
+        max_tokens: req.maxTokens,
+        messages: turns,
+      };
+      if (systemTurns) params.system = systemTurns;
+      const response = (await client.messages.create(params)) as Message;
+      const block = response.content[0];
+      const text = block?.type === "text" ? block.text : "";
+      return {
+        ok: true,
+        text,
+        model,
+        usage: {
+          input_tokens: response.usage?.input_tokens,
+          output_tokens: response.usage?.output_tokens,
+        },
+      };
+    } catch (err: any) {
+      const status = err?.status ?? 0;
+      logger.error({ err, status, provider: "anthropic" }, "anthropic chat failed");
+      return {
+        ok: false,
+        retryable: status === 429 || status >= 500,
+        code: status ? `http_${status}` : "sdk_error",
+        message: String(err?.message ?? err),
+      };
+    }
+  },
 };
