@@ -502,10 +502,13 @@ async function runWebFormPipeline(
         },
       },
       // Web-form submissions are tenant-less at intake (the lead has no
-      // firm_id yet — assignment happens later). Fan out to every enabled
-      // workflow of this trigger across all firms; operators are
-      // responsible for filtering inside the graph (e.g. on `tort_id`).
-      firmId: "any",
+      // firm_id assigned yet). To prevent cross-tenant PII leakage we
+      // scope the dispatch to system-wide workflows only (firm_id IS NULL).
+      // Per-firm workflows pick the lead up later, after assignment, via
+      // the `trigger.lead_assigned` / `trigger.lead_created_in_firm` events.
+      // (Previously this was "any" which fanned to every firm — flagged as
+      // a multi-tenant risk in code review.)
+      firmId: null,
       source: `web_form_${tortId}`,
     });
   }

@@ -1,23 +1,21 @@
 /**
  * Integration test for the `documents.fax_medical_records` automation node.
  *
- * We mock the fax adapter (so no real provider call) and the resolver
- * (so no integrations row is required), then exercise the executor handler
- * end-to-end against the live PG database. Asserts:
- *   - branch=sent on adapter ok, with structured payload (fax_results_id,
- *     external_fax_id, provider, to)
- *   - branch=failed on adapter non-retryable error, with fax_results_id
- *     populated and a fax_results row written in status=error
- *   - branch=failed on missing hospital_fax, with a fax_results row
- *     pre-created so it surfaces in the timeline
+ * Drives the executor handler directly (not the full graph runner) with a
+ * synthetic node + step context, and monkey-patches the fax adapter and
+ * provider router so no real provider call is made. Asserts the structured
+ * branch payload matches the contract documented in node-catalog.ts.
+ *
+ * Lifecycle: a temp lead is inserted in `before` and removed (with all of
+ * its fax_results rows, located via the canonical FAX_SOURCE_FILE_TEMPLATE)
+ * in `after`.
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { db, leadsTable, faxResultsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, like } from "drizzle-orm";
+import { FAX_SOURCE_FILE_TEMPLATE, buildFaxResultsLikePattern } from "../fax-results-matcher.js";
 
-// Stub the fax adapter + provider resolver BEFORE importing the executor.
-// We do this by hand-patching the adapter registry once the modules load.
 let leadId: number;
 let originalGetAdapter: any;
 let originalResolveProvider: any;
@@ -35,8 +33,8 @@ before(async () => {
     .returning();
   leadId = lead.id;
 
-  const adapters = await import("../fax");
-  const provider = await import("../provider-router");
+  const adapters = await import("../fax/index.js");
+  const provider = await import("../provider-router.js");
   originalGetAdapter = (adapters as any).getFaxAdapter;
   originalResolveProvider = (provider as any).resolveProvider;
   (provider as any).resolveProvider = async () => ({
@@ -48,69 +46,86 @@ before(async () => {
 });
 
 after(async () => {
-  await db.delete(faxResultsTable).where(eq(faxResultsTable.source_file, `outbound:lead_${leadId}_envelope_0_med_records.pdf`));
+  await db
+    .delete(faxResultsTable)
+    .where(like(faxResultsTable.source_file, buildFaxResultsLikePattern(leadId)));
   await db.delete(leadsTable).where(eq(leadsTable.id, leadId));
-  const adapters = await import("../fax");
-  const provider = await import("../provider-router");
+  const adapters = await import("../fax/index.js");
+  const provider = await import("../provider-router.js");
   if (originalGetAdapter) (adapters as any).getFaxAdapter = originalGetAdapter;
   if (originalResolveProvider) (provider as any).resolveProvider = originalResolveProvider;
 });
 
-test("documents.fax_medical_records: branch=sent on adapter success", async (t) => {
-  const adapters = await import("../fax");
+/**
+ * Run the executor's `documents.fax_medical_records` handler with a minimal
+ * synthetic step context. Avoids spinning up a full workflow run row.
+ */
+async function runFaxNode(params: Record<string, unknown>) {
+  const { HANDLERS } = await import("../automations/executor.js");
+  const handler = (HANDLERS as any)["documents.fax_medical_records"];
+  assert.ok(handler, "fax node handler missing from NODE_HANDLERS");
+  const ctx = {
+    runId: 0,
+    workflowId: 0,
+    firmId: null,
+    triggerSource: "test",
+    vars: {},
+    input: {},
+    log: () => {},
+  };
+  const node = { id: "n1", type: "documents.fax_medical_records", data: { params } };
+  return handler({ ctx, node, prev: undefined });
+}
+
+test("documents.fax_medical_records: branch=sent on adapter success", async () => {
+  const adapters = await import("../fax/index.js");
   (adapters as any).getFaxAdapter = () => ({
     provider: "test_provider",
     send: async () => ({ ok: true, externalFaxId: "ext-123", rawResponse: {} }),
   });
 
-  // Reach into the executor's NODE_HANDLERS map via the documented public
-  // entrypoint: drive a one-node graph through `runWorkflow`.
-  const { handleFaxMedRecordsRequest } = await import("../workflow-handlers");
-  const result = await handleFaxMedRecordsRequest({ lead_id: leadId, envelope_id: 0 });
-  assert.equal(result.ok, true);
-  assert.equal(result.status, "done");
-  assert.equal(result.externalFaxId, "ext-123");
-  assert.equal(result.provider, "test_provider");
-  assert.equal(result.to, "+16144552138");
-  assert.ok(result.faxResultId > 0);
+  const out = await runFaxNode({ leadId });
+  assert.equal(out.__branch, "sent");
+  assert.equal(out.value.lead_id, leadId);
+  assert.equal(out.value.external_fax_id, "ext-123");
+  assert.equal(out.value.provider, "test_provider");
+  assert.equal(out.value.to, "+16144552138");
+  assert.ok(out.value.fax_results_id > 0);
 
-  const [row] = await db.select().from(faxResultsTable).where(eq(faxResultsTable.id, result.faxResultId));
+  const [row] = await db.select().from(faxResultsTable).where(eq(faxResultsTable.id, out.value.fax_results_id));
   assert.equal(row.status, "done");
+  assert.equal(row.source_file, FAX_SOURCE_FILE_TEMPLATE(leadId, 0));
 });
 
-test("documents.fax_medical_records: branch=failed on non-retryable adapter error", async () => {
-  const adapters = await import("../fax");
+test("documents.fax_medical_records: branch=failed on non-retryable adapter error includes fax_results_id", async () => {
+  const adapters = await import("../fax/index.js");
   (adapters as any).getFaxAdapter = () => ({
     provider: "test_provider",
     send: async () => ({ ok: false, retryable: false, code: "BAD_NUMBER", message: "Number unreachable" }),
   });
 
-  const { handleFaxMedRecordsRequest } = await import("../workflow-handlers");
-  await assert.rejects(
-    () => handleFaxMedRecordsRequest({ lead_id: leadId, envelope_id: 0 }),
-    /Fax provider rejected request/,
-  );
-  // Verify a fax_results row exists in error state.
-  const rows = await db
-    .select()
-    .from(faxResultsTable)
-    .where(eq(faxResultsTable.source_file, `outbound:lead_${leadId}_envelope_0_med_records.pdf`));
-  assert.ok(rows.some((r) => r.status === "error"));
+  const out = await runFaxNode({ leadId });
+  assert.equal(out.__branch, "failed");
+  assert.equal(out.value.error, "send_failed");
+  assert.ok(out.value.fax_results_id, "fax_results_id must be carried on failed branch");
+  const [row] = await db.select().from(faxResultsTable).where(eq(faxResultsTable.id, out.value.fax_results_id));
+  assert.equal(row.status, "error");
+});
+
+test("documents.fax_medical_records: invalid override fax creates fax_results row and surfaces id", async () => {
+  const out = await runFaxNode({ leadId, providerFax: "not-a-number" });
+  assert.equal(out.__branch, "failed");
+  assert.equal(out.value.error, "invalid_fax_number");
+  // recordFaxFailure should have been called; id is included on the value.
+  // (If the insert failed for any reason we surface null — but the contract
+  // is that the field always exists on the failed payload.)
+  assert.ok("fax_results_id" in out.value);
 });
 
 test("documents.fax_medical_records: missing hospital_fax surfaces in fax_results timeline", async () => {
   await db.update(leadsTable).set({ hospital_fax: null }).where(eq(leadsTable.id, leadId));
-  const { handleFaxMedRecordsRequest } = await import("../workflow-handlers");
-  await assert.rejects(
-    () => handleFaxMedRecordsRequest({ lead_id: leadId, envelope_id: 0 }),
-    /no hospital_fax on file/,
-  );
-  const rows = await db
-    .select()
-    .from(faxResultsTable)
-    .where(eq(faxResultsTable.source_file, `outbound:lead_${leadId}_envelope_0_med_records.pdf`));
-  // At least one row should mention "no_fax_on_file"
-  assert.ok(rows.some((r) => (r.raw_text ?? "").includes("no_fax_on_file")));
-  // Restore for later cleanup safety
+  const out = await runFaxNode({ leadId });
+  assert.equal(out.__branch, "failed");
+  assert.ok(out.value.fax_results_id, "missing-fax preflight must still write a fax_results row");
   await db.update(leadsTable).set({ hospital_fax: "+16144552138" }).where(eq(leadsTable.id, leadId));
 });

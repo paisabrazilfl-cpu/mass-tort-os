@@ -242,6 +242,25 @@ router.post("/submit/:tortId", async (req, res) => {
 // (typo suggestions, address completeness) before the user hits Submit. No
 // PII is required — validateEmail takes only an email string and validateAddress
 // takes only the address fields. Per-IP rate limit on the router caps abuse.
+// Live validation for the optional hospital_fax field. Mirrors the
+// server-side normalizer used at submit time so the user sees the same
+// "valid / invalid" verdict before submitting. Used by the embed.js blur
+// handler. Public — no PII in the response.
+router.post("/validate/fax", async (req, res) => {
+  const raw = String(req.body?.fax ?? "").trim();
+  if (!raw) {
+    res.json({ valid: true, normalized: null });
+    return;
+  }
+  const { normalizeFaxNumber } = await import("../lib/fax/normalize");
+  const norm = normalizeFaxNumber(raw);
+  if (!norm.ok) {
+    res.json({ valid: false, message: norm.message });
+    return;
+  }
+  res.json({ valid: true, normalized: norm.e164 });
+});
+
 router.post("/validate/email", (req, res) => {
   const { email } = req.body ?? {};
   res.json(validateEmail(email));

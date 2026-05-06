@@ -1505,7 +1505,36 @@ form.appendChild(section("Physician Information",[
 
 form.appendChild(section("Hospital Information",[
   input("hospital_name","Hospital Name"),
-  input("hospital_fax","Hospital Fax","tel",{placeholder:"555-555-0100"}),
+  (function(){
+    var node=input("hospital_fax","Hospital Fax","tel",{placeholder:"555-555-0100",optional:true});
+    var inp=node.querySelector('input[name="hospital_fax"]');
+    if(inp){
+      var errDiv=el("div",{id:"mtos-hospital-fax-error",style:{color:"#dc2626",fontSize:"12px",marginTop:"4px",display:"none"}});
+      node.appendChild(errDiv);
+      // Live validation mirrors the server normalizer (NANP E.164). Empty
+      // input is allowed (field is optional). Any non-empty value must
+      // pass the same check before the form will submit cleanly.
+      inp.addEventListener("blur",function(){
+        var v=(inp.value||"").trim();
+        if(!v){errDiv.style.display="none";inp.style.borderColor="#d1d5db";return;}
+        fetch(API+"/validate/fax",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({fax:v})})
+          .then(function(r){return r.json()})
+          .then(function(r){
+            if(r.valid===false){
+              errDiv.textContent=r.message||"Please enter a valid US/Canada fax number (10 digits).";
+              errDiv.style.display="block";
+              inp.style.borderColor="#dc2626";
+            } else {
+              errDiv.style.display="none";
+              inp.style.borderColor="#d1d5db";
+              if(r.normalized)inp.value=r.normalized;
+            }
+          })
+          .catch(function(){/* non-blocking */});
+      });
+    }
+    return node;
+  })(),
   input("hospital_contact_info","Hospital Contact","text",{placeholder:"Phone, email, or contact person"}),
 ],{accent:"#dc2626",note:"All hospital fields are mandatory. Leads without complete hospital information will be rejected."}));
 

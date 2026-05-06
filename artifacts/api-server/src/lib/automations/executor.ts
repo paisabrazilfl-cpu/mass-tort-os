@@ -179,7 +179,7 @@ function evalExpression(expr: string, bindings: Record<string, any>): any {
   return vm.runInContext(expr, ctx, { timeout: 1000 });
 }
 
-const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>> = {
+export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>> = {
   // ───────── Triggers (no-op at runtime; entry points carry input through)
   "trigger.manual": async (s) => s.input,
   "trigger.webhook": async (s) => s.input,
@@ -487,15 +487,33 @@ const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>> = {
 
     try {
       const { normalizeFaxNumber } = await import("../fax/normalize");
-      const { handleFaxMedRecordsRequest } = await import("../workflow-handlers");
+      const { handleFaxMedRecordsRequest, recordFaxFailure } = await import("../workflow-handlers");
 
       // Validate any explicit override (does NOT mutate the lead row — the
-      // override is passed ephemerally to the handler).
+      // override is passed ephemerally to the handler). When the override is
+      // bad we MUST still write a fax_results row so the operator timeline
+      // reflects the failure (and so downstream nodes can link to it via
+      // fax_results_id) — otherwise the failure is invisible outside the
+      // automation run history.
       let overrideFax: string | null = null;
       if (explicitFax) {
         const norm = normalizeFaxNumber(explicitFax);
         if (!norm.ok) {
-          return { __branch: "failed", value: { error: "invalid_fax_number", message: norm.message } };
+          const faxResultId = await recordFaxFailure(
+            leadId,
+            0,
+            "invalid_override_fax",
+            `Automation override fax invalid: ${norm.message}`,
+          ).catch(() => 0);
+          return {
+            __branch: "failed",
+            value: {
+              error: "invalid_fax_number",
+              message: norm.message,
+              fax_results_id: faxResultId || null,
+              lead_id: leadId,
+            },
+          };
         }
         overrideFax = norm.e164;
       }

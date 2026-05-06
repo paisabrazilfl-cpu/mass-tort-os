@@ -452,7 +452,7 @@ export interface FaxMedRecordsResult {
  * Faxes" timeline shows the failed attempt even when we can't reach the
  * adapter. Returns the row id for the caller to surface.
  */
-async function recordFaxFailure(
+export async function recordFaxFailure(
   leadId: number,
   envelopeId: number,
   errorCode: string,
@@ -545,7 +545,7 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
       .set({ status: "error", raw_text: `Adapter threw: ${msg}`, processed_at: new Date() })
       .where(eq(faxResultsTable.id, faxRow.id));
     await auditLog("fax", String(faxRow.id), "adapter_threw", { lead_id, envelope_id, provider: resolved.provider, error: msg });
-    throw new Error(`Fax adapter ${resolved.provider} threw: ${msg}`);
+    throw new Error(`Fax adapter ${resolved.provider} threw: ${msg} (fax_results.id=${faxRow.id})`);
   }
 
   if (!outcome.ok) {
