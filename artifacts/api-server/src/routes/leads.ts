@@ -1021,7 +1021,7 @@ router.post(
       status: "ok",
       data: {
         sms_message_id: result.smsMessageId,
-        telnyx_message_id: result.telnyxMessageId,
+        telnyx_message_id: result.externalMessageId,
       },
     });
   },

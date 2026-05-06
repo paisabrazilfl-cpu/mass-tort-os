@@ -34,7 +34,7 @@ export const retellAiAdapter: VoiceAdapter = {
       logger.error({ err, provider: "retell_ai" }, "retell startCall network error");
       return { ok: false, retryable: true, code: "network_error", message: String((err as Error).message) };
     }
-    const json: { call_id?: string } = await resp.json().catch(() => ({}));
+    const json = (await resp.json().catch(() => ({}))) as { call_id?: string };
     if (!resp.ok || !json?.call_id) {
       return {
         ok: false,

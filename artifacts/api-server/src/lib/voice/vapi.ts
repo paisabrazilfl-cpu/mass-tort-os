@@ -37,7 +37,7 @@ export const vapiVoiceAdapter: VoiceAdapter = {
       logger.error({ err, provider: "vapi" }, "vapi startCall network error");
       return { ok: false, retryable: true, code: "network_error", message: String((err as Error).message) };
     }
-    const json: { id?: string } = await resp.json().catch(() => ({}));
+    const json = (await resp.json().catch(() => ({}))) as { id?: string };
     if (!resp.ok || !json?.id) {
       const body = JSON.stringify(json).slice(0, 200);
       return {

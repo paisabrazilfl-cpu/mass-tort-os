@@ -930,7 +930,7 @@ router.post("/sms/:provider", async (req, res) => {
   const externalId =
     pickFirstString(evt, ["MessageSid", "message_id", "id", "messageId"]);
   const status = pickFirstString(evt, ["MessageStatus", "status", "EventType"]);
-  if (externalId && status && signatureStatus !== "invalid") {
+  if (externalId && status) {
     try {
       // sms_messages.telnyx_message_id is the only external-id column
       // currently; for non-telnyx providers we skip the row update and

@@ -28,7 +28,7 @@ export const synthflowAdapter: VoiceAdapter = {
       logger.error({ err, provider: "synthflow" }, "synthflow startCall network error");
       return { ok: false, retryable: true, code: "network_error", message: String((err as Error).message) };
     }
-    const json: { call_id?: string; response?: { call_id?: string } } = await resp.json().catch(() => ({}));
+    const json = (await resp.json().catch(() => ({}))) as { call_id?: string; response?: { call_id?: string } };
     const externalId = json.call_id ?? json.response?.call_id;
     if (!resp.ok || !externalId) {
       return {

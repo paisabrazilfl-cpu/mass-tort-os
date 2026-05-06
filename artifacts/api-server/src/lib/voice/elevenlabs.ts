@@ -34,7 +34,7 @@ export const elevenlabsAdapter: VoiceAdapter = {
       logger.error({ err, provider: "elevenlabs" }, "elevenlabs startCall network error");
       return { ok: false, retryable: true, code: "network_error", message: String((err as Error).message) };
     }
-    const json: { conversation_id?: string; callSid?: string } = await resp.json().catch(() => ({}));
+    const json = (await resp.json().catch(() => ({}))) as { conversation_id?: string; callSid?: string };
     const externalId = json.conversation_id ?? json.callSid;
     if (!resp.ok || !externalId) {
       return {

@@ -1,10 +1,13 @@
 import type { LlmAdapter, LlmCompletionOutcome } from "./types";
 import { logger } from "../logger";
-import type OpenAI from "openai";
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
+// The `openai` SDK isn't a direct workspace dep — we reach it through
+// the Replit AI integrations env wrapper. Both the env-managed client
+// and an operator-vault-keyed client expose the same chat.completions
+// surface, so we model both as the env wrapper's `openai` type.
 type OpenAIModule = typeof import("@workspace/integrations-openai-ai-server");
 type OpenAIClient = OpenAIModule["openai"];
+type ChatMessage = Parameters<OpenAIClient["chat"]["completions"]["create"]>[0]["messages"][number];
 let envClient: OpenAIClient | undefined;
 
 async function getEnvClient(): Promise<OpenAIClient> {
@@ -32,16 +35,21 @@ export const openaiAdapter: LlmAdapter = {
   async complete(creds, req): Promise<LlmCompletionOutcome> {
     try {
       const vaultKey = typeof creds?.api_key === "string" ? creds.api_key.trim() : "";
-      let client: OpenAI | OpenAIClient;
+      let client: OpenAIClient;
       if (vaultKey) {
-        const OpenAICtor = (await import("openai")).default;
+        // Construct a fresh client from the env wrapper's underlying SDK
+        // but rebound to the operator's vault key. We read the OpenAI
+        // class off the env client's prototype to avoid a hard dep on the
+        // `openai` package (it isn't in @workspace/api-server's deps).
+        const env = await getEnvClient();
+        const OpenAICtor = (env.constructor as new (opts: { apiKey: string }) => OpenAIClient);
         client = new OpenAICtor({ apiKey: vaultKey });
       } else {
         client = await getEnvClient();
       }
 
       const model = req.model || openaiAdapter.defaultModel;
-      const messages: ChatCompletionMessageParam[] = [];
+      const messages: ChatMessage[] = [];
       if (req.systemPrompt) messages.push({ role: "system", content: req.systemPrompt });
       if (req.imageBase64 && req.imageMimeType) {
         messages.push({

@@ -29,7 +29,7 @@ export const blandAiAdapter: VoiceAdapter = {
       logger.error({ err, provider: "bland_ai" }, "bland startCall network error");
       return { ok: false, retryable: true, code: "network_error", message: String((err as Error).message) };
     }
-    const json: { call_id?: string; status?: string } = await resp.json().catch(() => ({}));
+    const json = (await resp.json().catch(() => ({}))) as { call_id?: string; status?: string };
     if (!resp.ok || !json?.call_id) {
       return {
         ok: false,
