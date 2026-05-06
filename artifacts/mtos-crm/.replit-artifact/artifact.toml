@@ -21,12 +21,3 @@ run = "pnpm --filter @workspace/mtos-crm run dev"
 PORT = "24540"
 BASE_PATH = "/"
 
-[services.production]
-serve = "static"
-publicDir = "artifacts/mtos-crm/dist/public"
-
-[services.production.build]
-args = ["pnpm", "--filter", "@workspace/mtos-crm", "run", "build"]
-
-[services.production.build.env]
-NODE_ENV = "production"
