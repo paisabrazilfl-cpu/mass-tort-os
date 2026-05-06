@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **220 checked / 38 public / 182 protected / 0 unprotected.**
+Boot-time count: **221 checked / 38 public / 183 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -638,6 +638,7 @@ Boot-time count: **220 checked / 38 public / 182 protected / 0 unprotected.**
 | automations | DELETE | `/api/automations/:id` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
 | automations | GET | `/api/automations/:id` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | automations | PUT | `/api/automations/:id` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
+| automations | POST | `/api/automations/assist` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
 | automations | GET | `/api/automations/` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | automations | GET | `/api/automations/node-catalog` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | automations | POST | `/api/automations/` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |

@@ -4,8 +4,10 @@ import { eq, desc, and, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
 import { badRequest, notFound, forbidden } from "../lib/http-errors";
-import { NODE_CATALOG } from "../lib/automations/node-catalog";
+import { NODE_CATALOG, getNodeDefinition } from "../lib/automations/node-catalog";
 import { runWorkflow } from "../lib/automations/executor";
+import { callLLM } from "../lib/ai-provider";
+import { logger } from "../lib/logger";
 
 const router = Router();
 router.use(authMiddleware);
@@ -192,5 +194,189 @@ router.get("/runs/:runId", requirePermission(Permission.AUTOMATIONS_VIEW), async
   if (!row) { notFound(res, "Run not found"); return; }
   res.json(row);
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// AI Assist — drawer-driven workflow builder. Operators describe what they
+// want in plain English; the assistant proposes a graph patch that the editor
+// can apply. The patch is validated against NODE_CATALOG server-side so the
+// model can never inject an unknown node type or a free-form output edge.
+// ────────────────────────────────────────────────────────────────────────────
+
+const assistGraphSchema = z.object({
+  nodes: z.array(z.object({
+    id: z.string().min(1),
+    type: z.string().min(1),
+    position: z.object({ x: z.number(), y: z.number() }).optional(),
+    data: z.object({
+      label: z.string().optional(),
+      params: z.record(z.string(), z.any()).optional(),
+    }).optional(),
+  })).default([]),
+  edges: z.array(z.object({
+    id: z.string().min(1),
+    source: z.string().min(1),
+    target: z.string().min(1),
+    sourceHandle: z.string().nullable().optional(),
+    targetHandle: z.string().nullable().optional(),
+  })).default([]),
+});
+
+const assistRequestSchema = z.object({
+  prompt: z.string().min(3).max(4000),
+  currentGraph: assistGraphSchema.optional(),
+  mode: z.enum(["replace", "patch"]).default("replace"),
+});
+
+/**
+ * Validate an assistant-produced graph against NODE_CATALOG. Returns the list
+ * of issues; empty array means the graph is safe to surface to the editor.
+ */
+function validateAssistGraph(graph: z.infer<typeof assistGraphSchema>): string[] {
+  const issues: string[] = [];
+  const ids = new Set<string>();
+  for (const n of graph.nodes) {
+    if (ids.has(n.id)) { issues.push(`Duplicate node id "${n.id}".`); continue; }
+    ids.add(n.id);
+    const def = getNodeDefinition(n.type);
+    if (!def) { issues.push(`Unknown node type "${n.type}" (id ${n.id}).`); continue; }
+    // Param key allowlist: every key under data.params must correspond to a
+    // declared NodeParamSpec for this node type. Catches the assistant
+    // hallucinating params that the editor's config panel would never expose
+    // and the handler would silently ignore.
+    const declared = new Set(def.params.map((p) => p.key));
+    const params = n.data?.params ?? {};
+    for (const key of Object.keys(params)) {
+      if (!declared.has(key)) {
+        issues.push(`Node ${n.id} (${n.type}): unknown param "${key}". Allowed: [${def.params.map((p) => p.key).join(", ") || "—"}].`);
+      }
+    }
+  }
+  for (const e of graph.edges) {
+    if (!ids.has(e.source)) issues.push(`Edge ${e.id}: source "${e.source}" is not a node in this graph.`);
+    if (!ids.has(e.target)) issues.push(`Edge ${e.id}: target "${e.target}" is not a node in this graph.`);
+    if (e.sourceHandle) {
+      const sourceNode = graph.nodes.find((n) => n.id === e.source);
+      if (sourceNode) {
+        const def = getNodeDefinition(sourceNode.type);
+        const outs = def?.outputs;
+        if (Array.isArray(outs) && !outs.includes(e.sourceHandle)) {
+          issues.push(`Edge ${e.id}: sourceHandle "${e.sourceHandle}" is not declared on ${sourceNode.type} (allowed: ${outs.join(", ")}).`);
+        }
+      }
+    }
+  }
+  return issues;
+}
+
+/**
+ * Compact catalog summary used in the assistant system prompt. Keeping it
+ * tight so we don't burn tokens on every call. Outputs are listed verbatim
+ * so the model knows the legal sourceHandle values for branching nodes.
+ */
+function buildCatalogSummary(): string {
+  const byCat: Record<string, string[]> = {};
+  for (const def of NODE_CATALOG) {
+    const outs = Array.isArray(def.outputs) ? `[${def.outputs.join("|")}]` : "*";
+    const params = def.params.length === 0
+      ? ""
+      : ` params=${def.params.map((p) => p.required ? `${p.key}!` : p.key).join(",")}`;
+    (byCat[def.category] ??= []).push(`  ${def.type} ${outs}${params}`);
+  }
+  return Object.entries(byCat).map(([cat, lines]) => `[${cat}]\n${lines.join("\n")}`).join("\n");
+}
+
+router.post("/assist", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
+  const parsed = assistRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ status: "error", code: "bad_request", message: "Invalid assist request", details: parsed.error.flatten() });
+    return;
+  }
+  const { prompt, currentGraph, mode } = parsed.data;
+
+  const catalogSummary = buildCatalogSummary();
+  const systemPrompt = [
+    "You are an expert workflow architect for MTOS Automation Center.",
+    "Given a plain-English request, produce a workflow graph in JSON.",
+    "STRICT RULES:",
+    "- Output ONE JSON object only — no prose, no code fences.",
+    `- Shape: { "explanation": string, "graph": { "nodes": [...], "edges": [...] } }`,
+    "- Every node MUST use a `type` from the catalog below. Do not invent new types.",
+    "- Every node needs `id` (unique short string), `type`, `position` ({x,y}), and `data.label`.",
+    "- Put node-specific config under `data.params`.",
+    "- Every workflow must start with exactly one trigger.* node.",
+    "- For branching nodes (outputs listed as [a|b|c]), set edge `sourceHandle` to one of those names.",
+    "- For non-branching nodes, omit sourceHandle.",
+    "- Position nodes left-to-right with x increasing by ~220 per step, y around 200.",
+    "",
+    "CATALOG:",
+    catalogSummary,
+  ].join("\n");
+
+  const userPrompt = [
+    `User request: ${prompt}`,
+    currentGraph
+      ? `\nCurrent graph (mode=${mode}):\n${JSON.stringify(currentGraph).slice(0, 8_000)}`
+      : "\n(No existing graph — build from scratch.)",
+  ].join("\n");
+
+  let raw: string;
+  try {
+    raw = await callLLM({
+      module: "lead-intelligence",
+      systemPrompt,
+      prompt: userPrompt,
+      maxTokens: 2500,
+    });
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, "automation.assist: LLM call failed");
+    res.status(502).json({ status: "error", code: "llm_unavailable", message: err?.message ?? "AI provider unreachable" });
+    return;
+  }
+
+  // Strip code fences the model sometimes adds despite instructions.
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/m, "").trim();
+  let payload: { explanation?: string; graph?: unknown };
+  try {
+    payload = JSON.parse(cleaned);
+  } catch {
+    res.status(422).json({
+      status: "error",
+      code: "assist_invalid_json",
+      message: "Assistant did not return valid JSON. Try again or rephrase.",
+      details: { raw: cleaned.slice(0, 800) },
+    });
+    return;
+  }
+
+  const graphParse = assistGraphSchema.safeParse(payload?.graph);
+  if (!graphParse.success) {
+    res.status(422).json({
+      status: "error",
+      code: "assist_bad_shape",
+      message: "Assistant produced a graph that does not match the expected shape.",
+      details: graphParse.error.flatten(),
+    });
+    return;
+  }
+  const issues = validateAssistGraph(graphParse.data);
+  if (issues.length > 0) {
+    res.status(422).json({
+      status: "error",
+      code: "assist_catalog_violation",
+      message: "Assistant produced a graph that uses unknown nodes or invalid edges.",
+      details: { issues, graph: graphParse.data },
+    });
+    return;
+  }
+  res.json({
+    status: "ok",
+    explanation: typeof payload.explanation === "string" ? payload.explanation : "",
+    graph: graphParse.data,
+    mode,
+  });
+});
+
+// Exported for tests. Keep them out of the catalog/handler surface.
+export const __assistInternals = { validateAssistGraph, buildCatalogSummary, assistGraphSchema };
 
 export default router;

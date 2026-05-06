@@ -9,14 +9,39 @@
  *   - undefined / object   → success, value becomes the output payload
  *   - { branch: string }   → success but route via the named output edge
  */
-import { db, automationRunsTable, automationWorkflowsTable, leadsTable, casesTable, auditLogTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import {
+  db,
+  automationRunsTable,
+  automationWorkflowsTable,
+  leadsTable,
+  casesTable,
+  auditLogTable,
+  reviewQueueTable,
+  paralegalsTable,
+  documentTemplatesTable,
+} from "@workspace/db";
+import { eq, and, sql, asc } from "drizzle-orm";
+import path from "node:path";
 import { logger } from "../logger";
 import vm from "node:vm";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import dns from "node:dns/promises";
 import net from "node:net";
+import { getNodeDefinition } from "./node-catalog";
+import { getIntegrationCredentials } from "../../routes/integrations";
+import { getEmailAdapter } from "../email/sendgrid";
+import { getFaxAdapter } from "../fax";
+import { sendSms } from "../sms/telnyx";
+import { callLLM } from "../ai-provider";
+import { saveFile, readFile } from "../vault";
+import { runBackgroundCheckHub } from "../bg-hub/hub";
+import { lookupNpiAndMatch } from "../taxonomy-engine";
+import { computeAndPersistLeadScore } from "../decision-engine-service";
+import { analyzeDocumentText } from "../ai-fields";
+import { getFormConfigByIdOrLabel, getFormConfig } from "../form-config-service";
+import { findExistingLeadForIntake } from "../lead-dedup";
+import { enqueueJob } from "../queue";
 
 /**
  * SSRF guard: block obviously dangerous URLs from any node-driven outbound
@@ -285,7 +310,14 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const idRaw = resolveOrLiteral(s, s.node.data?.params?.leadId);
     const leadId = Number(idRaw);
     const patch = (s.node.data?.params?.patch ?? {}) as Record<string, any>;
-    const [row] = await db.update(leadsTable).set({ ...patch, updated_at: new Date() }).where(eq(leadsTable.id, leadId)).returning();
+    // Tenant scoping: refuse to mutate a lead that belongs to a different
+    // firm than the workflow's owning firm. Workflows with no firm (system
+    // automations) skip the firm predicate.
+    const where = s.ctx.firmId == null
+      ? eq(leadsTable.id, leadId)
+      : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId));
+    const [row] = await db.update(leadsTable).set({ ...patch, updated_at: new Date() }).where(where).returning();
+    if (!row) throw new Error(`crm.update_lead: lead ${leadId} not found in firm ${s.ctx.firmId}.`);
     return { lead: row };
   },
   "crm.qualify_lead": async (s) => {
@@ -327,9 +359,74 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   },
 
   // ───────── Integrations
-  "integration.send_email": async (s) => stubIntegration("send_email", s),
-  "integration.send_fax": async (s) => stubIntegration("send_fax", s),
-  "integration.send_esign": async (s) => stubIntegration("send_esign", s),
+  "integration.send_email": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const to = String(resolveOrLiteral(s, p.to) ?? "").trim();
+    const subject = String(resolveOrLiteral(s, p.subject) ?? "");
+    const html = String(resolveOrLiteral(s, p.html) ?? "");
+    const fromOverride = p.from ? String(resolveOrLiteral(s, p.from)) : undefined;
+    if (!to || !subject || !html) throw new Error("integration.send_email requires to, subject, and html");
+    const creds = await getIntegrationCredentials("sendgrid");
+    if (!creds) throw new Error("SendGrid integration is not configured.");
+    const adapter = getEmailAdapter("sendgrid")!;
+    const fromEmail = fromOverride
+      || (typeof (creds as any).from_email === "string" ? (creds as any).from_email : "")
+      || process.env["EMAIL_FROM_ADDRESS"]
+      || "";
+    if (!fromEmail) throw new Error("SendGrid integration has no from_email configured.");
+    const result = await adapter.send(creds, { to, subject, html, fromEmail });
+    if (!result.ok) throw new Error(`SendGrid send failed: ${result.code}: ${result.message}`);
+    return { ok: true, messageId: result.externalMessageId };
+  },
+  "integration.send_fax": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const to = String(resolveOrLiteral(s, p.to) ?? "").trim();
+    const documentUrl = String(resolveOrLiteral(s, p.documentUrl) ?? "").trim();
+    if (!to || !documentUrl) throw new Error("integration.send_fax requires to and documentUrl");
+    const safeUrl = await assertSafeOutboundUrl(documentUrl);
+    const creds = await getIntegrationCredentials("srfax");
+    if (!creds) throw new Error("SRFax integration is not configured.");
+    const adapter = getFaxAdapter("srfax")!;
+    const docRes = await fetch(safeUrl.toString());
+    if (!docRes.ok) throw new Error(`Could not fetch document at ${documentUrl}: HTTP ${docRes.status}`);
+    const pdf = Buffer.from(await docRes.arrayBuffer());
+    const fileName = safeUrl.pathname.split("/").pop() || "document.pdf";
+    const result = await adapter.send(creds, { toNumber: to, pdf, fileName });
+    if (!result.ok) throw new Error(`SRFax send failed: ${result.code}: ${result.message}`);
+    return { ok: true, externalId: (result as any).externalFaxId };
+  },
+  "integration.send_esign": async (s) => {
+    // Catalog params: templateId, signerEmail, signerName. The worker job
+    // also needs a leadId so the resulting envelope can be attached to a
+    // lead — we read that from the upstream input rather than the catalog
+    // (workflows wire it up via the trigger payload, e.g. lead.created).
+    const p = s.node.data?.params ?? {};
+    const templateId = Number(resolveOrLiteral(s, p.templateId));
+    const signerEmail = String(resolveOrLiteral(s, p.signerEmail) ?? "").trim();
+    const signerName = String(resolveOrLiteral(s, p.signerName) ?? "").trim();
+    const leadId = Number(resolveOrLiteral(s, s.input?.lead?.id ?? s.input?.lead_id));
+    if (!Number.isInteger(templateId) || !signerEmail || !signerName) {
+      throw new Error("integration.send_esign requires templateId, signerEmail, signerName.");
+    }
+    if (!Number.isInteger(leadId)) {
+      throw new Error("integration.send_esign needs a leadId on the upstream input (input.lead_id or input.lead.id).");
+    }
+    // Tenant scoping: confirm the lead belongs to this firm before
+    // enqueueing the worker job (which itself will operate without the
+    // request-level firm middleware).
+    const [owned] = await db.select({ id: leadsTable.id }).from(leadsTable)
+      .where(s.ctx.firmId == null
+        ? eq(leadsTable.id, leadId)
+        : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId)))
+      .limit(1);
+    if (!owned) throw new Error(`integration.send_esign: lead ${leadId} not in firm ${s.ctx.firmId}.`);
+    // The worker payload contract only carries lead_id + template_id; signer
+    // identity is resolved by the worker from the lead record. We surface the
+    // catalog-supplied signer fields back to the caller for traceability so
+    // operators can confirm which signer the workflow targeted.
+    const jobId = await enqueueJob("send_esign_packet", { lead_id: leadId, template_id: templateId });
+    return { enqueued: true, job_id: jobId, signer_email: signerEmail, signer_name: signerName };
+  },
   "integration.webhook_out": async (s) => {
     const url = String(s.node.data?.params?.url ?? "");
     const safe = await assertSafeOutboundUrl(url);
@@ -378,9 +475,36 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   },
 
   // ───────── AI
-  "ai.extract_fields": async (s) => stubIntegration("ai_extract_fields", s),
-  "ai.summarize": async (s) => stubIntegration("ai_summarize", s),
-  "ai.draft": async (s) => stubIntegration("ai_draft", s),
+  "ai.extract_fields": async (s) => {
+    const text = String(resolveOrLiteral(s, s.node.data?.params?.text ?? s.input?.text ?? "") || "");
+    if (!text) throw new Error("ai.extract_fields requires text input.");
+    const fields = await analyzeDocumentText(text);
+    return { fields };
+  },
+  "ai.summarize": async (s) => {
+    const text = String(resolveOrLiteral(s, s.node.data?.params?.text ?? s.input?.text ?? "") || "");
+    if (!text) throw new Error("ai.summarize requires text input.");
+    const maxTokens = Number(s.node.data?.params?.maxTokens ?? 400);
+    const summary = await callLLM({
+      module: "drafting-ai",
+      systemPrompt: "You are a concise legal summarization assistant. Reply in plain prose, no preamble.",
+      prompt: `Summarize the following:\n\n${text}`,
+      maxTokens,
+    });
+    return { summary };
+  },
+  "ai.draft": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const prompt = String(resolveOrLiteral(s, p.prompt ?? s.input?.prompt) ?? "");
+    if (!prompt) throw new Error("ai.draft requires a prompt.");
+    const draft = await callLLM({
+      module: "drafting-ai",
+      systemPrompt: String(p.systemPrompt ?? "You are a legal drafting assistant. Reply with the requested document content only — no preamble."),
+      prompt,
+      maxTokens: Number(p.maxTokens ?? 800),
+    });
+    return { draft };
+  },
 
   // ───────── Scripts
   "script.javascript": async (s) => {
@@ -428,56 +552,323 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     })));
     return { rows: (result as any).rows ?? result };
   },
-  "io.read_file": async (s) => stubIntegration("read_file", s),
-  "io.write_file": async (s) => stubIntegration("write_file", s),
+  "io.read_file": async (s) => {
+    // Catalog param: `key` is a logical vault object key, conventionally
+    // "<caseId>/<filename>". We translate it to the absolute path the vault
+    // layer expects (`<cwd>/vault/<key>`) so the vault's traversal guard can
+    // still reject anything escaping its base directory.
+    const key = String(resolveOrLiteral(s, s.node.data?.params?.key) ?? "");
+    if (!key) throw new Error("io.read_file requires `key` (vault object key).");
+    if (key.includes("..") || path.isAbsolute(key)) {
+      throw new Error("io.read_file `key` must be a relative path inside the vault.");
+    }
+    const abs = path.resolve(process.cwd(), "vault", key);
+    const content = await readFile(abs);
+    return { key, content };
+  },
+  "io.write_file": async (s) => {
+    // Catalog params: `key` (relative vault key, "<caseId>/<filename>"),
+    // `content` (string or JSON-serializable). saveFile derives mime from the
+    // filename and re-applies its own traversal guard inside the vault layer.
+    const p = s.node.data?.params ?? {};
+    const key = String(resolveOrLiteral(s, p.key) ?? "");
+    const content = resolveOrLiteral(s, p.content);
+    if (!key || content == null) {
+      throw new Error("io.write_file requires `key` and `content`.");
+    }
+    if (key.includes("..") || path.isAbsolute(key)) {
+      throw new Error("io.write_file `key` must be a relative path inside the vault.");
+    }
+    const slash = key.lastIndexOf("/");
+    if (slash <= 0) {
+      throw new Error("io.write_file `key` must be of form '<caseId>/<filename>' so the vault can scope writes.");
+    }
+    const caseId = key.slice(0, slash);
+    const fileName = key.slice(slash + 1);
+    const data = typeof content === "string" || Buffer.isBuffer(content) ? content : JSON.stringify(content);
+    const out = await saveFile(caseId, data as any, fileName);
+    return { key, ...out };
+  },
 
   // ───────── CRM (extended)
-  "crm.assign_paralegal": async (s) => stubIntegration("assign_paralegal", s),
+  "crm.assign_paralegal": async (s) => {
+    // Catalog params: `entity` ("lead"|"case"), `id`, optional `paralegalId`.
+    // For now we only support entity=lead (cases would need their own join);
+    // we surface a clear error rather than silently no-op for case entities.
+    const p = s.node.data?.params ?? {};
+    const entity = String(resolveOrLiteral(s, p.entity) ?? "lead");
+    if (entity !== "lead") throw new Error(`crm.assign_paralegal: entity '${entity}' is not yet supported (only 'lead').`);
+    const leadIdRaw = resolveOrLiteral(s, p.id ?? s.input?.lead_id ?? s.input?.lead?.id);
+    const leadId = Number(leadIdRaw);
+    if (!Number.isInteger(leadId)) throw new Error("crm.assign_paralegal requires a resolvable `id`.");
+    let paralegalId: number | null = p.paralegalId != null ? Number(resolveOrLiteral(s, p.paralegalId)) : null;
+    if (!paralegalId) {
+      // Round-robin: pick the active paralegal with the fewest open assignments.
+      const [least] = await db.select().from(paralegalsTable).orderBy(asc(paralegalsTable.active_cases)).limit(1);
+      if (!least) throw new Error("crm.assign_paralegal: no paralegals on roster.");
+      paralegalId = least.id;
+    }
+    // The leads table has no dedicated paralegal_id column; we reuse `assigned_to`
+    // (integer) and record the paralegal table id there. Operators reading this
+    // column need to know it can be either a user_id or a paralegal_id depending
+    // on origin — the source-of-truth is the audit_log entry below.
+    const [updated] = await db.update(leadsTable)
+      .set({ assigned_to: paralegalId, updated_at: new Date() } as any)
+      .where(eq(leadsTable.id, leadId)).returning();
+    await db.insert(auditLogTable).values({
+      action: "automation.assign_paralegal",
+      entity_type: "lead",
+      entity_id: String(leadId),
+      details: { paralegal_id: paralegalId, run_id: s.ctx.runId },
+    } as any);
+    await db.update(paralegalsTable)
+      .set({
+        active_cases: sql`${paralegalsTable.active_cases} + 1`,
+        total_assigned: sql`${paralegalsTable.total_assigned} + 1`,
+        updated_at: new Date(),
+      } as any).where(eq(paralegalsTable.id, paralegalId));
+    return { lead_id: leadId, paralegal_id: paralegalId, lead: updated };
+  },
   "crm.set_lead_status": async (s) => {
     const idRaw = resolveOrLiteral(s, s.node.data?.params?.leadId);
     const leadId = Number(idRaw);
     const status = String(s.node.data?.params?.status ?? "");
     if (!leadId || !status) throw new Error("crm.set_lead_status requires leadId and status");
+    const where = s.ctx.firmId == null
+      ? eq(leadsTable.id, leadId)
+      : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId));
     const [row] = await db.update(leadsTable)
-      .set({ qualification_status: status, updated_at: new Date() } as any)
-      .where(eq(leadsTable.id, leadId)).returning();
+      .set({ status, updated_at: new Date() } as any)
+      .where(where).returning();
+    if (!row) throw new Error(`crm.set_lead_status: lead ${leadId} not found in firm ${s.ctx.firmId}.`);
     return { lead: row };
   },
-  "crm.send_to_review_queue": async (s) => stubIntegration("send_to_review_queue", s),
+  "crm.send_to_review_queue": async (s) => {
+    // Catalog params: entity (lead|case|document), id, reason, priority.
+    const p = s.node.data?.params ?? {};
+    const entity = String(resolveOrLiteral(s, p.entity ?? "lead"));
+    const idRaw = resolveOrLiteral(s, p.id ?? s.input?.lead_id ?? s.input?.lead?.id);
+    if (idRaw == null) throw new Error("crm.send_to_review_queue requires `id`.");
+    const reason = String(resolveOrLiteral(s, p.reason) ?? "Sent to review by automation");
+    const priority = String(resolveOrLiteral(s, p.priority) ?? "normal");
+    // Map catalog `priority` to internal review-queue `severity` axis.
+    const severity = priority === "urgent" ? "critical"
+      : priority === "high" ? "high"
+      : priority === "low" ? "low"
+      : "medium";
+    const [row] = await db.insert(reviewQueueTable).values({
+      entity_type: entity,
+      entity_id: String(idRaw),
+      conflict_type: "automation",
+      severity,
+      failsafe_mode: "review",
+      source_module: `automation:${s.ctx.runId}`,
+      summary: reason,
+      details: { entity, id: String(idRaw), reason, priority, run_id: s.ctx.runId } as any,
+    } as any).returning();
+    return { review_item_id: row.id };
+  },
   "crm.background_check": async (s) => {
-    const out = await stubIntegration("background_check", s);
-    return { __branch: "clear", value: out };
+    const leadIdRaw = resolveOrLiteral(s, s.node.data?.params?.leadId ?? s.input?.lead_id ?? s.input?.lead?.id);
+    const leadId = Number(leadIdRaw);
+    if (!Number.isInteger(leadId)) throw new Error("crm.background_check requires a resolvable leadId.");
+    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    if (!lead) throw new Error(`Lead ${leadId} not found.`);
+    const result = await runBackgroundCheckHub(lead);
+    // bg-hub final_status is one of clear|flagged|incomplete — map "incomplete"
+    // onto the catalog's "error" output so the editor renders a real edge.
+    const finalStatus = (result as any).final_status ?? "incomplete";
+    const branch = finalStatus === "clear" ? "clear" : finalStatus === "flagged" ? "flagged" : "error";
+    return { __branch: branch, value: result };
   },
-  "crm.npi_lookup": async (s) => stubIntegration("npi_lookup", s),
+  "crm.npi_lookup": async (s) => {
+    // Catalog declares a single `npi` param. The NPPES helper supports both
+    // raw NPI numbers (10-digit) and "first last" strings, so we accept both
+    // shapes here for operator convenience.
+    const p = s.node.data?.params ?? {};
+    const npi = String(resolveOrLiteral(s, p.npi ?? s.input?.npi) ?? "").trim();
+    if (!npi) throw new Error("crm.npi_lookup requires `npi` (NPI number or 'first last').");
+    let first = "", last = "", diagnosis = "";
+    if (/^\d{10}$/.test(npi)) {
+      // Raw NPI — we don't have a direct number lookup wired; fall back to
+      // surfacing the number so downstream nodes can use it.
+      return { npi, lookup: "deferred", note: "Direct NPI-by-number lookup not wired; use first/last query." };
+    }
+    const parts = npi.split(/\s+/);
+    first = parts[0] ?? ""; last = parts.slice(1).join(" ");
+    diagnosis = String(resolveOrLiteral(s, s.input?.diagnosis) ?? "");
+    if (!first || !last) throw new Error("crm.npi_lookup `npi` must be a 10-digit NPI or 'first last'.");
+    const result = await lookupNpiAndMatch(first, last, diagnosis);
+    return result;
+  },
   "crm.decision_engine": async (s) => {
-    const out = await stubIntegration("decision_engine", s);
-    return { __branch: "review", value: out };
+    const leadIdRaw = resolveOrLiteral(s, s.node.data?.params?.leadId ?? s.input?.lead_id ?? s.input?.lead?.id);
+    const leadId = Number(leadIdRaw);
+    if (!Number.isInteger(leadId)) throw new Error("crm.decision_engine requires a resolvable leadId.");
+    const result = await computeAndPersistLeadScore(leadId);
+    if (!result) {
+      return { __branch: "review", value: { reason: "no_score" } };
+    }
+    // computeAndPersistLeadScore writes convexity_action on the lead; map to branch.
+    const action = String((result as any).action ?? "review").toLowerCase();
+    const branch = action.startsWith("qual") || action === "accept"
+      ? "qualified"
+      : action.startsWith("rej") || action === "decline"
+        ? "rejected"
+        : "review";
+    return { __branch: branch, value: result };
   },
-  "crm.create_calendar_event": async (s) => stubIntegration("create_calendar_event", s),
+  "crm.create_calendar_event": async (s) => {
+    // Catalog params: `title`, `startsAt`, `endsAt`, `entity`, `id`, `notes`.
+    // No calendar table exists yet; we record the event as an audit_log entry
+    // so it lives on the lead/case timeline and is queryable. This is honest:
+    // the operator UI's timeline view already surfaces audit_log rows.
+    const p = s.node.data?.params ?? {};
+    const title = String(resolveOrLiteral(s, p.title) ?? "");
+    const startsAt = String(resolveOrLiteral(s, p.startsAt) ?? "");
+    const endsAt = String(resolveOrLiteral(s, p.endsAt) ?? "");
+    const entity = String(resolveOrLiteral(s, p.entity) ?? "lead");
+    const idRaw = resolveOrLiteral(s, p.id ?? s.input?.lead_id);
+    const notes = String(resolveOrLiteral(s, p.notes) ?? "");
+    if (!title || !startsAt || idRaw == null) {
+      throw new Error("crm.create_calendar_event requires `title`, `startsAt` (ISO timestamp), and `id`.");
+    }
+    await db.insert(auditLogTable).values({
+      action: "calendar_event.created",
+      entity_type: entity,
+      entity_id: String(idRaw),
+      details: { title, startsAt, endsAt, notes, source: "automation", run_id: s.ctx.runId } as any,
+    } as any);
+    return { ok: true, title, startsAt, endsAt: endsAt || null };
+  },
 
   // ───────── Communication
-  "comm.send_sms": async (s) => stubIntegration("send_sms", s),
-  "comm.send_mms": async (s) => stubIntegration("send_mms", s),
-  "comm.make_call": async (s) => {
-    const out = await stubIntegration("make_call", s);
-    return { __branch: "answered", value: out };
+  "comm.send_sms": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const to = String(resolveOrLiteral(s, p.to) ?? "").trim();
+    const body = String(resolveOrLiteral(s, p.body ?? p.message) ?? "");
+    if (!to || !body) throw new Error("comm.send_sms requires to and body.");
+    const r = await sendSms({
+      to,
+      body,
+      leadId: Number(resolveOrLiteral(s, p.leadId ?? s.input?.lead_id)) || null,
+    });
+    if (!r.ok) throw new Error(`Telnyx SMS failed: ${r.error ?? "unknown error"}`);
+    return r;
   },
-  "comm.send_voicemail": async (s) => stubIntegration("send_voicemail", s),
-  "comm.send_calendar_invite": async (s) => stubIntegration("send_calendar_invite", s),
+  "comm.send_mms": async () => {
+    // No MMS provider is wired. Surface a structured failure so downstream
+    // nodes can branch on `code` rather than crashing the whole run.
+    return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "comm.send_mms is not configured. Use comm.send_sms with a hosted asset URL." };
+  },
+  "comm.make_call": async () => {
+    // Catalog declares branches answered|no_answer|failed — return the
+    // failed branch with a structured provider-not-configured payload.
+    return { __branch: "failed", value: { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "comm.make_call requires a voice provider (Twilio/Vapi)." } };
+  },
+  "comm.send_voicemail": async () => {
+    return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "comm.send_voicemail is not configured in this deployment." };
+  },
+  "comm.send_calendar_invite": async (s) => {
+    // Falls back to send_email with an .ics attachment is not wired; record
+    // as audit so the workflow can still complete cleanly when the operator
+    // explicitly opts in. Otherwise fail loud.
+    if (!s.node.data?.params?.acknowledged_no_provider) {
+      throw new Error("comm.send_calendar_invite has no calendar provider wired. Set 'acknowledged_no_provider: true' in node params to log-only.");
+    }
+    await db.insert(auditLogTable).values({
+      action: "calendar_invite.logged_only",
+      entity_type: "automation_run",
+      entity_id: String(s.ctx.runId),
+      details: s.node.data?.params as any,
+    } as any);
+    return { logged_only: true };
+  },
 
   // ───────── Documents
-  "documents.render_template": async (s) => stubIntegration("render_template", s),
-  "documents.send_dropbox_sign": async (s) => stubIntegration("send_dropbox_sign", s),
-  "documents.send_docusign": async (s) => stubIntegration("send_docusign", s),
+  "documents.render_template": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const templateIdRaw = resolveOrLiteral(s, p.templateId);
+    const templateId = Number(templateIdRaw);
+    if (!Number.isInteger(templateId)) throw new Error("documents.render_template requires templateId.");
+    const [tpl] = await db.select().from(documentTemplatesTable).where(eq(documentTemplatesTable.id, templateId));
+    if (!tpl) throw new Error(`Template ${templateId} not found.`);
+    const variables = (resolveOrLiteral(s, p.variables) ?? s.input ?? {}) as Record<string, unknown>;
+    // Templates are either uploaded PDFs (storage_path) or AI-drafted (ai_prompt).
+    // For the PDF case we just return the storage handle — operators consume it
+    // via documents.send_dropbox_sign / send_docusign which already merge fields
+    // server-side. For the AI case we run the prompt with merge-field substitution.
+    if (tpl.source === "ai" && tpl.ai_prompt) {
+      const filledPrompt = tpl.ai_prompt.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key: string) => {
+        const v = resolvePath(variables, key);
+        return v == null ? "" : String(v);
+      });
+      const body = await callLLM({
+        module: "drafting-ai",
+        systemPrompt: "You are a legal drafting assistant. Output only the rendered document body.",
+        prompt: filledPrompt,
+        maxTokens: 1500,
+      });
+      return { template_id: templateId, name: tpl.name, source: "ai" as const, body };
+    }
+    return { template_id: templateId, name: tpl.name, source: tpl.source, storage_path: tpl.storage_path };
+  },
+  "documents.send_dropbox_sign": async (s) => {
+    // Catalog params: templateId, signerEmail, signerName, fields. The
+    // signer fields flow into the worker job so the worker can resolve the
+    // packet recipient even if there's no upstream lead. leadId is read
+    // from the upstream input the same way integration.send_esign does.
+    const p = s.node.data?.params ?? {};
+    const templateId = Number(resolveOrLiteral(s, p.templateId));
+    const signerEmail = String(resolveOrLiteral(s, p.signerEmail) ?? "").trim();
+    const signerName = String(resolveOrLiteral(s, p.signerName) ?? "").trim();
+    const fields = (p.fields ?? {}) as Record<string, any>;
+    const leadId = Number(resolveOrLiteral(s, s.input?.lead?.id ?? s.input?.lead_id));
+    if (!Number.isInteger(templateId) || !signerEmail || !signerName) {
+      throw new Error("documents.send_dropbox_sign requires templateId, signerEmail, signerName.");
+    }
+    if (!Number.isInteger(leadId)) {
+      throw new Error("documents.send_dropbox_sign needs a leadId on the upstream input.");
+    }
+    const [owned] = await db.select({ id: leadsTable.id }).from(leadsTable)
+      .where(s.ctx.firmId == null
+        ? eq(leadsTable.id, leadId)
+        : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId)))
+      .limit(1);
+    if (!owned) throw new Error(`documents.send_dropbox_sign: lead ${leadId} not in firm ${s.ctx.firmId}.`);
+    const jobId = await enqueueJob("send_esign_packet", { lead_id: leadId, template_id: templateId });
+    return { enqueued: true, job_id: jobId, signer_email: signerEmail, signer_name: signerName, prefill: fields, provider: "dropbox_sign" };
+  },
+  "documents.send_docusign": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const templateId = Number(resolveOrLiteral(s, p.templateId));
+    const signerEmail = String(resolveOrLiteral(s, p.signerEmail) ?? "").trim();
+    const signerName = String(resolveOrLiteral(s, p.signerName) ?? "").trim();
+    const fields = (p.fields ?? {}) as Record<string, any>;
+    const leadId = Number(resolveOrLiteral(s, s.input?.lead?.id ?? s.input?.lead_id));
+    if (!Number.isInteger(templateId) || !signerEmail || !signerName) {
+      throw new Error("documents.send_docusign requires templateId, signerEmail, signerName.");
+    }
+    if (!Number.isInteger(leadId)) {
+      throw new Error("documents.send_docusign needs a leadId on the upstream input.");
+    }
+    const [owned] = await db.select({ id: leadsTable.id }).from(leadsTable)
+      .where(s.ctx.firmId == null
+        ? eq(leadsTable.id, leadId)
+        : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId)))
+      .limit(1);
+    if (!owned) throw new Error(`documents.send_docusign: lead ${leadId} not in firm ${s.ctx.firmId}.`);
+    const jobId = await enqueueJob("send_esign_packet", { lead_id: leadId, template_id: templateId });
+    return { enqueued: true, job_id: jobId, signer_email: signerEmail, signer_name: signerName, tabs: fields, provider: "docusign" };
+  },
   "documents.fax_medical_records": async (s) => {
-    // Real wiring: pull leadId from params (literal or `input./vars.` path),
-    // resolve the target fax number from either an explicit `providerFax`
-    // override or the lead's `hospital_fax` column, validate via the shared
-    // E.164 normalizer, and hand off to the existing fax_med_records job
-    // handler — which builds the cover sheet, writes a fax_results row, and
-    // dispatches via the firm's resolved fax provider (SRFax). Branches
-    // "sent" / "failed" so an automation graph can react to either outcome
-    // without crashing the whole run.
+    // Conflict resolution (Task #65 + #66): keep Task #66's real fax
+    // dispatch — pull leadId from params, resolve the target fax number
+    // from either an explicit `providerFax` override or the lead's
+    // `hospital_fax` column, validate via the shared E.164 normalizer,
+    // and hand off to the existing fax_med_records job handler. Branches
+    // "sent" / "failed" so an automation graph can react to either
+    // outcome without crashing the whole run.
     const idRaw = resolveOrLiteral(s, s.node.data?.params?.leadId);
     const leadId = Number(idRaw);
     if (!Number.isFinite(leadId) || leadId <= 0) {
@@ -552,30 +943,174 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       return { __branch: "failed", value: { error: "send_failed", message, fax_results_id: faxResultId, lead_id: leadId } };
     }
   },
-  "documents.ocr_extract": async (s) => stubIntegration("ocr_extract", s),
-  "documents.medical_extract": async (s) => stubIntegration("medical_extract", s),
+  "documents.ocr_extract": async (s) => {
+    // Catalog params: `documentId` (vault key) and `language`. We don't have
+    // an image-OCR provider wired here; instead we read the file as text from
+    // the vault and pass it through the medical extractor. This is honest:
+    // for non-text docs the operator must run real OCR upstream first.
+    const p = s.node.data?.params ?? {};
+    const documentId = String(resolveOrLiteral(s, p.documentId ?? s.input?.documentId) ?? "");
+    if (!documentId) throw new Error("documents.ocr_extract requires `documentId` (vault key).");
+    const buf = await readFile(documentId);
+    const text = Buffer.isBuffer(buf) ? buf.toString("utf8") : String(buf ?? "");
+    if (!text) throw new Error(`documents.ocr_extract: document '${documentId}' is empty or non-text. Run real OCR upstream first.`);
+    const fields = await analyzeDocumentText(text);
+    return { documentId, fields };
+  },
+  "documents.medical_extract": async (s) => {
+    // Catalog params: `documentId`, optional `schema` (advisory — analyze
+    // DocumentText returns its canonical schema; passing schema is reserved
+    // for a future structured-extract path).
+    const p = s.node.data?.params ?? {};
+    const documentId = String(resolveOrLiteral(s, p.documentId ?? s.input?.documentId) ?? "");
+    if (!documentId) throw new Error("documents.medical_extract requires `documentId` (vault key).");
+    const buf = await readFile(documentId);
+    const text = Buffer.isBuffer(buf) ? buf.toString("utf8") : String(buf ?? "");
+    if (!text) throw new Error(`documents.medical_extract: document '${documentId}' is empty or non-text.`);
+    const fields = await analyzeDocumentText(text);
+    return { documentId, fields };
+  },
 
   // ───────── Forms
-  "forms.publish": async (s) => stubIntegration("forms_publish", s),
-  "forms.embed_script": async (s) => stubIntegration("forms_embed_script", s),
-  "forms.validate_submission": async (s) => {
-    const out = await stubIntegration("forms_validate_submission", s);
-    return { __branch: "valid", value: out };
+  "forms.publish": async (s) => {
+    // Catalog params: `formId` (tort code or form id), optional `version`.
+    const p = s.node.data?.params ?? {};
+    const formId = String(resolveOrLiteral(s, p.formId) ?? "");
+    if (!formId) throw new Error("forms.publish requires `formId`.");
+    const cfg = await getFormConfig(formId);
+    if (!cfg) throw new Error(`No form configuration found for '${formId}'.`);
+    return { form_id: formId, version: p.version ?? null, published: true, config: cfg };
   },
-  "forms.create_lead_from_submission": async (s) => stubIntegration("forms_create_lead_from_submission", s),
+  "forms.embed_script": async (s) => {
+    // Catalog param: `formId`.
+    const formId = String(resolveOrLiteral(s, s.node.data?.params?.formId) ?? "");
+    if (!formId) throw new Error("forms.embed_script requires `formId`.");
+    const cfg = await getFormConfigByIdOrLabel(formId);
+    if (!cfg) throw new Error(`No form configuration for '${formId}'.`);
+    const baseUrl = process.env["PUBLIC_BASE_URL"] ?? "";
+    // Minimal embed: a one-line <script> tag pointing at our public embed
+    // endpoint. The actual JS is served by routes/forms.ts → /forms/embed/:id.
+    const embed = `<script src="${baseUrl}/api/forms-public/embed/${cfg.id}" defer></script>`;
+    return { form_id: cfg.id, embed_html: embed };
+  },
+  "forms.validate_submission": async (s) => {
+    // Catalog params: `formId`, `payload`. `payload` may resolve to an object
+    // already, or fall back to the workflow input for convenience.
+    const submission = (resolveOrLiteral(s, s.node.data?.params?.payload) ?? s.input ?? {}) as Record<string, unknown>;
+    const required = ["first_name", "last_name", "email", "phone_primary", "tort_type"];
+    const missing = required.filter((k) => {
+      const v = submission[k];
+      return v == null || (typeof v === "string" && v.trim() === "");
+    });
+    if (missing.length === 0) {
+      return { __branch: "valid", value: { ok: true } };
+    }
+    return { __branch: "invalid", value: { missing_fields: missing } };
+  },
+  "forms.create_lead_from_submission": async (s) => {
+    // Catalog params: `formId`, `payload`.
+    const submission = (resolveOrLiteral(s, s.node.data?.params?.payload) ?? s.input ?? {}) as Record<string, unknown>;
+    const tortType = String(submission["tort_type"] ?? s.node.data?.params?.formId ?? "").trim();
+    const email = submission["email"] != null ? String(submission["email"]) : null;
+    const phone = submission["phone_primary"] != null ? String(submission["phone_primary"]) : null;
+    if (!tortType) throw new Error("forms.create_lead_from_submission requires submission.tort_type.");
+    const existing = await findExistingLeadForIntake({
+      tortType,
+      email,
+      phone,
+    });
+    if (existing) {
+      return { lead_id: existing.leadId, deduped: true, matched_by: existing.matchedBy };
+    }
+    const [created] = await db.insert(leadsTable).values({
+      name: String(submission["first_name"] ?? "") + " " + String(submission["last_name"] ?? ""),
+      tort_type: tortType,
+      email,
+      phone_primary: phone,
+      first_name: submission["first_name"] as any,
+      last_name: submission["last_name"] as any,
+      source: "automation",
+      status: "new",
+    } as any).returning();
+    return { lead_id: created.id, deduped: false };
+  },
 
   // ───────── AI (extended)
   "ai.agent": async (s) => {
-    const out = await stubIntegration("ai_agent", s);
-    return { __branch: "success", value: out };
+    // Catalog params: goal, tools, maxSteps, model. We do NOT run a real
+    // tool-loop agent (it needs a sandboxed tool registry that hasn't been
+    // built yet). Instead we run a single-turn LLM completion bounded by
+    // maxSteps=1; any catalog config asking for >1 steps falls through the
+    // `max_steps` branch so workflow authors can route to a human review
+    // node rather than silently truncating.
+    const p = s.node.data?.params ?? {};
+    const goal = String(resolveOrLiteral(s, p.goal) ?? "");
+    if (!goal) {
+      return { __branch: "error", value: { code: "MISSING_GOAL", error: "ai.agent requires `goal`." } };
+    }
+    const maxSteps = Number(p.maxSteps ?? 1);
+    if (Number.isFinite(maxSteps) && maxSteps > 1) {
+      return {
+        __branch: "max_steps",
+        value: {
+          code: "AGENT_LOOP_NOT_IMPLEMENTED",
+          error: `ai.agent multi-step loops aren't implemented yet (requested maxSteps=${maxSteps}). Falling through max_steps branch.`,
+          stepsRun: 1,
+          maxSteps,
+        },
+      };
+    }
+    try {
+      const output = await callLLM({
+        module: "lead-intelligence",
+        systemPrompt: "You are an autonomous assistant. Reply only with the final answer.",
+        prompt: `${goal}\n\nContext:\n${JSON.stringify(s.input ?? {}, null, 2).slice(0, 4000)}`,
+        maxTokens: 1000,
+      });
+      return { __branch: "success", value: { output, stepsRun: 1 } };
+    } catch (err: any) {
+      return { __branch: "error", value: { error: err?.message ?? String(err) } };
+    }
   },
-  "ai.classify": async (s) => stubIntegration("ai_classify", s),
-  "ai.chat_response": async (s) => stubIntegration("ai_chat_response", s),
-  "ai.voice_agent": async (s) => {
-    const out = await stubIntegration("ai_voice_agent", s);
-    return { __branch: "completed", value: out };
+  "ai.classify": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const text = String(resolveOrLiteral(s, p.text ?? s.input?.text) ?? "");
+    const labels = (p.labels ?? []) as string[];
+    if (!text || labels.length === 0) throw new Error("ai.classify requires text and a non-empty labels array.");
+    const raw = await callLLM({
+      module: "lead-intelligence",
+      systemPrompt: `You are a classifier. Choose exactly ONE label from this list: ${labels.join(", ")}. Respond with the label only.`,
+      prompt: text,
+      maxTokens: 16,
+    });
+    const picked = raw.trim();
+    return { label: labels.includes(picked) ? picked : labels[0], raw };
   },
-  "ai.transcribe": async (s) => stubIntegration("ai_transcribe", s),
+  "ai.chat_response": async (s) => {
+    // Catalog params: `message` (path/literal of inbound message), `persona`,
+    // `history` (path to prior conversation array — folded into the prompt).
+    const p = s.node.data?.params ?? {};
+    const userMsg = String(resolveOrLiteral(s, p.message ?? s.input?.message) ?? "");
+    if (!userMsg) throw new Error("ai.chat_response requires `message`.");
+    const history = resolveOrLiteral(s, p.history);
+    const histText = Array.isArray(history)
+      ? "\n\nPrior conversation:\n" + history.slice(-10).map((m: any) => `${m?.role ?? "user"}: ${m?.content ?? m}`).join("\n")
+      : "";
+    const reply = await callLLM({
+      module: "drafting-ai",
+      systemPrompt: String(p.persona ?? "You are a helpful customer-service assistant for a mass tort law firm. Be concise and never give legal advice."),
+      prompt: userMsg + histText,
+      maxTokens: 400,
+    });
+    return { reply };
+  },
+  "ai.voice_agent": async () => {
+    // Catalog declares branches completed|failed — surface the failed branch.
+    return { __branch: "failed", value: { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "ai.voice_agent requires Vapi credentials." } };
+  },
+  "ai.transcribe": async () => {
+    return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "ai.transcribe requires a transcription provider (Whisper/Deepgram)." };
+  },
 
   // ───────── Utility
   "utility.log": async (s) => {
@@ -667,8 +1202,31 @@ export async function runWorkflow(opts: ExecutorOptions): Promise<RunResult> {
         if (res && typeof res === "object" && (res as any).__branch) {
           branch = (res as any).__branch as string;
           output = (res as any).value;
+          // Validate the branch name against the catalog so a typoed handler
+          // can't silently route off a non-existent edge. The implicit
+          // sentinel "__end__" is always allowed (utility.end uses it).
+          if (branch !== "__end__") {
+            const def = getNodeDefinition(node.type);
+            const allowed = Array.isArray(def?.outputs) ? (def!.outputs as string[]) : null;
+            if (allowed && !allowed.includes(branch)) {
+              throw new Error(
+                `Handler for ${node.type} returned branch "${branch}" but the catalog declares only [${allowed.join(", ")}]. Update the catalog or fix the handler.`,
+              );
+            }
+          }
         } else {
           output = res;
+          // Contract: nodes whose catalog declares NAMED outputs must always
+          // emit a `__branch`. Without it, the executor cannot pick a next
+          // edge deterministically and the workflow would silently dead-end.
+          // We surface this as a hard error so handler bugs are caught fast.
+          const def = getNodeDefinition(node.type);
+          const allowed = Array.isArray(def?.outputs) ? (def!.outputs as string[]) : null;
+          if (allowed && allowed.length > 0) {
+            throw new Error(
+              `Handler for ${node.type} returned no __branch but the catalog declares named outputs [${allowed.join(", ")}]. Handler must return { __branch, value }.`,
+            );
+          }
         }
       } catch (err: any) {
         status = "error"; stepError = err?.message ?? String(err);

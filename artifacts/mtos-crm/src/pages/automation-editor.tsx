@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Sparkles, X, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { getLucide } from "@/lib/lucide-icon";
@@ -70,6 +70,17 @@ function EditorInner() {
   const [runOpen, setRunOpen] = useState(false);
   const [runInput, setRunInput] = useState("{}");
   const [running, setRunning] = useState(false);
+  // AI Assistant drawer state
+  const [assistOpen, setAssistOpen] = useState(false);
+  const [assistPrompt, setAssistPrompt] = useState("");
+  const [assistMode, setAssistMode] = useState<"replace" | "patch">("replace");
+  const [assistLoading, setAssistLoading] = useState(false);
+  const [assistResult, setAssistResult] = useState<{
+    explanation: string;
+    graph: { nodes: any[]; edges: any[] };
+    mode: "replace" | "patch";
+  } | null>(null);
+  const [assistError, setAssistError] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     return window.localStorage.getItem("mtos:automation:paletteOpen") !== "0";
@@ -247,6 +258,98 @@ function EditorInner() {
     } finally { setRunning(false); }
   }
 
+  async function askAssistant() {
+    const trimmed = assistPrompt.trim();
+    if (trimmed.length < 3) {
+      toast({ title: "Type a longer prompt", variant: "destructive" });
+      return;
+    }
+    setAssistLoading(true); setAssistError(null); setAssistResult(null);
+    try {
+      const res = await apiFetchRaw(`/api/automations/assist`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: trimmed, currentGraph: buildGraphForSave(), mode: assistMode }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.status === "error") {
+        const issues = data?.details?.issues;
+        const detail = Array.isArray(issues) ? issues.join("\n• ") : (data?.message ?? "Assistant failed");
+        setAssistError(detail);
+        return;
+      }
+      setAssistResult({
+        explanation: data.explanation ?? "",
+        graph: data.graph,
+        mode: data.mode ?? assistMode,
+      });
+    } catch (e: any) {
+      setAssistError(e?.message ?? String(e));
+    } finally {
+      setAssistLoading(false);
+    }
+  }
+
+  function applyAssistResult() {
+    if (!assistResult) return;
+    const proposed = assistResult.graph;
+    // Defensive client-side guard: even though /assist already validated the
+    // graph against the catalog, double-check here so a stale catalog cache
+    // (e.g. after a server deploy) can't slip an unknown node onto the
+    // canvas. We also ensure every edge points at a node we know about.
+    const ids = new Set(proposed.nodes.map((n: any) => n.id));
+    const badNodes = proposed.nodes.filter((n: any) => !catalogByType[n.type]);
+    const badEdges = proposed.edges.filter((e: any) => !ids.has(e.source) || !ids.has(e.target));
+    if (badNodes.length > 0 || badEdges.length > 0) {
+      const detail = [
+        ...badNodes.map((n: any) => `unknown node type "${n.type}"`),
+        ...badEdges.map((e: any) => `dangling edge ${e.id}`),
+      ].join("; ");
+      toast({ title: "Refused to apply proposal", description: detail, variant: "destructive" });
+      return;
+    }
+    // Map the proposed catalog graph onto ReactFlow nodes the same way the
+    // initial-load path does — keeping `data.nodeType` so the editor's per-
+    // node config panel works on the new nodes.
+    const newNodes = proposed.nodes.map((n) => decorateNodeFromCatalog(n));
+    const newEdges = proposed.edges.map((e) => ({
+      ...e,
+      sourceHandle: e.sourceHandle ?? null,
+      targetHandle: e.targetHandle ?? null,
+      markerEnd: { type: MarkerType.ArrowClosed },
+    }));
+    if (assistResult.mode === "replace") {
+      setNodes(newNodes); setEdges(newEdges);
+    } else {
+      // Patch: append new nodes/edges, dedupe by id (incoming wins).
+      const incomingIds = new Set(newNodes.map((n) => n.id));
+      setNodes((curr) => [...curr.filter((n) => !incomingIds.has(n.id)), ...newNodes]);
+      const incomingEdgeIds = new Set(newEdges.map((e) => e.id));
+      setEdges((curr) => [...curr.filter((e) => !incomingEdgeIds.has(e.id)), ...newEdges]);
+    }
+    toast({ title: "Workflow updated", description: assistResult.mode === "replace" ? "Graph replaced" : "Patch merged" });
+    setAssistResult(null); setAssistOpen(false); setAssistPrompt("");
+  }
+
+  // Decorate a catalog-shaped node {id,type,position,data:{label,params}} into
+  // the ReactFlow node shape the editor uses (mirrors the initial-load logic).
+  function decorateNodeFromCatalog(n: any): Node {
+    const def = catalogByType[n.type];
+    return {
+      id: n.id,
+      position: n.position ?? { x: 100, y: 100 },
+      type: "default",
+      data: {
+        nodeType: n.type,
+        label: n.data?.label ?? def?.label ?? n.type,
+        params: n.data?.params ?? {},
+      },
+      style: def
+        ? { borderLeft: `4px solid var(--accent, #6366f1)`, paddingLeft: 8 }
+        : undefined,
+    } as Node;
+  }
+
   function exportLocal() {
     const blob = new Blob([JSON.stringify({ name, description, tags, graph: buildGraphForSave() }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -269,11 +372,82 @@ function EditorInner() {
           <Label htmlFor="enabled" className="text-xs">Enabled</Label>
         </div>
         <div className="ml-auto flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => setAssistOpen(true)} data-testid="button-ai-assist"><Sparkles className="h-4 w-4 mr-1" /> AI Assist</Button>
           <Button size="sm" variant="outline" onClick={exportLocal}><Download className="h-4 w-4 mr-1" /> Export</Button>
           <Button size="sm" variant="outline" onClick={() => setRunOpen((v) => !v)}><Play className="h-4 w-4 mr-1" /> Run</Button>
           <Button size="sm" onClick={save} disabled={saving}><Save className="h-4 w-4 mr-1" /> {saving ? "Saving…" : "Save"}</Button>
         </div>
       </div>
+
+      {assistOpen && (
+        <div className="fixed inset-y-0 right-0 z-50 w-[420px] bg-background border-l shadow-2xl flex flex-col" data-testid="drawer-ai-assist">
+          <div className="flex items-center justify-between border-b px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-indigo-500" />
+              <span className="font-semibold text-sm">AI Workflow Assistant</span>
+            </div>
+            <button onClick={() => setAssistOpen(false)} className="p-1 rounded hover:bg-muted" aria-label="Close" data-testid="button-close-assist">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="p-4 space-y-3 overflow-y-auto flex-1">
+            <p className="text-xs text-muted-foreground">
+              Describe the workflow you want. The assistant will propose a graph using only nodes from the catalog.
+            </p>
+            <div className="space-y-1">
+              <Label className="text-xs">Prompt</Label>
+              <Textarea
+                value={assistPrompt}
+                onChange={(e) => setAssistPrompt(e.target.value)}
+                rows={5}
+                placeholder="e.g. When a new lead comes in, run a background check; if clear, send a welcome email and assign a paralegal."
+                data-testid="input-assist-prompt"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Mode</Label>
+              <Select value={assistMode} onValueChange={(v) => setAssistMode(v as "replace" | "patch")}>
+                <SelectTrigger className="h-8 text-xs" data-testid="select-assist-mode"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="replace">Replace entire workflow</SelectItem>
+                  <SelectItem value="patch">Append / patch existing</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button onClick={askAssistant} disabled={assistLoading} className="w-full" data-testid="button-ask-assist">
+              {assistLoading ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Thinking…</> : <><Sparkles className="h-4 w-4 mr-1" /> Generate</>}
+            </Button>
+
+            {assistError && (
+              <div className="rounded border border-destructive/40 bg-destructive/10 p-2 text-xs whitespace-pre-wrap text-destructive" data-testid="text-assist-error">
+                {assistError}
+              </div>
+            )}
+
+            {assistResult && (
+              <div className="space-y-2 border rounded p-2 bg-muted/30" data-testid="block-assist-result">
+                <div className="text-xs font-medium">Proposal</div>
+                {assistResult.explanation && (
+                  <p className="text-xs text-muted-foreground whitespace-pre-wrap">{assistResult.explanation}</p>
+                )}
+                <div className="text-xs flex gap-3">
+                  <Badge variant="secondary">{assistResult.graph.nodes.length} nodes</Badge>
+                  <Badge variant="secondary">{assistResult.graph.edges.length} edges</Badge>
+                  <Badge>{assistResult.mode}</Badge>
+                </div>
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Show JSON</summary>
+                  <pre className="mt-1 max-h-48 overflow-auto bg-background border rounded p-2 text-[10px]">{JSON.stringify(assistResult.graph, null, 2)}</pre>
+                </details>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={applyAssistResult} className="flex-1" data-testid="button-apply-assist">Apply</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setAssistResult(null)} data-testid="button-discard-assist">Discard</Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-1 min-h-0">
         {/* Node palette */}
