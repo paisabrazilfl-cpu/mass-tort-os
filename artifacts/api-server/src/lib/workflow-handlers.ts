@@ -573,10 +573,16 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
     if (outcome.retryable) {
       throw new Error(`Fax provider transient error: ${outcome.message} (fax_results.id=${faxRow.id})`);
     }
-    // Non-retryable provider failures are still failures — surface them so
-    // automation/job callers can branch and so the operator sees an error
-    // (not a misleading "sent") in the timeline.
-    throw new Error(`Fax provider rejected request: [${outcome.code}] ${outcome.message} (fax_results.id=${faxRow.id})`);
+    // Non-retryable provider failures: throw with `nonRetryable: true` so
+    // the worker dead-letters the job IMMEDIATELY (preserving the legacy
+    // "no retry loop on permanent failures" contract documented in
+    // worker.ts) AND the executor catch path still sees a thrown error
+    // and routes the automation node down its `failed` branch.
+    const err = new Error(
+      `Fax provider rejected request: [${outcome.code}] ${outcome.message} (fax_results.id=${faxRow.id})`,
+    );
+    (err as { nonRetryable?: boolean }).nonRetryable = true;
+    throw err;
   }
 
   await db

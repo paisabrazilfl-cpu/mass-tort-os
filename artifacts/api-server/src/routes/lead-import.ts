@@ -390,12 +390,18 @@ async function processImportBatch(
         continue;
       }
 
+      // Strip transient/non-column markers before building the insert
+      // payload — `_import_warnings` is collected in mapRowToLead() so we
+      // can surface per-row notes (e.g. invalid hospital_fax was dropped),
+      // but it is NOT a column on the leads table and would cause the
+      // insert to fail.
+      const { _import_warnings: importWarnings, ...leadColumns } = leadData;
       const insertData: Record<string, any> = {
-        ...leadData,
+        ...leadColumns,
         status: conflictResult.has_conflict ? "review_required" : "new",
-        source: leadData.source || "csv_import",
-        diagnosis_confirmed: leadData.diagnosis_confirmed || false,
-        was_at_location: leadData.was_at_location || false,
+        source: leadColumns.source || "csv_import",
+        diagnosis_confirmed: leadColumns.diagnosis_confirmed || false,
+        was_at_location: leadColumns.was_at_location || false,
       };
 
       const encrypted = encryptLeadFields(insertData);
@@ -427,6 +433,12 @@ async function processImportBatch(
         raw_data: rows[i],
         lead_id: newLead.id,
         conflict_details: conflictResult.has_conflict ? conflictResult : null,
+        // Surface per-row warnings (e.g. invalid hospital_fax was dropped)
+        // in the import row itself so operators can audit later. We piggyback
+        // on `error_message` for free-text since adding a new column would
+        // be a schema change.
+        error_message:
+          importWarnings && importWarnings.length > 0 ? `warnings: ${importWarnings.join("; ")}` : null,
         processed_at: new Date(),
       });
     } catch (err: any) {

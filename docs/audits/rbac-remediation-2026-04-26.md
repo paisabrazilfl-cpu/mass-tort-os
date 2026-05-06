@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **214 checked / 33 public / 181 protected / 0 unprotected.**
+Boot-time count: **215 checked / 34 public / 181 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -698,6 +698,7 @@ Boot-time count: **214 checked / 33 public / 181 protected / 0 unprotected.**
 | forms-public | POST | `/api/forms-public/submit/:tortId` |  |  | ✓ |  |  | — | — | — |
 | forms-public | POST | `/api/forms-public/validate/address` |  |  | ✓ |  |  | — | — | — |
 | forms-public | POST | `/api/forms-public/validate/email` |  |  | ✓ |  |  | — | — | — |
+| forms-public | POST | `/api/forms-public/validate/fax` |  |  | ✓ |  |  | — | — | — |
 | forms | GET | `/api/forms/background-check-hub/lead/:id/snapshots` | ✓ | ✓ |  |  |  | — | `forms:background_check` | ✓ |
 | forms | POST | `/api/forms/background-check-hub/lead/:id` | ✓ | ✓ |  |  |  | — | `forms:background_check` | ✓ |
 | forms | POST | `/api/forms/background-check/lead/:id` | ✓ | ✓ |  |  |  | — | `forms:background_check` | ✓ |
