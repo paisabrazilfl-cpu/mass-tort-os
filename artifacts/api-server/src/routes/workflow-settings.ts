@@ -90,18 +90,32 @@ router.put("/", requirePermission(Permission.WORKFLOW_SETTINGS_MANAGE), auditAct
     .select()
     .from(workflowSettingsTable)
     .where(eq(workflowSettingsTable.scope, d.scope));
+  // settingsSchema validates the request body to a partial of the
+  // workflow_settings columns; cast to the drizzle insert/update shape
+  // so we don't need `any` to widen optional FK + json fields.
+  type WorkflowSettingsInsert = typeof workflowSettingsTable.$inferInsert;
+  type WorkflowSettingsUpdate = Partial<WorkflowSettingsInsert>;
   if (existing) {
+    const updatePayload: WorkflowSettingsUpdate = {
+      ...(d as WorkflowSettingsUpdate),
+      updated_by_user_id: req.user?.id ?? null,
+      updated_at: new Date(),
+    };
     const [row] = await db
       .update(workflowSettingsTable)
-      .set({ ...d, updated_by_user_id: req.user?.id ?? null, updated_at: new Date() } as any)
+      .set(updatePayload)
       .where(eq(workflowSettingsTable.id, existing.id))
       .returning();
     res.json(row);
     return;
   }
+  const insertPayload: WorkflowSettingsInsert = {
+    ...(d as WorkflowSettingsInsert),
+    updated_by_user_id: req.user?.id ?? null,
+  };
   const [row] = await db
     .insert(workflowSettingsTable)
-    .values({ ...d, updated_by_user_id: req.user?.id ?? null } as any)
+    .values(insertPayload)
     .returning();
   res.status(201).json(row);
 });

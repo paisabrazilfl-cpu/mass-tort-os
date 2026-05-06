@@ -93,20 +93,24 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   documo: ["api_key"],
   telnyx_fax: ["api_key"],
 
-  // SMS
+  // SMS — providers whose inbound webhook verifier reads `client_secret`
+  // (HMAC-SHA256 signing key) MUST require it here so operators can't mark
+  // the integration "Live" while signature verification is impossible.
   twilio: ["api_key", "account_sid"],
-  telnyx: ["api_key"],
-  bandwidth: ["api_key"],
+  telnyx: ["api_key", "client_secret"],
+  bandwidth: ["api_key", "client_secret"],
   plivo: ["api_key", "account_sid"],
-  messagebird: ["api_key"],
-  sinch: ["api_key"],
+  messagebird: ["api_key", "client_secret"],
+  sinch: ["api_key", "client_secret"],
 
-  // Voice AI
-  vapi: ["api_key"],
-  retell_ai: ["api_key"],
-  bland_ai: ["api_key"],
-  elevenlabs: ["api_key"],
-  synthflow: ["api_key"],
+  // Voice AI — same invariant: any provider whose inbound /webhooks/voice
+  // verifier reads `client_secret` requires it. vapi already used api_key
+  // for HMAC + client_secret as the tool-call bearer.
+  vapi: ["api_key", "client_secret"],
+  retell_ai: ["api_key", "client_secret"],
+  bland_ai: ["api_key", "client_secret"],
+  elevenlabs: ["api_key", "client_secret"],
+  synthflow: ["api_key", "client_secret"],
 
   // AI / LLM (vault-consuming providers — anthropic/openai are env-managed)
   google_gemini: ["api_key"],

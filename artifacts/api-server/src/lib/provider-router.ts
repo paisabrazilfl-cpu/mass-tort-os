@@ -135,7 +135,10 @@ export async function resolveProvider(
         };
       }
       const field = FIELD_BY_CATEGORY[category];
-      const val = (settings as any)[field];
+      // settings is typed as workflowSettingsTable.$inferSelect; FIELD_BY_CATEGORY
+      // values are constrained to keyof that type so this lookup is type-safe
+      // (the cast just tells TS the indexed value's runtime shape).
+      const val = (settings as Record<string, unknown>)[field as string];
       if (typeof val === "number") integrationId = val;
     }
   }

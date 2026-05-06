@@ -764,7 +764,7 @@ function looksJsonObject(v: unknown): v is AnyJson {
 function pickFirstString(o: AnyJson | undefined, keys: string[]): string | undefined {
   if (!o) return undefined;
   for (const k of keys) {
-    const v = (o as any)[k];
+    const v = o[k];
     if (typeof v === "string" && v.length > 0) return v;
   }
   return undefined;
