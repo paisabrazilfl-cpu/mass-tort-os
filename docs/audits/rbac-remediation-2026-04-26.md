@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **219 checked / 38 public / 181 protected / 0 unprotected.**
+Boot-time count: **220 checked / 38 public / 182 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -654,6 +654,7 @@ Boot-time count: **219 checked / 38 public / 181 protected / 0 unprotected.**
 | buyers | POST | `/api/buyers/` | ✓ | ✓ |  |  |  | — | `buyers:manage` | ✓ |
 | calls | GET | `/api/calls/:id` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | calls | GET | `/api/calls/` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| calls | POST | `/api/calls/outbound` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | cases | POST | `/api/cases/:id/analyze` | ✓ | ✓ |  |  |  | — | `case:analyze` | ✓ |
 | cases | POST | `/api/cases/:id/upload` | ✓ | ✓ |  |  |  | — | `case:upload` | ✓ |
 | cases | GET | `/api/cases/:id` | ✓ | ✓ |  |  |  | — | `case:view:own`, `case:view:any` | ✓ |

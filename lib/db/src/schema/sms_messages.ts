@@ -27,6 +27,14 @@ export const smsMessagesTable = pgTable(
     to_phone_e164: varchar("to_phone_e164", { length: 20 }).notNull(),
     body: text("body").notNull(),
     telnyx_message_id: varchar("telnyx_message_id", { length: 100 }),
+    /**
+     * Provider-agnostic external id (Twilio MessageSid, Bandwidth
+     * messageId, Plivo MessageUUID, Sinch id, MessageBird id, …).
+     * Populated for every non-Telnyx provider; Telnyx writes to
+     * telnyx_message_id for backwards compat.
+     */
+    external_message_id: varchar("external_message_id", { length: 128 }),
+    provider: varchar("provider", { length: 32 }),
     status: varchar("status", { length: 30 }).notNull().default("queued"),
     error: text("error"),
     sent_at: timestamp("sent_at"),
@@ -40,6 +48,7 @@ export const smsMessagesTable = pgTable(
     leadIdx: index("sms_messages_lead_id_idx").on(t.lead_id),
     firmIdx: index("sms_messages_firm_id_idx").on(t.firm_id),
     telnyxIdIdx: index("sms_messages_telnyx_message_id_idx").on(t.telnyx_message_id),
+    externalMessageIdIdx: index("sms_messages_external_message_id_idx").on(t.external_message_id),
     statusCreatedIdx: index("sms_messages_status_created_at_idx").on(t.status, t.created_at),
     firmSentAtIdx: index("sms_messages_firm_sent_at_idx").on(t.firm_id, t.sent_at),
   }),

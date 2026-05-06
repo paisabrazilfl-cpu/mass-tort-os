@@ -927,20 +927,39 @@ router.post("/sms/:provider", async (req, res) => {
 
   // Correlate inbound delivery report → sms_messages row by external id
   // so the persisted update lights up the lead history view.
-  const externalId =
-    pickFirstString(evt, ["MessageSid", "message_id", "id", "messageId"]);
-  const status = pickFirstString(evt, ["MessageStatus", "status", "EventType"]);
+  const externalId = pickFirstString(evt, [
+    "MessageSid", "message_id", "id", "messageId", "MessageUUID",
+  ]);
+  const rawStatus = pickFirstString(evt, [
+    "MessageStatus", "status", "EventType", "Status",
+  ]);
+  // Normalize provider-specific status verbiage onto sms_messages.status.
+  const status = (() => {
+    const s = rawStatus?.toLowerCase();
+    if (!s) return null;
+    if (["delivered", "received"].includes(s)) return "delivered";
+    if (["failed", "undelivered", "rejected"].includes(s)) return "failed";
+    if (["sent", "queued", "accepted"].includes(s)) return s;
+    return s.slice(0, 30);
+  })();
+
   if (externalId && status) {
     try {
-      // sms_messages.telnyx_message_id is the only external-id column
-      // currently; for non-telnyx providers we skip the row update and
-      // persist only an audit_log record until a generic
-      // external_message_id column is added.
+      const setBase: Record<string, unknown> = { status, updated_at: new Date() };
+      if (status === "delivered") setBase.delivered_at = new Date();
+      if (status === "failed") setBase.failed_at = new Date();
+
       if (provider === "telnyx") {
+        // Backwards-compat path — Telnyx still uses the dedicated column.
         await db
           .update(smsMessagesTable)
-          .set({ status, updated_at: new Date() })
+          .set(setBase)
           .where(eq(smsMessagesTable.telnyx_message_id, externalId));
+      } else {
+        await db
+          .update(smsMessagesTable)
+          .set(setBase)
+          .where(eq(smsMessagesTable.external_message_id, externalId));
       }
     } catch (err) {
       logger.warn({ err, provider, externalId }, "sms_messages status update failed");
@@ -955,6 +974,33 @@ router.post("/sms/:provider", async (req, res) => {
   res.json({ ok: true, signature_status: signatureStatus });
 });
 
+/**
+ * Per-provider voice webhook → call_logs persistence.
+ *
+ * Each provider names its outbound-call id and event-type fields
+ * differently. We pluck the common ones, normalize the status, and
+ * upsert the call_logs row (matched by vapi_call_id when provider
+ * === "vapi", otherwise stored in events[]). For ringing/end events
+ * we also patch started_at / ended_at / duration_seconds when the
+ * provider includes them.
+ */
+function pickVoiceExternalId(provider: string, evt: AnyJson): string | undefined {
+  if (provider === "retell_ai") return pickFirstString(evt, ["call_id"]) ?? pickFirstString((evt as { call?: AnyJson }).call, ["call_id"]);
+  if (provider === "bland_ai") return pickFirstString(evt, ["call_id", "c_id"]);
+  if (provider === "elevenlabs") return pickFirstString(evt, ["conversation_id", "callSid"]);
+  if (provider === "synthflow") return pickFirstString(evt, ["call_id"]) ?? pickFirstString((evt as { response?: AnyJson }).response, ["call_id"]);
+  return pickFirstString(evt, ["call_id", "id"]);
+}
+
+function normalizeVoiceStatus(raw: string | undefined): string {
+  if (!raw) return "unknown";
+  const s = raw.toLowerCase();
+  if (["call-started", "call_started", "ringing", "started", "in-progress", "ongoing"].includes(s)) return "ringing";
+  if (["call-ended", "call_ended", "ended", "completed", "hangup"].includes(s)) return "completed";
+  if (["failed", "no-answer", "busy", "rejected"].includes(s)) return "failed";
+  return s.slice(0, 30);
+}
+
 router.post("/voice/:provider", async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
   if (!VOICE_EVENT_PROVIDERS.has(provider)) {
@@ -962,14 +1008,75 @@ router.post("/voice/:provider", async (req, res) => {
     return;
   }
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
+
   // Voice providers (retell/bland/elevenlabs/synthflow) use webhook
   // secrets that aren't yet captured in the integration vault preset;
-  // mark unverified and rely on auditing for traceability.
+  // mark unverified and rely on auditing for traceability. We still
+  // persist into call_logs because the events are non-privileged
+  // status updates on rows we ourselves created via /api/calls/outbound.
+  const signatureStatus: SignatureStatus = "unverified";
+
+  const externalId = pickVoiceExternalId(provider, evt);
+  const eventKind = pickFirstString(evt, ["event", "type", "EventType", "kind"]);
+  const status = normalizeVoiceStatus(eventKind ?? pickFirstString(evt, ["status"]));
+  const durationSec = (() => {
+    const v = (evt as { duration_seconds?: unknown; duration?: unknown; call_length?: unknown });
+    const n = Number(v.duration_seconds ?? v.duration ?? v.call_length);
+    return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+  })();
+  const recordingUrl = pickFirstString(evt, ["recording_url", "recordingUrl", "audio_url"]);
+
+  if (externalId) {
+    try {
+      // Match by provider-specific column for vapi (existing path),
+      // otherwise scan recent outbound rows whose events log carries
+      // this external id from the /api/calls/outbound dispatcher.
+      const matchedRows = provider === "vapi"
+        ? await db.select({ id: callLogsTable.id }).from(callLogsTable).where(eq(callLogsTable.vapi_call_id, externalId)).limit(1)
+        : await db
+            .select({ id: callLogsTable.id })
+            .from(callLogsTable)
+            .where(sql`${callLogsTable.events} @> ${JSON.stringify([{ external_call_id: externalId }])}::jsonb`)
+            .limit(1);
+
+      if (matchedRows[0]) {
+        const updates: Record<string, unknown> = {
+          status,
+          updated_at: new Date(),
+          events: sql`${callLogsTable.events} || ${JSON.stringify([
+            { kind: eventKind ?? "event", provider, ts: new Date().toISOString(), payload: evt },
+          ])}::jsonb`,
+        };
+        if (status === "ringing") updates.started_at = new Date();
+        if (status === "completed" || status === "failed") updates.ended_at = new Date();
+        if (durationSec !== null) updates.duration_seconds = durationSec;
+        if (recordingUrl) updates.recording_url = recordingUrl;
+        await db.update(callLogsTable).set(updates).where(eq(callLogsTable.id, matchedRows[0].id));
+      } else {
+        // No prior row — likely a provider-initiated inbound call. Insert
+        // a fresh row so the operator can still see it land.
+        await db.insert(callLogsTable).values({
+          direction: "inbound",
+          status,
+          to_number: pickFirstString(evt, ["to", "to_number", "called_number"]),
+          from_number: pickFirstString(evt, ["from", "from_number", "caller"]),
+          vapi_call_id: provider === "vapi" ? externalId : null,
+          events: [{ kind: eventKind ?? "event", provider, external_call_id: externalId, ts: new Date().toISOString(), payload: evt }],
+          recording_url: recordingUrl ?? null,
+          duration_seconds: durationSec ?? null,
+        });
+      }
+    } catch (err) {
+      logger.warn({ err, provider, externalId }, "call_logs persistence failed");
+    }
+  }
+
   await auditLog("voice_provider_webhook", provider, "received", {
-    raw: evt,
-    signature_status: "unverified",
+    signature_status: signatureStatus,
+    external_call_id: externalId ?? null,
+    status,
   });
-  res.json({ ok: true, signature_status: "unverified" });
+  res.json({ ok: true, signature_status: signatureStatus });
 });
 
 export default router;

@@ -17,6 +17,9 @@ import { desc, eq, sql, and, or, ilike, gte, lte } from "drizzle-orm";
 import { requirePermission, Permission } from "../lib/rbac";
 import { badRequest } from "../lib/http-errors";
 import { getFirmIdForUser } from "../lib/subscription-gate";
+import { resolveProvider, isResolved } from "../lib/provider-router";
+import { getVoiceAdapter } from "../lib/voice";
+import { logger } from "../lib/logger";
 
 /**
  * Firm scoping: every operator request must be filtered by their
@@ -206,6 +209,142 @@ router.get(
     }
 
     res.json({ status: "ok", data: row });
+  },
+);
+
+/**
+ * POST /api/calls/outbound — kick off an outbound voice call through
+ * the operator-chosen voice provider (Workflow Settings → Voice
+ * Provider). Resolves through provider-router so the same call surface
+ * works for vapi/retell_ai/bland_ai/elevenlabs/synthflow without any
+ * caller branching. Persists a queued call_logs row up front so the
+ * Calls page reflects the attempt even if the provider rejects it.
+ */
+const OutboundCallBody = z.object({
+  to: z.string().min(7),
+  assistant_id: z.string().min(1),
+  lead_id: z.number().int().optional(),
+  from: z.string().min(7).optional(),
+  context: z.record(z.string(), z.string()).optional(),
+});
+
+router.post(
+  "/outbound",
+  requirePermission(Permission.CALLS_MANAGE),
+  async (req, res) => {
+    const parsed = OutboundCallBody.safeParse(req.body);
+    if (!parsed.success) {
+      badRequest(res, "Invalid outbound call body", parsed.error.issues);
+      return;
+    }
+    const { to, assistant_id, lead_id, from, context } = parsed.data;
+
+    const user = req.user!;
+    const scope = await resolveFirmScope(user.id);
+    if (scope.error) {
+      res.status(scope.error.status).json({ status: "error", code: scope.error.code, message: scope.error.message });
+      return;
+    }
+
+    const resolved = await resolveProvider("voice");
+    if (!isResolved(resolved)) {
+      res.status(503).json({
+        status: "error",
+        code: "VOICE_PROVIDER_UNAVAILABLE",
+        message: `Voice provider not available: ${resolved.reason} — ${resolved.details ?? ""}`,
+      });
+      return;
+    }
+
+    const adapter = getVoiceAdapter(resolved.provider);
+    if (!adapter?.startCall) {
+      res.status(503).json({
+        status: "error",
+        code: "VOICE_PROVIDER_NOT_IMPLEMENTED",
+        message: `Voice provider "${resolved.provider}" does not implement outbound startCall.`,
+      });
+      return;
+    }
+
+    // Persist the queued row before dispatch so an upstream timeout
+    // still leaves an audit trail visible to the operator.
+    const [inserted] = await db
+      .insert(callLogsTable)
+      .values({
+        firm_id: scope.firmId,
+        lead_id: lead_id ?? null,
+        direction: "outbound",
+        from_number: from ?? null,
+        to_number: to,
+        status: "queued",
+      })
+      .returning({ id: callLogsTable.id });
+    const callLogId = inserted!.id;
+
+    try {
+      const out = await adapter.startCall(resolved.credentials, {
+        assistantId: assistant_id,
+        to,
+        from,
+        context,
+        metadata: { call_log_id: String(callLogId), lead_id: lead_id != null ? String(lead_id) : "" },
+      });
+
+      if (!out.ok) {
+        await db
+          .update(callLogsTable)
+          .set({ status: "failed", error: out.message, updated_at: new Date() })
+          .where(eq(callLogsTable.id, callLogId));
+        res.status(502).json({
+          status: "error",
+          code: "VOICE_START_FAILED",
+          message: out.message,
+          provider: resolved.provider,
+          call_log_id: callLogId,
+        });
+        return;
+      }
+
+      // External id naming varies; we keep vapi_call_id for vapi for
+      // backwards-compat with the existing webhook lookup, and stash
+      // every other provider's id in the events log so it's still
+      // discoverable from the call detail view.
+      const updates: Record<string, unknown> = {
+        status: "ringing",
+        started_at: new Date(),
+        updated_at: new Date(),
+      };
+      if (resolved.provider === "vapi") updates.vapi_call_id = out.externalCallId;
+      else {
+        updates.events = sql`${callLogsTable.events} || ${JSON.stringify([
+          { kind: "outbound_started", provider: resolved.provider, external_call_id: out.externalCallId, ts: new Date().toISOString() },
+        ])}::jsonb`;
+      }
+      await db.update(callLogsTable).set(updates).where(eq(callLogsTable.id, callLogId));
+
+      res.json({
+        status: "ok",
+        data: {
+          call_log_id: callLogId,
+          provider: resolved.provider,
+          external_call_id: out.externalCallId,
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      logger.error({ err, callLogId, provider: resolved.provider }, "outbound voice call threw");
+      await db
+        .update(callLogsTable)
+        .set({ status: "failed", error: message, updated_at: new Date() })
+        .where(eq(callLogsTable.id, callLogId));
+      res.status(500).json({
+        status: "error",
+        code: "VOICE_START_THREW",
+        message,
+        provider: resolved.provider,
+        call_log_id: callLogId,
+      });
+    }
   },
 );
 

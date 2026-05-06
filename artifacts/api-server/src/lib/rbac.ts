@@ -199,6 +199,7 @@ export const Permission = {
 
   // Voice (Vapi call logs)
   CALLS_VIEW: "calls:view",
+  CALLS_MANAGE: "calls:manage",
 
   // SMS (Telnyx outbound)
   SMS_SEND: "sms:send",
@@ -279,6 +280,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     // does NOT get billing perms even though they own legal work for the firm.
     // Voice & SMS — attorney can review calls and send SMS to leads.
     Permission.CALLS_VIEW,
+    Permission.CALLS_MANAGE,
     Permission.SMS_SEND,
   ]),
   paralegal: new Set<Permission>([

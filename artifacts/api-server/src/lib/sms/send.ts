@@ -103,9 +103,11 @@ export async function sendSmsViaRouter(input: SendSmsInput): Promise<SendSmsOutc
       status: "sent",
       sent_at: new Date(),
       updated_at: new Date(),
+      provider: resolved.provider,
+      external_message_id: out.externalMessageId,
     };
-    // Telnyx historically populated a dedicated column; for everything
-    // else the external id lives in raw_payload via the webhook handler.
+    // Telnyx keeps populating its dedicated column for backwards compat
+    // (existing UI joins still reference telnyx_message_id).
     if (resolved.provider === "telnyx") updates.telnyx_message_id = out.externalMessageId;
     await db.update(smsMessagesTable).set(updates).where(eq(smsMessagesTable.id, smsMessageId));
 
