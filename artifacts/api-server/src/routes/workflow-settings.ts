@@ -142,7 +142,9 @@ router.get("/_options/providers", requirePermission(Permission.WORKFLOW_SETTINGS
     fax: map("fax", supportedFax),
     email: map("email", supportedEmail),
     sms: map("sms", supportedSms),
-    voice: map("voice", supportedVoice),
+    // Preset rows for voice agents declare type="voice_ai" (not "voice"),
+    // so the dropdown was previously empty after Round-2 mappings landed.
+    voice: map("voice_ai", supportedVoice),
     llm: map("ai", supportedLlm),
   });
 });

@@ -943,7 +943,12 @@ router.post("/sms/:provider", async (req, res) => {
     return s.slice(0, 30);
   })();
 
-  if (externalId && status) {
+  // SECURITY: only mutate sms_messages when the signature was actually
+  // verified. "unverified" means we either lack the secret or the header
+  // is missing; either way, persisting would let an unauthenticated
+  // caller falsify delivery state. We still 200 so providers don't
+  // disable the endpoint, but the row stays untouched.
+  if (externalId && status && signatureStatus === "verified") {
     try {
       const setBase: Record<string, unknown> = { status, updated_at: new Date() };
       if (status === "delivered") setBase.delivered_at = new Date();
@@ -1010,11 +1015,39 @@ router.post("/voice/:provider", async (req, res) => {
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
 
   // Voice providers (retell/bland/elevenlabs/synthflow) use webhook
-  // secrets that aren't yet captured in the integration vault preset;
-  // mark unverified and rely on auditing for traceability. We still
-  // persist into call_logs because the events are non-privileged
-  // status updates on rows we ourselves created via /api/calls/outbound.
-  const signatureStatus: SignatureStatus = "unverified";
+  // secrets that vary by provider. When a credentials vault row carries
+  // a `client_secret` (HMAC key), verify against the standard
+  // `x-<provider>-signature` header (HMAC-SHA256 over rawBody). Anything
+  // we cannot verify falls back to "unverified" and is blocked from
+  // persisting below.
+  const { creds: voiceCreds } = await loadProviderForWebhook(provider);
+  let signatureStatus: SignatureStatus = "unverified";
+  const voiceSecret = typeof voiceCreds?.client_secret === "string" ? voiceCreds.client_secret : null;
+  const voiceSig =
+    (req.get(`x-${provider.replace(/_/g, "-")}-signature`) ??
+      req.get("x-webhook-signature") ??
+      "").trim();
+  if (voiceSecret && voiceSig) {
+    try {
+      const raw =
+        Buffer.isBuffer(req.body) ? req.body :
+        typeof req.body === "string" ? Buffer.from(req.body, "utf8") :
+        Buffer.from(JSON.stringify(req.body ?? {}), "utf8");
+      const expected = crypto.createHmac("sha256", voiceSecret).update(raw).digest("hex");
+      const a = Buffer.from(expected, "utf8");
+      const b = Buffer.from(voiceSig, "utf8");
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) signatureStatus = "verified";
+      else signatureStatus = "invalid";
+    } catch {
+      signatureStatus = "invalid";
+    }
+  }
+  if (signatureStatus === "invalid") {
+    logger.warn({ provider }, "voice webhook signature INVALID — refusing to mutate call_logs");
+    await auditLog("voice_webhook_invalid_signature", provider, "received", {});
+    res.json({ ok: true, signature_status: "invalid" });
+    return;
+  }
 
   const externalId = pickVoiceExternalId(provider, evt);
   const eventKind = pickFirstString(evt, ["event", "type", "EventType", "kind"]);
@@ -1026,7 +1059,9 @@ router.post("/voice/:provider", async (req, res) => {
   })();
   const recordingUrl = pickFirstString(evt, ["recording_url", "recordingUrl", "audio_url"]);
 
-  if (externalId) {
+  // SECURITY: only persist call_logs mutations when the request was
+  // actually verified. Unverified events are audit-only.
+  if (externalId && signatureStatus === "verified") {
     try {
       // Match by provider-specific column for vapi (existing path),
       // otherwise scan recent outbound rows whose events log carries

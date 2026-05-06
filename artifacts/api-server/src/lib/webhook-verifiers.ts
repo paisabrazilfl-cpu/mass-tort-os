@@ -175,6 +175,27 @@ const verifyPlivo: Verifier = (ctx, creds) => {
   return tsConstantEqual(expected, sig) ? "verified" : "invalid";
 };
 
+/**
+ * MessageBird webhooks: HMAC-SHA256 over the raw body keyed by the
+ * webhook signing key (preset stores it under client_secret). Header
+ * is `messagebird-signature` (or legacy `Messagebird-Signature`).
+ * MessageBird also sends `messagebird-request-timestamp`; when present
+ * we include it in the signed payload (`<ts>.<body>`), matching the
+ * v2 signing scheme.
+ */
+const verifyMessagebird: Verifier = (ctx, creds) => {
+  const sig =
+    header(ctx, "messagebird-signature-jwt") ??
+    header(ctx, "messagebird-signature");
+  if (!sig) return "unverified";
+  const secret = typeof creds?.client_secret === "string" ? creds.client_secret : null;
+  if (!secret) return "unverified";
+  const ts = header(ctx, "messagebird-request-timestamp");
+  const data = ts ? `${ts}.${ctx.rawBody.toString("utf8")}` : ctx.rawBody.toString("utf8");
+  const expected = crypto.createHmac("sha256", secret).update(data).digest("base64");
+  return tsConstantEqual(expected, sig) ? "verified" : "invalid";
+};
+
 const verifySinch: Verifier = (ctx, creds) => {
   const sig = header(ctx, "x-sinch-webhook-signature") ?? header(ctx, "x-sinch-signature");
   const ts = header(ctx, "x-sinch-webhook-signature-timestamp");
@@ -201,6 +222,7 @@ const SMS: Record<string, Verifier> = {
   bandwidth: verifyBandwidth,
   plivo: verifyPlivo,
   sinch: verifySinch,
+  messagebird: verifyMessagebird,
 };
 
 // AWS SES (SNS) and MessageBird use complex schemes (SNS message
