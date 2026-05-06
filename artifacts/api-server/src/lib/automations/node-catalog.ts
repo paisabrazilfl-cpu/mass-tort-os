@@ -294,7 +294,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
         { label: "Lead", value: "lead" }, { label: "Case", value: "case" },
       ]},
       { key: "id", label: "Entity id", type: "string", required: true, placeholder: "input.lead.id" },
-      { key: "paralegalId", label: "Paralegal id (blank = auto)", type: "string", placeholder: "(leave blank for round-robin)" },
+      { key: "paralegalId", label: "Paralegal id (blank = auto)", type: "string", help: "Leave blank for round-robin assignment." },
     ],
   },
   {
@@ -617,7 +617,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
       ]},
       { key: "headers", label: "Headers (JSON)", type: "json", placeholder: '{"X-Source":"mtos","Content-Type":"application/json"}' },
       { key: "body", label: "Body (JSON)", type: "json", placeholder: '{"event":"lead.created","lead_id":"input.lead.id"}' },
-      { key: "hmacSecret", label: "HMAC secret (optional)", type: "string", placeholder: "(leave blank to skip signing)" },
+      { key: "hmacSecret", label: "HMAC secret (optional)", type: "string", help: "Leave blank to skip request signing." },
     ],
   },
   {
