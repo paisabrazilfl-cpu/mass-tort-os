@@ -242,7 +242,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     icon: "UserCog", color: "bg-violet-600",
     params: [
       { key: "leadId", label: "Lead id (or path)", type: "string", required: true, placeholder: "input.lead_id" },
-      { key: "patch", label: "Patch (JSON)", type: "json", required: true },
+      { key: "patch", label: "Patch (JSON)", type: "json", required: true, placeholder: '{"status":"qualified","priority":"high"}' },
     ],
   },
   {
@@ -250,7 +250,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Run the decision-engine and set the lead's qualification status.",
     icon: "ShieldCheck", color: "bg-violet-600",
     params: [
-      { key: "leadId", label: "Lead id", type: "string", required: true },
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
     ], outputs: ["qualified", "rejected", "review"],
   },
   {
@@ -258,8 +258,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Create a new case file from a lead.",
     icon: "Briefcase", color: "bg-violet-600",
     params: [
-      { key: "leadId", label: "Lead id", type: "string", required: true },
-      { key: "data", label: "Case fields (JSON)", type: "json" },
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "data", label: "Case fields (JSON)", type: "json", placeholder: '{"matter_type":"mass_tort","priority":"normal"}' },
     ],
   },
   {
@@ -270,8 +270,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
       { key: "entity", label: "Entity", type: "select", options: [
         { label: "Lead", value: "lead" }, { label: "Case", value: "case" },
       ], required: true },
-      { key: "id", label: "Entity id", type: "string", required: true },
-      { key: "note", label: "Note text", type: "text", required: true },
+      { key: "id", label: "Entity id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "note", label: "Note text", type: "text", required: true, placeholder: "Auto-note from workflow: {{input.summary}}" },
     ],
   },
   {
@@ -279,10 +279,10 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Write a compliance audit log row.",
     icon: "ClipboardList", color: "bg-violet-600",
     params: [
-      { key: "action", label: "Action", type: "string", required: true },
-      { key: "entityType", label: "Entity type", type: "string", required: true },
-      { key: "entityId", label: "Entity id", type: "string", required: true },
-      { key: "details", label: "Details (JSON)", type: "json" },
+      { key: "action", label: "Action", type: "string", required: true, placeholder: "workflow.executed" },
+      { key: "entityType", label: "Entity type", type: "string", required: true, placeholder: "lead" },
+      { key: "entityId", label: "Entity id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "details", label: "Details (JSON)", type: "json", placeholder: '{"workflow":"intake","step":"qualify"}' },
     ],
   },
   {
@@ -293,8 +293,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
       { key: "entity", label: "Entity", type: "select", required: true, options: [
         { label: "Lead", value: "lead" }, { label: "Case", value: "case" },
       ]},
-      { key: "id", label: "Entity id", type: "string", required: true },
-      { key: "paralegalId", label: "Paralegal id (blank = auto)", type: "string" },
+      { key: "id", label: "Entity id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "paralegalId", label: "Paralegal id (blank = auto)", type: "string", placeholder: "(leave blank for round-robin)" },
     ],
   },
   {
@@ -302,7 +302,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Move a lead to a new pipeline status.",
     icon: "GitBranch", color: "bg-violet-600",
     params: [
-      { key: "leadId", label: "Lead id", type: "string", required: true },
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
       { key: "status", label: "Status", type: "string", required: true, placeholder: "qualified | working | rejected" },
     ],
   },
@@ -314,8 +314,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
       { key: "entity", label: "Entity", type: "select", required: true, options: [
         { label: "Lead", value: "lead" }, { label: "Case", value: "case" }, { label: "Document", value: "document" },
       ]},
-      { key: "id", label: "Entity id", type: "string", required: true },
-      { key: "reason", label: "Reason", type: "text" },
+      { key: "id", label: "Entity id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "reason", label: "Reason", type: "text", placeholder: "Conflicting demographic data — needs human review." },
       { key: "priority", label: "Priority", type: "select", default: "normal", options: [
         { label: "Low", value: "low" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" }, { label: "Urgent", value: "urgent" },
       ]},
@@ -326,7 +326,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Fan out across the 9-lane background check hub for a lead.",
     icon: "Shield", color: "bg-violet-600",
     params: [
-      { key: "leadId", label: "Lead id", type: "string", required: true },
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
       { key: "lanes", label: "Lanes (JSON array, blank = all)", type: "json", placeholder: '["courtlistener","ofac","npi"]' },
     ], outputs: ["clear", "flagged", "error"],
   },
@@ -343,8 +343,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Run the deterministic decision engine and return scoring + routing.",
     icon: "Scale", color: "bg-violet-600",
     params: [
-      { key: "leadId", label: "Lead id", type: "string", required: true },
-      { key: "tort", label: "Tort code (optional)", type: "string" },
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "tort", label: "Tort code (optional)", type: "string", placeholder: "depo_provera" },
     ], outputs: ["qualified", "rejected", "review"],
   },
   {
@@ -352,14 +352,14 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Create a calendar/timeline event for a lead, case, or user.",
     icon: "Clock", color: "bg-violet-600",
     params: [
-      { key: "title", label: "Title", type: "string", required: true },
-      { key: "startsAt", label: "Starts at (ISO)", type: "string", required: true },
-      { key: "endsAt", label: "Ends at (ISO)", type: "string" },
+      { key: "title", label: "Title", type: "string", required: true, placeholder: "Intake call with {{input.lead.first_name}}" },
+      { key: "startsAt", label: "Starts at (ISO)", type: "string", required: true, placeholder: "2026-06-01T15:00:00Z" },
+      { key: "endsAt", label: "Ends at (ISO)", type: "string", placeholder: "2026-06-01T15:30:00Z" },
       { key: "entity", label: "Linked entity", type: "select", default: "lead", options: [
         { label: "Lead", value: "lead" }, { label: "Case", value: "case" }, { label: "User", value: "user" },
       ]},
-      { key: "id", label: "Entity id", type: "string", required: true },
-      { key: "notes", label: "Notes", type: "text" },
+      { key: "id", label: "Entity id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "notes", label: "Notes", type: "text", placeholder: "Confirm injury date and treating provider." },
     ],
   },
 
@@ -370,8 +370,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     icon: "MessageSquare", color: "bg-pink-600",
     params: [
       { key: "to", label: "To number (E.164)", type: "string", required: true, placeholder: "+15555550100" },
-      { key: "from", label: "From number (optional)", type: "string" },
-      { key: "body", label: "Message", type: "text", required: true },
+      { key: "from", label: "From number (optional)", type: "string", placeholder: "+15555550199" },
+      { key: "body", label: "Message", type: "text", required: true, placeholder: "Hi {{input.lead.first_name}}, your case file is ready — reply YES to proceed." },
     ],
   },
   {
@@ -379,9 +379,9 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Send a multimedia message with an attachment.",
     icon: "Image", color: "bg-pink-600",
     params: [
-      { key: "to", label: "To number", type: "string", required: true },
-      { key: "body", label: "Message", type: "text" },
-      { key: "mediaUrl", label: "Media URL", type: "string", required: true },
+      { key: "to", label: "To number", type: "string", required: true, placeholder: "+15555550100" },
+      { key: "body", label: "Message", type: "text", placeholder: "See attached document." },
+      { key: "mediaUrl", label: "Media URL", type: "string", required: true, placeholder: "https://files.example.com/retainer.pdf" },
     ],
   },
   {
@@ -389,10 +389,10 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Initiate an outbound voice call (optionally connect to an AI agent).",
     icon: "PhoneCall", color: "bg-pink-600",
     params: [
-      { key: "to", label: "To number", type: "string", required: true },
-      { key: "from", label: "From number (optional)", type: "string" },
-      { key: "agentId", label: "AI voice agent id (optional)", type: "string", help: "If set, the call connects to a Vapi/AI voice agent." },
-      { key: "twiml", label: "TwiML / script (optional)", type: "text" },
+      { key: "to", label: "To number", type: "string", required: true, placeholder: "+15555550100" },
+      { key: "from", label: "From number (optional)", type: "string", placeholder: "+15555550199" },
+      { key: "agentId", label: "AI voice agent id (optional)", type: "string", placeholder: "vapi-agent-id", help: "If set, the call connects to a Vapi/AI voice agent." },
+      { key: "twiml", label: "TwiML / script (optional)", type: "text", placeholder: "<Response><Say>Hello, this is the law firm calling.</Say></Response>" },
     ], outputs: ["answered", "no_answer", "failed"],
   },
   {
@@ -400,8 +400,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Drop a pre-recorded voicemail to the recipient's mailbox.",
     icon: "Voicemail", color: "bg-pink-600",
     params: [
-      { key: "to", label: "To number", type: "string", required: true },
-      { key: "audioUrl", label: "Audio URL (mp3/wav)", type: "string", required: true },
+      { key: "to", label: "To number", type: "string", required: true, placeholder: "+15555550100" },
+      { key: "audioUrl", label: "Audio URL (mp3/wav)", type: "string", required: true, placeholder: "https://files.example.com/voicemail.mp3" },
     ],
   },
   {
@@ -409,12 +409,12 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Send an iCal calendar invite via email.",
     icon: "CalendarPlus", color: "bg-pink-600",
     params: [
-      { key: "to", label: "To email", type: "string", required: true },
-      { key: "title", label: "Title", type: "string", required: true },
-      { key: "startsAt", label: "Starts at (ISO)", type: "string", required: true },
-      { key: "endsAt", label: "Ends at (ISO)", type: "string" },
-      { key: "location", label: "Location / link", type: "string" },
-      { key: "body", label: "Message body", type: "text" },
+      { key: "to", label: "To email", type: "string", required: true, placeholder: "client@example.com" },
+      { key: "title", label: "Title", type: "string", required: true, placeholder: "Intake call with the legal team" },
+      { key: "startsAt", label: "Starts at (ISO)", type: "string", required: true, placeholder: "2026-06-01T15:00:00Z" },
+      { key: "endsAt", label: "Ends at (ISO)", type: "string", placeholder: "2026-06-01T15:30:00Z" },
+      { key: "location", label: "Location / link", type: "string", placeholder: "https://meet.example.com/intake" },
+      { key: "body", label: "Message body", type: "text", placeholder: "Looking forward to speaking with you about your case." },
     ],
   },
 
@@ -424,8 +424,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Render a document template with variables → PDF/DOCX in the file vault.",
     icon: "FileSignature", color: "bg-indigo-600",
     params: [
-      { key: "templateId", label: "Template id", type: "string", required: true },
-      { key: "variables", label: "Variables (JSON)", type: "json", required: true },
+      { key: "templateId", label: "Template id", type: "string", required: true, placeholder: "retainer-v2" },
+      { key: "variables", label: "Variables (JSON)", type: "json", required: true, placeholder: '{"client_name":"input.lead.full_name","date_of_injury":"input.lead.injury_date"}' },
       { key: "format", label: "Format", type: "select", default: "pdf", options: [
         { label: "PDF", value: "pdf" }, { label: "DOCX", value: "docx" },
       ]},
@@ -436,10 +436,10 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Send a packet for e-signature via Dropbox Sign.",
     icon: "FileSignature", color: "bg-indigo-600",
     params: [
-      { key: "templateId", label: "Template id", type: "string", required: true },
-      { key: "signerEmail", label: "Signer email", type: "string", required: true },
-      { key: "signerName", label: "Signer name", type: "string", required: true },
-      { key: "fields", label: "Pre-fill fields (JSON)", type: "json" },
+      { key: "templateId", label: "Template id", type: "string", required: true, placeholder: "retainer-v2" },
+      { key: "signerEmail", label: "Signer email", type: "string", required: true, placeholder: "input.lead.email" },
+      { key: "signerName", label: "Signer name", type: "string", required: true, placeholder: "input.lead.full_name" },
+      { key: "fields", label: "Pre-fill fields (JSON)", type: "json", placeholder: '{"date_of_injury":"input.lead.injury_date"}' },
     ],
   },
   {
@@ -447,10 +447,10 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Send a packet for e-signature via DocuSign.",
     icon: "FileSignature", color: "bg-indigo-600",
     params: [
-      { key: "templateId", label: "DocuSign template id", type: "string", required: true },
-      { key: "signerEmail", label: "Signer email", type: "string", required: true },
-      { key: "signerName", label: "Signer name", type: "string", required: true },
-      { key: "fields", label: "Tab values (JSON)", type: "json" },
+      { key: "templateId", label: "DocuSign template id", type: "string", required: true, placeholder: "docusign-template-id" },
+      { key: "signerEmail", label: "Signer email", type: "string", required: true, placeholder: "input.lead.email" },
+      { key: "signerName", label: "Signer name", type: "string", required: true, placeholder: "input.lead.full_name" },
+      { key: "fields", label: "Tab values (JSON)", type: "json", placeholder: '{"DateOfInjury":"input.lead.injury_date"}' },
     ],
   },
   {
@@ -468,7 +468,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Run OCR on an uploaded document and return extracted text.",
     icon: "ScanText", color: "bg-indigo-600",
     params: [
-      { key: "documentId", label: "Document id (or path)", type: "string", required: true },
+      { key: "documentId", label: "Document id (or path)", type: "string", required: true, placeholder: "input.document.id" },
       { key: "language", label: "Language", type: "string", default: "en" },
     ],
   },
@@ -477,8 +477,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Use AI to extract structured fields (diagnoses, medications, dates) from a medical record.",
     icon: "Brain", color: "bg-indigo-600",
     params: [
-      { key: "documentId", label: "Document id", type: "string", required: true },
-      { key: "schema", label: "Field schema (JSON)", type: "json" },
+      { key: "documentId", label: "Document id", type: "string", required: true, placeholder: "input.document.id" },
+      { key: "schema", label: "Field schema (JSON)", type: "json", placeholder: '{"diagnoses":["string"],"medications":["string"],"dates":["YYYY-MM-DD"]}' },
     ],
   },
 
@@ -488,8 +488,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Publish or re-publish a form built in the Form Engine.",
     icon: "AppWindow", color: "bg-teal-600",
     params: [
-      { key: "formId", label: "Form id", type: "string", required: true },
-      { key: "version", label: "Version label (optional)", type: "string" },
+      { key: "formId", label: "Form id", type: "string", required: true, placeholder: "intake-v3" },
+      { key: "version", label: "Version label (optional)", type: "string", placeholder: "2026-06-01" },
     ],
   },
   {
@@ -497,7 +497,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Return the embeddable JavaScript snippet for a published form.",
     icon: "Code2", color: "bg-teal-600",
     params: [
-      { key: "formId", label: "Form id", type: "string", required: true },
+      { key: "formId", label: "Form id", type: "string", required: true, placeholder: "intake-v3" },
     ],
   },
   {
@@ -505,8 +505,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Run TCPA / TrustedForm / field validation against a payload.",
     icon: "ShieldCheck", color: "bg-teal-600",
     params: [
-      { key: "formId", label: "Form id", type: "string", required: true },
-      { key: "payload", label: "Payload (JSON)", type: "json", required: true },
+      { key: "formId", label: "Form id", type: "string", required: true, placeholder: "intake-v3" },
+      { key: "payload", label: "Payload (JSON)", type: "json", required: true, placeholder: "input.payload" },
     ], outputs: ["valid", "invalid"],
   },
   {
@@ -514,8 +514,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Run the standard lead-intake pipeline (dedup + create/update) for a form payload.",
     icon: "UserPlus", color: "bg-teal-600",
     params: [
-      { key: "formId", label: "Form id", type: "string", required: true },
-      { key: "payload", label: "Payload (JSON)", type: "json", required: true },
+      { key: "formId", label: "Form id", type: "string", required: true, placeholder: "intake-v3" },
+      { key: "payload", label: "Payload (JSON)", type: "json", required: true, placeholder: "input.payload" },
     ],
   },
 
@@ -525,7 +525,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Run an autonomous LLM agent with tool access (CRM, search, etc).",
     icon: "Bot", color: "bg-fuchsia-600",
     params: [
-      { key: "goal", label: "Goal / instructions", type: "text", required: true },
+      { key: "goal", label: "Goal / instructions", type: "text", required: true, placeholder: "Qualify this lead, run a background check, and route to the right paralegal." },
       { key: "tools", label: "Allowed tools (JSON array)", type: "json", placeholder: '["crm.update_lead","comm.send_sms","io.sql_query"]' },
       { key: "maxSteps", label: "Max steps", type: "number", default: 10 },
       { key: "model", label: "Model", type: "select", default: "gpt-4o", options: [
@@ -539,7 +539,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Classify text into one of N labels.",
     icon: "Tag", color: "bg-fuchsia-600",
     params: [
-      { key: "text", label: "Text path", type: "string", required: true },
+      { key: "text", label: "Text path", type: "string", required: true, placeholder: "input.body" },
       { key: "labels", label: "Labels (JSON array)", type: "json", required: true, placeholder: '["urgent","normal","spam"]' },
     ],
   },
@@ -549,8 +549,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     icon: "MessageCircle", color: "bg-fuchsia-600",
     params: [
       { key: "message", label: "Inbound message path", type: "string", required: true, placeholder: "input.body" },
-      { key: "persona", label: "Persona / system prompt", type: "text" },
-      { key: "history", label: "Conversation history path (optional)", type: "string" },
+      { key: "persona", label: "Persona / system prompt", type: "text", placeholder: "You are a friendly legal intake assistant. Always confirm sensitive details before proceeding." },
+      { key: "history", label: "Conversation history path (optional)", type: "string", placeholder: "input.thread.messages" },
     ],
   },
   {
@@ -558,9 +558,9 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Connect a phone call to a configured Vapi/AI voice agent.",
     icon: "Phone", color: "bg-fuchsia-600",
     params: [
-      { key: "agentId", label: "Vapi agent id", type: "string", required: true },
-      { key: "callId", label: "Call id (or path)", type: "string", required: true },
-      { key: "metadata", label: "Metadata (JSON)", type: "json" },
+      { key: "agentId", label: "Vapi agent id", type: "string", required: true, placeholder: "vapi-agent-id" },
+      { key: "callId", label: "Call id (or path)", type: "string", required: true, placeholder: "input.call.id" },
+      { key: "metadata", label: "Metadata (JSON)", type: "json", placeholder: '{"lead_id":"input.lead.id"}' },
     ], outputs: ["completed", "failed"],
   },
   {
@@ -568,7 +568,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Transcribe a voicemail or call recording to text.",
     icon: "Mic", color: "bg-fuchsia-600",
     params: [
-      { key: "audioUrl", label: "Audio URL", type: "string", required: true },
+      { key: "audioUrl", label: "Audio URL", type: "string", required: true, placeholder: "input.recording_url" },
       { key: "language", label: "Language", type: "string", default: "en" },
     ],
   },
@@ -579,10 +579,10 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Send transactional email via the configured email provider (SendGrid).",
     icon: "Mail", color: "bg-rose-600",
     params: [
-      { key: "to", label: "To", type: "string", required: true },
-      { key: "subject", label: "Subject", type: "string", required: true },
-      { key: "html", label: "HTML body", type: "text", required: true },
-      { key: "from", label: "From (optional)", type: "string" },
+      { key: "to", label: "To", type: "string", required: true, placeholder: "client@example.com" },
+      { key: "subject", label: "Subject", type: "string", required: true, placeholder: "Your case update from {{firm.name}}" },
+      { key: "html", label: "HTML body", type: "text", required: true, placeholder: "<p>Hi {{input.lead.first_name}},</p><p>Thank you for reaching out. Your intake has been received.</p>" },
+      { key: "from", label: "From (optional)", type: "string", placeholder: "intake@example.com" },
     ],
   },
   {
@@ -590,9 +590,9 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Send a fax via the configured fax provider (SRFax).",
     icon: "Printer", color: "bg-rose-600",
     params: [
-      { key: "to", label: "To fax number", type: "string", required: true },
-      { key: "documentUrl", label: "Document URL", type: "string", required: true },
-      { key: "coverNote", label: "Cover note", type: "text" },
+      { key: "to", label: "To fax number", type: "string", required: true, placeholder: "+15555550101" },
+      { key: "documentUrl", label: "Document URL", type: "string", required: true, placeholder: "input.document.url" },
+      { key: "coverNote", label: "Cover note", type: "text", placeholder: "Medical records request — please return within 30 days." },
     ],
   },
   {
@@ -600,9 +600,9 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Send a document for e-signature via the configured provider.",
     icon: "FileSignature", color: "bg-rose-600",
     params: [
-      { key: "templateId", label: "Document template id", type: "string", required: true },
-      { key: "signerEmail", label: "Signer email", type: "string", required: true },
-      { key: "signerName", label: "Signer name", type: "string", required: true },
+      { key: "templateId", label: "Document template id", type: "string", required: true, placeholder: "retainer-v2" },
+      { key: "signerEmail", label: "Signer email", type: "string", required: true, placeholder: "input.lead.email" },
+      { key: "signerName", label: "Signer name", type: "string", required: true, placeholder: "input.lead.full_name" },
     ],
   },
   {
@@ -610,14 +610,14 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "POST a payload to a third-party webhook URL.",
     icon: "Webhook", color: "bg-rose-600",
     params: [
-      { key: "url", label: "URL", type: "string", required: true },
+      { key: "url", label: "URL", type: "string", required: true, placeholder: "https://example.com/hooks/mtos" },
       { key: "method", label: "Method", type: "select", default: "POST", options: [
         { label: "POST", value: "POST" }, { label: "PUT", value: "PUT" },
         { label: "PATCH", value: "PATCH" }, { label: "DELETE", value: "DELETE" },
       ]},
-      { key: "headers", label: "Headers (JSON)", type: "json" },
-      { key: "body", label: "Body (JSON)", type: "json" },
-      { key: "hmacSecret", label: "HMAC secret (optional)", type: "string" },
+      { key: "headers", label: "Headers (JSON)", type: "json", placeholder: '{"X-Source":"mtos","Content-Type":"application/json"}' },
+      { key: "body", label: "Body (JSON)", type: "json", placeholder: '{"event":"lead.created","lead_id":"input.lead.id"}' },
+      { key: "hmacSecret", label: "HMAC secret (optional)", type: "string", placeholder: "(leave blank to skip signing)" },
     ],
   },
   {
@@ -625,13 +625,13 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Generic HTTP fetch — call any REST API.",
     icon: "Globe", color: "bg-rose-600",
     params: [
-      { key: "url", label: "URL", type: "string", required: true },
+      { key: "url", label: "URL", type: "string", required: true, placeholder: "https://api.example.com/v1/resource" },
       { key: "method", label: "Method", type: "select", default: "GET", options: [
         { label: "GET", value: "GET" }, { label: "POST", value: "POST" },
         { label: "PUT", value: "PUT" }, { label: "PATCH", value: "PATCH" }, { label: "DELETE", value: "DELETE" },
       ]},
-      { key: "headers", label: "Headers (JSON)", type: "json" },
-      { key: "body", label: "Body (JSON or string)", type: "json" },
+      { key: "headers", label: "Headers (JSON)", type: "json", placeholder: '{"Accept":"application/json","Authorization":"Bearer …"}' },
+      { key: "body", label: "Body (JSON or string)", type: "json", placeholder: '{"key":"value"}' },
       { key: "responseType", label: "Response", type: "select", default: "json", options: [
         { label: "JSON", value: "json" }, { label: "Text", value: "text" },
       ]},
@@ -642,10 +642,10 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Execute a GraphQL query against an endpoint.",
     icon: "Network", color: "bg-rose-600",
     params: [
-      { key: "url", label: "Endpoint", type: "string", required: true },
-      { key: "query", label: "Query", type: "code", language: "javascript", required: true },
-      { key: "variables", label: "Variables (JSON)", type: "json" },
-      { key: "headers", label: "Headers (JSON)", type: "json" },
+      { key: "url", label: "Endpoint", type: "string", required: true, placeholder: "https://api.example.com/graphql" },
+      { key: "query", label: "Query", type: "code", language: "javascript", required: true, placeholder: "query GetLead($id: ID!) { lead(id: $id) { id status } }" },
+      { key: "variables", label: "Variables (JSON)", type: "json", placeholder: '{"id":"input.lead.id"}' },
+      { key: "headers", label: "Headers (JSON)", type: "json", placeholder: '{"Authorization":"Bearer …"}' },
     ],
   },
 
@@ -668,7 +668,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Generate a short summary of a long text block.",
     icon: "FileText", color: "bg-fuchsia-600",
     params: [
-      { key: "text", label: "Text path", type: "string", required: true },
+      { key: "text", label: "Text path", type: "string", required: true, placeholder: "input.body" },
       { key: "maxWords", label: "Max words", type: "number", default: 200 },
     ],
   },
@@ -677,8 +677,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Generate text from a prompt template.",
     icon: "Sparkles", color: "bg-fuchsia-600",
     params: [
-      { key: "prompt", label: "Prompt", type: "text", required: true },
-      { key: "system", label: "System (optional)", type: "text" },
+      { key: "prompt", label: "Prompt", type: "text", required: true, placeholder: "Write a friendly intake follow-up to {{input.lead.first_name}} confirming we received their information." },
+      { key: "system", label: "System (optional)", type: "text", placeholder: "You are a paralegal writing in plain, empathetic language." },
     ],
   },
 
@@ -706,7 +706,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Run a bash command on the worker host. Requires admin approval.",
     icon: "TerminalSquare", color: "bg-orange-600",
     params: [
-      { key: "command", label: "Bash command", type: "code", language: "bash", required: true },
+      { key: "command", label: "Bash command", type: "code", language: "bash", required: true, placeholder: "echo \"hello from $(hostname) at $(date -Iseconds)\"" },
       { key: "timeoutMs", label: "Timeout (ms)", type: "number", default: 15000 },
       { key: "approved", label: "I confirm this is safe", type: "boolean", default: false, required: true },
     ],
@@ -716,7 +716,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Run a PowerShell command (requires PowerShell installed). Approved-only.",
     icon: "TerminalSquare", color: "bg-orange-600",
     params: [
-      { key: "command", label: "PowerShell command", type: "code", language: "powershell", required: true },
+      { key: "command", label: "PowerShell command", type: "code", language: "powershell", required: true, placeholder: "Get-Date | ConvertTo-Json" },
       { key: "timeoutMs", label: "Timeout (ms)", type: "number", default: 15000 },
       { key: "approved", label: "I confirm this is safe", type: "boolean", default: false, required: true },
     ],
@@ -737,7 +737,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Read a file from object storage (file vault).",
     icon: "FileDown", color: "bg-cyan-600",
     params: [
-      { key: "key", label: "Object key", type: "string", required: true },
+      { key: "key", label: "Object key", type: "string", required: true, placeholder: "leads/{{input.lead.id}}/intake.pdf" },
     ],
   },
   {
@@ -745,8 +745,8 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Write a payload to object storage.",
     icon: "FileUp", color: "bg-cyan-600",
     params: [
-      { key: "key", label: "Object key", type: "string", required: true },
-      { key: "content", label: "Content (string or JSON)", type: "json", required: true },
+      { key: "key", label: "Object key", type: "string", required: true, placeholder: "leads/{{input.lead.id}}/note.json" },
+      { key: "content", label: "Content (string or JSON)", type: "json", required: true, placeholder: '{"note":"Auto-generated by workflow"}' },
       { key: "contentType", label: "Content type", type: "string", default: "application/json" },
     ],
   },
@@ -760,7 +760,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
       { key: "level", label: "Level", type: "select", default: "info", options: [
         { label: "info", value: "info" }, { label: "warn", value: "warn" }, { label: "error", value: "error" },
       ]},
-      { key: "message", label: "Message", type: "text", required: true },
+      { key: "message", label: "Message", type: "text", required: true, placeholder: "Reached step with input={{JSON.stringify(input)}}" },
     ],
   },
   {
@@ -768,7 +768,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     description: "Stop execution. Optional return value becomes the run output.",
     icon: "Square", color: "bg-slate-500",
     params: [
-      { key: "output", label: "Return value (JSON)", type: "json" },
+      { key: "output", label: "Return value (JSON)", type: "json", placeholder: '{"status":"done","lead_id":"input.lead.id"}' },
     ], outputs: 0,
   },
 ];

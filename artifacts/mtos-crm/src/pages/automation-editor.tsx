@@ -171,7 +171,28 @@ function EditorInner() {
       data: {
         label: def.label,
         nodeType: def.type,
-        params: Object.fromEntries(def.params.map((p) => [p.key, p.default ?? ""])),
+        // Pre-fill each parameter with the most obvious starter value:
+        // an explicit `default` if the catalog declared one, otherwise the
+        // `placeholder` example (which is always written to demonstrate what
+        // the field should contain), otherwise empty. This means dragging a
+        // fresh node into the canvas shows meaningful example content for
+        // every slot rather than a wall of empty inputs.
+        //
+        // For `type: "json"` params, we mirror the textarea's `onChange`
+        // behavior (see ParamField below): if the seed string parses as JSON
+        // we store the parsed value, otherwise we keep it as a raw string.
+        // This is critical because the executor uses json params directly
+        // as objects (e.g. `{...patch}`); spreading a raw JSON string would
+        // produce character-indexed garbage instead of the intended object.
+        // Path-style placeholders like "input.payload" stay as strings and
+        // are handled by `resolveOrLiteral` at run time.
+        params: Object.fromEntries(def.params.map((p) => {
+          const seed = p.default ?? p.placeholder ?? "";
+          if (p.type === "json" && typeof seed === "string" && seed.length > 0) {
+            try { return [p.key, JSON.parse(seed)]; } catch { return [p.key, seed]; }
+          }
+          return [p.key, seed];
+        })),
       },
     };
     // We use the default reactflow node type but render a custom inner label.
