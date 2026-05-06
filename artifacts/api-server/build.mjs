@@ -24,7 +24,6 @@ const runtimeExternal = [
   "@pdf-lib/*",
   "@anthropic-ai/sdk",       // ~346 KB; lazy-loaded inside threat-analyzer.ts.
   "@anthropic-ai/sdk/*",
-  "pino-http",               // handled by esbuild-plugin-pino transport rewriting; safer external.
 ];
 
 const external = [
