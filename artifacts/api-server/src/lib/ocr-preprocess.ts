@@ -8,11 +8,11 @@
  *
  * Sharp provides pre-compiled binaries — no build toolchain required.
  */
-import sharp from "sharp";
 import { logger } from "./logger";
 
 export async function preprocessFaxBuffer(input: Buffer): Promise<Buffer> {
   try {
+    const sharp = (await import("sharp")).default;
     const meta = await sharp(input).metadata();
     const targetWidth = meta.width ? meta.width * 2 : undefined;
     const processed = await sharp(input)
