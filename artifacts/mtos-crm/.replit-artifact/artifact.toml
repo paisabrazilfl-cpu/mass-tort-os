@@ -23,7 +23,7 @@ BASE_PATH = "/"
 
 [services.production]
 serve = "static"
-publicDir = "artifacts/mtos-crm/dist"
+publicDir = "artifacts/mtos-crm/dist/public"
 
 [services.production.build]
 args = ["pnpm", "--filter", "@workspace/mtos-crm", "run", "build"]
