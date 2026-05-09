@@ -7,6 +7,7 @@ import { badRequest, notFound, forbidden } from "../lib/http-errors";
 import { NODE_CATALOG, getNodeDefinition } from "../lib/automations/node-catalog";
 import { runWorkflow } from "../lib/automations/executor";
 import { callLLM } from "../lib/ai-provider";
+import { getAiConstitutionPreamble } from "../lib/ai-constitution";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -327,7 +328,10 @@ router.post("/assist", requirePermission(Permission.AUTOMATIONS_MANAGE), async (
   const { prompt, currentGraph, mode } = parsed.data;
 
   const catalogSummary = buildCatalogSummary();
+  const constitutionPreamble = getAiConstitutionPreamble();
   const systemPrompt = [
+    constitutionPreamble,
+    "",
     "You are an expert workflow architect for MTOS Automation Center.",
     "Given a plain-English request, produce a workflow graph in JSON.",
     "STRICT RULES:",

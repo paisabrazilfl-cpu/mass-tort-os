@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **239 checked / 39 public / 200 protected / 0 unprotected.**
+Boot-time count: **240 checked / 39 public / 201 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -606,6 +606,7 @@ Boot-time count: **239 checked / 39 public / 200 protected / 0 unprotected.**
 
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
+| admin-ai-constitution | GET | `/api/admin-ai-constitution/` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | admin-api-keys | GET | `/api/admin-api-keys/_meta/scopes` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-api-keys | GET | `/api/admin-api-keys/:id/audit` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-api-keys | DELETE | `/api/admin-api-keys/:id` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
