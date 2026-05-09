@@ -109,6 +109,8 @@ export default function LeadDetail() {
   const [scoringError, setScoringError] = useState<string | null>(null);
   const [lensScore, setLensScore] = useState<LensScore | null>(null);
   const [lensLoading, setLensLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("profile");
+  const [docSourceFilter, setDocSourceFilter] = useState<"all" | "fasten">("all");
   const autoTriggered = useRef(false);
 
   const { data: lead, isLoading, isError, error } = useGetLead(leadId, {
@@ -389,7 +391,7 @@ export default function LeadDetail() {
         </div>
       )}
 
-      <Tabs defaultValue="profile" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="profile" className="flex items-center gap-2"><User className="h-4 w-4" />Claimant Profile</TabsTrigger>
           <TabsTrigger value="medical" className="flex items-center gap-2"><Stethoscope className="h-4 w-4" />Medical & Exposure</TabsTrigger>
@@ -748,7 +750,13 @@ export default function LeadDetail() {
             })()}
 
             <BackgroundCheckHubCard leadId={leadId} />
-            <FastenConnectCard leadId={leadId} />
+            <FastenConnectCard
+              leadId={leadId}
+              onViewDocuments={() => {
+                setDocSourceFilter("fasten");
+                setActiveTab("documents");
+              }}
+            />
           </div>
         </TabsContent>
 
@@ -759,18 +767,53 @@ export default function LeadDetail() {
                 <CardTitle>Associated Documents</CardTitle>
                 <CardDescription>All documents, agreements, and records linked to this claimant</CardDescription>
               </div>
+              <div className="flex gap-2">
+                <Button
+                  variant={docSourceFilter === "all" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setDocSourceFilter("all")}
+                  data-testid="filter-docs-all"
+                >
+                  All
+                </Button>
+                <Button
+                  variant={docSourceFilter === "fasten" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setDocSourceFilter("fasten")}
+                  data-testid="filter-docs-fasten"
+                >
+                  <Stethoscope className="h-3 w-3 mr-1" />Fasten medical records
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
-              {docsLoading ? (
-                <Skeleton className="h-24 w-full" />
-              ) : !documents || documents.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No documents have been associated with this claimant record.</p>
-                </div>
-              ) : (
+              {(() => {
+                const visible = (documents ?? []).filter((d) =>
+                  docSourceFilter === "all"
+                    ? true
+                    : (d.notes ?? "").startsWith("fasten_"),
+                );
+                if (docsLoading) return <Skeleton className="h-24 w-full" />;
+                if (!documents || documents.length === 0) {
+                  return (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No documents have been associated with this claimant record.</p>
+                    </div>
+                  );
+                }
+                if (visible.length === 0) {
+                  return (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Stethoscope className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No Fasten medical records have been ingested yet.</p>
+                      <Button variant="link" size="sm" onClick={() => setDocSourceFilter("all")}>Show all documents</Button>
+                    </div>
+                  );
+                }
+                return (
                 <div className="space-y-2">
-                  {documents.map(doc => (
+                  {visible.map(doc => (
                     <div key={doc.id} className="flex items-center justify-between py-3 border-b last:border-0">
                       <div className="flex items-center gap-3">
                         <FileText className="h-5 w-5 text-muted-foreground" />
@@ -789,7 +832,8 @@ export default function LeadDetail() {
                     </div>
                   ))}
                 </div>
-              )}
+                );
+              })()}
             </CardContent>
           </Card>
         </TabsContent>

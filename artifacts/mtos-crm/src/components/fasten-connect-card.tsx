@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetchRaw } from "@/lib/api-fetch";
-import { Stethoscope, RefreshCw, ExternalLink, X, Search, AlertTriangle } from "lucide-react";
+import { Stethoscope, RefreshCw, ExternalLink, X, Search, AlertTriangle, FolderOpen, Clock, CheckCircle2, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 
 interface CatalogBrand {
@@ -46,7 +46,13 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   error: "destructive",
 };
 
-export function FastenConnectCard({ leadId }: { leadId: number }) {
+export function FastenConnectCard({
+  leadId,
+  onViewDocuments,
+}: {
+  leadId: number;
+  onViewDocuments?: () => void;
+}) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
@@ -260,37 +266,101 @@ export function FastenConnectCard({ leadId }: { leadId: number }) {
             <div className="border rounded-md divide-y">
               {conns.map((c) => {
                 const isPartial = !!c.last_error && c.last_error.startsWith("Partial:");
+                const isError = !isPartial && !!c.last_error && c.status === "error";
+                const isPending = !c.last_synced_at && c.status !== "error";
+                const isSynced = !!c.last_synced_at && !isPartial && !isError;
+                const isSyncing = c.status === "syncing";
+
+                // Distinct row tint per state so operators can scan a long list
+                // and immediately spot the broken connections without reading
+                // text. Pending = neutral muted, Synced = subtle green,
+                // Partial = amber, Error = red.
+                const rowTint = isError
+                  ? "bg-destructive/5"
+                  : isPartial
+                  ? "bg-amber-500/5"
+                  : isSynced
+                  ? "bg-emerald-500/5"
+                  : "";
+
+                const StateIcon = isError
+                  ? AlertTriangle
+                  : isPartial
+                  ? AlertTriangle
+                  : isSyncing
+                  ? Loader2
+                  : isSynced
+                  ? CheckCircle2
+                  : Clock;
+                const stateIconColor = isError
+                  ? "text-destructive"
+                  : isPartial
+                  ? "text-amber-600 dark:text-amber-400"
+                  : isSynced
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-muted-foreground";
+
                 return (
-                  <div key={c.id} className="p-3 flex items-center justify-between gap-3" data-testid={`fasten-connection-${c.id}`}>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-sm truncate">{c.portal_name || c.portal_id || "Unnamed portal"}</span>
-                        <Badge variant={STATUS_VARIANT[c.status] ?? "outline"}>{c.status}</Badge>
-                        <Badge variant="outline" className="text-[10px]">{c.backend}</Badge>
-                        {isPartial && (
-                          <Badge
-                            variant="destructive"
-                            className="gap-1"
-                            data-testid={`badge-partial-${c.id}`}
-                            title={c.last_error ?? undefined}
+                  <div
+                    key={c.id}
+                    className={`p-3 flex items-center justify-between gap-3 ${rowTint}`}
+                    data-testid={`fasten-connection-${c.id}`}
+                  >
+                    <div className="min-w-0 flex items-start gap-2">
+                      <StateIcon className={`h-4 w-4 mt-0.5 shrink-0 ${stateIconColor} ${isSyncing ? "animate-spin" : ""}`} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium text-sm truncate">{c.portal_name || c.portal_id || "Unnamed portal"}</span>
+                          <Badge variant={STATUS_VARIANT[c.status] ?? "outline"}>{c.status}</Badge>
+                          <Badge variant="outline" className="text-[10px]">{c.backend}</Badge>
+                          {isPartial && (
+                            <Badge
+                              variant="destructive"
+                              className="gap-1"
+                              data-testid={`badge-partial-${c.id}`}
+                              title={c.last_error ?? undefined}
+                            >
+                              <AlertTriangle className="h-3 w-3" />
+                              Partial — files missing
+                            </Badge>
+                          )}
+                          {isSynced && (c.last_resource_count ?? 0) > 0 && (
+                            <Badge variant="secondary" className="text-[10px]" data-testid={`badge-resources-${c.id}`}>
+                              {c.last_resource_count} resources
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground" data-testid={`fasten-summary-${c.id}`}>
+                          {isPending
+                            ? "Awaiting first sync — patient hasn't completed the connect flow yet."
+                            : isSyncing
+                            ? "Sync in progress…"
+                            : c.last_synced_at
+                            ? `Last synced ${format(new Date(c.last_synced_at), "PPp")} — ${c.last_resource_count ?? 0} resources ingested`
+                            : "No sync data yet"}
+                        </div>
+                        {c.last_error && (
+                          <div
+                            className={`text-xs truncate ${isPartial ? "text-amber-600 dark:text-amber-400 font-medium" : "text-destructive"}`}
+                            data-testid={`fasten-error-${c.id}`}
                           >
-                            <AlertTriangle className="h-3 w-3" />
-                            Partial — files missing
-                          </Badge>
+                            {c.last_error}
+                          </div>
                         )}
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        {c.last_synced_at
-                          ? `Last synced ${format(new Date(c.last_synced_at), "PPp")} — ${c.last_resource_count ?? 0} resources`
-                          : "Awaiting first sync"}
-                      </div>
-                      {c.last_error && (
-                        <div className={`text-xs truncate ${isPartial ? "text-amber-600 dark:text-amber-400 font-medium" : "text-destructive"}`}>
-                          {c.last_error}
-                        </div>
-                      )}
                     </div>
                     <div className="flex gap-1 shrink-0">
+                      {(isSynced || isPartial) && (c.last_resource_count ?? 0) > 0 && onViewDocuments && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={onViewDocuments}
+                          title="Jump to the Documents tab filtered to Fasten medical records"
+                          data-testid={`button-view-documents-${c.id}`}
+                        >
+                          <FolderOpen className="h-3 w-3 mr-1" />View documents
+                        </Button>
+                      )}
                       {isPartial && (
                         <Button
                           size="sm"
