@@ -335,6 +335,17 @@ export function assertWiringRegistryConsistency(): void {
       adapterProviders: listSearchProviders(),
       expectInRegistry: ["serpapi"],
     },
+    {
+      // Court records — currently a single provider (PACER PCL Search API).
+      // Unlike the multi-provider classes above, the court-records space
+      // uses one bespoke adapter (lib/pacer/pcl-client.ts) instead of a
+      // category index. We hardcode ["pacer"] on both sides so any future
+      // attempt to remove the PACER adapter without also pruning REGISTRY
+      // (or vice versa) trips this consistency check at boot.
+      klass: "court_records",
+      adapterProviders: ["pacer"],
+      expectInRegistry: ["pacer"],
+    },
   ];
 
   for (const { klass, adapterProviders, expectInRegistry } of checks) {
