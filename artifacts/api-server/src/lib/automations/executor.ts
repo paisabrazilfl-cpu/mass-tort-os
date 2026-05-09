@@ -42,6 +42,7 @@ import { getSearchAdapter } from "../search";
 import { saveFile, readFile } from "../vault";
 import { runBackgroundCheckHub } from "../bg-hub/hub";
 import { lookupNpiAndMatch } from "../taxonomy-engine";
+import { serpapiAdvertiserAds, isSerpapiConfigured, SerpapiError } from "../serpapi-client";
 import { computeAndPersistLeadScore } from "../decision-engine-service";
 import { analyzeDocumentText } from "../ai-fields";
 import { getFormConfigByIdOrLabel, getFormConfig } from "../form-config-service";
@@ -763,6 +764,25 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
         ? "rejected"
         : "review";
     return { __branch: branch, value: result };
+  },
+  "crm.competitive_intel_lookup": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const advertiserId = String(resolveOrLiteral(s, p.advertiserId ?? s.input?.advertiser_id) ?? "").trim();
+    if (!advertiserId) throw new Error("crm.competitive_intel_lookup requires `advertiserId`.");
+    if (!isSerpapiConfigured()) {
+      return { __branch: "error", value: { error: "serpapi_not_configured" } };
+    }
+    try {
+      const result = await serpapiAdvertiserAds(advertiserId);
+      const ad_count = result.ad_creatives?.length ?? 0;
+      return {
+        __branch: ad_count > 0 ? "found" : "empty",
+        value: { advertiser_id: advertiserId, ad_count, advertiser: result.advertiser ?? null, ads: result.ad_creatives ?? [] },
+      };
+    } catch (err) {
+      const sa = err instanceof SerpapiError ? err : null;
+      return { __branch: "error", value: { error: (err as Error).message, status: sa?.status ?? 502 } };
+    }
   },
   "crm.create_calendar_event": async (s) => {
     // Catalog params: `title`, `startsAt`, `endsAt`, `entity`, `id`, `notes`.

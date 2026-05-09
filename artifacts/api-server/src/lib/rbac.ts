@@ -228,6 +228,10 @@ export const Permission = {
   // Self-Heal / Auto-Fix (Jules dispatch). Admin-only — pasted prompts
   // become coding-agent input that opens PRs against the repo.
   SELF_HEAL_MANAGE: "self_heal:manage",
+
+  // Competitive Intelligence (Google Ads Transparency Center via SerpAPI).
+  // Admin-only — surfaces what other plaintiff firms are advertising for.
+  COMPETITIVE_INTEL_MANAGE: "competitive_intel:manage",
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];

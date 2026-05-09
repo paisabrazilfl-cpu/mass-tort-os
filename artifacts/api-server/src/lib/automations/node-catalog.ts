@@ -348,6 +348,14 @@ export const NODE_CATALOG: NodeDefinition[] = [
     ], outputs: ["qualified", "rejected", "review"],
   },
   {
+    type: "crm.competitive_intel_lookup", label: "Competitive Intel Lookup", category: "crm",
+    description: "Pull current Google Ads Transparency Center creatives for a competing advertiser (via SerpAPI).",
+    icon: "Eye", color: "bg-violet-600",
+    params: [
+      { key: "advertiserId", label: "Advertiser id (e.g. AR12345…)", type: "string", required: true, placeholder: "AR12345678901234567" },
+    ], outputs: ["found", "empty", "error"],
+  },
+  {
     type: "crm.create_calendar_event", label: "Create Calendar Event", category: "crm",
     description: "Create a calendar/timeline event for a lead, case, or user.",
     icon: "Clock", color: "bg-violet-600",

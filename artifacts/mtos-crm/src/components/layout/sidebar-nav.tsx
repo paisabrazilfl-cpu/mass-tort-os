@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, UserCog, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck,
   BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch,
   Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp, Scale, Building, FileSignature,
-  Grid3x3, Settings, Activity, CreditCard, Phone, Skull, Workflow,
+  Grid3x3, Settings, Activity, CreditCard, Phone, Skull, Workflow, Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -49,6 +49,7 @@ export const navigation: NavSection[] = [
       { name: "Automations", href: "/automations", icon: Workflow },
       { name: "n8n / API Setup", href: "/n8n-setup", icon: Plug },
       { name: "Self-Heal (Auto-Fix)", href: "/self-heal", icon: Sparkles },
+      { name: "Competitive Intel", href: "/competitive-intel", icon: Eye },
       { name: "Form API Directory", href: "/forms-api", icon: AppWindow },
     ],
   },

@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **248 checked / 39 public / 209 protected / 0 unprotected.**
+Boot-time count: **254 checked / 39 public / 215 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -612,6 +612,12 @@ Boot-time count: **248 checked / 39 public / 209 protected / 0 unprotected.**
 | admin-api-keys | DELETE | `/api/admin-api-keys/:id` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-api-keys | GET | `/api/admin-api-keys/` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-api-keys | POST | `/api/admin-api-keys/` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
+| admin-competitive-intel | GET | `/api/admin-competitive-intel/config` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
+| admin-competitive-intel | POST | `/api/admin-competitive-intel/lookup` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
+| admin-competitive-intel | POST | `/api/admin-competitive-intel/watchlist/:id/refresh` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
+| admin-competitive-intel | DELETE | `/api/admin-competitive-intel/watchlist/:id` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
+| admin-competitive-intel | GET | `/api/admin-competitive-intel/watchlist` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
+| admin-competitive-intel | POST | `/api/admin-competitive-intel/watchlist` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
 | admin-dark-room | DELETE | `/api/admin-dark-room/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
 | admin-dark-room | PATCH | `/api/admin-dark-room/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
 | admin-dark-room | GET | `/api/admin-dark-room/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
