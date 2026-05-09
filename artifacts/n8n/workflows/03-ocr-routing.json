@@ -1,0 +1,89 @@
+{
+  "name": "MTOS — OCR result routing",
+  "_description": "When fax OCR completes, route low-confidence (< 0.7) or failed rows to the human review queue. Clean rows are written back to the matched lead. Subscribe to event: ocr.completed.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mtos-ocr-completed",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh",
+      "name": "MTOS ocr.completed webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "combinator": "or",
+          "conditions": [
+            { "id": "c1", "operator": { "type": "boolean", "operation": "false" }, "leftValue": "={{ $json.success }}", "rightValue": "" },
+            { "id": "c2", "operator": { "type": "number", "operation": "lt" }, "leftValue": "={{ $json.confidence }}", "rightValue": 0.7 },
+            { "id": "c3", "operator": { "type": "object", "operation": "empty" }, "leftValue": "={{ $json.lead_id }}", "rightValue": "" }
+          ]
+        }
+      },
+      "id": "branch",
+      "name": "Low confidence / no match?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MTOS_API_BASE }}/api/review-queue",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"entity_type\": \"fax_ocr\",\n  \"entity_id\": \"{{ $json.fax_result_id }}\",\n  \"reason\": {{ $json.success ? \"\\\"low_confidence\\\"\" : \"\\\"ocr_failed\\\"\" }},\n  \"context\": { \"confidence\": {{ $json.confidence }}, \"drug_name\": \"{{ $json.drug_name }}\" }\n}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "enqueue",
+      "name": "POST /review-queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (review-queue:write,leads:write)" } },
+      "position": [720, 200]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.MTOS_API_BASE }}/api/leads/{{ $json.lead_id }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"medication\": \"{{ $json.drug_name }}\",\n  \"rx_number\": \"{{ $json.rx_number }}\",\n  \"fill_date\": \"{{ $json.fill_date }}\"\n}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "attach",
+      "name": "PATCH /leads/:id (attach OCR data)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (review-queue:write,leads:write)" } },
+      "position": [720, 420]
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={ \"ok\": true }" },
+      "id": "ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1000, 300]
+    }
+  ],
+  "connections": {
+    "MTOS ocr.completed webhook": { "main": [[{ "node": "Low confidence / no match?", "type": "main", "index": 0 }]] },
+    "Low confidence / no match?": { "main": [
+      [{ "node": "POST /review-queue", "type": "main", "index": 0 }],
+      [{ "node": "PATCH /leads/:id (attach OCR data)", "type": "main", "index": 0 }]
+    ] },
+    "POST /review-queue": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] },
+    "PATCH /leads/:id (attach OCR data)": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

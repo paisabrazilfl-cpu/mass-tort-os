@@ -1,0 +1,76 @@
+{
+  "name": "MTOS — Round-robin lead assignment",
+  "_description": "When a new lead is created in MTOS, pick the paralegal with the lowest open-lead count and assign it via PATCH /api/leads/:id. Subscribe to event: lead.created.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mtos-lead-created",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-trigger",
+      "name": "MTOS lead.created webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.MTOS_API_BASE }}/api/paralegals?status=active&sort=open_leads_asc",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "fetch-paralegals",
+      "name": "GET /paralegals (load-sorted)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (paralegals:read,leads:write)" } },
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const list = $json.paralegals || $json.items || $json;\nif (!Array.isArray(list) || list.length === 0) {\n  throw new Error('No active paralegals available');\n}\nconst chosen = list[0];\nreturn [{ json: { lead_id: $('MTOS lead.created webhook').item.json.lead.id, paralegal_id: chosen.id, paralegal_name: chosen.name } }];"
+      },
+      "id": "choose",
+      "name": "Choose paralegal (lowest load)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.MTOS_API_BASE }}/api/leads/{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"assigned_paralegal_id\": {{ $json.paralegal_id }} }",
+        "options": {}
+      },
+      "id": "assign",
+      "name": "PATCH /leads/:id (assign)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (paralegals:read,leads:write)" } },
+      "position": [960, 300]
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={ \"ok\": true, \"assigned_to\": $json.paralegal_name }" },
+      "id": "respond",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 300]
+    }
+  ],
+  "connections": {
+    "MTOS lead.created webhook": { "main": [[{ "node": "GET /paralegals (load-sorted)", "type": "main", "index": 0 }]] },
+    "GET /paralegals (load-sorted)": { "main": [[{ "node": "Choose paralegal (lowest load)", "type": "main", "index": 0 }]] },
+    "Choose paralegal (lowest load)": { "main": [[{ "node": "PATCH /leads/:id (assign)", "type": "main", "index": 0 }]] },
+    "PATCH /leads/:id (assign)": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

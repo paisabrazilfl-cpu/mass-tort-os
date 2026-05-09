@@ -18,6 +18,7 @@ import { withErrorFallback, createLoopGuard, DEFAULT_LIMITS } from "./lib/error-
 import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail, handleSendWorkflowSms } from "./lib/workflow-handlers";
 import { handleFastenRecordsSync, auditStaleFastenPartials } from "./lib/fasten-job";
 import { ensureSystemUser } from "./lib/case-ownership-backfill";
+import { dispatchEvent } from "./lib/event-dispatcher";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -213,6 +214,13 @@ async function processJob(job: {
     }
 
     const finalStatus = failCount === docs.length ? "review_required" : "analyzed";
+    // Capture old status BEFORE writing so the case.stage_changed event
+    // payload reports the actual transition (not new === new).
+    const [priorCase] = await db
+      .select({ status: casesTable.status })
+      .from(casesTable)
+      .where(eq(casesTable.id, case_id));
+    const oldStatus = priorCase?.status ?? null;
     await db
       .update(casesTable)
       .set({ status: finalStatus, updated_at: new Date() })
@@ -224,6 +232,26 @@ async function processJob(job: {
         success_count: successCount,
         fail_count: failCount,
       });
+    }
+
+    // Task #52 — emit case.stage_changed only on a real transition. The
+    // case-auto-advance n8n workflow listens for `analyzed` to send the
+    // packet to the right paralegal queue.
+    if (oldStatus !== finalStatus) {
+      dispatchEvent(
+        {
+          event: "case.stage_changed",
+          payload: {
+            case_id,
+            old_status: oldStatus,
+            new_status: finalStatus,
+            changed_by: "worker",
+            success_count: successCount,
+            fail_count: failCount,
+          },
+        },
+        { source: "worker:analyze_case" },
+      );
     }
   } else if (job.job_type === "process_fax") {
     const { fax_result_id, vault_path, source_file, mime_type } = payload as {
@@ -299,6 +327,35 @@ async function processJob(job: {
         .set({ status: "error", processed_at: new Date() })
         .where(eq(faxResultsTable.id, fax_result_id));
       logger.error({ fax_result_id, output_state: faxResult.output_state }, "Fax OCR failed — routed to review");
+    }
+
+    // Task #52 — emit ocr.completed for both success and failure so the
+    // OCR-routing automation can branch on the `success` flag (low-
+    // confidence rows go to a human review queue, clean rows attach to
+    // the matched lead). Re-read fax row to surface the resolved lead_id
+    // (matcher writes it asynchronously).
+    const [finalRow] = await db
+      .select()
+      .from(faxResultsTable)
+      .where(eq(faxResultsTable.id, fax_result_id));
+    if (finalRow) {
+      dispatchEvent(
+        {
+          event: "ocr.completed",
+          payload: {
+            fax_result_id,
+            lead_id: finalRow.lead_id,
+            drug_name: finalRow.drug_name || null,
+            rx_number: finalRow.rx_number || null,
+            fill_date: finalRow.fill_date || null,
+            quantity: finalRow.quantity || null,
+            confidence: finalRow.confidence,
+            success: faxResult.success,
+            source_file,
+          },
+        },
+        { source: "worker:process_fax" },
+      );
     }
   } else if (job.job_type === "send_esign_packet") {
     await handleSendEsignPacket(payload as unknown as Parameters<typeof handleSendEsignPacket>[0]);

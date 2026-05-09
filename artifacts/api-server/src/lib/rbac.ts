@@ -10,6 +10,12 @@ import {
   __internal_markAuthMiddleware as markAuthMiddleware,
   __internal_markGateMiddleware as markGateMiddleware,
 } from "./route-protection";
+import {
+  isApiKeyToken,
+  authenticateApiKey,
+  checkScope,
+  auditApiKeyRequest,
+} from "./api-keys";
 
 const NODE_ENV = process.env.NODE_ENV;
 const IS_DEV = NODE_ENV === "development";
@@ -212,6 +218,12 @@ export const Permission = {
   // Medical Records (Fasten Health patient-initiated FHIR import)
   MEDICAL_RECORDS_VIEW: "medical_records:view",
   MEDICAL_RECORDS_MANAGE: "medical_records:manage",
+
+  // API keys (Task #52) — long-lived service-account tokens for n8n etc.
+  // Admin-only. Keys are scoped per-resource so they're strictly LESS
+  // privileged than admin sessions; the manage perm itself is the gate
+  // on minting / revoking.
+  API_KEYS_MANAGE: "api_keys:manage",
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];
@@ -515,6 +527,58 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
   }
 
   const token = authHeader.slice(7);
+
+  // Task #52 — API key bearer path. The `mtos_` prefix lets us
+  // disambiguate cheaply without paying the JWT verify cost. API key
+  // requests bypass the 15-minute access token expiry but are scoped
+  // per-resource: a key with `leads:read` cannot hit `/api/cases`.
+  if (isApiKeyToken(token)) {
+    const apiKey = await authenticateApiKey(token);
+    if (!apiKey) {
+      auditDenial(req, "invalid_api_key");
+      sendUnauthorized(res, "Invalid or revoked API key");
+      return;
+    }
+    if (!checkScope(apiKey.scopes, req.method, req.path)) {
+      auditApiKeyRequest(
+        apiKey.id,
+        req.method,
+        req.originalUrl,
+        403,
+        (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
+        req.headers["user-agent"],
+      );
+      auditDenial(req, "api_key_scope_denied", {
+        extra: { api_key_id: apiKey.id, scopes: Array.from(apiKey.scopes) },
+      });
+      sendForbidden(res, "API key scope does not allow this route");
+      return;
+    }
+    req.user = {
+      id: apiKey.user_id,
+      email: apiKey.user_email,
+      name: `api-key:${apiKey.name}`,
+      role: apiKey.user_role,
+      firm_id: apiKey.firm_id,
+    };
+    // Tag the request so downstream handlers (and the response audit hook
+    // below) can recognise an API-key call. Audit the outcome on response
+    // finish so we capture the actual status code the route returned.
+    (req as Request & { apiKey?: { id: number } }).apiKey = { id: apiKey.id };
+    res.on("finish", () => {
+      auditApiKeyRequest(
+        apiKey.id,
+        req.method,
+        req.originalUrl,
+        res.statusCode,
+        (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
+        req.headers["user-agent"],
+      );
+    });
+    next();
+    return;
+  }
+
   const decoded = verifyToken(token);
   if (!decoded) {
     auditDenial(req, "invalid_or_expired_token");

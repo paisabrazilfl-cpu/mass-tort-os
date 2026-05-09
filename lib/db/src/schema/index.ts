@@ -36,5 +36,6 @@ export * from "./automations";
 export * from "./email_events";
 export * from "./fax_events";
 export * from "./fasten_connections";
+export * from "./api_keys";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";

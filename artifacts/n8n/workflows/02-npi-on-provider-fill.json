@@ -1,0 +1,120 @@
+{
+  "name": "MTOS — NPI lookup when physician fields filled",
+  "_description": "Listens for lead.updated where physician_first_name or physician_last_name was set, calls /api/npi/search, then writes physician_npi back via PATCH. Subscribe to event: lead.updated.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mtos-lead-updated-physician",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh",
+      "name": "MTOS lead.updated webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "or",
+          "conditions": [
+            { "id": "c1", "operator": { "type": "array", "operation": "contains" }, "leftValue": "={{ $json.changed_fields }}", "rightValue": "physician_first_name" },
+            { "id": "c2", "operator": { "type": "array", "operation": "contains" }, "leftValue": "={{ $json.changed_fields }}", "rightValue": "physician_last_name" },
+            { "id": "c3", "operator": { "type": "array", "operation": "contains" }, "leftValue": "={{ $json.changed_fields }}", "rightValue": "physician_state" }
+          ]
+        }
+      },
+      "id": "if-physician",
+      "name": "Only when a physician field changed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MTOS_API_BASE }}/api/leads/{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "get-lead",
+      "name": "GET /leads/:id (full record)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (leads:write,npi:read)" } },
+      "position": [720, 220]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MTOS_API_BASE }}/api/npi/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "first_name", "value": "={{ $json.physician_first_name }}" },
+            { "name": "last_name", "value": "={{ $json.physician_last_name }}" },
+            { "name": "state", "value": "={{ $json.physician_state }}" }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "npi",
+      "name": "NPI lookup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (leads:write,npi:read)" } },
+      "position": [960, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $json.results || $json.providers || [];\nif (results.length === 0) { return []; }\nconst best = results[0];\nreturn [{ json: { lead_id: $('MTOS lead.updated webhook').item.json.lead_id, physician_npi: best.npi || best.number, physician_full_name: best.full_name || (best.first_name + ' ' + best.last_name) } }];"
+      },
+      "id": "pick",
+      "name": "Pick top NPI hit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 220]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.MTOS_API_BASE }}/api/leads/{{ $json.lead_id }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"physician_npi\": \"{{ $json.physician_npi }}\" }",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "write-npi",
+      "name": "PATCH /leads/:id (physician_npi)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (leads:write,npi:read)" } },
+      "position": [1440, 220]
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={ \"ok\": true }" },
+      "id": "ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1680, 300]
+    }
+  ],
+  "connections": {
+    "MTOS lead.updated webhook": { "main": [[{ "node": "Only when a physician field changed", "type": "main", "index": 0 }]] },
+    "Only when a physician field changed": { "main": [
+      [{ "node": "GET /leads/:id (full record)", "type": "main", "index": 0 }],
+      [{ "node": "Respond OK", "type": "main", "index": 0 }]
+    ] },
+    "GET /leads/:id (full record)": { "main": [[{ "node": "NPI lookup", "type": "main", "index": 0 }]] },
+    "NPI lookup": { "main": [[{ "node": "Pick top NPI hit", "type": "main", "index": 0 }]] },
+    "Pick top NPI hit": { "main": [[{ "node": "PATCH /leads/:id (physician_npi)", "type": "main", "index": 0 }]] },
+    "PATCH /leads/:id (physician_npi)": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

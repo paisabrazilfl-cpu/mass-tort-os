@@ -57,6 +57,7 @@ import JobQueue from "@/pages/job-queue";
 import CallsPage from "@/pages/calls";
 import DarkRoomPage from "@/pages/dark-room";
 import AutomationsPage from "@/pages/automations";
+import AutomationDocsPage from "@/pages/automation-docs";
 import AutomationEditorPage from "@/pages/automation-editor";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
@@ -134,6 +135,7 @@ function AuthedRoutes() {
           <Route path="/job-queue" component={JobQueue} />
           <Route path="/dark-room" component={DarkRoomPage} />
           <Route path="/automations" component={AutomationsPage} />
+          <Route path="/automation-docs" component={AutomationDocsPage} />
           <Route path="/automations/:id" component={AutomationEditorPage} />
           <Route component={NotFound} />
         </Switch>

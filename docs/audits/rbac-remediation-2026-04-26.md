@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **230 checked / 39 public / 191 protected / 0 unprotected.**
+Boot-time count: **236 checked / 39 public / 197 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -606,10 +606,16 @@ Boot-time count: **230 checked / 39 public / 191 protected / 0 unprotected.**
 
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
+| admin-api-keys | GET | `/api/admin-api-keys/_meta/scopes` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
+| admin-api-keys | GET | `/api/admin-api-keys/:id/audit` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
+| admin-api-keys | DELETE | `/api/admin-api-keys/:id` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
+| admin-api-keys | GET | `/api/admin-api-keys/` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
+| admin-api-keys | POST | `/api/admin-api-keys/` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-dark-room | DELETE | `/api/admin-dark-room/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
 | admin-dark-room | PATCH | `/api/admin-dark-room/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
 | admin-dark-room | GET | `/api/admin-dark-room/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
 | admin-dark-room | POST | `/api/admin-dark-room/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| admin-event-catalog | GET | `/api/admin-event-catalog/` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | analytics | GET | `/api/analytics/conversion-funnel` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/overview` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/paralegal-leaderboard` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |

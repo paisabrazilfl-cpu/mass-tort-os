@@ -22,6 +22,7 @@ import { Permission, requirePermission, auditAction, canBypassOwnership, denyFor
 import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
+import { dispatchEvent } from "../lib/event-dispatcher";
 import { sendSmsViaRouter } from "../lib/sms/send";
 import { getFirmIdForUser } from "../lib/subscription-gate";
 
@@ -747,6 +748,33 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
   const convexityFields = ["tort_type", "diagnosis", "diagnosis_date", "diagnosis_confirmed", "exposure_start", "exposure_end", "date_of_birth", "state", "phone", "email", "source", "rejection_reason", "ad_spend", "status"];
   if (convexityFields.some(f => (body as Record<string, unknown>)[f] !== undefined)) {
     computeAndPersistLeadScore(lead.id).catch(() => {});
+  }
+
+  // Task #52 — outbound lead.updated event for n8n / Zapier / Make.
+  // changed_fields drives the NPI-on-provider-fill automation
+  // (subscribed integrations filter on `physician_*` keys).
+  // PATCH bodies are small so it's safe to forward `new_values` verbatim.
+  // Note: encrypted/PII fields would be redacted by an integration's
+  // mapping layer; payload here mirrors what the operator sent.
+  const changedFields = Object.keys(body as Record<string, unknown>).filter(
+    (k) => (body as Record<string, unknown>)[k] !== undefined,
+  );
+  if (changedFields.length > 0) {
+    dispatchEvent(
+      {
+        event: "lead.updated",
+        payload: {
+          lead_id: lead.id,
+          changed_fields: changedFields,
+          new_values: changedFields.reduce<Record<string, unknown>>((acc, k) => {
+            acc[k] = (body as Record<string, unknown>)[k];
+            return acc;
+          }, {}),
+          prior_status: priorStatus,
+        },
+      },
+      { source: `user:${user.id}` },
+    );
   }
 
   res.json(decryptLeadFields(lead, String(lead.id)));

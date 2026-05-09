@@ -35,6 +35,8 @@ import vapiToolsRouter from "./vapi-tools";
 import usersRouter from "./users";
 import adminDarkRoomRouter from "./admin-dark-room";
 import automationsRouter from "./automations";
+import adminApiKeysRouter from "./admin-api-keys";
+import adminEventCatalogRouter from "./admin-event-catalog";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -94,6 +96,8 @@ labelRouter(callsRouter, "calls");
 labelRouter(usersRouter, "users");
 labelRouter(adminDarkRoomRouter, "admin-dark-room");
 labelRouter(automationsRouter, "automations");
+labelRouter(adminApiKeysRouter, "admin-api-keys");
+labelRouter(adminEventCatalogRouter, "admin-event-catalog");
 
 const router: IRouter = Router();
 
@@ -155,6 +159,8 @@ router.use("/document-templates", documentTemplatesRouter);
 router.use("/workflow-settings", workflowSettingsRouter);
 router.use("/users", usersRouter);
 router.use("/admin/dark-room", adminDarkRoomRouter);
+router.use("/admin/api-keys", adminApiKeysRouter);
+router.use("/admin/event-catalog", adminEventCatalogRouter);
 router.use("/automations", automationsRouter);
 
 export default router;

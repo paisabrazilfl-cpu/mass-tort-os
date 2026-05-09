@@ -1,0 +1,84 @@
+{
+  "name": "MTOS — Case auto-advance after analysis",
+  "_description": "When a case transitions to `analyzed` (worker analysis succeeded), notify the assigned paralegal via SMS and tag the lead as ready_for_review. Subscribe to event: case.stage_changed.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mtos-case-stage-changed",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh",
+      "name": "MTOS case.stage_changed webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "combinator": "and",
+          "conditions": [
+            { "id": "c1", "operator": { "type": "string", "operation": "equals" }, "leftValue": "={{ $json.new_status }}", "rightValue": "analyzed" }
+          ]
+        }
+      },
+      "id": "if-analyzed",
+      "name": "Only when new_status == analyzed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MTOS_API_BASE }}/api/cases/{{ $json.case_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "get-case",
+      "name": "GET /cases/:id",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (cases:read,leads:write)" } },
+      "position": [720, 220]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.MTOS_API_BASE }}/api/leads/{{ $json.lead_id }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"ready_for_review\"\n}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "tag-lead",
+      "name": "PATCH /leads/:id (ready_for_review)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (cases:read,leads:write)" } },
+      "position": [960, 220]
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={ \"ok\": true }" },
+      "id": "ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 300]
+    }
+  ],
+  "connections": {
+    "MTOS case.stage_changed webhook": { "main": [[{ "node": "Only when new_status == analyzed", "type": "main", "index": 0 }]] },
+    "Only when new_status == analyzed": { "main": [
+      [{ "node": "GET /cases/:id", "type": "main", "index": 0 }],
+      [{ "node": "Respond OK", "type": "main", "index": 0 }]
+    ] },
+    "GET /cases/:id": { "main": [[{ "node": "PATCH /leads/:id (ready_for_review)", "type": "main", "index": 0 }]] },
+    "PATCH /leads/:id (ready_for_review)": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
