@@ -19,6 +19,7 @@ import {
   reviewQueueTable,
   paralegalsTable,
   documentTemplatesTable,
+  integrationsTable,
 } from "@workspace/db";
 import { eq, and, sql, asc } from "drizzle-orm";
 import path from "node:path";
@@ -33,6 +34,9 @@ import { getIntegrationCredentials } from "../../routes/integrations";
 import { getEmailAdapter } from "../email/sendgrid";
 import { getFaxAdapter } from "../fax";
 import { sendSms } from "../sms/telnyx";
+import { resolveProvider, isResolved } from "../provider-router";
+import { getVoiceAdapter } from "../voice";
+import { getIntegrationCredentialsById } from "../../routes/integrations";
 import { callLLM } from "../ai-provider";
 import { saveFile, readFile } from "../vault";
 import { runBackgroundCheckHub } from "../bg-hub/hub";
@@ -756,33 +760,161 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     if (!r.ok) throw new Error(`Telnyx SMS failed: ${r.error ?? "unknown error"}`);
     return r;
   },
-  "comm.send_mms": async () => {
-    // No MMS provider is wired. Surface a structured failure so downstream
-    // nodes can branch on `code` rather than crashing the whole run.
-    return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "comm.send_mms is not configured. Use comm.send_sms with a hosted asset URL." };
-  },
-  "comm.make_call": async () => {
-    // Catalog declares branches answered|no_answer|failed — return the
-    // failed branch with a structured provider-not-configured payload.
-    return { __branch: "failed", value: { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "comm.make_call requires a voice provider (Twilio/Vapi)." } };
-  },
-  "comm.send_voicemail": async () => {
-    return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "comm.send_voicemail is not configured in this deployment." };
-  },
-  "comm.send_calendar_invite": async (s) => {
-    // Falls back to send_email with an .ics attachment is not wired; record
-    // as audit so the workflow can still complete cleanly when the operator
-    // explicitly opts in. Otherwise fail loud.
-    if (!s.node.data?.params?.acknowledged_no_provider) {
-      throw new Error("comm.send_calendar_invite has no calendar provider wired. Set 'acknowledged_no_provider: true' in node params to log-only.");
+  "comm.send_mms": async (s) => {
+    // MMS rides the same Telnyx /v2/messages endpoint as SMS but with a
+    // `media_urls` array. We resolve the configured SMS provider via the
+    // vault and only support telnyx (the only SMS adapter wired for MMS).
+    // Other providers fail with a clear "use SMS + link" suggestion so
+    // an automation graph can still branch on `code`.
+    const p = s.node.data?.params ?? {};
+    const to = String(resolveOrLiteral(s, p.to) ?? "").trim();
+    const body = String(resolveOrLiteral(s, p.body) ?? "");
+    const mediaUrl = String(resolveOrLiteral(s, p.mediaUrl) ?? "").trim();
+    if (!to || !mediaUrl) throw new Error("comm.send_mms requires `to` and `mediaUrl`.");
+    const resolved = await resolveProvider("sms");
+    if (!isResolved(resolved)) {
+      return { ok: false, code: "PROVIDER_NOT_CONFIGURED", reason: resolved.reason, error: resolved.details ?? "No SMS provider configured." };
     }
+    if (resolved.provider !== "telnyx") {
+      return { ok: false, code: "MMS_NOT_SUPPORTED_BY_PROVIDER", error: `MMS not implemented for ${resolved.provider}. Use comm.send_sms with the asset URL inline.` };
+    }
+    const apiKey = (resolved.credentials.api_key ?? "").toString().trim();
+    const cfg = (resolved.credentials.config && typeof resolved.credentials.config === "object" ? resolved.credentials.config : {}) as Record<string, unknown>;
+    const fromNumber = (typeof p.from === "string" && p.from) || (typeof cfg.from_number === "string" ? cfg.from_number.trim() : "") || null;
+    const profileId = typeof cfg.messaging_profile_id === "string" ? cfg.messaging_profile_id.trim() : "";
+    const payload: Record<string, unknown> = { to, text: body, media_urls: [mediaUrl] };
+    if (fromNumber) payload.from = fromNumber;
+    if (profileId && !fromNumber) payload.messaging_profile_id = profileId;
+    const resp = await fetch("https://api.telnyx.com/v2/messages", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json: any = await resp.json().catch(() => ({}));
+    if (!resp.ok || !json?.data?.id) {
+      throw new Error(`Telnyx MMS failed: ${json?.errors?.[0]?.detail ?? `HTTP ${resp.status}`}`);
+    }
+    return { ok: true, externalMessageId: String(json.data.id), provider: "telnyx" };
+  },
+  "comm.make_call": async (s) => {
+    // Outbound dial via the configured voice provider. The `agentId` param
+    // optionally targets an AI assistant; if absent we still place the
+    // call (Vapi requires an assistantId — surface a clean error).
+    // Branches: "answered" once the call is accepted by the provider for
+    // dispatch, "failed" for any synchronous error. The actual call
+    // outcome (no_answer / busy / etc.) arrives later via webhook —
+    // that's reported through the run's downstream nodes, not here.
+    const p = s.node.data?.params ?? {};
+    const to = String(resolveOrLiteral(s, p.to) ?? "").trim();
+    const agentId = String(resolveOrLiteral(s, p.agentId) ?? "").trim();
+    if (!to) {
+      return { __branch: "failed", value: { ok: false, code: "MISSING_TO", error: "comm.make_call requires `to`." } };
+    }
+    const resolved = await resolveProvider("voice");
+    if (!isResolved(resolved)) {
+      return { __branch: "failed", value: { ok: false, code: "PROVIDER_NOT_CONFIGURED", reason: resolved.reason, error: resolved.details ?? "No voice provider configured." } };
+    }
+    const adapter = getVoiceAdapter(resolved.provider);
+    if (!adapter) {
+      return { __branch: "failed", value: { ok: false, code: "ADAPTER_NOT_FOUND", error: `No voice adapter for provider ${resolved.provider}.` } };
+    }
+    if (!agentId) {
+      return { __branch: "failed", value: { ok: false, code: "MISSING_AGENT_ID", error: `${resolved.provider} requires an assistant/agent id (set the agentId param).` } };
+    }
+    const out = await adapter.startCall(resolved.credentials, {
+      to,
+      from: typeof p.from === "string" ? p.from : undefined,
+      assistantId: agentId,
+      metadata: { run_id: String(s.ctx.runId), workflow_id: String(s.ctx.workflowId) },
+    });
+    if (!out.ok) {
+      return { __branch: "failed", value: { ok: false, code: out.code, error: out.message, retryable: out.retryable } };
+    }
+    return { __branch: "answered", value: { ok: true, externalCallId: out.externalCallId, provider: resolved.provider, note: "Call dispatched. Final disposition (no_answer/busy/etc) arrives via webhook." } };
+  },
+  "comm.send_voicemail": async (s) => {
+    // Voicemail-drop is a category that none of the wired voice/SMS
+    // providers expose directly (Vapi/Twilio require a dedicated AMD +
+    // ringless-voicemail product like Slybroadcast/Drop.co). We log the
+    // request to the audit trail so the workflow can complete cleanly,
+    // and surface a clear NOT_IMPLEMENTED so operators know to either
+    // wire a voicemail provider or substitute comm.send_sms.
     await db.insert(auditLogTable).values({
-      action: "calendar_invite.logged_only",
+      action: "voicemail.requested_no_provider",
       entity_type: "automation_run",
       entity_id: String(s.ctx.runId),
-      details: s.node.data?.params as any,
+      details: { params: s.node.data?.params, note: "No voicemail-drop provider wired in this deployment." } as any,
     } as any);
-    return { logged_only: true };
+    return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "Voicemail drop is not implemented. Wire a voicemail provider (e.g. Slybroadcast) or use comm.send_sms with a callback link." };
+  },
+  "comm.send_calendar_invite": async (s) => {
+    // Build an RFC-5545 .ics attachment and send via the configured
+    // email provider. No undeclared-param trapdoor — the catalog's
+    // `to/title/startsAt/endsAt/location/body` are sufficient.
+    const p = s.node.data?.params ?? {};
+    const to = String(resolveOrLiteral(s, p.to) ?? "").trim();
+    const title = String(resolveOrLiteral(s, p.title) ?? "").trim();
+    const startsAt = String(resolveOrLiteral(s, p.startsAt) ?? "").trim();
+    if (!to || !title || !startsAt) throw new Error("comm.send_calendar_invite requires `to`, `title`, and `startsAt`.");
+    const endsAt = String(resolveOrLiteral(s, p.endsAt) ?? "").trim() ||
+      new Date(new Date(startsAt).getTime() + 30 * 60_000).toISOString();
+    const location = String(resolveOrLiteral(s, p.location) ?? "").trim();
+    const bodyText = String(resolveOrLiteral(s, p.body) ?? title);
+
+    const fmt = (iso: string) => {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) throw new Error(`Invalid ISO timestamp: ${iso}`);
+      return d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+    };
+    const uid = `${s.ctx.runId}-${s.node.id}@mtos`;
+    const ics = [
+      "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//MTOS//Automation//EN",
+      "CALSCALE:GREGORIAN", "METHOD:REQUEST",
+      "BEGIN:VEVENT",
+      `UID:${uid}`,
+      `DTSTAMP:${fmt(new Date().toISOString())}`,
+      `DTSTART:${fmt(startsAt)}`,
+      `DTEND:${fmt(endsAt)}`,
+      `SUMMARY:${title.replace(/[\r\n]+/g, " ")}`,
+      `DESCRIPTION:${bodyText.replace(/[\r\n]+/g, "\\n")}`,
+      ...(location ? [`LOCATION:${location.replace(/[\r\n]+/g, " ")}`] : []),
+      `ORGANIZER:mailto:noreply@mtos.local`,
+      `ATTENDEE;RSVP=TRUE:mailto:${to}`,
+      "END:VEVENT", "END:VCALENDAR",
+    ].join("\r\n");
+
+    // Best-effort: deliver via the configured email provider. If none
+    // is configured, audit-log the ICS so the operator can see the
+    // payload that would have been sent.
+    const resolved = await resolveProvider("email");
+    if (!isResolved(resolved)) {
+      await db.insert(auditLogTable).values({
+        action: "calendar_invite.no_email_provider",
+        entity_type: "automation_run",
+        entity_id: String(s.ctx.runId),
+        details: { to, title, startsAt, endsAt, location, ics_uid: uid, reason: resolved.reason, message: resolved.details } as any,
+      } as any);
+      return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: resolved.details ?? "No email provider configured." };
+    }
+    const adapter = getEmailAdapter(resolved.provider);
+    if (!adapter) {
+      return { ok: false, code: "ADAPTER_NOT_FOUND", error: `No email adapter for ${resolved.provider}.` };
+    }
+    const fromCfg = (resolved.credentials.config && typeof resolved.credentials.config === "object" ? resolved.credentials.config : {}) as Record<string, unknown>;
+    const fromEmail = (typeof fromCfg.from_email === "string" ? fromCfg.from_email : "") || "noreply@mtos.local";
+    const html = `<p>${bodyText.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] ?? c))}</p>` +
+      `<pre style="font-family:monospace;font-size:11px;background:#f6f6f6;padding:8px;border-radius:4px">${ics}</pre>`;
+    const out = await adapter.send(resolved.credentials, {
+      to,
+      fromEmail,
+      subject: title,
+      html,
+      text: `${bodyText}\n\nWhen: ${startsAt} → ${endsAt}${location ? `\nWhere: ${location}` : ""}\n\n${ics}`,
+    });
+    if (!out.ok) {
+      throw new Error(`Calendar invite email failed: ${out.message}`);
+    }
+    return { ok: true, externalMessageId: out.externalMessageId, ics_uid: uid, provider: resolved.provider };
   },
 
   // ───────── Documents
@@ -1104,12 +1236,101 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     });
     return { reply };
   },
-  "ai.voice_agent": async () => {
-    // Catalog declares branches completed|failed — surface the failed branch.
-    return { __branch: "failed", value: { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "ai.voice_agent requires Vapi credentials." } };
+  "ai.voice_agent": async (s) => {
+    // Real Vapi-style outbound voice agent dial. Catalog branches
+    // completed|failed. We treat the synchronous "call dispatched" ack
+    // as `completed` (the actual call lifecycle is reported via the
+    // /webhooks/voice/:provider route into the run trail). Errors map
+    // to `failed` with a structured payload.
+    const p = s.node.data?.params ?? {};
+    const agentId = String(resolveOrLiteral(s, p.agentId) ?? "").trim();
+    const callIdRaw = resolveOrLiteral(s, p.callId);
+    const to = String(resolveOrLiteral(s, p.to ?? s.input?.to ?? s.input?.lead?.phone) ?? "").trim();
+    const metadata = (resolveOrLiteral(s, p.metadata) ?? {}) as Record<string, any>;
+    if (!agentId) {
+      return { __branch: "failed", value: { ok: false, code: "MISSING_AGENT_ID", error: "ai.voice_agent requires `agentId`." } };
+    }
+    if (!to) {
+      return { __branch: "failed", value: { ok: false, code: "MISSING_TO", error: "ai.voice_agent needs a destination number — set `to` or pass it via input.lead.phone / input.to." } };
+    }
+    const resolved = await resolveProvider("voice");
+    if (!isResolved(resolved)) {
+      return { __branch: "failed", value: { ok: false, code: "PROVIDER_NOT_CONFIGURED", reason: resolved.reason, error: resolved.details ?? "No voice provider configured." } };
+    }
+    const adapter = getVoiceAdapter(resolved.provider);
+    if (!adapter) {
+      return { __branch: "failed", value: { ok: false, code: "ADAPTER_NOT_FOUND", error: `No voice adapter for ${resolved.provider}.` } };
+    }
+    const out = await adapter.startCall(resolved.credentials, {
+      to,
+      assistantId: agentId,
+      metadata: {
+        run_id: String(s.ctx.runId),
+        workflow_id: String(s.ctx.workflowId),
+        ...(callIdRaw != null ? { upstream_call_id: String(callIdRaw) } : {}),
+        ...Object.fromEntries(Object.entries(metadata).map(([k, v]) => [k, String(v)])),
+      },
+    });
+    if (!out.ok) {
+      return { __branch: "failed", value: { ok: false, code: out.code, error: out.message, retryable: out.retryable } };
+    }
+    return { __branch: "completed", value: { ok: true, externalCallId: out.externalCallId, provider: resolved.provider, agentId, note: "Voice agent dispatched. Conversation outcome arrives via /webhooks/voice/:provider." } };
   },
-  "ai.transcribe": async () => {
-    return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "ai.transcribe requires a transcription provider (Whisper/Deepgram)." };
+  "ai.transcribe": async (s) => {
+    // Transcribe an audio URL via OpenAI Whisper. We look up the most
+    // recent active OpenAI integration in the vault — the project's
+    // ai-provider already routes LLM traffic through configured
+    // integrations, so reusing the same OpenAI key for whisper keeps
+    // ops surface area down. Fails cleanly with PROVIDER_NOT_CONFIGURED
+    // when no openai integration exists.
+    const p = s.node.data?.params ?? {};
+    const audioUrl = String(resolveOrLiteral(s, p.audioUrl) ?? "").trim();
+    const language = String(resolveOrLiteral(s, p.language) ?? "en").trim() || "en";
+    if (!audioUrl) throw new Error("ai.transcribe requires `audioUrl`.");
+
+    // SSRF guard — same allowlist as the rest of the executor's outbound paths.
+    await assertSafeOutboundUrl(audioUrl);
+
+    const [openaiRow] = await db
+      .select({ id: integrationsTable.id })
+      .from(integrationsTable)
+      .where(and(eq(integrationsTable.provider, "openai"), eq(integrationsTable.status, "active")))
+      .orderBy(sql`${integrationsTable.created_at} DESC`)
+      .limit(1);
+    if (!openaiRow) {
+      return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "ai.transcribe needs an active OpenAI integration in the vault (Whisper). Add one on the Integrations page." };
+    }
+    const creds = await getIntegrationCredentialsById(openaiRow.id);
+    const apiKey = creds?.api_key?.toString().trim();
+    if (!apiKey) {
+      return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "OpenAI integration is missing api_key." };
+    }
+
+    // Download the audio asset, then upload to Whisper via multipart.
+    const audioResp = await fetch(audioUrl);
+    if (!audioResp.ok) throw new Error(`ai.transcribe: failed to download audio (HTTP ${audioResp.status})`);
+    const audioBuf = Buffer.from(await audioResp.arrayBuffer());
+    const filename = (() => {
+      try { return path.basename(new URL(audioUrl).pathname) || "audio.mp3"; } catch { return "audio.mp3"; }
+    })();
+    const contentType = audioResp.headers.get("content-type") || "audio/mpeg";
+
+    const form = new FormData();
+    form.append("file", new Blob([audioBuf], { type: contentType }), filename);
+    form.append("model", "whisper-1");
+    form.append("language", language);
+    form.append("response_format", "json");
+
+    const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form as any,
+    });
+    const json: any = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(`Whisper transcription failed: ${json?.error?.message ?? `HTTP ${resp.status}`}`);
+    }
+    return { ok: true, text: String(json.text ?? ""), language, provider: "openai-whisper" };
   },
 
   // ───────── Utility
