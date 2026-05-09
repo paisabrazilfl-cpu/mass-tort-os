@@ -34,6 +34,10 @@ import { badRequest, notFound } from "../lib/http-errors";
 import { verifyWebhook as verifyStripeWebhook } from "../lib/payments/stripe";
 import { verifyVapiSignature } from "../lib/voice/vapi-webhook";
 import { verifyTelnyxSignature } from "../lib/sms/telnyx";
+import { verifyFastenSignature } from "../lib/fasten/webhook";
+import { getFastenWebhookSecret } from "../lib/fasten/client";
+import { fastenConnectionsTable } from "@workspace/db";
+import { enqueueJob } from "../lib/queue";
 import { getEmailVerifier, getSmsVerifier, type VerifyContext, type SignatureStatus } from "../lib/webhook-verifiers";
 import { invalidateStripeConfiguredCache } from "../lib/subscription-gate";
 import type Stripe from "stripe";
@@ -1117,6 +1121,99 @@ router.post("/voice/:provider", async (req, res) => {
     status,
   });
   res.json({ ok: true, signature_status: signatureStatus });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Fasten Health webhook
+//   Auth: HMAC-SHA256 of `${timestamp}.${rawBody}` using the webhook
+//   signing secret stored on the fasten_connect integration row as
+//   `client_secret`. Header: `Fasten-Signature: t=<unix>,v1=<hex>`.
+//   Replay window: 5 minutes.
+//
+//   On `connection.completed` we mark the matching pending row "active"
+//   and enqueue the first records sync. On `connection.disconnected`
+//   we mark the row "revoked". Other events are recorded for audit.
+// ─────────────────────────────────────────────────────────────────
+
+router.post("/fasten", async (req, res) => {
+  try {
+    const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+    const header = req.header("fasten-signature") || req.header("Fasten-Signature") || "";
+    const secret = await getFastenWebhookSecret();
+    const sigStatus = verifyFastenSignature({ rawBody, header, secret });
+
+    if (sigStatus !== "ok") {
+      logger.warn({ provider: "fasten", sigStatus }, "Fasten webhook signature check failed — refusing state mutation");
+      res.status(200).json({ ok: true, note: sigStatus });
+      return;
+    }
+
+    const evt = (req.body || {}) as {
+      type?: string;
+      data?: { org_connection_id?: string; external_id?: string; status?: string };
+    };
+    const orgConnectionId = evt.data?.org_connection_id;
+    const externalId = evt.data?.external_id;
+    if (!orgConnectionId && !externalId) {
+      logger.info({ provider: "fasten", type: evt.type }, "Fasten webhook with no correlation id — ack only");
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    // Locate the pending connection row by external_id (carried in metadata)
+    // or by an already-known org_connection_id.
+    const rows = await db.select().from(fastenConnectionsTable);
+    const conn = rows.find((r) => {
+      if (orgConnectionId && r.org_connection_id === orgConnectionId) return true;
+      const meta = (r.metadata as { external_id?: string } | null) || null;
+      return externalId && meta?.external_id === externalId;
+    });
+    if (!conn) {
+      logger.warn({ provider: "fasten", orgConnectionId, externalId }, "Fasten webhook for unknown connection — ignoring");
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const update: Record<string, unknown> = { updated_at: new Date() };
+    if (orgConnectionId && !conn.org_connection_id) update.org_connection_id = orgConnectionId;
+
+    if (evt.type === "connection.completed" || evt.data?.status === "active") {
+      update.status = "active";
+    } else if (evt.type === "connection.disconnected" || evt.data?.status === "revoked") {
+      update.status = "revoked";
+    } else if (evt.type === "connection.reauth_required" || evt.data?.status === "reauth") {
+      update.status = "reauth";
+    }
+
+    await db
+      .update(fastenConnectionsTable)
+      .set(update)
+      .where(eq(fastenConnectionsTable.id, conn.id));
+
+    await auditLog("fasten_connection", String(conn.id), `webhook_${evt.type ?? "event"}`, {
+      org_connection_id: orgConnectionId,
+      external_id: externalId,
+    });
+
+    if (update.status === "active") {
+      try {
+        await enqueueJob("fasten_records_sync", {
+          connection_id: conn.id,
+          lead_id: conn.lead_id,
+          case_id: `lead-${conn.lead_id}`,
+          backend: conn.backend as "connect" | "onprem",
+          org_connection_id: (orgConnectionId || conn.org_connection_id) as string,
+        });
+      } catch (err) {
+        logger.warn({ err, connectionId: conn.id }, "Auto-enqueue of fasten sync from webhook failed");
+      }
+    }
+
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Fasten webhook handler error");
+    res.status(200).json({ ok: true, note: "handler_error_logged" });
+  }
 });
 
 export default router;

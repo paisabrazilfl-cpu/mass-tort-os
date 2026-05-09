@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **221 checked / 38 public / 183 protected / 0 unprotected.**
+Boot-time count: **229 checked / 39 public / 190 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -694,6 +694,13 @@ Boot-time count: **221 checked / 38 public / 183 protected / 0 unprotected.**
 | drafting | POST | `/api/drafting/generate-pdf` | ✓ | ✓ |  |  |  | — | `drafting:generate` | ✓ |
 | drafting | POST | `/api/drafting/generate` | ✓ | ✓ |  |  |  | — | `drafting:generate` | ✓ |
 | drafting | GET | `/api/drafting/templates` | ✓ | ✓ |  |  |  | — | `drafting:templates_view` | ✓ |
+| fasten | GET | `/api/fasten/callback` | ✓ | ✓ |  |  |  | — | `medical_records:view` | ✓ |
+| fasten | GET | `/api/fasten/catalog` | ✓ | ✓ |  |  |  | — | `medical_records:manage` | ✓ |
+| fasten | GET | `/api/fasten/connections/:leadId` | ✓ | ✓ |  |  |  | — | `medical_records:view` | ✓ |
+| fasten | POST | `/api/fasten/connect` | ✓ | ✓ |  |  |  | — | `medical_records:manage` | ✓ |
+| fasten | POST | `/api/fasten/disconnect/:connectionId` | ✓ | ✓ |  |  |  | — | `medical_records:manage` | ✓ |
+| fasten | GET | `/api/fasten/status` | ✓ | ✓ |  |  |  | — | `medical_records:view` | ✓ |
+| fasten | POST | `/api/fasten/sync/:connectionId` | ✓ | ✓ |  |  |  | — | `medical_records:manage` | ✓ |
 | forms-public | GET | `/api/forms-public/embed/:tortId` |  |  | ✓ |  |  | — | — | — |
 | forms-public | GET | `/api/forms-public/preview-blocker.js` |  |  | ✓ |  |  | — | — | — |
 | forms-public | GET | `/api/forms-public/preview/:tortId` |  |  | ✓ |  |  | — | — | — |
@@ -812,6 +819,7 @@ Boot-time count: **221 checked / 38 public / 183 protected / 0 unprotected.**
 | webhooks | POST | `/api/webhooks/docusign` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/dropbox-sign` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/email/:provider` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/fasten` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/fax/:provider` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/sms/:provider` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/stripe` |  |  | ✓ |  |  | — | — | — |

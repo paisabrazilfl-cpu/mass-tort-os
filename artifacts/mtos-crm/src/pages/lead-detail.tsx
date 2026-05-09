@@ -20,6 +20,7 @@ import {
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { EnvelopeTimeline } from "@/components/envelope-timeline";
 import { BackgroundCheckHubCard } from "@/components/background-check-hub-card";
+import { FastenConnectCard } from "@/components/fasten-connect-card";
 import { SendSmsButton } from "@/components/send-sms-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
@@ -747,6 +748,7 @@ export default function LeadDetail() {
             })()}
 
             <BackgroundCheckHubCard leadId={leadId} />
+            <FastenConnectCard leadId={leadId} />
           </div>
         </TabsContent>
 

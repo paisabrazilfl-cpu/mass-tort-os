@@ -208,6 +208,10 @@ export const Permission = {
   AUTOMATIONS_VIEW: "automations:view",
   AUTOMATIONS_MANAGE: "automations:manage",
   AUTOMATIONS_EXECUTE: "automations:execute",
+
+  // Medical Records (Fasten Health patient-initiated FHIR import)
+  MEDICAL_RECORDS_VIEW: "medical_records:view",
+  MEDICAL_RECORDS_MANAGE: "medical_records:manage",
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];
@@ -282,6 +286,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     Permission.CALLS_VIEW,
     Permission.CALLS_MANAGE,
     Permission.SMS_SEND,
+    // Medical records (Fasten) — attorneys can issue connect links and trigger syncs.
+    Permission.MEDICAL_RECORDS_VIEW,
+    Permission.MEDICAL_RECORDS_MANAGE,
   ]),
   paralegal: new Set<Permission>([
     // Leads / lead-import (no delete/export, no execute)
@@ -332,6 +339,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     // Voice & SMS — paralegals can listen to calls and send SMS follow-ups.
     Permission.CALLS_VIEW,
     Permission.SMS_SEND,
+    // Medical records (Fasten) — paralegals issue connect links + run syncs day-to-day.
+    Permission.MEDICAL_RECORDS_VIEW,
+    Permission.MEDICAL_RECORDS_MANAGE,
   ]),
   viewer: new Set<Permission>([
     Permission.LEAD_VIEW_OWN,
