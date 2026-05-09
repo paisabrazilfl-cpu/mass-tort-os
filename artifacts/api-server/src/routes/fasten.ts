@@ -98,7 +98,10 @@ router.post("/connect", requirePermission(Permission.MEDICAL_RECORDS_MANAGE), as
     badRequest(res, "lead_id is required");
     return;
   }
-  const chosenBackend: FastenBackend = backend === "onprem" ? "onprem" : "connect";
+  // Default to the free, self-hosted on-prem backend. Operators must
+  // explicitly opt into the paid Fasten Connect SaaS by passing
+  // backend="connect" (and a brand_id).
+  const chosenBackend: FastenBackend = backend === "connect" ? "connect" : "onprem";
   if (chosenBackend === "connect" && !brand_id) {
     badRequest(res, "brand_id is required when backend=connect");
     return;

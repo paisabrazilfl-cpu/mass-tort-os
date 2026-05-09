@@ -161,8 +161,9 @@ export function FastenConnectCard({ leadId }: { leadId: number }) {
           <CardTitle className="flex items-center gap-2"><Stethoscope className="h-5 w-5" /> Patient Medical Records (Fasten)</CardTitle>
           <CardDescription>
             Fasten Health is not yet configured. An admin can wire it up under{" "}
-            <a className="underline" href="/integrations">Settings → Integrations</a>{" "}
-            (search for &quot;Fasten Connect&quot; or &quot;Fasten On-Premise&quot;).
+            <a className="underline" href="/integrations">Settings → Integrations</a>.
+            Recommended: <strong>Fasten On-Premise (Self-Hosted, Free)</strong> — the
+            GPL-licensed open-source path with no SaaS fees.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -181,8 +182,30 @@ export function FastenConnectCard({ leadId }: { leadId: number }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {status.data.backends.connect && (
+        {status.data.backends.onprem && (
           <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm">
+                <div className="font-medium">Fasten On-Premise (Free)</div>
+                <div className="text-xs text-muted-foreground">
+                  Recommended. Sends the patient to your self-hosted fasten-onprem instance to pick a provider.
+                </div>
+              </div>
+              <Button
+                onClick={() => connectMut.mutate({ brand_id: "", backend: "onprem", portal_name: "Fasten on-prem" })}
+                disabled={connectMut.isPending}
+              >
+                <ExternalLink className="h-4 w-4 mr-1" />Issue Connect Link
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {status.data.backends.connect && (
+          <div className="space-y-2 border-t pt-3">
+            <div className="text-xs text-muted-foreground">
+              Optional: Fasten Connect (paid SaaS) — wider provider catalog. Search to pick a specific portal.
+            </div>
             <div className="flex gap-2">
               <Input
                 placeholder="Search providers (e.g. 'epic', 'kaiser', 'cleveland clinic')…"
@@ -204,6 +227,7 @@ export function FastenConnectCard({ leadId }: { leadId: number }) {
                     </div>
                     <Button
                       size="sm"
+                      variant="outline"
                       onClick={() => connectMut.mutate({ brand_id: b.id, backend: "connect", portal_name: b.name })}
                       disabled={connectMut.isPending}
                     >
@@ -214,15 +238,6 @@ export function FastenConnectCard({ leadId }: { leadId: number }) {
               </div>
             )}
           </div>
-        )}
-
-        {status.data.backends.onprem && !status.data.backends.connect && (
-          <Button
-            onClick={() => connectMut.mutate({ brand_id: "", backend: "onprem", portal_name: "Fasten on-prem" })}
-            disabled={connectMut.isPending}
-          >
-            <ExternalLink className="h-4 w-4 mr-1" />Issue On-Prem Connect Link
-          </Button>
         )}
 
         <div className="space-y-2">
