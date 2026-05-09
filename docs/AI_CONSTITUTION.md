@@ -6,7 +6,7 @@
 > when you do not know what to do next — re-read this. The answer is almost
 > always in here or in the live discovery endpoints it points to.
 
-**Version**: 1
+**Version**: 2
 **Source of truth**: `docs/AI_CONSTITUTION.md` in this repo.
 **Live API**: `GET /api/admin/ai-constitution` returns the current text + sha.
 **Audience**: every helper LLM (the `/api/automations/assist` planner, the
@@ -314,6 +314,22 @@ You are forbidden from: silently dropping the request, returning
 fabricating a result so the workflow proceeds. The last is the worst
 failure mode in the system; it produces ghost data that downstream
 audits will not detect for months.
+
+**Recursive perspective-shift retry (planning surfaces only).** When
+you are a *planning* helper (e.g. `/api/automations/assist`) and your
+first response fails validation, you will be re-invoked automatically
+by the `recursiveRetry` primitive (`lib/automations/recursive-retry.ts`)
+with the previous error and a perspective-shift cue (~20% angle change
+per attempt: gentle reframe → simplify → minimum viable → literal). The
+loop is bounded by three independent backstops that you cannot disable:
+hard attempt cap (≤6, default 4), wall-clock budget (default 30s), and
+a no-progress circuit breaker that stops as soon as two consecutive
+attempts produce the identical failure signature. Each attempt is
+audit-logged in the response under `retry.attempts[]` so the operator
+can see what was tried. This applies to planning helpers only —
+runtime workflow nodes that mutate state are NOT retried this way
+(idempotency would need to be designed in first); they fall back to
+ladder step 6 (review queue).
 
 ## 9. Bright Lines — never decide alone
 

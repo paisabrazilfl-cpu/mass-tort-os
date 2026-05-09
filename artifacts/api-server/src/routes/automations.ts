@@ -8,6 +8,11 @@ import { NODE_CATALOG, getNodeDefinition } from "../lib/automations/node-catalog
 import { runWorkflow } from "../lib/automations/executor";
 import { callLLM } from "../lib/ai-provider";
 import { getAiConstitutionPreamble } from "../lib/ai-constitution";
+import {
+  recursiveRetry,
+  perspectiveCue,
+  type AttemptOutcome,
+} from "../lib/automations/recursive-retry";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -350,68 +355,156 @@ router.post("/assist", requirePermission(Permission.AUTOMATIONS_MANAGE), async (
     catalogSummary,
   ].join("\n");
 
-  const userPrompt = [
+  const baseUserPrompt = [
     `User request: ${prompt}`,
     currentGraph
       ? `\nCurrent graph (mode=${mode}):\n${JSON.stringify(currentGraph).slice(0, 8_000)}`
       : "\n(No existing graph — build from scratch.)",
   ].join("\n");
 
-  let raw: string;
-  try {
-    raw = await callLLM({
-      module: "lead-intelligence",
-      systemPrompt,
-      prompt: userPrompt,
-      maxTokens: 2500,
+  // Successful payload shape returned to the operator on a good attempt.
+  type AssistOk = {
+    explanation: string;
+    graph: ReturnType<typeof assistGraphSchema.parse>;
+    warnings: ReturnType<typeof validateAssistGraph>["warnings"];
+  };
+
+  // One attempt = one LLM call + JSON parse + schema check + catalog
+  // validation. Each failure mode is converted to a structured
+  // AttemptOutcome so the recursiveRetry primitive can feed the previous
+  // error into the next perspective shift.
+  //
+  // We deliberately retry transport failures (`llm_unavailable`) too —
+  // the underlying provider router has its own fallback to the Anthropic
+  // env-key adapter, but a transient 5xx on the chosen provider can
+  // resolve on the next call.
+  const runOneAttempt = async (
+    ctx: { perspectiveIndex: number; totalAttempts: number; previousError: { code: string; message: string } | null },
+  ): Promise<AttemptOutcome<AssistOk>> => {
+    // Build the user prompt for this attempt: base + perspective cue +
+    // (on retries) a compact summary of the previous failure so the
+    // model can correct rather than guess.
+    const cue = perspectiveCue(ctx.perspectiveIndex);
+    const previousErrorBlock = ctx.previousError
+      ? `\nPREVIOUS ATTEMPT FAILED:\n  code: ${ctx.previousError.code}\n  message: ${ctx.previousError.message.slice(0, 600)}\nAddress this in your next response.`
+      : "";
+    const attemptUserPrompt = [
+      baseUserPrompt,
+      cue ? `\n${cue}` : "",
+      previousErrorBlock,
+    ].filter(Boolean).join("\n");
+
+    let raw: string;
+    try {
+      raw = await callLLM({
+        module: "lead-intelligence",
+        systemPrompt,
+        prompt: attemptUserPrompt,
+        maxTokens: 2500,
+      });
+    } catch (err: any) {
+      return {
+        ok: false,
+        errorCode: "llm_unavailable",
+        errorMessage: err?.message ?? "AI provider unreachable",
+      };
+    }
+
+    // Strip code fences the model sometimes adds despite instructions.
+    const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/m, "").trim();
+    let payload: { explanation?: string; graph?: unknown };
+    try {
+      payload = JSON.parse(cleaned);
+    } catch {
+      return {
+        ok: false,
+        errorCode: "assist_invalid_json",
+        errorMessage: "Assistant did not return valid JSON.",
+        errorDetails: { raw: cleaned.slice(0, 800) },
+      };
+    }
+
+    const graphParse = assistGraphSchema.safeParse(payload?.graph);
+    if (!graphParse.success) {
+      return {
+        ok: false,
+        errorCode: "assist_bad_shape",
+        errorMessage: "Assistant produced a graph that does not match the expected shape.",
+        errorDetails: graphParse.error.flatten(),
+      };
+    }
+
+    const { issues, warnings } = validateAssistGraph(graphParse.data);
+    if (issues.length > 0) {
+      return {
+        ok: false,
+        errorCode: "assist_catalog_violation",
+        errorMessage: `Graph uses unknown nodes or invalid edges: ${issues.slice(0, 3).map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join("; ")}`,
+        errorDetails: { issues, warnings, graph: graphParse.data },
+      };
+    }
+
+    return {
+      ok: true,
+      value: {
+        explanation: typeof payload.explanation === "string" ? payload.explanation : "",
+        graph: graphParse.data,
+        warnings,
+      },
+    };
+  };
+
+  const result = await recursiveRetry({
+    attempt: runOneAttempt,
+    // 4 total attempts (original + 3 retries). The hard ceiling in
+    // recursive-retry.ts caps anything beyond 6, so even if we bump
+    // this we cannot accidentally loop forever.
+    maxAttempts: 4,
+    // 30s wall-clock cap across all attempts — protects request budget
+    // and prevents a slow LLM from holding the connection open.
+    maxTotalMs: 30_000,
+  });
+
+  if (!result.ok) {
+    // Map the last error code to an HTTP status: transport failures
+    // are 502, validation failures are 422.
+    const httpStatus = result.lastError.code === "llm_unavailable" ? 502 : 422;
+    logger.warn(
+      {
+        code: result.lastError.code,
+        attempts: result.attempts.length,
+        stoppedReason: result.stoppedReason,
+      },
+      "automation.assist: all retries failed",
+    );
+    res.status(httpStatus).json({
+      status: "error",
+      code: result.lastError.code,
+      message: result.lastError.message,
+      details: result.lastError.details,
+      // Surface the full audit trail so the operator can see WHAT we
+      // tried and WHY each attempt failed — without this, the recursive
+      // retry is a black box that just burns LLM credits.
+      retry: {
+        attempts: result.attempts,
+        stopped_reason: result.stoppedReason,
+      },
     });
-  } catch (err: any) {
-    logger.warn({ err: err?.message }, "automation.assist: LLM call failed");
-    res.status(502).json({ status: "error", code: "llm_unavailable", message: err?.message ?? "AI provider unreachable" });
     return;
   }
 
-  // Strip code fences the model sometimes adds despite instructions.
-  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/m, "").trim();
-  let payload: { explanation?: string; graph?: unknown };
-  try {
-    payload = JSON.parse(cleaned);
-  } catch {
-    res.status(422).json({
-      status: "error",
-      code: "assist_invalid_json",
-      message: "Assistant did not return valid JSON. Try again or rephrase.",
-      details: { raw: cleaned.slice(0, 800) },
-    });
-    return;
-  }
-
-  const graphParse = assistGraphSchema.safeParse(payload?.graph);
-  if (!graphParse.success) {
-    res.status(422).json({
-      status: "error",
-      code: "assist_bad_shape",
-      message: "Assistant produced a graph that does not match the expected shape.",
-      details: graphParse.error.flatten(),
-    });
-    return;
-  }
-  const { issues, warnings } = validateAssistGraph(graphParse.data);
-  if (issues.length > 0) {
-    res.status(422).json({
-      status: "error",
-      code: "assist_catalog_violation",
-      message: "Assistant produced a graph that uses unknown nodes or invalid edges.",
-      details: { issues, warnings, graph: graphParse.data },
-    });
-    return;
-  }
   res.json({
     status: "ok",
-    explanation: typeof payload.explanation === "string" ? payload.explanation : "",
-    graph: graphParse.data,
-    warnings,
+    explanation: result.value.explanation,
+    graph: result.value.graph,
+    warnings: result.value.warnings,
     mode,
+    // On success, still surface the retry log when more than one
+    // attempt was needed — useful telemetry for tuning the perspective
+    // cues over time.
+    ...(result.attempts.length > 1
+      ? { retry: { attempts: result.attempts, stopped_reason: result.stoppedReason } }
+      : {}),
   });
 });
 

@@ -19,7 +19,7 @@ describe("ai-constitution loader", () => {
     const a = getAiConstitution();
     assert.equal(typeof a.markdown, "string");
     assert.ok(a.markdown.length > 1000, "constitution should be substantial");
-    assert.equal(a.version, 1);
+    assert.equal(a.version, 2);
     assert.match(a.sha256, /^[0-9a-f]{64}$/);
     assert.equal(a.bytes, Buffer.byteLength(a.markdown, "utf8"));
     // Two reads in a row must return the same content + same sha (cache),
@@ -114,7 +114,7 @@ describe("ai-constitution loader", () => {
     // with a small helper. This guards against the previous behaviour
     // where a missing header silently defaulted to v1.
     const { version } = getAiConstitution();
-    assert.equal(version, 1, "current doc should be v1");
+    assert.equal(version, 2, "current doc should be v2");
 
     // Simulate the malformed case: feed the parser a markdown blob
     // missing the header and assert the loader's contract by re-
