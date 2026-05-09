@@ -47,6 +47,8 @@ export const navigation: NavSection[] = [
     section: "Automation",
     items: [
       { name: "Automations", href: "/automations", icon: Workflow },
+      { name: "n8n / API Setup", href: "/n8n-setup", icon: Plug },
+      { name: "Form API Directory", href: "/forms-api", icon: AppWindow },
     ],
   },
   {

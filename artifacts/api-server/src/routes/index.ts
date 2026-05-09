@@ -38,6 +38,7 @@ import automationsRouter from "./automations";
 import adminAiConstitutionRouter from "./admin-ai-constitution";
 import adminApiKeysRouter from "./admin-api-keys";
 import adminEventCatalogRouter from "./admin-event-catalog";
+import formsApiDirectoryRouter from "./forms-api-directory";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -100,6 +101,7 @@ labelRouter(automationsRouter, "automations");
 labelRouter(adminAiConstitutionRouter, "admin-ai-constitution");
 labelRouter(adminApiKeysRouter, "admin-api-keys");
 labelRouter(adminEventCatalogRouter, "admin-event-catalog");
+labelRouter(formsApiDirectoryRouter, "forms-api-directory");
 
 const router: IRouter = Router();
 
@@ -164,6 +166,7 @@ router.use("/admin/dark-room", adminDarkRoomRouter);
 router.use("/admin/ai-constitution", adminAiConstitutionRouter);
 router.use("/admin/api-keys", adminApiKeysRouter);
 router.use("/admin/event-catalog", adminEventCatalogRouter);
+router.use("/admin/forms-api-directory", formsApiDirectoryRouter);
 router.use("/automations", automationsRouter);
 
 export default router;

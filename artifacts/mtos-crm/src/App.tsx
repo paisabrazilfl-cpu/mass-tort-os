@@ -59,6 +59,8 @@ import DarkRoomPage from "@/pages/dark-room";
 import AutomationsPage from "@/pages/automations";
 import AutomationDocsPage from "@/pages/automation-docs";
 import AutomationEditorPage from "@/pages/automation-editor";
+import N8nSetupPage from "@/pages/n8n-setup";
+import FormsApiPage from "@/pages/forms-api";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
 // 401s are handled separately by api-fetch's auth-failure callback.
@@ -136,6 +138,8 @@ function AuthedRoutes() {
           <Route path="/dark-room" component={DarkRoomPage} />
           <Route path="/automations" component={AutomationsPage} />
           <Route path="/automation-docs" component={AutomationDocsPage} />
+          <Route path="/n8n-setup" component={N8nSetupPage} />
+          <Route path="/forms-api" component={FormsApiPage} />
           <Route path="/automations/:id" component={AutomationEditorPage} />
           <Route component={NotFound} />
         </Switch>
