@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, UserCog, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck,
   BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch,
   Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp, Scale, Building, FileSignature,
-  Grid3x3, Settings, Activity, CreditCard, Phone, Skull, Workflow, Eye,
+  Grid3x3, Settings, Activity, CreditCard, Phone, Skull, Workflow, Eye, BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -18,6 +18,7 @@ export const navigation: NavSection[] = [
       { name: "Dashboard", href: "/", icon: LayoutDashboard },
       { name: "Pipeline", href: "/pipeline", icon: GitBranch },
       { name: "Analytics", href: "/analytics", icon: BarChart3 },
+      { name: "User Manual", href: "/user-manual", icon: BookOpen },
     ],
   },
   {
