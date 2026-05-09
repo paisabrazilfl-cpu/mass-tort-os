@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **241 checked / 39 public / 202 protected / 0 unprotected.**
+Boot-time count: **248 checked / 39 public / 209 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -618,6 +618,13 @@ Boot-time count: **241 checked / 39 public / 202 protected / 0 unprotected.**
 | admin-dark-room | POST | `/api/admin-dark-room/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
 | admin-event-catalog | GET | `/api/admin-event-catalog/` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-event-catalog | GET | `/api/admin-event-catalog/openapi.yaml` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
+| admin-self-heal | POST | `/api/admin-self-heal/:id/approve` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
+| admin-self-heal | POST | `/api/admin-self-heal/:id/messages` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
+| admin-self-heal | POST | `/api/admin-self-heal/:id/refresh` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
+| admin-self-heal | GET | `/api/admin-self-heal/:id` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
+| admin-self-heal | GET | `/api/admin-self-heal/config` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
+| admin-self-heal | GET | `/api/admin-self-heal/` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
+| admin-self-heal | POST | `/api/admin-self-heal/` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
 | analytics | GET | `/api/analytics/conversion-funnel` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/overview` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/paralegal-leaderboard` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |

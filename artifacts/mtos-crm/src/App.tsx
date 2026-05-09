@@ -61,6 +61,7 @@ import AutomationDocsPage from "@/pages/automation-docs";
 import AutomationEditorPage from "@/pages/automation-editor";
 import N8nSetupPage from "@/pages/n8n-setup";
 import FormsApiPage from "@/pages/forms-api";
+import SelfHealPage from "@/pages/self-heal";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
 // 401s are handled separately by api-fetch's auth-failure callback.
@@ -140,6 +141,7 @@ function AuthedRoutes() {
           <Route path="/automation-docs" component={AutomationDocsPage} />
           <Route path="/n8n-setup" component={N8nSetupPage} />
           <Route path="/forms-api" component={FormsApiPage} />
+          <Route path="/self-heal" component={SelfHealPage} />
           <Route path="/automations/:id" component={AutomationEditorPage} />
           <Route component={NotFound} />
         </Switch>

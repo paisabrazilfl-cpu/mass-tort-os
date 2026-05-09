@@ -48,6 +48,7 @@ export const navigation: NavSection[] = [
     items: [
       { name: "Automations", href: "/automations", icon: Workflow },
       { name: "n8n / API Setup", href: "/n8n-setup", icon: Plug },
+      { name: "Self-Heal (Auto-Fix)", href: "/self-heal", icon: Sparkles },
       { name: "Form API Directory", href: "/forms-api", icon: AppWindow },
     ],
   },

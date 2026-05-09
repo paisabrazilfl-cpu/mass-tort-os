@@ -224,6 +224,10 @@ export const Permission = {
   // privileged than admin sessions; the manage perm itself is the gate
   // on minting / revoking.
   API_KEYS_MANAGE: "api_keys:manage",
+
+  // Self-Heal / Auto-Fix (Jules dispatch). Admin-only — pasted prompts
+  // become coding-agent input that opens PRs against the repo.
+  SELF_HEAL_MANAGE: "self_heal:manage",
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];

@@ -37,5 +37,6 @@ export * from "./email_events";
 export * from "./fax_events";
 export * from "./fasten_connections";
 export * from "./api_keys";
+export * from "./self_heal_sessions";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";
