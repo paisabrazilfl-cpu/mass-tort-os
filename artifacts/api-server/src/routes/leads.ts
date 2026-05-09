@@ -638,6 +638,9 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
   if (body.exposure_end !== undefined) updateData.exposure_end = body.exposure_end;
   if (body.diagnosis_confirmed !== undefined) updateData.diagnosis_confirmed = body.diagnosis_confirmed;
   if (body.diagnosis_type !== undefined) updateData.diagnosis_type = body.diagnosis_type;
+  if ((body as { assigned_to?: number | null }).assigned_to !== undefined) updateData.assigned_to = (body as { assigned_to?: number | null }).assigned_to;
+  if ((body as { npi_number?: string | null }).npi_number !== undefined) updateData.npi_number = (body as { npi_number?: string | null }).npi_number;
+  if ((body as { medications?: string | null }).medications !== undefined) updateData.medications = (body as { medications?: string | null }).medications;
   if (body.was_at_location !== undefined) updateData.was_at_location = body.was_at_location;
   if (body.location_name !== undefined) updateData.location_name = body.location_name;
   if (body.status !== undefined) updateData.status = body.status;

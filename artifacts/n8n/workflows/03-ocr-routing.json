@@ -56,7 +56,7 @@
         "url": "={{ $env.MTOS_API_BASE }}/api/leads/{{ $json.lead_id }}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"medication\": \"{{ $json.drug_name }}\",\n  \"rx_number\": \"{{ $json.rx_number }}\",\n  \"fill_date\": \"{{ $json.fill_date }}\"\n}",
+        "jsonBody": "={\n  \"medications\": \"{{ $json.drug_name }} | rx#{{ $json.rx_number }} | filled {{ $json.fill_date }}\",\n  \"notes\": \"OCR ingest @ confidence {{ $json.confidence }} (fax_result_id={{ $json.fax_result_id }})\"\n}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth"
       },

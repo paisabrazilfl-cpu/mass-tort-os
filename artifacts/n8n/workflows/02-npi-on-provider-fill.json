@@ -71,7 +71,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const results = $json.results || $json.providers || [];\nif (results.length === 0) { return []; }\nconst best = results[0];\nreturn [{ json: { lead_id: $('MTOS lead.updated webhook').item.json.lead_id, physician_npi: best.npi || best.number, physician_full_name: best.full_name || (best.first_name + ' ' + best.last_name) } }];"
+        "jsCode": "const results = $json.results || $json.providers || [];\nif (results.length === 0) { return []; }\nconst best = results[0];\nreturn [{ json: { lead_id: $('MTOS lead.updated webhook').item.json.lead_id, npi_number: best.npi || best.number, physician_full_name: best.full_name || (best.first_name + ' ' + best.last_name) } }];"
       },
       "id": "pick",
       "name": "Pick top NPI hit",
@@ -85,12 +85,12 @@
         "url": "={{ $env.MTOS_API_BASE }}/api/leads/{{ $json.lead_id }}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\"physician_npi\": \"{{ $json.physician_npi }}\" }",
+        "jsonBody": "={\"npi_number\": \"{{ $json.npi_number }}\" }",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth"
       },
       "id": "write-npi",
-      "name": "PATCH /leads/:id (physician_npi)",
+      "name": "PATCH /leads/:id (npi_number)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (leads:write,npi:read)" } },
@@ -113,8 +113,8 @@
     ] },
     "GET /leads/:id (full record)": { "main": [[{ "node": "NPI lookup", "type": "main", "index": 0 }]] },
     "NPI lookup": { "main": [[{ "node": "Pick top NPI hit", "type": "main", "index": 0 }]] },
-    "Pick top NPI hit": { "main": [[{ "node": "PATCH /leads/:id (physician_npi)", "type": "main", "index": 0 }]] },
-    "PATCH /leads/:id (physician_npi)": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+    "Pick top NPI hit": { "main": [[{ "node": "PATCH /leads/:id (npi_number)", "type": "main", "index": 0 }]] },
+    "PATCH /leads/:id (npi_number)": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
   },
   "settings": { "executionOrder": "v1" }
 }

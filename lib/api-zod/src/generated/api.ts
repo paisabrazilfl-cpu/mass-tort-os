@@ -232,6 +232,9 @@ export const UpdateLeadBody = zod.object({
   exposure_end: zod.string().nullish(),
   diagnosis_confirmed: zod.boolean().optional(),
   diagnosis_type: zod.string().nullish(),
+  assigned_to: zod.number().nullish(),
+  npi_number: zod.string().nullish(),
+  medications: zod.string().nullish(),
   was_at_location: zod.boolean().optional(),
   location_name: zod.string().nullish(),
   status: zod

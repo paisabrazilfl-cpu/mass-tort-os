@@ -161,6 +161,9 @@ export interface UpdateLeadBody {
   exposure_end?: string | null;
   diagnosis_confirmed?: boolean;
   diagnosis_type?: string | null;
+  assigned_to?: number | null;
+  npi_number?: string | null;
+  medications?: string | null;
   was_at_location?: boolean;
   location_name?: string | null;
   status?: UpdateLeadBodyStatus;

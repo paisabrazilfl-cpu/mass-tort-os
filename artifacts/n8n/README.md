@@ -30,7 +30,7 @@ instructions for self-hosting n8n alongside MTOS. The CRM exposes:
 | `01-lead-assign.json`             | `lead.created`       | Round-robins the new lead to the paralegal with the lowest open count |
 | `02-npi-on-provider-fill.json`    | `lead.updated`       | Hits `/api/npi/search` whenever a `physician_*` field changes         |
 | `03-ocr-routing.json`             | `ocr.completed`      | Low-confidence rows → review queue; clean rows → attach to lead       |
-| `04-case-auto-advance.json`       | `case.stage_changed` | When a case becomes `analyzed`, marks lead `ready_for_review`         |
+| `04-case-auto-advance.json`       | `case.stage_changed` | When a case transitions to `analyzed`, GET /cases/:id, count attached documents vs `MTOS_REQUIRED_DOC_COUNT` (default 3), and PATCH /cases/:id/status → `documents_received` if the threshold is met (and the case isn't already past it). |
 
 ## Self-hosting n8n
 

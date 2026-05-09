@@ -2072,6 +2072,15 @@ components:
         diagnosis_type:
           type: string
           nullable: true
+        assigned_to:
+          type: integer
+          nullable: true
+        npi_number:
+          type: string
+          nullable: true
+        medications:
+          type: string
+          nullable: true
         was_at_location:
           type: boolean
         location_name:
