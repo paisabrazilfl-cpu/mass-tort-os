@@ -13,7 +13,8 @@
     "worker": "node --enable-source-maps ./dist/worker/worker.mjs",
     "pretypecheck": "tsc -b ../../",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test --test-timeout=30000 src/lib/__tests__/*.test.ts"
+    "test": "node --import tsx --test --test-timeout=30000 src/lib/__tests__/*.test.ts",
+    "verify:search": "tsx src/scripts/verify-serpapi.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

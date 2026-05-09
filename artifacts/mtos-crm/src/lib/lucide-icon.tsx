@@ -3,7 +3,7 @@ import {
   Variable, Wand2, Scissors, Crosshair, Table2, UserCog, ShieldCheck,
   Briefcase, StickyNote, ClipboardList, Mail, Printer, FileSignature,
   Globe, Network, Brain, FileText, Sparkles, Code2, Terminal, TerminalSquare,
-  Database, FileDown, FileUp, MessageSquare, Square, Box,
+  Database, FileDown, FileUp, MessageSquare, Square, Search, Box,
   type LucideIcon,
 } from "lucide-react";
 
@@ -12,7 +12,7 @@ const ICONS: Record<string, LucideIcon> = {
   Variable, Wand2, Scissors, Crosshair, Table2, UserCog, ShieldCheck,
   Briefcase, StickyNote, ClipboardList, Mail, Printer, FileSignature,
   Globe, Network, Brain, FileText, Sparkles, Code2, Terminal, TerminalSquare,
-  Database, FileDown, FileUp, MessageSquare, Square,
+  Database, FileDown, FileUp, MessageSquare, Square, Search,
 };
 
 export function getLucide(name?: string | null): LucideIcon {

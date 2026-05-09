@@ -38,6 +38,7 @@ import { resolveProvider, isResolved } from "../provider-router";
 import { getVoiceAdapter } from "../voice";
 import { getIntegrationCredentialsById } from "../../routes/integrations";
 import { callLLM } from "../ai-provider";
+import { getSearchAdapter } from "../search";
 import { saveFile, readFile } from "../vault";
 import { runBackgroundCheckHub } from "../bg-hub/hub";
 import { lookupNpiAndMatch } from "../taxonomy-engine";
@@ -463,6 +464,47 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const res = await fetch(safe.toString(), init);
     const data = responseType === "json" ? await res.json().catch(() => null) : await res.text();
     return { status: res.status, ok: res.ok, data };
+  },
+  "integration.web_search": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const providerKey = String(resolveOrLiteral(s, p.provider) ?? "serpapi").trim() || "serpapi";
+    const adapter = getSearchAdapter(providerKey);
+    if (!adapter) {
+      throw new Error(`integration.web_search: no adapter wired for provider "${providerKey}".`);
+    }
+    const query = String(resolveOrLiteral(s, p.query) ?? "").trim();
+    if (!query) {
+      throw new Error("integration.web_search requires `query`.");
+    }
+    const engine = String(resolveOrLiteral(s, p.engine) ?? adapter.defaultEngine).trim() || adapter.defaultEngine;
+    const location = String(resolveOrLiteral(s, p.location) ?? "").trim() || undefined;
+    const num = Number(resolveOrLiteral(s, p.maxResults) ?? 10);
+
+    const [row] = await db
+      .select({ id: integrationsTable.id })
+      .from(integrationsTable)
+      .where(and(eq(integrationsTable.provider, providerKey), eq(integrationsTable.status, "active")))
+      .orderBy(sql`${integrationsTable.created_at} DESC`)
+      .limit(1);
+    if (!row) {
+      throw new Error(`integration.web_search needs an active ${providerKey} integration in the vault. Add one on the Integrations page.`);
+    }
+    const creds = await getIntegrationCredentialsById(row.id);
+    if (!creds) {
+      throw new Error(`${providerKey} credentials could not be loaded from the vault.`);
+    }
+    const out = await adapter.search(creds, { query, engine, location, num });
+    if (!out.ok) {
+      return { ok: false, code: out.code, retryable: out.retryable, error: out.message };
+    }
+    return {
+      ok: true,
+      provider: out.provider,
+      engine: out.engine,
+      query: out.query,
+      results: out.results,
+      count: out.results.length,
+    };
   },
   "integration.graphql": async (s) => {
     const url = String(s.node.data?.params?.url ?? "");

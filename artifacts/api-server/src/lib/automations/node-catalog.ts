@@ -638,6 +638,22 @@ export const NODE_CATALOG: NodeDefinition[] = [
     ],
   },
   {
+    type: "integration.web_search", label: "Web Search", category: "integration",
+    description: "Run a Google/Bing/Yahoo search via the configured search provider (SerpAPI). Returns structured organic results.",
+    icon: "Search", color: "bg-rose-600",
+    params: [
+      { key: "query", label: "Query", type: "string", required: true, placeholder: "input.lead.full_name OR \"asbestos verdict 2024\"" },
+      { key: "engine", label: "Engine", type: "select", default: "google", options: [
+        { label: "Google", value: "google" }, { label: "Bing", value: "bing" }, { label: "Yahoo", value: "yahoo" }, { label: "DuckDuckGo", value: "duckduckgo" },
+      ]},
+      { key: "location", label: "Location (optional)", type: "string", placeholder: "Austin, Texas, United States" },
+      { key: "maxResults", label: "Max results", type: "number", default: 10, help: "1–100. Provider may cap below this." },
+      { key: "provider", label: "Search provider", type: "select", default: "serpapi", options: [
+        { label: "SerpAPI", value: "serpapi" },
+      ], help: "Only providers with a wired adapter appear here." },
+    ],
+  },
+  {
     type: "integration.graphql", label: "GraphQL Query", category: "integration",
     description: "Execute a GraphQL query against an endpoint.",
     icon: "Network", color: "bg-rose-600",

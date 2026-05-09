@@ -54,6 +54,7 @@ import { listFaxProviders } from "./fax";
 import { listSmsProviders } from "./sms";
 import { listVoiceProviders } from "./voice";
 import { listLlmProviders } from "./ai";
+import { listSearchProviders } from "./search";
 import { PRESET_INTEGRATIONS } from "./integration-presets";
 
 /**
@@ -129,6 +130,9 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   cohere: ["api_key"],
   xai_grok: ["api_key"],
   fireworks_ai: ["api_key"],
+
+  // Web Search
+  serpapi: ["api_key"],
 };
 
 export type WiringStatus = "live" | "live_no_vault" | "vault_only";
@@ -173,6 +177,9 @@ const REGISTRY: Record<string, WiringInfo> = {
   bland_ai: { status: "live", note: "Voice AI agent via Bland AI v1 pathway API." },
   elevenlabs: { status: "live", note: "Voice AI agent via ElevenLabs Conversational + voices APIs." },
   synthflow: { status: "live", note: "Voice AI agent via Synthflow v2 assistants API." },
+
+  // Web Search
+  serpapi: { status: "live", note: "Google/Bing/Yahoo search results as structured JSON via SerpAPI /search.json. Requires api_key." },
 
   // AI / LLM (vault-consuming providers)
   google_gemini: { status: "live", note: "LLM completions via Gemini v1beta generateContent." },
@@ -311,6 +318,11 @@ export function assertWiringRegistryConsistency(): void {
       // the LLM ADAPTERS map but the REGISTRY entry stays "live_no_vault".
       adapterProviders: listLlmProviders().filter((p) => p !== "anthropic" && p !== "openai"),
       expectInRegistry: ["google_gemini", "openrouter", "groq", "deepseek", "perplexity", "mistral", "cohere", "xai_grok", "fireworks_ai"],
+    },
+    {
+      klass: "search",
+      adapterProviders: listSearchProviders(),
+      expectInRegistry: ["serpapi"],
     },
   ];
 
