@@ -1,5 +1,6 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -136,9 +137,22 @@ app.use("/api", (req: express.Request, res: express.Response) => {
 // at runtime, so the CRM build sits at ../../mtos-crm/dist/public relative
 // to that. We also try a project-root path so the same logic works whether
 // invoked from the bundled dist or via tsx in tests.
+// Resolve relative to the bundled server file location too — when Replit
+// Autoscale runs `node artifacts/api-server/dist/server/index.mjs` the
+// process cwd is NOT guaranteed to be the project root (it can be /app or
+// the dist dir), which silently breaks process.cwd()-only resolution and
+// leaves the SPA fallback unmounted — so /, /login, etc. fall through to
+// the default Express 500 page. The __dirname candidate fixes that.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const candidateSpaDirs = [
   path.resolve(process.cwd(), "artifacts/mtos-crm/dist/public"),
   path.resolve(process.cwd(), "../mtos-crm/dist/public"),
+  // Bundled file is at artifacts/api-server/dist/server/index.mjs → up 3
+  // levels = artifacts/, then mtos-crm/dist/public.
+  path.resolve(__dirname, "../../../mtos-crm/dist/public"),
+  // Same idea but if the bundle ever lands one level shallower.
+  path.resolve(__dirname, "../../mtos-crm/dist/public"),
 ];
 const spaDir = candidateSpaDirs.find((p) => existsSync(p));
 
@@ -163,10 +177,34 @@ if (spaDir) {
   // sub-router so the route-protection validator recognises it as a
   // deliberately public route (serving the React shell, no PII, no auth).
   const spaRouter = markPublic(express.Router(), "spa");
-  spaRouter.get(/^(?!\/api\/).*/, (_req: express.Request, res: express.Response) => {
-    res.sendFile(path.join(spaDir, "index.html"));
+  spaRouter.get(/^(?!\/api\/).*/, (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    res.sendFile(path.join(spaDir, "index.html"), (err) => {
+      if (err) {
+        // Forward to global JSON error handler so the client gets a
+        // structured error instead of Express's plain-text default page.
+        next(err);
+      }
+    });
   });
   app.use(spaRouter);
+} else {
+  // Loud, structured warning so this misconfiguration is immediately
+  // visible in deployment logs instead of silently 500-ing the SPA.
+  logger.warn(
+    { tried: candidateSpaDirs, cwd: process.cwd(), dirname: __dirname },
+    "SPA bundle not found — non-API requests will return JSON 404. Did the mtos-crm build step run before deploy?",
+  );
+  // Mount a fallback that returns a clear JSON error for non-API requests
+  // so users don't get the bare "Internal Server Error" plain-text page.
+  const spaMissingRouter = markPublic(express.Router(), "spa");
+  spaMissingRouter.get(/^(?!\/api\/).*/, (_req: express.Request, res: express.Response) => {
+    res.status(503).json({
+      status: "error",
+      code: "spa_bundle_missing",
+      message: "Frontend bundle not deployed. The API is up at /api/* but the React app was not built into this deployment.",
+    });
+  });
+  app.use(spaMissingRouter);
 }
 
 // Final 404 for non-API non-static paths (e.g. POST to an unknown URL).
