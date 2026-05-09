@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, paralegalsTable, leadsTable } from "@workspace/db";
-import { eq, sql, desc } from "drizzle-orm";
+import { eq, sql, desc, and } from "drizzle-orm";
 import { z } from "zod";
 import {
   GetParalegalParams,
@@ -31,7 +31,15 @@ import { Permission, requirePermission, auditAction } from "../lib/rbac";
 const router = Router();
 
 
-router.get("/", requirePermission(Permission.PARALEGAL_VIEW), async (_req, res) => {
+router.get("/", requirePermission(Permission.PARALEGAL_VIEW), async (req, res) => {
+  // Tort + state filters power the n8n lead-assignment workflow (Task #52).
+  // A paralegal whose `assigned_torts` / `licensed_states` is NULL acts
+  // as a wildcard — that way operators don't have to backfill every row
+  // before round-robin keeps working. Sort=load_asc returns the lowest
+  // active-case count first so the workflow can pick `[0]`.
+  const tortFilter = typeof req.query.tort === "string" ? req.query.tort : undefined;
+  const stateFilter = typeof req.query.state === "string" ? req.query.state.toUpperCase() : undefined;
+  const sortLoadAsc = req.query.sort === "load_asc";
   // Compute counts live from the leads table. The integer columns
   // total_assigned / signed_cases / active_cases on the paralegals row are
   // legacy denormalized counters that were never wired to update on lead
@@ -39,12 +47,28 @@ router.get("/", requirePermission(Permission.PARALEGAL_VIEW), async (_req, res) 
   // leads were assigned. The leaderboard endpoint
   // (/api/analytics/paralegal-leaderboard) already does this same join, so
   // both surfaces now agree.
+  // NULL on the array column means "any" (wildcard); a non-null array
+  // must contain the requested value. Using = ANY(array) so postgres
+  // can use a GIN index later if/when we add one.
+  const tortPredicate = tortFilter
+    ? sql`(${paralegalsTable.assigned_torts} IS NULL OR ${tortFilter} = ANY(${paralegalsTable.assigned_torts}))`
+    : sql`TRUE`;
+  const statePredicate = stateFilter
+    ? sql`(${paralegalsTable.licensed_states} IS NULL OR ${stateFilter} = ANY(${paralegalsTable.licensed_states}))`
+    : sql`TRUE`;
+
+  const orderBy = sortLoadAsc
+    ? sql`count(*) filter (where ${leadsTable.status} not in ('signed','rejected') and ${leadsTable.id} is not null) asc, ${paralegalsTable.id} asc`
+    : sql`count(*) filter (where ${leadsTable.status} = 'signed') desc`;
+
   const rows = await db
     .select({
       id: paralegalsTable.id,
       name: paralegalsTable.name,
       email: paralegalsTable.email,
       role: paralegalsTable.role,
+      assigned_torts: paralegalsTable.assigned_torts,
+      licensed_states: paralegalsTable.licensed_states,
       created_at: paralegalsTable.created_at,
       updated_at: paralegalsTable.updated_at,
       total_assigned: sql<number>`count(${leadsTable.id})::int`,
@@ -53,15 +77,18 @@ router.get("/", requirePermission(Permission.PARALEGAL_VIEW), async (_req, res) 
     })
     .from(paralegalsTable)
     .leftJoin(leadsTable, eq(paralegalsTable.id, leadsTable.assigned_to))
+    .where(and(tortPredicate, statePredicate))
     .groupBy(
       paralegalsTable.id,
       paralegalsTable.name,
       paralegalsTable.email,
       paralegalsTable.role,
+      paralegalsTable.assigned_torts,
+      paralegalsTable.licensed_states,
       paralegalsTable.created_at,
       paralegalsTable.updated_at,
     )
-    .orderBy(sql`count(*) filter (where ${leadsTable.status} = 'signed') desc`);
+    .orderBy(orderBy);
   res.json(rows);
 });
 

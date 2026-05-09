@@ -1,19 +1,19 @@
 {
-  "name": "MTOS — Case auto-advance after analysis",
-  "_description": "When a case transitions to `analyzed` (worker analysis succeeded), notify the assigned paralegal via SMS and tag the lead as ready_for_review. Subscribe to event: case.stage_changed.",
+  "name": "MTOS — Case auto-advance when required documents received",
+  "_description": "When OCR completes for a fax/document tied to a lead, look up the lead's case, count the documents the case now holds, and — if the required-doc threshold is met — advance the case to `documents_received` via PATCH /api/cases/:id/status. Subscribe to event: ocr.completed. Required scopes: leads:read, cases:read, cases:write. The required-doc count is read from $env.MTOS_REQUIRED_DOC_COUNT (default 3) so each firm can tune it without editing the workflow.",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "mtos-case-stage-changed",
+        "path": "mtos-ocr-completed",
         "responseMode": "responseNode",
         "options": {}
       },
       "id": "wh",
-      "name": "MTOS case.stage_changed webhook",
+      "name": "MTOS ocr.completed webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300]
+      "position": [200, 300]
     },
     {
       "parameters": {
@@ -21,15 +21,56 @@
           "options": { "caseSensitive": true },
           "combinator": "and",
           "conditions": [
-            { "id": "c1", "operator": { "type": "string", "operation": "equals" }, "leftValue": "={{ $json.new_status }}", "rightValue": "analyzed" }
+            { "id": "c-success", "operator": { "type": "boolean", "operation": "true" }, "leftValue": "={{ $json.success }}" },
+            { "id": "c-lead",    "operator": { "type": "number",  "operation": "exists" }, "leftValue": "={{ $json.lead_id }}" }
           ]
         }
       },
-      "id": "if-analyzed",
-      "name": "Only when new_status == analyzed",
+      "id": "if-ok",
+      "name": "Only when OCR succeeded AND has lead_id",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [480, 300]
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MTOS_API_BASE }}/api/leads/{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "get-lead",
+      "name": "GET /leads/:id (find case_id)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (leads:read,cases:write)" } },
+      "position": [680, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Bail out cleanly if this lead has no case yet — case creation\n// happens on qualification; pre-qual leads just shouldn't advance.\nconst lead = $json;\nconst case_id = lead.case_id || lead.case?.id;\nif (!case_id) {\n  return [{ json: { skip: true, reason: 'lead has no case yet', lead_id: lead.id } }];\n}\nreturn [{ json: { skip: false, case_id, lead_id: lead.id } }];"
+      },
+      "id": "extract-case",
+      "name": "Extract case_id (or skip)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "combinator": "and",
+          "conditions": [
+            { "id": "c-skip", "operator": { "type": "boolean", "operation": "false" }, "leftValue": "={{ $json.skip }}" }
+          ]
+        }
+      },
+      "id": "if-has-case",
+      "name": "Has case?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 220]
     },
     {
       "parameters": {
@@ -39,46 +80,91 @@
         "genericAuthType": "httpHeaderAuth"
       },
       "id": "get-case",
-      "name": "GET /cases/:id",
+      "name": "GET /cases/:id (with documents)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (cases:read,leads:write)" } },
-      "position": [720, 220]
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (leads:read,cases:write)" } },
+      "position": [1340, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Required-doc check. Each firm tunes the bar via\n// MTOS_REQUIRED_DOC_COUNT (default 3 — typically intake form +\n// retainer + at least one medical record). When met, we advance\n// the case to `documents_received`. Otherwise emit a no-op result\n// the responder can pass through unchanged.\nconst caseRow = $json;\nconst ctx = $('Extract case_id (or skip)').item.json;\nconst docs = Array.isArray(caseRow.documents) ? caseRow.documents : (caseRow.case_documents || []);\nconst required = Number($env.MTOS_REQUIRED_DOC_COUNT || 3);\nconst docCount = docs.length;\nif (docCount < required) {\n  return [{ json: { advance: false, case_id: ctx.case_id, doc_count: docCount, required } }];\n}\n// Don't bounce the case backwards if it's already past this stage.\nconst current = (caseRow.status || '').toLowerCase();\nconst alreadyAdvanced = ['documents_received','ready_for_review','client_signed','filed','closed'].includes(current);\nif (alreadyAdvanced) {\n  return [{ json: { advance: false, case_id: ctx.case_id, doc_count: docCount, required, reason: `already at ${current}` } }];\n}\nreturn [{ json: { advance: true, case_id: ctx.case_id, doc_count: docCount, required, current_status: current } }];"
+      },
+      "id": "decide",
+      "name": "Required-doc threshold met?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 140]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "combinator": "and",
+          "conditions": [
+            { "id": "c-adv", "operator": { "type": "boolean", "operation": "true" }, "leftValue": "={{ $json.advance }}" }
+          ]
+        }
+      },
+      "id": "if-advance",
+      "name": "If threshold met",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1780, 140]
     },
     {
       "parameters": {
         "method": "PATCH",
-        "url": "={{ $env.MTOS_API_BASE }}/api/leads/{{ $json.lead_id }}",
+        "url": "={{ $env.MTOS_API_BASE }}/api/cases/{{ $json.case_id }}/status",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"status\": \"ready_for_review\"\n}",
+        "jsonBody": "={\n  \"status\": \"documents_received\",\n  \"reason\": \"auto-advance: {{ $json.doc_count }}/{{ $json.required }} required documents received\"\n}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth"
       },
-      "id": "tag-lead",
-      "name": "PATCH /leads/:id (ready_for_review)",
+      "id": "advance",
+      "name": "PATCH /cases/:id/status (documents_received)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (cases:read,leads:write)" } },
-      "position": [960, 220]
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (leads:read,cases:write)" } },
+      "position": [2020, 60]
     },
     {
-      "parameters": { "respondWith": "json", "responseBody": "={ \"ok\": true }" },
-      "id": "ok",
-      "name": "Respond OK",
+      "parameters": { "respondWith": "json", "responseBody": "={ \"ok\": true, \"action\": \"advanced\", \"case_id\": $json.case_id }" },
+      "id": "ok-adv",
+      "name": "Respond — advanced",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1200, 300]
+      "position": [2260, 60]
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={ \"ok\": true, \"action\": \"noop\" }" },
+      "id": "ok-noop",
+      "name": "Respond — noop",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2020, 360]
     }
   ],
   "connections": {
-    "MTOS case.stage_changed webhook": { "main": [[{ "node": "Only when new_status == analyzed", "type": "main", "index": 0 }]] },
-    "Only when new_status == analyzed": { "main": [
-      [{ "node": "GET /cases/:id", "type": "main", "index": 0 }],
-      [{ "node": "Respond OK", "type": "main", "index": 0 }]
+    "MTOS ocr.completed webhook": { "main": [[{ "node": "Only when OCR succeeded AND has lead_id", "type": "main", "index": 0 }]] },
+    "Only when OCR succeeded AND has lead_id": { "main": [
+      [{ "node": "GET /leads/:id (find case_id)", "type": "main", "index": 0 }],
+      [{ "node": "Respond — noop", "type": "main", "index": 0 }]
     ] },
-    "GET /cases/:id": { "main": [[{ "node": "PATCH /leads/:id (ready_for_review)", "type": "main", "index": 0 }]] },
-    "PATCH /leads/:id (ready_for_review)": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+    "GET /leads/:id (find case_id)": { "main": [[{ "node": "Extract case_id (or skip)", "type": "main", "index": 0 }]] },
+    "Extract case_id (or skip)": { "main": [[{ "node": "Has case?", "type": "main", "index": 0 }]] },
+    "Has case?": { "main": [
+      [{ "node": "GET /cases/:id (with documents)", "type": "main", "index": 0 }],
+      [{ "node": "Respond — noop", "type": "main", "index": 0 }]
+    ] },
+    "GET /cases/:id (with documents)": { "main": [[{ "node": "Required-doc threshold met?", "type": "main", "index": 0 }]] },
+    "Required-doc threshold met?": { "main": [[{ "node": "If threshold met", "type": "main", "index": 0 }]] },
+    "If threshold met": { "main": [
+      [{ "node": "PATCH /cases/:id/status (documents_received)", "type": "main", "index": 0 }],
+      [{ "node": "Respond — noop", "type": "main", "index": 0 }]
+    ] },
+    "PATCH /cases/:id/status (documents_received)": { "main": [[{ "node": "Respond — advanced", "type": "main", "index": 0 }]] }
   },
   "settings": { "executionOrder": "v1" }
 }

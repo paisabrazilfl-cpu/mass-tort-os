@@ -1,6 +1,6 @@
 {
-  "name": "MTOS — Round-robin lead assignment",
-  "_description": "When a new lead is created in MTOS, pick the paralegal with the lowest open-lead count and assign it via PATCH /api/leads/:id. Subscribe to event: lead.created.",
+  "name": "MTOS — Lead assignment by tort + state + load",
+  "_description": "When a new lead is created, route it to a paralegal who handles that tort, is licensed in that state, and currently has the lowest open-lead count. Subscribe to event: lead.created. Requires API-key scopes: paralegals:read, leads:write. Paralegals with NULL assigned_torts/licensed_states act as wildcards.",
   "nodes": [
     {
       "parameters": {
@@ -13,31 +13,41 @@
       "name": "MTOS lead.created webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300]
+      "position": [200, 300]
     },
     {
       "parameters": {
-        "url": "={{ $env.MTOS_API_BASE }}/api/paralegals?status=active&sort=open_leads_asc",
+        "jsCode": "// Pull tort + state off the inbound event payload so the next HTTP\n// node can pass them as query params. Both fields are required for a\n// proper routing decision — refuse to assign blindly if either is\n// missing, that's what the human review queue is for.\nconst lead = $json.lead || $json.payload?.lead || $json.payload || {};\nconst tort = lead.tort_type;\nconst state = (lead.state || '').toUpperCase();\nif (!tort || !state) {\n  throw new Error(`Cannot route lead ${lead.id}: missing tort_type or state`);\n}\nreturn [{ json: { lead_id: lead.id, tort, state } }];"
+      },
+      "id": "extract",
+      "name": "Extract tort + state",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.MTOS_API_BASE }}/api/paralegals?tort={{ encodeURIComponent($json.tort) }}&state={{ $json.state }}&sort=load_asc",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {}
       },
       "id": "fetch-paralegals",
-      "name": "GET /paralegals (load-sorted)",
+      "name": "GET /paralegals (tort+state, load_asc)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (paralegals:read,leads:write)" } },
-      "position": [480, 300]
+      "position": [660, 300]
     },
     {
       "parameters": {
-        "jsCode": "const list = $json.paralegals || $json.items || $json;\nif (!Array.isArray(list) || list.length === 0) {\n  throw new Error('No active paralegals available');\n}\nconst chosen = list[0];\nreturn [{ json: { lead_id: $('MTOS lead.created webhook').item.json.lead.id, paralegal_id: chosen.id, paralegal_name: chosen.name } }];"
+        "jsCode": "// Server already filtered by tort + state and ordered by lowest active\n// case count (sort=load_asc). We just take [0] — the most-available\n// qualified paralegal. Throw on empty so the operator gets a real\n// error instead of silently dropping the lead.\nconst list = Array.isArray($json) ? $json : ($json.paralegals || $json.items || []);\nconst ctx = $('Extract tort + state').item.json;\nif (!Array.isArray(list) || list.length === 0) {\n  throw new Error(`No paralegals available for tort='${ctx.tort}' state='${ctx.state}' — escalate to human queue`);\n}\nconst chosen = list[0];\nreturn [{ json: { lead_id: ctx.lead_id, tort: ctx.tort, state: ctx.state, paralegal_id: chosen.id, paralegal_name: chosen.name, paralegal_load: chosen.active_cases } }];"
       },
       "id": "choose",
-      "name": "Choose paralegal (lowest load)",
+      "name": "Pick lowest-load qualified paralegal",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [720, 300]
+      "position": [900, 300]
     },
     {
       "parameters": {
@@ -47,7 +57,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\"assigned_paralegal_id\": {{ $json.paralegal_id }} }",
+        "jsonBody": "={\n  \"assigned_paralegal_id\": {{ $json.paralegal_id }},\n  \"routing_reason\": \"tort={{ $json.tort }} state={{ $json.state }} load={{ $json.paralegal_load }}\"\n}",
         "options": {}
       },
       "id": "assign",
@@ -55,21 +65,22 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (paralegals:read,leads:write)" } },
-      "position": [960, 300]
+      "position": [1140, 300]
     },
     {
-      "parameters": { "respondWith": "json", "responseBody": "={ \"ok\": true, \"assigned_to\": $json.paralegal_name }" },
+      "parameters": { "respondWith": "json", "responseBody": "={ \"ok\": true, \"lead_id\": $json.lead_id, \"assigned_to\": $json.paralegal_name, \"tort\": $json.tort, \"state\": $json.state }" },
       "id": "respond",
       "name": "Respond OK",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1200, 300]
+      "position": [1380, 300]
     }
   ],
   "connections": {
-    "MTOS lead.created webhook": { "main": [[{ "node": "GET /paralegals (load-sorted)", "type": "main", "index": 0 }]] },
-    "GET /paralegals (load-sorted)": { "main": [[{ "node": "Choose paralegal (lowest load)", "type": "main", "index": 0 }]] },
-    "Choose paralegal (lowest load)": { "main": [[{ "node": "PATCH /leads/:id (assign)", "type": "main", "index": 0 }]] },
+    "MTOS lead.created webhook": { "main": [[{ "node": "Extract tort + state", "type": "main", "index": 0 }]] },
+    "Extract tort + state": { "main": [[{ "node": "GET /paralegals (tort+state, load_asc)", "type": "main", "index": 0 }]] },
+    "GET /paralegals (tort+state, load_asc)": { "main": [[{ "node": "Pick lowest-load qualified paralegal", "type": "main", "index": 0 }]] },
+    "Pick lowest-load qualified paralegal": { "main": [[{ "node": "PATCH /leads/:id (assign)", "type": "main", "index": 0 }]] },
     "PATCH /leads/:id (assign)": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
   },
   "settings": { "executionOrder": "v1" }

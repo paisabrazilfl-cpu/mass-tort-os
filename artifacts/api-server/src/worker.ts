@@ -19,6 +19,7 @@ import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEm
 import { handleFastenRecordsSync, auditStaleFastenPartials } from "./lib/fasten-job";
 import { ensureSystemUser } from "./lib/case-ownership-backfill";
 import { dispatchEvent } from "./lib/event-dispatcher";
+import { updateCaseStatus } from "./lib/case-status";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -214,17 +215,20 @@ async function processJob(job: {
     }
 
     const finalStatus = failCount === docs.length ? "review_required" : "analyzed";
-    // Capture old status BEFORE writing so the case.stage_changed event
-    // payload reports the actual transition (not new === new).
-    const [priorCase] = await db
-      .select({ status: casesTable.status })
-      .from(casesTable)
-      .where(eq(casesTable.id, case_id));
-    const oldStatus = priorCase?.status ?? null;
-    await db
-      .update(casesTable)
-      .set({ status: finalStatus, updated_at: new Date() })
-      .where(eq(casesTable.id, case_id));
+    // All case status mutations go through updateCaseStatus so the
+    // audit row + case.stage_changed event are guaranteed in lockstep
+    // — see lib/case-status.ts for the contract.
+    await updateCaseStatus({
+      case_id,
+      new_status: finalStatus,
+      changed_by: "worker",
+      context: {
+        total_docs: docs.length,
+        success_count: successCount,
+        fail_count: failCount,
+      },
+      source: "worker:analyze_case",
+    });
 
     if (finalStatus === "review_required") {
       await auditLog("case", case_id, "analysis_failed", {
@@ -232,26 +236,6 @@ async function processJob(job: {
         success_count: successCount,
         fail_count: failCount,
       });
-    }
-
-    // Task #52 — emit case.stage_changed only on a real transition. The
-    // case-auto-advance n8n workflow listens for `analyzed` to send the
-    // packet to the right paralegal queue.
-    if (oldStatus !== finalStatus) {
-      dispatchEvent(
-        {
-          event: "case.stage_changed",
-          payload: {
-            case_id,
-            old_status: oldStatus,
-            new_status: finalStatus,
-            changed_by: "worker",
-            success_count: successCount,
-            fail_count: failCount,
-          },
-        },
-        { source: "worker:analyze_case" },
-      );
     }
   } else if (job.job_type === "process_fax") {
     const { fax_result_id, vault_path, source_file, mime_type } = payload as {

@@ -1,9 +1,11 @@
 import { Router } from "express";
+import { z } from "zod";
 import { db, casesTable, analysisTable, caseDocumentsTable, auditLogTable, jobQueueTable } from "@workspace/db";
 import { eq, or, desc } from "drizzle-orm";
 import { CreateCaseBody, UploadCaseFileBody } from "@workspace/api-zod";
 import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
 import { auditLog } from "../lib/audit";
+import { updateCaseStatus } from "../lib/case-status";
 import crypto from "crypto";
 import type { AuthUser } from "../lib/rbac";
 import { Permission, requirePermission, auditAction, denyForbidden } from "../lib/rbac";
@@ -122,6 +124,59 @@ router.post("/:id/upload", requirePermission(Permission.CASE_UPLOAD), auditActio
   });
 
   res.json({ case_id, status: "queued", job_id, file_name });
+});
+
+// Allow-list of statuses an HTTP caller (or n8n workflow) is permitted
+// to set. The full state machine is wider, but only a few transitions are
+// safe to expose to automations — anything else stays worker-only.
+const SETTABLE_CASE_STATUSES = [
+  "documents_received",
+  "ready_for_review",
+  "client_signed",
+  "filed",
+  "review_required",
+  "closed",
+] as const;
+
+const PatchCaseStatusBody = z.object({
+  status: z.enum(SETTABLE_CASE_STATUSES),
+  reason: z.string().trim().max(500).optional(),
+});
+
+/**
+ * Manual / automation-driven case stage advancement (Task #52). Used by
+ * the n8n "case auto-advance" workflow once required documents have been
+ * received. Goes through `updateCaseStatus`, which guarantees the
+ * `case.stage_changed` event fires (no-op if status is unchanged).
+ */
+router.patch("/:id/status", requirePermission(Permission.CASE_ANALYZE), async (req, res) => {
+  const case_id = String(req.params.id);
+  if (!validateCaseId(case_id)) {
+    badRequest(res, "Invalid case ID format");
+    return;
+  }
+  const parsed = PatchCaseStatusBody.safeParse(req.body);
+  if (!parsed.success) {
+    badRequest(res, "Invalid request body", parsed.error.issues);
+    return;
+  }
+  const result = await updateCaseStatus({
+    case_id,
+    new_status: parsed.data.status,
+    changed_by: req.user!.id,
+    context: parsed.data.reason ? { reason: parsed.data.reason } : undefined,
+    source: "http:patch_case_status",
+  });
+  if (!result.ok) {
+    notFound(res);
+    return;
+  }
+  res.json({
+    case_id,
+    old_status: result.old_status,
+    new_status: result.new_status,
+    transitioned: result.transitioned,
+  });
 });
 
 router.post("/:id/analyze", requirePermission(Permission.CASE_ANALYZE), async (req, res) => {
