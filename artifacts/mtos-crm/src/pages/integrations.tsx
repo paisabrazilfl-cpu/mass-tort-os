@@ -14,6 +14,7 @@ import {
   Star, Search, Sparkles, Brain, FileSignature, Phone, MessageSquare, Mail,
   Printer, ScanText, MapPin, ShieldCheck, UserCheck, CreditCard, Database,
   Calendar as CalendarIcon, Briefcase, TrendingUp, Bot, Globe, Zap, Shield,
+  Stethoscope,
 } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
 
@@ -63,6 +64,7 @@ const categoryIcons: Record<string, typeof Plug> = {
   "Address & Geo": MapPin,
   "Identity & KYC": UserCheck,
   "Background Check": ShieldCheck,
+  "Medical Records Retrieval (AI)": Stethoscope,
   "Phone Validation & Fraud": Phone,
   "TCPA Compliance": Shield,
   "File Storage": Database,
