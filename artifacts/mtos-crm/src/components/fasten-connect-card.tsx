@@ -331,10 +331,10 @@ export function FastenConnectCard({
                           )}
                         </div>
                         <div className="text-xs text-muted-foreground" data-testid={`fasten-summary-${c.id}`}>
-                          {isPending
-                            ? "Awaiting first sync — patient hasn't completed the connect flow yet."
-                            : isSyncing
+                          {isSyncing
                             ? "Sync in progress…"
+                            : isPending
+                            ? "Awaiting first sync — patient hasn't completed the connect flow yet."
                             : c.last_synced_at
                             ? `Last synced ${format(new Date(c.last_synced_at), "PPp")} — ${c.last_resource_count ?? 0} resources ingested`
                             : "No sync data yet"}
@@ -350,7 +350,7 @@ export function FastenConnectCard({
                       </div>
                     </div>
                     <div className="flex gap-1 shrink-0">
-                      {(isSynced || isPartial) && (c.last_resource_count ?? 0) > 0 && onViewDocuments && (
+                      {(isSynced || isPartial) && onViewDocuments && (
                         <Button
                           size="sm"
                           variant="ghost"
