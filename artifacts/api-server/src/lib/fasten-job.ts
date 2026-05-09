@@ -141,11 +141,15 @@ export async function handleFastenRecordsSync(payload: FastenRecordsSyncPayload)
       // dl.bytes is the raw NDJSON. Best-effort parse into a Bundle of entries;
       // if the file isn't valid NDJSON we still ingest the raw bytes so the
       // record is preserved for manual review.
-      const text = Buffer.isBuffer(dl.bytes)
-        ? dl.bytes.toString("utf8")
-        : typeof dl.bytes === "string"
+      // `dl.bytes` is a Uint8Array (see fasten/client.ts) — Buffer.isBuffer
+      // returns false on a plain Uint8Array so we wrap unconditionally
+      // before decoding. Without the wrap, text was silently "" and the
+      // NDJSON parse below produced zero entries, which sent
+      // last_resource_count → 0 even on healthy bulk exports.
+      const text =
+        typeof dl.bytes === "string"
           ? dl.bytes
-          : "";
+          : Buffer.from(dl.bytes as Uint8Array).toString("utf8");
       const lines = text
         .split(/\r?\n/)
         .map((l) => l.trim())
