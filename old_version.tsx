@@ -64,11 +64,7 @@ function EditorInner() {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [catalog, setCatalog] = useState<NodeDef[]>([]);
   const [openCat, setOpenCat] = useState<Record<string, boolean>>({});
-  // Track only the selected node's id; derive the live node from `nodes`
-  // below so every state update (typing in a param field, dragging the node,
-  // running the graph) re-renders the config panel with fresh data instead
-  // of a stale snapshot.
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Node | null>(null);
   const [saving, setSaving] = useState(false);
   const [runResult, setRunResult] = useState<any>(null);
   const [runOpen, setRunOpen] = useState(false);
@@ -156,19 +152,14 @@ function EditorInner() {
   // node up from state so the config panel sees the plain string label and
   // raw params, not React elements.
   const onNodeClick = useCallback((_: any, n: Node) => {
-    setSelectedId(n.id);
+    setSelected((_prev) => null);
+    setNodes((curr) => {
+      const original = curr.find((x) => x.id === n.id) ?? n;
+      setSelected(original);
+      return curr;
+    });
   }, []);
-  const onPaneClick = useCallback(() => setSelectedId(null), []);
-
-  // Defensive: if the selected node disappears from the graph (keyboard
-  // Backspace/Delete via ReactFlow's built-in handler, AI Assist "replace",
-  // future JSON import, etc.) clear the stale id so the config panel
-  // doesn't keep a phantom selection.
-  useEffect(() => {
-    if (selectedId && !nodes.some((n) => n.id === selectedId)) {
-      setSelectedId(null);
-    }
-  }, [nodes, selectedId]);
+  const onPaneClick = useCallback(() => setSelected(null), []);
 
   function addNode(def: NodeDef) {
     const center = wrapperRef.current?.getBoundingClientRect();
@@ -180,28 +171,7 @@ function EditorInner() {
       data: {
         label: def.label,
         nodeType: def.type,
-        // Pre-fill each parameter with the most obvious starter value:
-        // an explicit `default` if the catalog declared one, otherwise the
-        // `placeholder` example (which is always written to demonstrate what
-        // the field should contain), otherwise empty. This means dragging a
-        // fresh node into the canvas shows meaningful example content for
-        // every slot rather than a wall of empty inputs.
-        //
-        // For `type: "json"` params, we mirror the textarea's `onChange`
-        // behavior (see ParamField below): if the seed string parses as JSON
-        // we store the parsed value, otherwise we keep it as a raw string.
-        // This is critical because the executor uses json params directly
-        // as objects (e.g. `{...patch}`); spreading a raw JSON string would
-        // produce character-indexed garbage instead of the intended object.
-        // Path-style placeholders like "input.payload" stay as strings and
-        // are handled by `resolveOrLiteral` at run time.
-        params: Object.fromEntries(def.params.map((p) => {
-          const seed = p.default ?? p.placeholder ?? "";
-          if (p.type === "json" && typeof seed === "string" && seed.length > 0) {
-            try { return [p.key, JSON.parse(seed)]; } catch { return [p.key, seed]; }
-          }
-          return [p.key, seed];
-        })),
+        params: Object.fromEntries(def.params.map((p) => [p.key, p.default ?? ""])),
       },
     };
     // We use the default reactflow node type but render a custom inner label.
@@ -221,23 +191,22 @@ function EditorInner() {
   }
 
   function deleteSelected() {
-    if (!selectedId) return;
-    const id = selectedId;
-    setNodes((ns) => ns.filter((n) => n.id !== id));
-    setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
-    setSelectedId(null);
+    if (!selected) return;
+    setNodes((ns) => ns.filter((n) => n.id !== selected.id));
+    setEdges((es) => es.filter((e) => e.source !== selected.id && e.target !== selected.id));
+    setSelected(null);
   }
 
   function updateParam(key: string, value: any) {
-    if (!selectedId) return;
-    const id = selectedId;
-    setNodes((ns) => ns.map((n) => n.id === id ? { ...n, data: { ...n.data, params: { ...(n.data?.params ?? {}), [key]: value } } } : n));
+    if (!selected) return;
+    setNodes((ns) => ns.map((n) => n.id === selected.id ? { ...n, data: { ...n.data, params: { ...(n.data?.params ?? {}), [key]: value } } } : n));
+    setSelected((s) => s ? { ...s, data: { ...s.data, params: { ...(s.data?.params ?? {}), [key]: value } } } : s);
   }
 
   function updateLabel(label: string) {
-    if (!selectedId) return;
-    const id = selectedId;
-    setNodes((ns) => ns.map((n) => n.id === id ? { ...n, data: { ...n.data, label } } : n));
+    if (!selected) return;
+    setNodes((ns) => ns.map((n) => n.id === selected.id ? { ...n, data: { ...n.data, label } } : n));
+    setSelected((s) => s ? { ...s, data: { ...s.data, label } } : s);
   }
 
   function buildGraphForSave() {
@@ -390,13 +359,6 @@ function EditorInner() {
   }
 
   // Render
-  // Derive the selected node from the live nodes array so every state update
-  // (typing in a param field, dragging the node, etc.) re-renders the config
-  // panel against fresh data instead of a stale snapshot.
-  const selected = useMemo(
-    () => (selectedId ? nodes.find((n) => n.id === selectedId) ?? null : null),
-    [nodes, selectedId],
-  );
   const selectedDef = selected ? catalogByType[selected.data?.nodeType] : undefined;
 
   return (
