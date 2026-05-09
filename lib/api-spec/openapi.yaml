@@ -3706,6 +3706,7 @@ components:
             - sex_offender_nsopw
             - attorney
             - business_entity
+            - pacer_federal
         status:
           type: string
           enum: [PASS, REVIEW_REQUIRED, FAIL, NOT_RUN]

@@ -4,6 +4,7 @@ import { runBackgroundCheck } from "../background-check";
 import { validateAddress as validateAddressInternal } from "../address-validator";
 import { validateEmail as validateEmailInternal } from "../email-validator";
 import { logger } from "../logger";
+import { searchPcl } from "../pacer/pcl-client";
 
 import { BACKGROUND_SOURCES } from "./sources";
 import { statusFromFlags } from "./escalation";
@@ -296,6 +297,122 @@ export async function adaptAttorney(lead: LeadLike): Promise<BackgroundLaneResul
         "State bar lookup required only if the lead claims attorney status or legal-entity connection.",
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// PACER federal courts — live adapter via PCL Search API.
+// Vault-only credentials (provider="pacer"). Returns NOT_RUN cleanly when
+// no integration is configured (PACER is opt-in due to per-page billing).
+// Hits surface as REVIEW — never auto-FAIL — because PCL returns party
+// names without identity-confirming metadata; the operator confirms by
+// purchasing the docket. Auth/network failures degrade to REVIEW with a
+// `pacer_source_unreachable` or `pacer_auth_failed` flag so a configured
+// source that wasn't actually checked can never silently PASS.
+// ---------------------------------------------------------------------------
+export async function adaptPacer(lead: LeadLike): Promise<BackgroundLaneResult> {
+  if (!lead.first_name || !lead.last_name) {
+    return {
+      lane: "pacer_federal",
+      status: "NOT_RUN",
+      score: 0,
+      flags: [],
+      notes: ["PACER lookup skipped — lead missing first_name or last_name."],
+      sources: [...BACKGROUND_SOURCES.pacer_federal],
+      checked_at: new Date().toISOString(),
+      raw: { searched_name: fullName(lead) },
+    };
+  }
+
+  try {
+    const outcome = await searchPcl({
+      firstName: lead.first_name,
+      lastName: lead.last_name,
+      dateOfBirth: lead.dob ?? null,
+    });
+
+    if (outcome.ok === false && outcome.reason === "NOT_CONFIGURED") {
+      // Honest NOT_RUN — operator hasn't paid to wire PACER. Bypass the
+      // flag taxonomy because we want NOT_RUN, not REVIEW. The hub-level
+      // arbiter still escalates the overall result to REVIEW_REQUIRED
+      // when any lane is NOT_RUN, so the operator sees the gap.
+      return {
+        lane: "pacer_federal",
+        status: "NOT_RUN",
+        score: 0,
+        flags: ["pacer_not_configured"],
+        notes: [
+          "PACER lane skipped — no active 'pacer' integration in the vault. Add credentials in Settings → Integrations to enable federal court searches (per-page billing applies).",
+        ],
+        sources: [...BACKGROUND_SOURCES.pacer_federal],
+        checked_at: new Date().toISOString(),
+        raw: { searched_name: fullName(lead), configured: false },
+      };
+    }
+
+    if (outcome.ok === false) {
+      const flag = outcome.reason === "AUTH_FAILED" ? "pacer_auth_failed" : "pacer_source_unreachable";
+      return makeResult(
+        "pacer_federal",
+        [flag],
+        { searched_name: fullName(lead), reason: outcome.reason },
+        [`PACER ${outcome.reason.toLowerCase().replace("_", " ")} — operator should retry or check credentials.`],
+        outcome.message,
+      );
+    }
+
+    const flags: string[] = [];
+    if (outcome.cases.length > 0) {
+      flags.push("pacer_records_found_review");
+      // If any returned case is a criminal docket (court_type=cr / nature
+      // codes that begin with "Criminal"), surface that as a separate flag
+      // so the operator notices it without auto-FAILing.
+      const hasCriminal = outcome.cases.some((c) => {
+        const cn = (c.caseNumberFull ?? "").toLowerCase();
+        const courtType = (c.courtType ?? "").toLowerCase();
+        const nature = (c.natureOfSuit ?? "").toLowerCase();
+        return (
+          cn.includes("-cr-") ||
+          courtType.includes("criminal") ||
+          nature.includes("criminal")
+        );
+      });
+      if (hasCriminal) flags.push("pacer_active_criminal_docket");
+    }
+
+    return makeResult(
+      "pacer_federal",
+      flags,
+      {
+        searched_name: fullName(lead),
+        searched_dob: lead.dob ?? null,
+        case_count: outcome.cases.length,
+        truncated: outcome.truncated,
+        cases: outcome.cases.slice(0, 10).map((c) => ({
+          case_number: c.caseNumberFull,
+          title: c.caseTitle,
+          year: c.caseYear,
+          court_id: c.courtId,
+          court_type: c.courtType,
+          date_filed: c.dateFiled,
+          nature_of_suit: c.natureOfSuit,
+        })),
+      },
+      outcome.cases.length === 0
+        ? ["No PACER cases found for this name."]
+        : [`Operator: confirm identity by purchasing the docket(s) before treating as a match.`],
+    );
+  } catch (err) {
+    // Defense-in-depth — searchPcl already returns outcome objects rather
+    // than throwing, but a programming error here must never bubble up
+    // and break the parallel adapter fan-out.
+    return makeResult(
+      "pacer_federal",
+      ["pacer_source_unreachable"],
+      { searched_name: fullName(lead) },
+      ["PACER adapter raised an exception — see error field."],
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

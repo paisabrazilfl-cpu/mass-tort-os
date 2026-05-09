@@ -19,4 +19,5 @@ export const BackgroundHubLaneResultLane = {
   sex_offender_nsopw: "sex_offender_nsopw",
   attorney: "attorney",
   business_entity: "business_entity",
+  pacer_federal: "pacer_federal",
 } as const;

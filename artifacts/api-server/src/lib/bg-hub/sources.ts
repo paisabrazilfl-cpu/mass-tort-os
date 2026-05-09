@@ -121,6 +121,7 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
       source_type: "federal",
       requires_api_key: true,
       live_adapter_available: false,
+      notes: "PACER lives in its own dedicated lane (pacer_federal) with a live PCL Search adapter — see below.",
     },
     {
       name: "State Court Websites Directory",
@@ -177,6 +178,26 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
       requires_api_key: false,
       live_adapter_available: false,
       notes: "State-by-state bar lookups — no national live adapter.",
+    },
+  ],
+
+  pacer_federal: [
+    {
+      name: "PACER PCL Search API",
+      url: "https://pcl.uscourts.gov/pcl/index.jsf",
+      source_type: "federal",
+      requires_api_key: true,
+      live_adapter_available: true,
+      notes:
+        "Live adapter (lib/pacer/pcl-client.ts) calls the PACER Case Locator Search API using vault-stored PACER credentials. Per-page billing applies — lane returns NOT_RUN when no PACER integration is configured. Hits surface as REVIEW (never auto-FAIL) — operator confirms identity by purchasing the docket.",
+    },
+    {
+      name: "PACER Login",
+      url: "https://pacer.login.uscourts.gov/",
+      source_type: "federal",
+      requires_api_key: true,
+      live_adapter_available: false,
+      notes: "Token endpoint used by the PCL adapter to exchange username/password for a session cookie.",
     },
   ],
 

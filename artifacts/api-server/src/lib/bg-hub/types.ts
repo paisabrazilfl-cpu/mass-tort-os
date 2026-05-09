@@ -22,7 +22,8 @@ export type BackgroundLane =
   | "incarceration"
   | "sex_offender_nsopw"
   | "attorney"
-  | "business_entity";
+  | "business_entity"
+  | "pacer_federal";
 
 export type BackgroundSourceType =
   | "primary"

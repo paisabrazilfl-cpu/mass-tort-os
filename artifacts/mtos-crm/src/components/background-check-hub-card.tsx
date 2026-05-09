@@ -32,6 +32,7 @@ const LANE_LABEL: Record<string, string> = {
   sex_offender_nsopw: "Sex Offender Registry (NSOPW)",
   attorney: "Attorney Conflict Check",
   business_entity: "Business Entity Check",
+  pacer_federal: "PACER (Federal Courts)",
 };
 
 function statusBadge(status: string) {
@@ -209,8 +210,8 @@ export function BackgroundCheckHubCard({ leadId }: Props) {
           </CardTitle>
           <CardDescription>
             Unified, multi-lane verification (address, email, phone, residency, court records,
-            incarceration, NSOPW, attorney conflicts, business entity). Stubs are explicit —
-            no fake passes.
+            incarceration, NSOPW, attorney conflicts, business entity, PACER federal courts).
+            Stubs are explicit — no fake passes.
           </CardDescription>
         </div>
         <Button
@@ -234,7 +235,7 @@ export function BackgroundCheckHubCard({ leadId }: Props) {
           <div className="text-center py-8 text-muted-foreground border border-dashed rounded-md">
             <Activity className="h-8 w-8 mx-auto mb-2 opacity-40" />
             <p className="text-sm">No Background Check Hub run yet for this claimant.</p>
-            <p className="text-xs mt-1">Click "Run Hub" to fan out across all 9 lanes.</p>
+            <p className="text-xs mt-1">Click "Run Hub" to fan out across all 10 lanes.</p>
           </div>
         )}
 

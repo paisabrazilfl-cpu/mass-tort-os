@@ -130,6 +130,9 @@ export const PRESET_INTEGRATIONS: IntegrationPreset[] = [
   { provider: "authorize_net", name: "Authorize.Net", type: "payments", category: "Payments", description: "Long-standing payment gateway, widely accepted by legal vendors.", docs_url: "https://developer.authorize.net", fields: ["api_key", "client_secret"], score: 7, pricing: "subscription" },
   { provider: "paypal", name: "PayPal", type: "payments", category: "Payments", description: "Consumer-trusted alternative payment method.", docs_url: "https://developer.paypal.com", fields: ["api_key", "client_secret"], score: 6, pricing: "usage" },
 
+  // ──────────────────────────── COURT RECORDS ────────────────────────────
+  { provider: "pacer", name: "PACER (Federal Courts)", type: "court_records", category: "Court Records", description: "Public Access to Court Electronic Records — federal district, bankruptcy, and appellate cases via the PCL Search API.", docs_url: "https://pacer.uscourts.gov/help/pacer/case-search-only-api", fields: ["api_key", "client_secret"], score: 9, recommended: true, pricing: "usage", notes: "Save your PACER username as api_key and password as client_secret. Per-page billing applies on the PACER side. Powers the dedicated 'pacer_federal' lane in the Background Check Hub." },
+
   // ──────────────────────────── SEARCH APIs ────────────────────────────
   { provider: "serpapi", name: "SerpAPI", type: "search", category: "Web Search", description: "Google/Bing/Yahoo search results as structured JSON.", docs_url: "https://serpapi.com/search-api", fields: ["api_key"], score: 8, recommended: true, pricing: "subscription", notes: "Use for AI agents that need to research vendors or attorneys." },
   { provider: "tavily", name: "Tavily", type: "search", category: "Web Search", description: "AI-native search API — built for LLM agents.", docs_url: "https://tavily.com/docs", fields: ["api_key"], score: 8, pricing: "freemium" },

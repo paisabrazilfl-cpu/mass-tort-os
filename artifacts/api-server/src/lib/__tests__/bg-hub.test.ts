@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
+import { adaptPacer } from "../bg-hub/adapters.js";
 import { statusFromFlags, BACKGROUND_ESCALATION_RULES } from "../bg-hub/escalation.js";
 import { runBackgroundCheckHub } from "../bg-hub/hub.js";
 import { BACKGROUND_SOURCES } from "../bg-hub/sources.js";
@@ -74,8 +75,8 @@ describe("bg-hub: source registry", () => {
   });
 
   test("lanes with live adapters declare live_adapter_available=true on at least one source", () => {
-    // address, email, phone, criminal_court are the live lanes.
-    for (const lane of ["address", "email", "phone", "criminal_court"] as const) {
+    // address, email, phone, criminal_court, pacer_federal are the live lanes.
+    for (const lane of ["address", "email", "phone", "criminal_court", "pacer_federal"] as const) {
       const sources = BACKGROUND_SOURCES[lane];
       const hasLive = sources.some((s) => s.live_adapter_available);
       assert.ok(hasLive, `lane ${lane} should have at least one live source`);
@@ -116,7 +117,7 @@ describe("bg-hub: full pipeline", () => {
 
   test("returns one result per lane in stable order", async () => {
     const result = await runBackgroundCheckHub(baseLead);
-    assert.equal(result.results.length, 9);
+    assert.equal(result.results.length, 10);
     assert.deepEqual(
       result.results.map((r) => r.lane),
       [
@@ -129,6 +130,7 @@ describe("bg-hub: full pipeline", () => {
         "sex_offender_nsopw",
         "attorney",
         "business_entity",
+        "pacer_federal",
       ],
     );
   });
@@ -208,5 +210,65 @@ describe("bg-hub: full pipeline", () => {
     for (const r of result.results) {
       assert.ok(r.sources.length > 0, `lane ${r.lane} has empty sources`);
     }
+  });
+});
+
+describe("bg-hub: pacer_federal lane", () => {
+  const baseLead: LeadLike = {
+    id: 9001,
+    first_name: "Test",
+    last_name: "Pacer",
+    email: "x@x.com",
+    phone: "+15555550100",
+    address_line1: "1 Main St",
+    city: "Austin",
+    state: "TX",
+    zip: "78701",
+    dob: "1980-01-01",
+  };
+
+  test("missing first/last name → NOT_RUN (no flags, never PASS)", async () => {
+    const r = await adaptPacer({ ...baseLead, first_name: "", last_name: "" });
+    assert.equal(r.lane, "pacer_federal");
+    assert.equal(r.status, "NOT_RUN");
+    assert.equal(r.score, 0);
+    assert.deepEqual(r.flags, []);
+  });
+
+  test("no PACER integration in vault → NOT_RUN with pacer_not_configured (honest, never silent PASS)", async () => {
+    // Test environment has no `pacer` integration row, so loadPacerCredentials
+    // returns null and searchPcl returns NOT_CONFIGURED — this is the
+    // production path operators will see until they wire credentials.
+    const r = await adaptPacer(baseLead);
+    assert.equal(r.lane, "pacer_federal");
+    assert.equal(r.status, "NOT_RUN");
+    assert.deepEqual(r.flags, ["pacer_not_configured"]);
+    assert.ok(r.sources.length > 0);
+    assert.ok(r.sources.some((s) => s.live_adapter_available));
+  });
+
+  test("escalation: pacer_records_found_review → REVIEW_REQUIRED (never auto-FAIL on a name hit)", () => {
+    const r = statusFromFlags("pacer_federal", ["pacer_records_found_review"]);
+    assert.equal(r.status, "REVIEW_REQUIRED");
+  });
+
+  test("escalation: pacer_active_criminal_docket → REVIEW_REQUIRED (operator confirms identity)", () => {
+    const r = statusFromFlags("pacer_federal", ["pacer_active_criminal_docket"]);
+    assert.equal(r.status, "REVIEW_REQUIRED");
+  });
+
+  test("escalation: pacer_auth_failed → REVIEW_REQUIRED (configured source must not silently PASS)", () => {
+    const r = statusFromFlags("pacer_federal", ["pacer_auth_failed"]);
+    assert.equal(r.status, "REVIEW_REQUIRED");
+  });
+
+  test("escalation: pacer_source_unreachable → REVIEW_REQUIRED (network failure ≠ clean record)", () => {
+    const r = statusFromFlags("pacer_federal", ["pacer_source_unreachable"]);
+    assert.equal(r.status, "REVIEW_REQUIRED");
+  });
+
+  test("escalation: pacer_confirmed_criminal_match → FAIL (only after operator-confirmed match)", () => {
+    const r = statusFromFlags("pacer_federal", ["pacer_confirmed_criminal_match"]);
+    assert.equal(r.status, "FAIL");
   });
 });

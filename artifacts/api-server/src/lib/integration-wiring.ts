@@ -133,6 +133,11 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
 
   // Web Search
   serpapi: ["api_key"],
+
+  // Court Records — PACER PCL Search API. api_key=PACER username,
+  // client_secret=PACER password (mapped this way so the existing preset
+  // field taxonomy covers it without introducing new field names).
+  pacer: ["api_key", "client_secret"],
 };
 
 export type WiringStatus = "live" | "live_no_vault" | "vault_only";
@@ -180,6 +185,12 @@ const REGISTRY: Record<string, WiringInfo> = {
 
   // Web Search
   serpapi: { status: "live", note: "Google/Bing/Yahoo search results as structured JSON via SerpAPI /search.json. Requires api_key." },
+
+  // Court Records
+  pacer: {
+    status: "live",
+    note: "Federal court searches via PACER PCL Search API (lib/pacer/pcl-client.ts). Powers the dedicated 'pacer_federal' lane in the Background Check Hub. Requires api_key=PACER username + client_secret=PACER password. Per-page billing applies on the PACER side.",
+  },
 
   // AI / LLM (vault-consuming providers)
   google_gemini: { status: "live", note: "LLM completions via Gemini v1beta generateContent." },

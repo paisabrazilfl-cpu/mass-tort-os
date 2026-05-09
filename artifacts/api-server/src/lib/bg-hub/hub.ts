@@ -6,6 +6,7 @@ import {
   adaptEmail,
   adaptIncarceration,
   adaptNSOPW,
+  adaptPacer,
   adaptPhone,
   adaptResidency,
 } from "./adapters";
@@ -34,6 +35,7 @@ const ADAPTERS: readonly AdapterEntry[] = [
   { lane: "sex_offender_nsopw", run: adaptNSOPW },
   { lane: "attorney", run: adaptAttorney },
   { lane: "business_entity", run: adaptBusiness },
+  { lane: "pacer_federal", run: adaptPacer },
 ];
 
 // Aggregate per-lane statuses into a single decision. Precedence:
