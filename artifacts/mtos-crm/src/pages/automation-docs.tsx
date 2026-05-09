@@ -1,5 +1,5 @@
 /**
- * Automation Docs (Task #52)
+ * Automation Docs (Task #52 + n8n discovery follow-up)
  *
  * Operator-facing reference page for wiring n8n / Zapier / Make.com
  * against the CRM. Pulls everything from /api/admin/event-catalog so the
@@ -9,17 +9,31 @@
  * - Lists every API surface a workflow can call back into + its scope
  * - Lists every available API-key scope
  * - Documents auth + HMAC signing headers
+ * - Lists every internal automation node (the 37-node catalog) so n8n
+ *   operators can see exactly which internal services are wrapped and
+ *   how to call them via HTTP
+ * - Provides a one-click link to the full OpenAPI spec for n8n import
  *
  * Admin-only (the API endpoint is gated by `api_keys:manage`).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Webhook, KeyRound, BookOpen, ExternalLink } from "lucide-react";
+import { Webhook, KeyRound, BookOpen, ExternalLink, Boxes, FileCode2 } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { useToast } from "@/hooks/use-toast";
+
+interface InternalNode {
+  type: string;
+  label: string;
+  category: string;
+  description: string;
+  inputs: number;
+  outputs: number | string[];
+  params: Array<{ key: string; label: string; type: string; required: boolean }>;
+}
 
 interface Catalog {
   events: Array<{ event: string; description: string; payload_shape: Record<string, unknown> }>;
@@ -36,12 +50,25 @@ interface Catalog {
     secret_source: string;
     headers: string[];
   };
+  openapi: {
+    url: string;
+    format: string;
+    description: string;
+  };
+  internal_automation: {
+    description: string;
+    categories: Array<{ category: string; count: number }>;
+    nodes: InternalNode[];
+    editor_url: string;
+    catalog_url: string;
+  };
 }
 
 export default function AutomationDocsPage() {
   const { toast } = useToast();
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activeCategory, setActiveCategory] = useState<string>("all");
 
   useEffect(() => {
     let cancelled = false;
@@ -66,6 +93,12 @@ export default function AutomationDocsPage() {
     return () => { cancelled = true; };
   }, [toast]);
 
+  const filteredNodes = useMemo(() => {
+    if (!catalog) return [];
+    if (activeCategory === "all") return catalog.internal_automation.nodes;
+    return catalog.internal_automation.nodes.filter((n) => n.category === activeCategory);
+  }, [catalog, activeCategory]);
+
   if (loading) return <div className="p-6 text-muted-foreground">Loading…</div>;
   if (!catalog) return <div className="p-6 text-destructive">Catalog unavailable.</div>;
 
@@ -86,6 +119,30 @@ export default function AutomationDocsPage() {
           </Button>
         </Link>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileCode2 className="h-5 w-5" /> OpenAPI spec (for n8n import)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm">{catalog.openapi.description}</p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <Button asChild variant="default" size="sm">
+              <a href={catalog.openapi.url} target="_blank" rel="noreferrer">
+                <FileCode2 className="h-4 w-4 mr-2" /> Download {catalog.openapi.format}
+              </a>
+            </Button>
+            <code className="text-xs bg-muted px-2 py-1 rounded">{catalog.openapi.url}</code>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            In n8n: <strong>HTTP Request node → Import from URL</strong>. Paste the URL above
+            (with your bearer token in the Authorization header) and n8n will generate one
+            operation per CRM endpoint automatically.
+          </p>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -166,9 +223,13 @@ export default function AutomationDocsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>API surface</CardTitle>
+          <CardTitle>API surface (curated)</CardTitle>
         </CardHeader>
         <CardContent>
+          <p className="text-xs text-muted-foreground mb-3">
+            The endpoints most commonly used from automation workflows. Full coverage is
+            in the OpenAPI spec above.
+          </p>
           <table className="w-full text-sm">
             <thead className="text-left">
               <tr className="border-b">
@@ -189,6 +250,69 @@ export default function AutomationDocsPage() {
               ))}
             </tbody>
           </table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Boxes className="h-5 w-5" /> Internal automation nodes
+            <Badge variant="secondary" className="ml-2">{catalog.internal_automation.nodes.length}</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm">{catalog.internal_automation.description}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant={activeCategory === "all" ? "default" : "outline"}
+              onClick={() => setActiveCategory("all")}
+            >
+              All ({catalog.internal_automation.nodes.length})
+            </Button>
+            {catalog.internal_automation.categories.map((c) => (
+              <Button
+                key={c.category}
+                size="sm"
+                variant={activeCategory === c.category ? "default" : "outline"}
+                onClick={() => setActiveCategory(c.category)}
+              >
+                {c.category} ({c.count})
+              </Button>
+            ))}
+          </div>
+          <table className="w-full text-sm">
+            <thead className="text-left">
+              <tr className="border-b">
+                <th className="py-2 pr-4">Type</th>
+                <th className="py-2 pr-4">Label</th>
+                <th className="py-2 pr-4">Category</th>
+                <th className="py-2 pr-4">Outputs</th>
+                <th className="py-2">Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredNodes.map((n) => (
+                <tr key={n.type} className="border-b align-top">
+                  <td className="py-2 pr-4 font-mono text-xs whitespace-nowrap">{n.type}</td>
+                  <td className="py-2 pr-4">{n.label}</td>
+                  <td className="py-2 pr-4"><Badge variant="outline" className="text-xs">{n.category}</Badge></td>
+                  <td className="py-2 pr-4 font-mono text-xs">
+                    {Array.isArray(n.outputs) ? n.outputs.join(", ") : n.outputs}
+                  </td>
+                  <td className="py-2 text-muted-foreground">{n.description}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-xs text-muted-foreground">
+            Browse interactively in the visual editor at{" "}
+            <Link href={catalog.internal_automation.editor_url}>
+              <code className="text-xs underline">{catalog.internal_automation.editor_url}</code>
+            </Link>{" "}
+            — or fetch raw JSON from{" "}
+            <code className="text-xs">{catalog.internal_automation.catalog_url}</code>.
+          </p>
         </CardContent>
       </Card>
 

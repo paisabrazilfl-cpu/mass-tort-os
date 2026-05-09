@@ -60,6 +60,43 @@ Then, in MTOS:
 4. Optional: paste a shared secret in the API key field — the dispatcher
    will sign payloads with HMAC-SHA256 and n8n's webhook node can verify.
 
+## Discovery — letting n8n see every CRM tool
+
+n8n doesn't need to be told about each CRM endpoint by hand. Two
+discovery surfaces are exposed:
+
+### 1. OpenAPI spec (every API endpoint)
+
+```
+GET /api/admin/event-catalog/openapi.yaml
+Authorization: Bearer mtos_…   (api_keys:manage scope)
+```
+
+In n8n: add an **HTTP Request** node, click **Import** → paste the URL
+above (with the bearer header). n8n will generate one operation per CRM
+endpoint automatically — leads, cases, paralegals, NPI lookup, OCR
+results, review queue, automation runs, integrations, vault, every
+admin endpoint, the lot. ~200 protected operations in total.
+
+### 2. Internal node catalog (the 37 in-CRM workflow nodes)
+
+```
+GET /api/admin/event-catalog
+Authorization: Bearer mtos_…   (api_keys:manage scope)
+```
+
+The response now includes `internal_automation.nodes[]` — a compact
+description of every node available in the CRM's own visual workflow
+editor (`/automations`). Each entry lists the node's type, label,
+category, branch outputs, and parameter keys. Use this to map an
+internal automation step to its HTTP equivalent — every CRM node is
+just a wrapper around an internal service that's also reachable via
+the OpenAPI surface.
+
+The same data is rendered as a browsable, filterable table in the CRM
+under `/automation-docs` (admin only) — alongside the events, payload
+shapes, scopes, signing headers, and downloadable OpenAPI spec.
+
 > **Deviation note:** a fully self-contained `artifacts/n8n` web artifact
 > running n8n in this Repl is **not** included. The `n8n` npm package is
 > ~1 GB installed and ships its own embedded SQLite DB / job queue;
