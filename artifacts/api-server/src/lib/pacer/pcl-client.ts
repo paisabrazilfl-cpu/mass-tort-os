@@ -45,6 +45,26 @@ export interface PclCase {
   dateFiled?: string;
   jurisdictionType?: string;
   natureOfSuit?: string;
+  /**
+   * Direct PACER docket link. PCL responses sometimes include a `caseLink`
+   * field; when absent we synthesize the canonical PACER ECF URL from
+   * courtId + caseNumberFull so operators always have a one-click way to
+   * confirm identity by purchasing the docket.
+   */
+  docketUrl?: string;
+}
+
+/**
+ * Build the canonical PACER ECF DktRpt link from the courtId + case number.
+ * Example courtId "txed" → https://ecf.txed.uscourts.gov/cgi-bin/DktRpt.pl?…
+ * Bankruptcy courts use ecf-ci.<court>.uscourts.gov; appellate use the
+ * dedicated PACER appellate site. We use the most-common district pattern
+ * because PCL itself returns mixed court types and the user can override
+ * via the explicit caseLink when present.
+ */
+function buildDocketUrl(courtId?: string, caseNumber?: string): string | undefined {
+  if (!courtId || !caseNumber) return undefined;
+  return `https://ecf.${courtId.toLowerCase()}.uscourts.gov/cgi-bin/DktRpt.pl?caseNumber=${encodeURIComponent(caseNumber)}`;
 }
 
 export type PclSearchOutcome =
@@ -196,10 +216,17 @@ async function searchPclInner(input: PclSearchInput): Promise<PclSearchOutcome> 
       };
     }
     const json = (await resp.json().catch(() => ({}))) as {
-      content?: PclCase[];
+      content?: (PclCase & { caseLink?: string })[];
       pageInfo?: { totalElements?: number };
     };
-    const cases = Array.isArray(json.content) ? json.content.slice(0, 25) : [];
+    const rawCases = Array.isArray(json.content) ? json.content.slice(0, 25) : [];
+    // Normalize each case so callers always get a usable docketUrl. PCL
+    // sometimes returns `caseLink`; when absent we synthesize the canonical
+    // ECF URL from courtId + caseNumberFull.
+    const cases: PclCase[] = rawCases.map((c) => ({
+      ...c,
+      docketUrl: c.caseLink ?? buildDocketUrl(c.courtId, c.caseNumberFull),
+    }));
     const total = typeof json.pageInfo?.totalElements === "number" ? json.pageInfo.totalElements : cases.length;
     return { ok: true, cases, truncated: total > cases.length };
   } catch (err) {

@@ -16,7 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
-import { Activity, AlertTriangle, CheckCircle2, RefreshCw, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, ExternalLink, RefreshCw, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 
 interface Props {
   leadId: number;
@@ -79,8 +79,80 @@ function finalStatusHeadline(result: BackgroundHubResult) {
   }
 }
 
+interface PacerCase {
+  case_number?: string;
+  title?: string;
+  year?: number;
+  court_id?: string;
+  court_type?: string;
+  date_filed?: string;
+  nature_of_suit?: string;
+  docket_url?: string;
+}
+
+interface PacerRaw {
+  case_count?: number;
+  truncated?: boolean;
+  cases?: PacerCase[];
+}
+
+function PacerHitsTable({ cases, truncated }: { cases: PacerCase[]; truncated?: boolean }) {
+  return (
+    <div className="border rounded bg-amber-50/50 p-2 space-y-1">
+      <div className="text-[11px] font-semibold text-amber-900 uppercase tracking-wider">
+        PACER cases ({cases.length}{truncated ? "+" : ""}) — operator must confirm identity
+      </div>
+      <div className="space-y-1">
+        {cases.map((c, i) => (
+          <div key={i} className="text-xs border border-amber-200 rounded p-2 bg-white">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="font-medium truncate" title={c.title ?? ""}>
+                  {c.title || "(untitled case)"}
+                </div>
+                <div className="text-[11px] text-muted-foreground font-mono">
+                  {c.case_number ?? "—"}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  {[
+                    c.court_id ? `Court: ${c.court_id}` : null,
+                    c.court_type || null,
+                    c.date_filed ? `Filed: ${c.date_filed}` : null,
+                  ].filter(Boolean).join(" · ")}
+                </div>
+                {c.nature_of_suit && (
+                  <div className="text-[11px] text-muted-foreground italic">
+                    Nature: {c.nature_of_suit}
+                  </div>
+                )}
+              </div>
+              {c.docket_url && (
+                <a
+                  href={c.docket_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 inline-flex items-center gap-1 text-[11px] text-blue-700 hover:underline"
+                  data-testid={`pacer-docket-link-${i}`}
+                >
+                  Docket <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function LaneRow({ lane }: { lane: BackgroundHubLaneResult }) {
   const label = LANE_LABEL[lane.lane] ?? lane.lane;
+  const pacerCases =
+    lane.lane === "pacer_federal"
+      ? ((lane.raw as PacerRaw | undefined)?.cases ?? [])
+      : [];
+  const pacerTruncated =
+    lane.lane === "pacer_federal" ? (lane.raw as PacerRaw | undefined)?.truncated : false;
   return (
     <div className="border rounded-md p-3 space-y-2">
       <div className="flex items-start justify-between gap-3">
@@ -103,6 +175,9 @@ function LaneRow({ lane }: { lane: BackgroundHubLaneResult }) {
             <li key={i}>• {n}</li>
           ))}
         </ul>
+      )}
+      {pacerCases.length > 0 && (
+        <PacerHitsTable cases={pacerCases} truncated={pacerTruncated} />
       )}
       {lane.error && (
         <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">

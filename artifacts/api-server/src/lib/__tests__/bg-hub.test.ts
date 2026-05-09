@@ -220,7 +220,7 @@ describe("bg-hub: pacer_federal lane", () => {
     last_name: "Pacer",
     email: "x@x.com",
     phone: "+15555550100",
-    address_line1: "1 Main St",
+    address: "1 Main St",
     city: "Austin",
     state: "TX",
     zip: "78701",
@@ -254,16 +254,6 @@ describe("bg-hub: pacer_federal lane", () => {
 
   test("escalation: pacer_active_criminal_docket → REVIEW_REQUIRED (operator confirms identity)", () => {
     const r = statusFromFlags("pacer_federal", ["pacer_active_criminal_docket"]);
-    assert.equal(r.status, "REVIEW_REQUIRED");
-  });
-
-  test("escalation: pacer_auth_failed → REVIEW_REQUIRED (configured source must not silently PASS)", () => {
-    const r = statusFromFlags("pacer_federal", ["pacer_auth_failed"]);
-    assert.equal(r.status, "REVIEW_REQUIRED");
-  });
-
-  test("escalation: pacer_source_unreachable → REVIEW_REQUIRED (network failure ≠ clean record)", () => {
-    const r = statusFromFlags("pacer_federal", ["pacer_source_unreachable"]);
     assert.equal(r.status, "REVIEW_REQUIRED");
   });
 

@@ -92,17 +92,18 @@ export const BACKGROUND_ESCALATION_RULES: Record<
   // PACER federal courts (PCL Search API). Hard FAIL is reserved for
   // operator-confirmed criminal matches surfaced after manual review of the
   // returned docket; the live adapter never auto-FAILs on a name hit because
-  // PCL returns party names without identity-confirming metadata. The
-  // `pacer_not_configured` flag deliberately routes to NOT_RUN (handled in
-  // adaptPacer directly, bypassing this taxonomy) — PACER is opt-in due to
-  // per-page billing.
+  // PCL returns party names without identity-confirming metadata.
+  //
+  // The `pacer_not_configured`, `pacer_auth_failed`, and
+  // `pacer_source_unreachable` flags route to NOT_RUN (handled directly in
+  // adaptPacer, bypassing this taxonomy) — PACER is opt-in (per-page billing)
+  // and a service or auth failure is reported honestly as "we did not run
+  // this lane" with the underlying reason, NOT as a manual review queue.
   pacer_federal: {
     fail: ["pacer_confirmed_criminal_match"],
     review: [
       "pacer_records_found_review",
       "pacer_active_criminal_docket",
-      "pacer_source_unreachable",
-      "pacer_auth_failed",
     ],
   },
 };

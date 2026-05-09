@@ -1,5 +1,6 @@
 import dnsPromises from "node:dns/promises";
 
+import { auditLog } from "../audit";
 import { runBackgroundCheck } from "../background-check";
 import { validateAddress as validateAddressInternal } from "../address-validator";
 import { validateEmail as validateEmailInternal } from "../email-validator";
@@ -301,16 +302,66 @@ export async function adaptAttorney(lead: LeadLike): Promise<BackgroundLaneResul
 
 // ---------------------------------------------------------------------------
 // PACER federal courts — live adapter via PCL Search API.
-// Vault-only credentials (provider="pacer"). Returns NOT_RUN cleanly when
-// no integration is configured (PACER is opt-in due to per-page billing).
-// Hits surface as REVIEW — never auto-FAIL — because PCL returns party
-// names without identity-confirming metadata; the operator confirms by
-// purchasing the docket. Auth/network failures degrade to REVIEW with a
-// `pacer_source_unreachable` or `pacer_auth_failed` flag so a configured
-// source that wasn't actually checked can never silently PASS.
+// Vault-only credentials (provider="pacer"). PACER is opt-in (per-page
+// billing) so any path where we did NOT actually search returns NOT_RUN
+// with a clear reason flag — never a silent PASS, never a noisy REVIEW for
+// a service failure. The states are:
+//
+//   no name on lead       → NOT_RUN (no flags)
+//   integration missing   → NOT_RUN ("pacer_not_configured")
+//   auth rejected         → NOT_RUN ("pacer_auth_failed") + error
+//   network/HTTP failure  → NOT_RUN ("pacer_source_unreachable") + error
+//   search succeeded:
+//     0 hits              → PASS  (statusFromFlags with no flags)
+//     ≥1 hit              → REVIEW_REQUIRED ("pacer_records_found_review",
+//                            optionally "pacer_active_criminal_docket")
+//
+// Hits never auto-FAIL — PCL returns party names without identity-
+// confirming metadata. The operator promotes a hit to FAIL after manually
+// reviewing the docket via the docketUrl included on each case.
+// Every outcome is audit-logged so operators can always answer "did we
+// run PACER on this lead, and what happened?"
 // ---------------------------------------------------------------------------
+function buildPacerNotRun(
+  lead: LeadLike,
+  flag: string,
+  notes: string[],
+  rawExtra: Record<string, unknown> = {},
+  error?: string,
+): BackgroundLaneResult {
+  return {
+    lane: "pacer_federal",
+    status: "NOT_RUN",
+    score: 0,
+    flags: [flag],
+    notes,
+    sources: [...BACKGROUND_SOURCES.pacer_federal],
+    checked_at: new Date().toISOString(),
+    raw: { searched_name: fullName(lead), ...rawExtra },
+    ...(error ? { error } : {}),
+  };
+}
+
+async function logPacerRun(
+  lead: LeadLike,
+  outcome: "success" | "not_configured" | "auth_failed" | "source_unreachable" | "skipped_missing_name",
+  details: Record<string, unknown> = {},
+) {
+  try {
+    await auditLog("lead", String(lead.id ?? "unknown"), "pacer_run", {
+      outcome,
+      ...details,
+    });
+  } catch (err) {
+    // auditLog already swallows its own errors, but be paranoid: this
+    // adapter MUST NOT throw from the audit path.
+    logger.error({ err }, "PACER adapter: audit log write failed");
+  }
+}
+
 export async function adaptPacer(lead: LeadLike): Promise<BackgroundLaneResult> {
   if (!lead.first_name || !lead.last_name) {
+    void logPacerRun(lead, "skipped_missing_name");
     return {
       lane: "pacer_federal",
       status: "NOT_RUN",
@@ -331,31 +382,40 @@ export async function adaptPacer(lead: LeadLike): Promise<BackgroundLaneResult> 
     });
 
     if (outcome.ok === false && outcome.reason === "NOT_CONFIGURED") {
-      // Honest NOT_RUN — operator hasn't paid to wire PACER. Bypass the
-      // flag taxonomy because we want NOT_RUN, not REVIEW. The hub-level
-      // arbiter still escalates the overall result to REVIEW_REQUIRED
-      // when any lane is NOT_RUN, so the operator sees the gap.
-      return {
-        lane: "pacer_federal",
-        status: "NOT_RUN",
-        score: 0,
-        flags: ["pacer_not_configured"],
-        notes: [
+      void logPacerRun(lead, "not_configured");
+      return buildPacerNotRun(
+        lead,
+        "pacer_not_configured",
+        [
           "PACER lane skipped — no active 'pacer' integration in the vault. Add credentials in Settings → Integrations to enable federal court searches (per-page billing applies).",
         ],
-        sources: [...BACKGROUND_SOURCES.pacer_federal],
-        checked_at: new Date().toISOString(),
-        raw: { searched_name: fullName(lead), configured: false },
-      };
+        { configured: false },
+      );
+    }
+
+    if (outcome.ok === false && outcome.reason === "AUTH_FAILED") {
+      void logPacerRun(lead, "auth_failed", { message: outcome.message });
+      return buildPacerNotRun(
+        lead,
+        "pacer_auth_failed",
+        [
+          "PACER credentials were rejected by the auth endpoint. Re-check the username/password in Settings → Integrations. Lane was NOT run.",
+        ],
+        { reason: "AUTH_FAILED" },
+        outcome.message,
+      );
     }
 
     if (outcome.ok === false) {
-      const flag = outcome.reason === "AUTH_FAILED" ? "pacer_auth_failed" : "pacer_source_unreachable";
-      return makeResult(
-        "pacer_federal",
-        [flag],
-        { searched_name: fullName(lead), reason: outcome.reason },
-        [`PACER ${outcome.reason.toLowerCase().replace("_", " ")} — operator should retry or check credentials.`],
+      // SOURCE_UNREACHABLE.
+      void logPacerRun(lead, "source_unreachable", { message: outcome.message });
+      return buildPacerNotRun(
+        lead,
+        "pacer_source_unreachable",
+        [
+          "PACER service was unreachable (network or HTTP error). Lane was NOT run; retry later. Operator must not interpret this as a clean record.",
+        ],
+        { reason: "SOURCE_UNREACHABLE" },
         outcome.message,
       );
     }
@@ -379,6 +439,12 @@ export async function adaptPacer(lead: LeadLike): Promise<BackgroundLaneResult> 
       if (hasCriminal) flags.push("pacer_active_criminal_docket");
     }
 
+    void logPacerRun(lead, "success", {
+      case_count: outcome.cases.length,
+      truncated: outcome.truncated,
+      criminal_hit: flags.includes("pacer_active_criminal_docket"),
+    });
+
     return makeResult(
       "pacer_federal",
       flags,
@@ -395,6 +461,7 @@ export async function adaptPacer(lead: LeadLike): Promise<BackgroundLaneResult> 
           court_type: c.courtType,
           date_filed: c.dateFiled,
           nature_of_suit: c.natureOfSuit,
+          docket_url: c.docketUrl,
         })),
       },
       outcome.cases.length === 0
@@ -404,13 +471,17 @@ export async function adaptPacer(lead: LeadLike): Promise<BackgroundLaneResult> 
   } catch (err) {
     // Defense-in-depth — searchPcl already returns outcome objects rather
     // than throwing, but a programming error here must never bubble up
-    // and break the parallel adapter fan-out.
-    return makeResult(
-      "pacer_federal",
-      ["pacer_source_unreachable"],
-      { searched_name: fullName(lead) },
-      ["PACER adapter raised an exception — see error field."],
-      err instanceof Error ? err.message : String(err),
+    // and break the parallel adapter fan-out. Treat as SOURCE_UNREACHABLE
+    // (NOT_RUN) per the same honesty principle: if we didn't actually
+    // talk to PACER, do not pretend the lead is clean.
+    const message = err instanceof Error ? err.message : String(err);
+    void logPacerRun(lead, "source_unreachable", { message, programming_error: true });
+    return buildPacerNotRun(
+      lead,
+      "pacer_source_unreachable",
+      ["PACER adapter raised an exception — see error field. Lane was NOT run."],
+      { reason: "ADAPTER_EXCEPTION" },
+      message,
     );
   }
 }
