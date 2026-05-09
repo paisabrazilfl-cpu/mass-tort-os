@@ -54,3 +54,9 @@ id = "7Ciqk5JfPMPb4wopGncw7"
 uri = "file://exports/mtos-crm-source-20260501-123800.tar.gz"
 type = "unspecified"
 title = "Mass Tort OS CRM — Full Source (3.4 MB, 728 files)"
+
+[[outputs]]
+id = "3u1j6s3VQuayF_DxWvbi2"
+uri = "file://docs/USER_MANUAL.md"
+type = "text"
+title = "MTOS User Manual"
