@@ -39,7 +39,8 @@ import {
 } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { encrypt } from "../encryption.js";
-import { handleFastenRecordsSync } from "../fasten-job.js";
+import { handleFastenRecordsSync, auditStaleFastenPartials } from "../fasten-job.js";
+import { auditLogTable } from "@workspace/db";
 
 // Audit writes off — we don't pin audit shape here, the route + matrix
 // suites already cover the Fasten audit_log contract.
@@ -88,8 +89,8 @@ function ndjsonForFile(fileId: string): string {
   ].join("\n");
 }
 
-function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const url = typeof input === "string" ? input : input.toString();
+function mockFetch(input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
+  const url = typeof input === "string" ? input : (input as URL | Request).toString();
 
   // POST /v1/ehi-export — start a bulk export task.
   if (url.endsWith("/v1/ehi-export") && (init?.method ?? "GET") === "POST") {
@@ -239,6 +240,7 @@ async function readConn(): Promise<{
   last_error: string | null;
   last_resource_count: number | null;
   last_synced_at: Date | null;
+  metadata: unknown;
 }> {
   const [row] = await db
     .select({
@@ -246,6 +248,7 @@ async function readConn(): Promise<{
       last_error: fastenConnectionsTable.last_error,
       last_resource_count: fastenConnectionsTable.last_resource_count,
       last_synced_at: fastenConnectionsTable.last_synced_at,
+      metadata: fastenConnectionsTable.metadata,
     })
     .from(fastenConnectionsTable)
     .where(eq(fastenConnectionsTable.id, connectionId));
@@ -366,4 +369,121 @@ test("(3) partial-success path: worker marks 'synced' but records last_error='Pa
     /^Partial: 1\/3 files ingested$/,
     "last_error format is part of the operator-UX contract — the lead-detail card renders this string verbatim, so it must read 'Partial: x/y files ingested'",
   );
+
+  // Task #72 contract: a partial sync must also persist the failed file_ids
+  // (and the bulk-export task_id) to metadata so the operator-facing
+  // "Retry Failed" button has the data it needs to re-pull just the
+  // missing files instead of the entire export.
+  const meta = (conn.metadata && typeof conn.metadata === "object")
+    ? (conn.metadata as { failed_files?: Array<{ file_id: string }>; last_task_id?: string })
+    : {};
+  assert.equal(meta.failed_files?.length, 2, "metadata.failed_files must list both failed downloads so retry-failed knows what to re-pull");
+  assert.deepEqual(
+    (meta.failed_files ?? []).map((f) => f.file_id).sort(),
+    ["file_partial_fail_a", "file_partial_fail_b"],
+    "failed_files must reference the exact file_ids that failed — retry-failed iterates this list verbatim",
+  );
+  assert.ok(meta.last_task_id, "metadata.last_task_id must be persisted so retry-failed can hit the same bulk export task");
+});
+
+test("(4) retry_failed_only: re-pulls only saved failed_files, ADDS resources to last_resource_count, clears Partial state", async () => {
+  // Seed the connection in the post-partial state: synced + Partial last_error
+  // + metadata.failed_files + metadata.last_task_id. This is exactly the row
+  // shape the prior test (3) leaves behind, so we're testing the operator's
+  // next click on "Retry Failed Files" from the lead-detail card.
+  await db
+    .update(fastenConnectionsTable)
+    .set({
+      status: "synced",
+      last_error: "Partial: 1/3 files ingested",
+      last_resource_count: 2,
+      last_synced_at: new Date(),
+      metadata: {
+        last_task_id: TASK_ID,
+        failed_files: [
+          { file_id: "file_retry_a", resource_type: "Observation", error: "500" },
+          { file_id: "file_retry_b", resource_type: "MedicationStatement", error: "500" },
+        ],
+      },
+    })
+    .where(eq(fastenConnectionsTable.id, connectionId));
+
+  // Both failed files now succeed on retry. file_retry_b still fails — the
+  // mocked task ALSO returns the original three files via getBulkExport, but
+  // the worker MUST ignore them and only iterate metadata.failed_files.
+  script.files = [
+    { file_id: "file_partial_ok", resource_type: "Condition" },
+    { file_id: "file_retry_a", resource_type: "Observation" },
+    { file_id: "file_retry_b", resource_type: "MedicationStatement" },
+  ];
+  script.fileOutcomes = {
+    file_retry_a: "ok",
+    file_retry_b: "ok",
+    // Tracker for the regression: if the worker accidentally re-downloads
+    // file_partial_ok we'd see it ingest extra resources. Leaving it "ok"
+    // here means the assertion on resource count below would catch it.
+    file_partial_ok: "ok",
+  };
+
+  await handleFastenRecordsSync({
+    connection_id: connectionId,
+    lead_id: leadId,
+    case_id: `lead-${leadId}`,
+    backend: "connect",
+    org_connection_id: ORG_CONN_ID,
+    retry_failed_only: true,
+  });
+
+  const conn = await readConn();
+  assert.equal(conn.status, "synced", "successful retry-failed must land status='synced'");
+  assert.equal(conn.last_error, null, "a fully-successful retry must clear the Partial last_error so the badge disappears");
+  // 2 prior resources + (2 retried files × 2 NDJSON lines each) = 6
+  assert.equal(
+    conn.last_resource_count,
+    6,
+    "retry-failed must ADD newly-ingested resources to the prior count — replacing it would lie ('0 records' right after a successful retry)",
+  );
+  const meta = (conn.metadata && typeof conn.metadata === "object")
+    ? (conn.metadata as { failed_files?: unknown[] })
+    : {};
+  assert.equal(
+    Array.isArray(meta.failed_files) ? meta.failed_files.length : -1,
+    0,
+    "metadata.failed_files must be cleared on full retry success so the next 'Retry Failed' button correctly returns the no_partial_sync_to_retry 409",
+  );
+});
+
+test("(5) auditStaleFastenPartials: writes ONE high-severity audit row for >24h stale Partials, dedups on second run", async () => {
+  // Force the connection into a Partial state with updated_at backdated >24h.
+  // The audit helper queries on last_error LIKE 'Partial:%' AND
+  // updated_at < now()-thresholdMs, so we shift updated_at by 25h.
+  const old = new Date(Date.now() - 25 * 3600 * 1000);
+  await db
+    .update(fastenConnectionsTable)
+    .set({
+      status: "synced",
+      last_error: "Partial: 1/3 files ingested",
+      updated_at: old,
+      metadata: { last_task_id: TASK_ID, failed_files: [{ file_id: "x", error: "500" }] },
+    })
+    .where(eq(fastenConnectionsTable.id, connectionId));
+
+  const auditedFirst = await auditStaleFastenPartials();
+  assert.ok(auditedFirst >= 1, "first run over a >24h Partial must emit at least one stale_partial_sync_unresolved audit row");
+
+  // Verify the row landed with severity=high and the right action label.
+  const auditRows = await db
+    .select()
+    .from(auditLogTable)
+    .where(eq(auditLogTable.entity_id, String(connectionId)));
+  const stale = auditRows.find((r) => r.action === "stale_partial_sync_unresolved");
+  assert.ok(stale, "audit_log must contain a stale_partial_sync_unresolved row for the partial connection");
+  const details = stale!.details as { severity?: string; lead_id?: number };
+  assert.equal(details.severity, "high", "stale-partial audit row must be severity:high — operators won't chase missed medical records on a low-severity alert");
+  assert.equal(details.lead_id, leadId, "audit details must reference the lead so an ops engineer can jump straight to it");
+
+  // Second run on the same row: dedup via metadata.partial_audited_at means
+  // we MUST NOT emit another audit row.
+  const auditedSecond = await auditStaleFastenPartials();
+  assert.equal(auditedSecond, 0, "subsequent runs must dedup via metadata.partial_audited_at — re-alerting hourly would drown the audit log");
 });

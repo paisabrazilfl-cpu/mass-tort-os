@@ -52,6 +52,12 @@ export interface JobPayload {
     task_id?: string;
     /** Number of poll attempts so far — guards against infinite re-enqueue. */
     poll_attempt?: number;
+    /**
+     * Task #72: when true, skip startBulkExport and only re-download the
+     * file_ids saved to metadata.failed_files from the prior partial run.
+     * Triggered from /api/fasten/sync with `mode=retry-failed`.
+     */
+    retry_failed_only?: boolean;
   };
 }
 

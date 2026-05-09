@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetchRaw } from "@/lib/api-fetch";
-import { Stethoscope, RefreshCw, ExternalLink, X, Search } from "lucide-react";
+import { Stethoscope, RefreshCw, ExternalLink, X, Search, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 
 interface CatalogBrand {
@@ -99,16 +99,26 @@ export function FastenConnectCard({ leadId }: { leadId: number }) {
   });
 
   const syncMut = useMutation({
-    mutationFn: async (connectionId: number) => {
-      const r = await apiFetchRaw(`/api/fasten/sync/${connectionId}`, { method: "POST" });
+    mutationFn: async (vars: { connectionId: number; retryFailedOnly?: boolean }) => {
+      const r = await apiFetchRaw(`/api/fasten/sync/${vars.connectionId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(vars.retryFailedOnly ? { mode: "retry-failed" } : {}),
+      });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
         throw new Error(err.message || `HTTP ${r.status}`);
       }
-      return r.json();
+      return r.json() as Promise<{ ok: boolean; mode: "full" | "retry-failed" }>;
     },
-    onSuccess: () => {
-      toast({ title: "Sync queued", description: "Records will appear in the Documents tab once Fasten finishes." });
+    onSuccess: (data) => {
+      toast({
+        title: data.mode === "retry-failed" ? "Retry queued" : "Sync queued",
+        description:
+          data.mode === "retry-failed"
+            ? "Re-pulling only the files that failed last time. They'll appear in the Documents tab once Fasten finishes."
+            : "Records will appear in the Documents tab once Fasten finishes.",
+      });
       qc.invalidateQueries({ queryKey: ["fasten", "connections", leadId] });
     },
     onError: (err: Error) => {
@@ -248,37 +258,68 @@ export function FastenConnectCard({ leadId }: { leadId: number }) {
             <div className="text-sm text-muted-foreground italic">No connections yet. Search a provider above to issue a connect link.</div>
           ) : (
             <div className="border rounded-md divide-y">
-              {conns.map((c) => (
-                <div key={c.id} className="p-3 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm truncate">{c.portal_name || c.portal_id || "Unnamed portal"}</span>
-                      <Badge variant={STATUS_VARIANT[c.status] ?? "outline"}>{c.status}</Badge>
-                      <Badge variant="outline" className="text-[10px]">{c.backend}</Badge>
+              {conns.map((c) => {
+                const isPartial = !!c.last_error && c.last_error.startsWith("Partial:");
+                return (
+                  <div key={c.id} className="p-3 flex items-center justify-between gap-3" data-testid={`fasten-connection-${c.id}`}>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm truncate">{c.portal_name || c.portal_id || "Unnamed portal"}</span>
+                        <Badge variant={STATUS_VARIANT[c.status] ?? "outline"}>{c.status}</Badge>
+                        <Badge variant="outline" className="text-[10px]">{c.backend}</Badge>
+                        {isPartial && (
+                          <Badge
+                            variant="destructive"
+                            className="gap-1"
+                            data-testid={`badge-partial-${c.id}`}
+                            title={c.last_error ?? undefined}
+                          >
+                            <AlertTriangle className="h-3 w-3" />
+                            Partial — files missing
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {c.last_synced_at
+                          ? `Last synced ${format(new Date(c.last_synced_at), "PPp")} — ${c.last_resource_count ?? 0} resources`
+                          : "Awaiting first sync"}
+                      </div>
+                      {c.last_error && (
+                        <div className={`text-xs truncate ${isPartial ? "text-amber-600 dark:text-amber-400 font-medium" : "text-destructive"}`}>
+                          {c.last_error}
+                        </div>
+                      )}
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                      {c.last_synced_at
-                        ? `Last synced ${format(new Date(c.last_synced_at), "PPp")} — ${c.last_resource_count ?? 0} resources`
-                        : "Awaiting first sync"}
+                    <div className="flex gap-1 shrink-0">
+                      {isPartial && (
+                        <Button
+                          size="sm"
+                          variant="default"
+                          onClick={() => syncMut.mutate({ connectionId: c.id, retryFailedOnly: true })}
+                          disabled={syncMut.isPending || c.status === "syncing"}
+                          title="Re-pull only the files that failed last time"
+                          data-testid={`button-retry-failed-${c.id}`}
+                        >
+                          <RefreshCw className="h-3 w-3 mr-1" />Retry Failed
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => syncMut.mutate({ connectionId: c.id })}
+                        disabled={syncMut.isPending || !c.org_connection_id || c.status === "syncing"}
+                        title={!c.org_connection_id ? "Patient hasn't completed OAuth yet" : "Sync now"}
+                        data-testid={`button-sync-${c.id}`}
+                      >
+                        <RefreshCw className="h-3 w-3 mr-1" />Sync
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => disconnectMut.mutate(c.id)} disabled={disconnectMut.isPending}>
+                        <X className="h-3 w-3" />
+                      </Button>
                     </div>
-                    {c.last_error && <div className="text-xs text-destructive truncate">{c.last_error}</div>}
                   </div>
-                  <div className="flex gap-1 shrink-0">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => syncMut.mutate(c.id)}
-                      disabled={syncMut.isPending || !c.org_connection_id || c.status === "syncing"}
-                      title={!c.org_connection_id ? "Patient hasn't completed OAuth yet" : "Sync now"}
-                    >
-                      <RefreshCw className="h-3 w-3 mr-1" />Sync
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => disconnectMut.mutate(c.id)} disabled={disconnectMut.isPending}>
-                      <X className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

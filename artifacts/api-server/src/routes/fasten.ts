@@ -247,6 +247,28 @@ router.post(
       return;
     }
 
+    // Optional retry-failed-only mode (Task #72) — re-pulls only the file_ids
+    // recorded on the connection's metadata.failed_files from the prior
+    // partial sync. Avoids paying the full bulk-export cost again for data
+    // we've already ingested.
+    const mode = String((req.body as { mode?: string } | undefined)?.mode ?? "").toLowerCase();
+    const retryFailedOnly = mode === "retry-failed";
+
+    if (retryFailedOnly) {
+      const meta = (conn.metadata && typeof conn.metadata === "object")
+        ? (conn.metadata as { failed_files?: unknown[]; last_task_id?: string })
+        : {};
+      const failedCount = Array.isArray(meta.failed_files) ? meta.failed_files.length : 0;
+      if (failedCount === 0 || !meta.last_task_id) {
+        res.status(409).json({
+          error: "no_partial_sync_to_retry",
+          message:
+            "This connection has no recorded partial sync to retry. Run a normal Sync to pull all records.",
+        });
+        return;
+      }
+    }
+
     // Vault files are written under "lead-<id>/" — no need to require an
     // existing cases row. The worker creates the dir on first write.
     const caseId = `lead-${conn.lead_id}`;
@@ -257,6 +279,7 @@ router.post(
       case_id: caseId,
       backend: conn.backend as "connect" | "onprem",
       org_connection_id: conn.org_connection_id,
+      retry_failed_only: retryFailedOnly,
     });
 
     await db
@@ -264,9 +287,12 @@ router.post(
       .set({ status: "syncing", updated_at: new Date(), last_error: null })
       .where(eq(fastenConnectionsTable.id, connectionId));
 
-    await auditLog("fasten_connection", String(connectionId), "sync_enqueued", { job_id: jobId });
+    await auditLog("fasten_connection", String(connectionId), "sync_enqueued", {
+      job_id: jobId,
+      mode: retryFailedOnly ? "retry-failed" : "full",
+    });
 
-    res.json({ ok: true, job_id: jobId });
+    res.json({ ok: true, job_id: jobId, mode: retryFailedOnly ? "retry-failed" : "full" });
   },
 );
 

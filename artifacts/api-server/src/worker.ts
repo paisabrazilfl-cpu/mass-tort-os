@@ -16,7 +16,7 @@ import { extractOcrData, extractOcrDataFromText } from "./lib/ai-ocr";
 import { extractPdfText } from "./lib/pdf-extract";
 import { withErrorFallback, createLoopGuard, DEFAULT_LIMITS } from "./lib/error-fallback";
 import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail, handleSendWorkflowSms } from "./lib/workflow-handlers";
-import { handleFastenRecordsSync } from "./lib/fasten-job";
+import { handleFastenRecordsSync, auditStaleFastenPartials } from "./lib/fasten-job";
 import { ensureSystemUser } from "./lib/case-ownership-backfill";
 
 const POLL_INTERVAL_MS = 2000;
@@ -331,6 +331,12 @@ export async function workerLoop(): Promise<void> {
   const RECLAIM_EVERY_MS = 60_000;
   const STALE_AFTER_MS = 5 * 60_000;
 
+  // Surface Fasten partial syncs that have sat unresolved for >24h. Hourly
+  // tick is plenty — a single audit row per stale partial is the contract,
+  // and dedup is enforced via metadata.partial_audited_at inside the helper.
+  let lastFastenStaleAuditAt = 0;
+  const FASTEN_STALE_AUDIT_EVERY_MS = 60 * 60_000;
+
   while (true) {
     try {
       const now = Date.now();
@@ -340,6 +346,14 @@ export async function workerLoop(): Promise<void> {
           await reclaimStaleProcessingJobs(STALE_AFTER_MS);
         } catch (e) {
           logger.error({ err: e }, "Stale-job reclaim failed");
+        }
+      }
+      if (now - lastFastenStaleAuditAt > FASTEN_STALE_AUDIT_EVERY_MS) {
+        lastFastenStaleAuditAt = now;
+        try {
+          await auditStaleFastenPartials();
+        } catch (e) {
+          logger.error({ err: e }, "Stale Fasten partial audit failed");
         }
       }
     } catch {

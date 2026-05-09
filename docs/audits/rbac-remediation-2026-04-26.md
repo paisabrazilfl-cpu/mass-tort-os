@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **229 checked / 39 public / 190 protected / 0 unprotected.**
+Boot-time count: **230 checked / 39 public / 191 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -685,6 +685,7 @@ Boot-time count: **229 checked / 39 public / 190 protected / 0 unprotected.**
 | document-templates | GET | `/api/document-templates/` | ✓ | ✓ |  |  |  | — | `templates:view` | ✓ |
 | document-templates | POST | `/api/document-templates/` | ✓ | ✓ |  |  |  | — | `templates:manage` | ✓ |
 | document-templates | POST | `/api/document-templates/upload` | ✓ | ✓ |  |  |  | — | `templates:manage` | ✓ |
+| documents | GET | `/api/documents/:id/view` | ✓ | ✓ |  |  |  | — | `documents:view` | ✓ |
 | documents | DELETE | `/api/documents/:id` | ✓ | ✓ |  |  |  | — | `documents:delete` | ✓ |
 | documents | PATCH | `/api/documents/:id` | ✓ | ✓ |  |  |  | — | `documents:update` | ✓ |
 | documents | GET | `/api/documents/` | ✓ | ✓ |  |  |  | — | `documents:view` | ✓ |
