@@ -11,8 +11,107 @@ import {
 } from "@workspace/api-zod";
 import { redactPdf, highlightPdfRegions, getPdfPageCount, RedactionNotImplementedError } from "../lib/pdf-redaction";
 import { Permission, requirePermission, auditAction } from "../lib/rbac";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
 const router = Router();
+
+// Render a placeholder PDF for documents that have no real file backing them yet
+// (e.g. seeded sample rows, or records created from an automation step before
+// the file content has been attached). Keeps the Document Center "View" action
+// honest — the user always gets *something* viewable, with a clear note that
+// no file is attached, instead of a dead link.
+async function renderPlaceholderPdf(doc: {
+  id: number;
+  lead_id: number;
+  document_type: string;
+  file_name: string;
+  signed: boolean;
+  signed_at: Date | null;
+  notes: string | null;
+  created_at: Date;
+}): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([612, 792]); // US Letter
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+  const draw = (text: string, x: number, y: number, opts?: { size?: number; bold?: boolean; color?: ReturnType<typeof rgb> }) => {
+    page.drawText(text, {
+      x,
+      y,
+      size: opts?.size ?? 11,
+      font: opts?.bold ? bold : font,
+      color: opts?.color ?? rgb(0.1, 0.1, 0.1),
+    });
+  };
+
+  draw(doc.file_name, 50, 740, { size: 18, bold: true });
+  draw(`Document Type: ${doc.document_type.replace(/_/g, " ")}`, 50, 710, { size: 12 });
+  draw(`Lead ID: #${doc.lead_id}`, 50, 690);
+  draw(`Status: ${doc.signed ? "Signed" : "Pending"}`, 50, 672);
+  draw(`Created: ${doc.created_at.toISOString()}`, 50, 654);
+  if (doc.signed_at) draw(`Signed: ${doc.signed_at.toISOString()}`, 50, 636);
+
+  page.drawRectangle({
+    x: 50,
+    y: 540,
+    width: 512,
+    height: 70,
+    borderColor: rgb(0.85, 0.6, 0.05),
+    borderWidth: 1,
+    color: rgb(1, 0.97, 0.88),
+  });
+  draw("No file attached", 60, 588, { size: 13, bold: true, color: rgb(0.55, 0.35, 0) });
+  draw("This document record exists in the database but no file has been uploaded yet.", 60, 568, { size: 10, color: rgb(0.3, 0.3, 0.3) });
+  draw("Attach a PDF via the lead's Documents tab or an automation handler to replace this placeholder.", 60, 552, { size: 10, color: rgb(0.3, 0.3, 0.3) });
+
+  if (doc.notes) {
+    draw("Notes", 50, 510, { size: 12, bold: true });
+    const notes = doc.notes.length > 1500 ? doc.notes.slice(0, 1500) + "…" : doc.notes;
+    const wrapped = notes.match(/.{1,90}/g) ?? [];
+    wrapped.slice(0, 25).forEach((line, i) => draw(line, 50, 492 - i * 14, { size: 10 }));
+  }
+
+  draw(`Document #${doc.id} — Mass Tort OS`, 50, 40, { size: 9, color: rgb(0.5, 0.5, 0.5) });
+
+  return pdf.save();
+}
+
+router.get("/:id/view", requirePermission(Permission.DOCUMENTS_VIEW), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) {
+    badRequest(res, "Invalid document id");
+    return;
+  }
+
+  const [doc] = await db.select().from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
+  if (!doc) {
+    notFound(res, "Document not found");
+    return;
+  }
+
+  const url = doc.file_url?.trim();
+  if (url && /^https?:\/\//i.test(url)) {
+    // External file_url — let the browser fetch it directly. We don't proxy
+    // here to avoid SSRF / large-file streaming concerns; the source URL was
+    // already supplied by an authenticated operator at upload time.
+    res.redirect(302, url);
+    return;
+  }
+
+  // No real file → render the placeholder so the operator always gets a
+  // viewable PDF instead of a broken link.
+  try {
+    const pdfBytes = await renderPlaceholderPdf(doc);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${doc.file_name.replace(/[^a-zA-Z0-9._-]/g, "_")}"`);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.send(Buffer.from(pdfBytes));
+  } catch (err) {
+    req.log.error({ err, document_id: id }, "Failed to render document placeholder PDF");
+    serverError(res, "Failed to render document");
+  }
+});
 
 router.get("/", requirePermission(Permission.DOCUMENTS_VIEW), async (req, res) => {
   const parsed = ListDocumentsQueryParams.safeParse(req.query);

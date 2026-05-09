@@ -3,7 +3,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
-import { FileText, Download } from "lucide-react";
+import { FileText, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 
@@ -72,9 +72,15 @@ export default function Documents() {
                     {format(new Date(doc.created_at), "yyyy-MM-dd")}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" asChild>
-                      <a href={doc.file_url || "#"} target="_blank" rel="noopener noreferrer">
-                        <Download className="h-4 w-4" />
+                    <Button variant="ghost" size="sm" asChild data-testid={`button-view-document-${doc.id}`}>
+                      <a
+                        href={`${import.meta.env.BASE_URL}api/documents/${doc.id}/view`.replace(/\/+/g, "/")}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="View document"
+                      >
+                        <Eye className="h-4 w-4 mr-1" />
+                        View
                       </a>
                     </Button>
                   </TableCell>
