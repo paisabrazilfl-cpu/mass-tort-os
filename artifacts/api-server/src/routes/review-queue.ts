@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, reviewQueueTable } from "@workspace/db";
 import { eq, and, sql, desc } from "drizzle-orm";
+import { z } from "zod/v4";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { Permission, requirePermission, auditAction } from "../lib/rbac";
@@ -8,6 +9,67 @@ import { badRequest, notFound } from "../lib/http-errors";
 import { enqueueLeadFollowUpSms } from "../lib/workflow-engine";
 
 const router = Router();
+
+// POST /api/review-queue — operator/automation enqueues an item for human
+// review. Documented in the admin event catalog and used by the day-one
+// n8n workflow `03-ocr-routing.json` to route low-confidence/failed OCR
+// rows to a human. Gated by the same RESOLVE permission that already
+// controls writes to this table.
+const CreateReviewItemSchema = z.object({
+  entity_type: z.string().min(1).max(50),
+  entity_id: z.string().min(1).max(100),
+  conflict_type: z.string().min(1).max(50).default("automation_routed"),
+  severity: z.enum(["low", "medium", "high", "critical"]).default("medium"),
+  failsafe_mode: z.enum(["queue", "block", "warn", "auto"]).default("queue"),
+  source_module: z.string().min(1).max(100).default("automation"),
+  summary: z.string().min(1).optional(),
+  reason: z.string().min(1).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
+  details: z.record(z.string(), z.unknown()).optional(),
+});
+
+router.post(
+  "/",
+  requirePermission(Permission.REVIEW_QUEUE_RESOLVE),
+  auditAction("create_review_item"),
+  async (req, res) => {
+    const parsed = CreateReviewItemSchema.safeParse(req.body);
+    if (!parsed.success) {
+      badRequest(res, "Invalid review-queue payload", parsed.error.issues);
+      return;
+    }
+    const body = parsed.data;
+    // n8n workflow #3 sends `reason` and `context`; the table stores them
+    // as `summary` + `details`. Accept either shape so both legacy callers
+    // and the documented automation contract work.
+    const summary = body.summary ?? body.reason ?? `${body.entity_type}:${body.entity_id} routed for review`;
+    const details = body.details ?? body.context ?? null;
+
+    const [row] = await db
+      .insert(reviewQueueTable)
+      .values({
+        entity_type: body.entity_type,
+        entity_id: body.entity_id,
+        conflict_type: body.conflict_type,
+        severity: body.severity,
+        failsafe_mode: body.failsafe_mode,
+        source_module: body.source_module,
+        summary,
+        details,
+      })
+      .returning();
+
+    await auditLog("review_queue", String(row.id), "created", {
+      entity_type: row.entity_type,
+      entity_id: row.entity_id,
+      conflict_type: row.conflict_type,
+      source_module: row.source_module,
+      created_by: req.user?.email ?? "api_key",
+    });
+
+    res.status(201).json(row);
+  },
+);
 
 router.get("/", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req, res) => {
   const { resolution, conflict_type, severity, entity_type, limit } = req.query as Record<string, string | undefined>;

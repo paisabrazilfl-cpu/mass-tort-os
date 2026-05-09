@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **237 checked / 39 public / 198 protected / 0 unprotected.**
+Boot-time count: **238 checked / 39 public / 199 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -794,6 +794,7 @@ Boot-time count: **237 checked / 39 public / 198 protected / 0 unprotected.**
 | paralegals | POST | `/api/paralegals/` | ✓ | ✓ |  |  |  | — | `paralegal:manage` | ✓ |
 | review-queue | PATCH | `/api/review-queue/:id` | ✓ | ✓ |  |  |  | — | `review_queue:resolve` | ✓ |
 | review-queue | GET | `/api/review-queue/` | ✓ | ✓ |  |  |  | — | `review_queue:view` | ✓ |
+| review-queue | POST | `/api/review-queue/` | ✓ | ✓ |  |  |  | — | `review_queue:resolve` | ✓ |
 | review-queue | GET | `/api/review-queue/stats` | ✓ | ✓ |  |  |  | — | `review_queue:view` | ✓ |
 | security | PATCH | `/api/security/alerts/:id/dismiss` | ✓ | ✓ |  |  |  | — | `security:manage` | ✓ |
 | security | GET | `/api/security/alerts` | ✓ | ✓ |  |  |  | — | `security:manage` | ✓ |
