@@ -64,6 +64,7 @@ import FormsApiPage from "@/pages/forms-api";
 import SelfHealPage from "@/pages/self-heal";
 import CompetitiveIntelPage from "@/pages/competitive-intel";
 import UserManualPage from "@/pages/user-manual";
+import AdsLibrariesPage from "@/pages/ads-libraries";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
 // 401s are handled separately by api-fetch's auth-failure callback.
@@ -146,6 +147,7 @@ function AuthedRoutes() {
           <Route path="/self-heal" component={SelfHealPage} />
           <Route path="/competitive-intel" component={CompetitiveIntelPage} />
           <Route path="/user-manual" component={UserManualPage} />
+          <Route path="/ads-libraries" component={AdsLibrariesPage} />
           <Route path="/automations/:id" component={AutomationEditorPage} />
           <Route component={NotFound} />
         </Switch>
