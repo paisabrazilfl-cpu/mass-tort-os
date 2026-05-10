@@ -1,8 +1,18 @@
+import crypto from "crypto";
 import { db } from "@workspace/db";
 import { firmsTable, usersTable } from "@workspace/db";
-import { eq, isNull } from "drizzle-orm";
-import { sql } from "drizzle-orm";
+import { eq, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger";
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const key: Buffer = await new Promise((resolve, reject) =>
+    crypto.scrypt(password, salt, 64, (err, k) =>
+      err ? reject(err) : resolve(k as Buffer),
+    ),
+  );
+  return `${salt}:${key.toString("hex")}`;
+}
 
 const DEFAULT_FIRM_SLUG = "default";
 const DEFAULT_FIRM_NAME = "Default Firm";
@@ -96,4 +106,69 @@ export async function backfillEmailVerifiedAt(): Promise<{ rows_updated: number 
     logger.info({ rows_updated: rowsUpdated }, "Email verification backfill: marked legacy users verified");
   }
   return { rows_updated: rowsUpdated };
+}
+
+/**
+ * One-time super-admin bootstrap.
+ *
+ * Runs on every startup but is a no-op unless SEED_ADMIN_EMAIL and
+ * SEED_ADMIN_PASSWORD are both set.  When set it upserts a single
+ * super_admin row so operators can gain initial access to a fresh
+ * production database without needing direct DB access.
+ *
+ * Remove (or unset) the env vars after first login.
+ */
+export async function seedSuperAdmin(): Promise<{ skipped: boolean; created: boolean; updated: boolean }> {
+  const email = process.env["SEED_ADMIN_EMAIL"]?.trim();
+  const password = process.env["SEED_ADMIN_PASSWORD"]?.trim();
+
+  if (!email || !password) {
+    return { skipped: true, created: false, updated: false };
+  }
+
+  const firmRows = await db
+    .select({ id: firmsTable.id })
+    .from(firmsTable)
+    .where(eq(firmsTable.slug, DEFAULT_FIRM_SLUG))
+    .limit(1);
+  const firmId = firmRows[0]?.id;
+  if (!firmId) {
+    logger.warn("seedSuperAdmin: default firm not found — skipping (run seedDefaultFirm first)");
+    return { skipped: true, created: false, updated: false };
+  }
+
+  const existing = await db
+    .select({ id: usersTable.id })
+    .from(usersTable)
+    .where(eq(usersTable.email, email))
+    .limit(1);
+
+  const passwordHash = await hashPassword(password);
+  const now = new Date();
+
+  if (existing.length === 0) {
+    await db.insert(usersTable).values({
+      email,
+      name: "Super Admin",
+      role: "super_admin",
+      firm_id: firmId,
+      password_hash: passwordHash,
+      mfa_enabled: false,
+      email_verified_at: now,
+    });
+    logger.info({ email }, "seedSuperAdmin: created super_admin user");
+    return { skipped: false, created: true, updated: false };
+  }
+
+  await db
+    .update(usersTable)
+    .set({
+      password_hash: passwordHash,
+      role: "super_admin",
+      mfa_enabled: false,
+      email_verified_at: sql`COALESCE(email_verified_at, ${now})`,
+    })
+    .where(eq(usersTable.email, email));
+  logger.info({ email }, "seedSuperAdmin: updated existing user to super_admin");
+  return { skipped: false, created: false, updated: true };
 }

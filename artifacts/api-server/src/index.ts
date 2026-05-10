@@ -1,7 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
-import { seedDefaultFirm, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
+import { seedDefaultFirm, seedSuperAdmin, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
 import { workerLoop } from "./worker";
 
 const NODE_ENV = process.env["NODE_ENV"];
@@ -82,6 +82,18 @@ app.listen(port, async (err) => {
     await seedDefaultFirm();
   } catch (e) {
     logger.error({ err: e }, "Default firm seed failed on boot");
+  }
+
+  // Super-admin bootstrap — no-op unless SEED_ADMIN_EMAIL + SEED_ADMIN_PASSWORD are set.
+  // Set those secrets to create/reset the super-admin on a fresh production DB,
+  // then remove them after first login.
+  try {
+    const seedResult = await seedSuperAdmin();
+    if (!seedResult.skipped) {
+      logger.info(seedResult, "Super-admin seed complete");
+    }
+  } catch (e) {
+    logger.error({ err: e }, "Super-admin seed failed on boot");
   }
 
   // Email-verification backfill (Task #56). Marks legacy user rows as
