@@ -24,7 +24,7 @@ NODE_ENV = "production"
 args = ["node", "--enable-source-maps", "artifacts/api-server/dist/server/index.mjs"]
 
 [services.production.run.env]
-PORT = "8080"
+PORT = "8082"
 NODE_ENV = "production"
 
 [services.production.health.startup]
