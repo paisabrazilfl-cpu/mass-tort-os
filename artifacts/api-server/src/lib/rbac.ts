@@ -48,7 +48,7 @@ function rowsOf<T extends Record<string, unknown>>(result: unknown): T[] {
 const ACCESS_TOKEN_EXPIRY = "15m";
 const REFRESH_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
-export type UserRole = "admin" | "attorney" | "paralegal" | "viewer";
+export type UserRole = "super_admin" | "admin" | "attorney" | "paralegal" | "viewer";
 
 export interface AuthUser {
   id: number;
@@ -81,6 +81,7 @@ declare global {
 
 // Higher number = more privilege.
 const ROLE_HIERARCHY: Record<UserRole, number> = {
+  super_admin: 200,
   admin: 100,
   attorney: 75,
   paralegal: 50,
@@ -240,6 +241,7 @@ export type Permission = (typeof Permission)[keyof typeof Permission];
 // inheritance) so new permissions cannot land in admin's bag without an
 // explicit edit to this map.
 export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
+  super_admin: new Set<Permission>(Object.values(Permission)),
   admin: new Set<Permission>(Object.values(Permission)),
   attorney: new Set<Permission>([
     // Leads / lead-import
