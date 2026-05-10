@@ -95,20 +95,8 @@ localPort = 8081
 externalPort = 8081
 
 [[ports]]
-localPort = 8082
-externalPort = 80
-
-[[ports]]
-localPort = 8090
-externalPort = 3002
-
-[[ports]]
 localPort = 24540
-externalPort = 3001
-
-[[ports]]
-localPort = 24541
-externalPort = 3000
+externalPort = 80
 
 [agent]
 expertMode = true
