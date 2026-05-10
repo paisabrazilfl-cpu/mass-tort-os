@@ -574,14 +574,12 @@ async function runWebFormPipeline(
             .where(eq(workflowSettingsTable.scope, "global"))
             .limit(1)
             .then((r) => r[0] ?? null);
-          const fromEmail =
-            (resolved.credentials as Record<string, unknown>).from_email as string | undefined ||
-            globalSettings?.fromAddress ||
-            "noreply@example.com";
-          const fromName =
-            (resolved.credentials as Record<string, unknown>).from_name as string | undefined ||
-            globalSettings?.fromName ||
-            "Mass Tort OS";
+          const fromEmail = resolved.credentials.from_email
+            || globalSettings?.fromAddress
+            || "noreply@example.com";
+          const fromName = resolved.credentials.from_name
+            || globalSettings?.fromName
+            || "Mass Tort OS";
           const html = renderTemplate(cfg.confirmation_body_html, body);
           const subject = renderTemplate(cfg.confirmation_subject, body);
           const result = await adapter.send(resolved.credentials, {

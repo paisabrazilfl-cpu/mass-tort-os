@@ -26,7 +26,7 @@ function parseIntegrationId(res: Response, raw: unknown): number | null {
 
 // Credential field names that we treat as secrets (encrypted at rest).
 // `api_url` and `webhook_url` are NOT secrets — they are stored plaintext.
-const SECRET_FIELDS = ["api_key", "client_id", "client_secret", "account_sid", "access_id", "access_password", "fax_number", "sender_email"] as const;
+const SECRET_FIELDS = ["api_key", "client_id", "client_secret", "account_sid", "access_id", "access_password", "fax_number", "sender_email", "from_email", "from_name"] as const;
 type SecretField = (typeof SECRET_FIELDS)[number];
 
 // AAD scope is the integration row id, not the provider, so two rows that
@@ -51,6 +51,7 @@ function maskCredentials(creds: Record<string, any> | undefined | null): Record<
 export interface DecryptedCredentials {
   api_key?: string; client_id?: string; client_secret?: string; account_sid?: string;
   access_id?: string; access_password?: string; fax_number?: string; sender_email?: string;
+  from_email?: string; from_name?: string;
   api_url?: string | null; webhook_url?: string | null; config?: any;
   _decryption_errors?: SecretField[];
 }
@@ -259,7 +260,7 @@ router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
       const missing = expectedSecretFields.filter(f => !creds[f] || String(creds[f]).length === 0);
       if (missing.length > 0) {
         credentialCheck = "missing_required_secret";
-        decryptionErrors = missing;
+        decryptionErrors = missing as SecretField[];
       }
     }
   }

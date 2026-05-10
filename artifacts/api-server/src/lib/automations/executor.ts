@@ -976,7 +976,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       .where(eq(workflowSettingsTable.scope, "global"))
       .limit(1)
       .then((r) => r[0] ?? null);
-    const fromEmail = (resolved.credentials as Record<string, unknown>).from_email as string | undefined
+    const fromEmail = resolved.credentials.from_email
       || globalSettingsForCal?.fromAddress
       || "noreply@mtos.local";
     const html = `<p>${bodyText.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] ?? c))}</p>` +

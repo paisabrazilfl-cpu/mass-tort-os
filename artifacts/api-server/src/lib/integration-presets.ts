@@ -5,7 +5,7 @@ export interface IntegrationPreset {
   category: string;
   description: string;
   docs_url: string;
-  fields: Array<"api_key" | "api_url" | "webhook_url" | "account_sid" | "client_id" | "client_secret" | "access_id" | "access_password" | "fax_number" | "sender_email">;
+  fields: Array<"api_key" | "api_url" | "webhook_url" | "account_sid" | "client_id" | "client_secret" | "access_id" | "access_password" | "fax_number" | "sender_email" | "from_email" | "from_name">;
   score: number;
   recommended?: boolean;
   pricing: "free" | "freemium" | "usage" | "subscription" | "enterprise";
@@ -51,7 +51,7 @@ export const PRESET_INTEGRATIONS: IntegrationPreset[] = [
   { provider: "sinch", name: "Sinch", type: "sms", category: "SMS & Telephony", description: "Enterprise-scale CPaaS, owns Phaxio for fax.", docs_url: "https://developers.sinch.com", fields: ["api_key", "client_secret"], score: 7, pricing: "enterprise", notes: "api_key = Sinch service plan key. client_secret = the webhook signing secret used to verify inbound delivery reports." },
 
   // ──────────────────────────── EMAIL ────────────────────────────
-  { provider: "sendgrid", name: "SendGrid", type: "email", category: "Email", description: "Twilio-owned email API — high deliverability, marketing + transactional.", docs_url: "https://docs.sendgrid.com", fields: ["api_key"], score: 9, recommended: true, pricing: "freemium", notes: "Default for transactional + drip campaigns." },
+  { provider: "sendgrid", name: "SendGrid", type: "email", category: "Email", description: "Twilio-owned email API — high deliverability, marketing + transactional.", docs_url: "https://docs.sendgrid.com", fields: ["api_key", "from_email", "from_name"], score: 9, recommended: true, pricing: "freemium", notes: "Default for transactional + drip campaigns. from_email must match a verified SendGrid Sender Identity." },
   { provider: "postmark", name: "Postmark", type: "email", category: "Email", description: "Best-in-class transactional deliverability, fast support.", docs_url: "https://postmarkapp.com/developer", fields: ["api_key"], score: 9, recommended: true, pricing: "usage", notes: "Use specifically for transactional (signed retainer confirmation, MFA). Inbox rate is unmatched." },
   { provider: "resend", name: "Resend", type: "email", category: "Email", description: "Modern email API for developers, beautiful React Email components.", docs_url: "https://resend.com/docs", fields: ["api_key"], score: 8, pricing: "freemium", notes: "Best DX; great for templated client emails." },
   { provider: "mailgun", name: "Mailgun", type: "email", category: "Email", description: "Mature transactional email with strong analytics and EU regions.", docs_url: "https://documentation.mailgun.com", fields: ["api_key"], score: 8, pricing: "usage" },

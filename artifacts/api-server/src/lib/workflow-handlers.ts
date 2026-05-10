@@ -649,10 +649,10 @@ export async function handleSendWorkflowEmail(payload: SendWorkflowEmailPayload)
     .limit(1)
     .then((r) => r[0] ?? null);
 
-  const fromEmail = (resolved.credentials as Record<string, unknown>).from_email as string | undefined
+  const fromEmail = resolved.credentials.from_email
     || globalSettings?.fromAddress
     || "noreply@example.com";
-  const fromName = (resolved.credentials as Record<string, unknown>).from_name as string | undefined
+  const fromName = resolved.credentials.from_name
     || globalSettings?.fromName
     || "MTOS";
 
