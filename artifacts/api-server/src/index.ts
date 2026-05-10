@@ -41,6 +41,53 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+
+// ─── Schema repair migration (idempotent ALTER TABLE IF NOT EXISTS) ──────────
+// Runs at boot to add columns that were added to Drizzle schema after the
+// table was first created via drizzle-kit push. Safe to run every boot.
+async function runSchemaRepair(): Promise<void> {
+  const repairs: string[] = [
+    // automation_workflows — columns added post-initial-creation
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS trigger_config jsonb NOT NULL DEFAULT '{}'`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS trigger_type varchar(40) NOT NULL DEFAULT 'manual'`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS description text`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS created_by_user_id integer`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS firm_id integer`,
+    // automation_runs — make sure all columns exist
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS trigger_source varchar(40) NOT NULL DEFAULT 'manual'`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS step_log jsonb NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS output jsonb`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS firm_id integer`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS started_by_user_id integer`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS completed_at timestamp`,
+    // api_keys — make sure revoked_at exists (not the old boolean revoked)
+    `ALTER TABLE api_keys DROP COLUMN IF EXISTS revoked`,
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS revoked_at timestamp`,
+    // api_key_audit — ensure table exists
+    `CREATE TABLE IF NOT EXISTS api_key_audit (
+       id serial PRIMARY KEY,
+       api_key_id integer NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+       route text NOT NULL,
+       method text NOT NULL,
+       status_code integer NOT NULL,
+       ip_address text,
+       user_agent text,
+       occurred_at timestamp NOT NULL DEFAULT now()
+    )`,
+  ];
+
+  for (const stmt of repairs) {
+    try {
+      await db.execute(sql.raw(stmt));
+    } catch (err: any) {
+      // Non-fatal: log and continue — some repairs may fail if constraints clash
+      logger.warn({ err: err?.message, stmt: stmt.slice(0, 80) }, "Schema repair stmt failed (non-fatal)");
+    }
+  }
+  logger.info("Schema repair complete");
+}
+
 app.listen(port, async (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
@@ -62,6 +109,10 @@ app.listen(port, async (err) => {
     },
     "MTOS API server listening",
   );
+
+
+  // Run schema repair migrations (idempotent — safe every boot)
+  await runSchemaRepair().catch((err) => logger.error({ err }, "Schema repair failed"));
 
   // Seed/refresh form configurations from TORT_REGISTRY on boot.
   // Safe: inserts missing rows and refreshes only rows where updated_by IS NULL
