@@ -21,3 +21,12 @@ run = "pnpm --filter @workspace/mtos-crm run dev"
 PORT = "24540"
 BASE_PATH = "/"
 
+[services.production]
+serve = "static"
+publicDir = "artifacts/mtos-crm/dist/public"
+
+[services.production.build]
+args = ["sh", "-c", "pnpm --filter @workspace/api-spec run codegen && pnpm --filter @workspace/mtos-crm run build"]
+
+[services.production.build.env]
+NODE_ENV = "production"
