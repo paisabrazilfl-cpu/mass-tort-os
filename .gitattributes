@@ -1,1 +1,2 @@
 mass-tort-os.tar.gz filter=lfs diff=lfs merge=lfs -text
+mass-tort-os-full.tar.gz filter=lfs diff=lfs merge=lfs -text

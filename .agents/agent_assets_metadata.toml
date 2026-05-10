@@ -66,3 +66,9 @@ id = "g68ho2T_T_-UFx8pswbxJ"
 uri = "file://mass-tort-os.tar.gz"
 type = "unspecified"
 title = "mass-tort-os.tar.gz — Full MTOS Source Code"
+
+[[outputs]]
+id = "z6SV5_4xBXSTZgrr-_3jw"
+uri = "file://mass-tort-os-full.tar.gz"
+type = "unspecified"
+title = "mass-tort-os-full.tar.gz — Complete MTOS (source + node_modules + dist)"
