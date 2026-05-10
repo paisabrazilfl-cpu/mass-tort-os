@@ -11,7 +11,16 @@ import {
 } from "@workspace/api-zod";
 import { redactPdf, highlightPdfRegions, getPdfPageCount, RedactionNotImplementedError } from "../lib/pdf-redaction";
 import { Permission, requirePermission, auditAction } from "../lib/rbac";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+// pdf-lib is heavy (~830 KB with transitives) and externalized in the
+// production bundle. Load on demand inside renderPlaceholderPdf so importing
+// this route file at boot does not crash when pdf-lib is absent from the
+// runtime node_modules (Replit Autoscale ships only dist/, not node_modules).
+type PdfLib = typeof import("pdf-lib");
+let pdfLibModule: PdfLib | null = null;
+async function loadPdfLib(): Promise<PdfLib> {
+  if (!pdfLibModule) pdfLibModule = await import("pdf-lib");
+  return pdfLibModule;
+}
 
 const router = Router();
 
@@ -30,6 +39,7 @@ async function renderPlaceholderPdf(doc: {
   notes: string | null;
   created_at: Date;
 }): Promise<Uint8Array> {
+  const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([612, 792]); // US Letter
   const font = await pdf.embedFont(StandardFonts.Helvetica);
