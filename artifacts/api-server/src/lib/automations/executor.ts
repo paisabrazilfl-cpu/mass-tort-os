@@ -20,6 +20,7 @@ import {
   paralegalsTable,
   documentTemplatesTable,
   integrationsTable,
+  workflowSettingsTable,
 } from "@workspace/db";
 import { eq, and, sql, asc } from "drizzle-orm";
 import path from "node:path";
@@ -375,11 +376,18 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const creds = await getIntegrationCredentials("sendgrid");
     if (!creds) throw new Error("SendGrid integration is not configured.");
     const adapter = getEmailAdapter("sendgrid")!;
+    const globalSettingsForEmail = await db
+      .select({ fromAddress: workflowSettingsTable.default_email_from_address })
+      .from(workflowSettingsTable)
+      .where(eq(workflowSettingsTable.scope, "global"))
+      .limit(1)
+      .then((r) => r[0] ?? null);
     const fromEmail = fromOverride
       || (typeof (creds as any).from_email === "string" ? (creds as any).from_email : "")
       || process.env["EMAIL_FROM_ADDRESS"]
+      || globalSettingsForEmail?.fromAddress
       || "";
-    if (!fromEmail) throw new Error("SendGrid integration has no from_email configured.");
+    if (!fromEmail) throw new Error("SendGrid integration has no from_email configured. Set one in Workflow Settings → Default From Address.");
     const result = await adapter.send(creds, { to, subject, html, fromEmail });
     if (!result.ok) throw new Error(`SendGrid send failed: ${result.code}: ${result.message}`);
     return { ok: true, messageId: result.externalMessageId };
@@ -962,8 +970,15 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     if (!adapter) {
       return { ok: false, code: "ADAPTER_NOT_FOUND", error: `No email adapter for ${resolved.provider}.` };
     }
-    const fromCfg = (resolved.credentials.config && typeof resolved.credentials.config === "object" ? resolved.credentials.config : {}) as Record<string, unknown>;
-    const fromEmail = (typeof fromCfg.from_email === "string" ? fromCfg.from_email : "") || "noreply@mtos.local";
+    const globalSettingsForCal = await db
+      .select({ fromAddress: workflowSettingsTable.default_email_from_address })
+      .from(workflowSettingsTable)
+      .where(eq(workflowSettingsTable.scope, "global"))
+      .limit(1)
+      .then((r) => r[0] ?? null);
+    const fromEmail = (resolved.credentials as Record<string, unknown>).from_email as string | undefined
+      || globalSettingsForCal?.fromAddress
+      || "noreply@mtos.local";
     const html = `<p>${bodyText.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] ?? c))}</p>` +
       `<pre style="font-family:monospace;font-size:11px;background:#f6f6f6;padding:8px;border-radius:4px">${ics}</pre>`;
     const out = await adapter.send(resolved.credentials, {

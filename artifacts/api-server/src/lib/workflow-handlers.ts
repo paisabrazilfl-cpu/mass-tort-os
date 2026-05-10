@@ -8,7 +8,7 @@
  *  - Persist a row in document_envelopes / fax_results so admin can audit
  *  - Use structured error returns from adapters; throw with a clear message on terminal errors
  */
-import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable } from "@workspace/db";
+import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable, workflowSettingsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
@@ -642,9 +642,18 @@ export async function handleSendWorkflowEmail(payload: SendWorkflowEmailPayload)
     throw new Error(`No email adapter wired for provider "${resolved.provider}".`);
   }
 
+  const globalSettings = await db
+    .select({ fromAddress: workflowSettingsTable.default_email_from_address, fromName: workflowSettingsTable.default_email_from_name })
+    .from(workflowSettingsTable)
+    .where(eq(workflowSettingsTable.scope, "global"))
+    .limit(1)
+    .then((r) => r[0] ?? null);
+
   const fromEmail = (resolved.credentials as Record<string, unknown>).from_email as string | undefined
+    || globalSettings?.fromAddress
     || "noreply@example.com";
   const fromName = (resolved.credentials as Record<string, unknown>).from_name as string | undefined
+    || globalSettings?.fromName
     || "MTOS";
 
   let outcome;

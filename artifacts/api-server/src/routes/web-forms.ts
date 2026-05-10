@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
-import { db, formConfigurationsTable, leadsTable } from "@workspace/db";
+import { db, formConfigurationsTable, leadsTable, workflowSettingsTable } from "@workspace/db";
 import type { WebFormConfig, WebFormField, EligibilityRule } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { getFormConfig } from "../lib/form-config-service";
@@ -568,11 +568,19 @@ async function runWebFormPipeline(
             },
           );
         } else {
+          const globalSettings = await db
+            .select({ fromAddress: workflowSettingsTable.default_email_from_address, fromName: workflowSettingsTable.default_email_from_name })
+            .from(workflowSettingsTable)
+            .where(eq(workflowSettingsTable.scope, "global"))
+            .limit(1)
+            .then((r) => r[0] ?? null);
           const fromEmail =
             (resolved.credentials as Record<string, unknown>).from_email as string | undefined ||
+            globalSettings?.fromAddress ||
             "noreply@example.com";
           const fromName =
             (resolved.credentials as Record<string, unknown>).from_name as string | undefined ||
+            globalSettings?.fromName ||
             "Mass Tort OS";
           const html = renderTemplate(cfg.confirmation_body_html, body);
           const subject = renderTemplate(cfg.confirmation_subject, body);
