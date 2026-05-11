@@ -60,10 +60,6 @@ markPublic(healthRouter, "health");
 markPublic(formsPublicRouter, "forms-public");
 markPublic(webFormsRouter, "web-forms");
 markPublic(webhooksRouter, "webhooks");
-// Automation webhook triggers: PUBLIC — external providers call this without JWT
-// Security is via HMAC-SHA256 slug+secret on each individual workflow
-import automationsWebhookRouter from "./automations-webhook";
-markPublic(automationsWebhookRouter, "automations-webhook");
 // Vapi tool callbacks: PUBLIC because Vapi authenticates with a static
 // bearer token (the assistant's tool secret), not a session JWT. Each
 // handler verifies the bearer at request time against vault credentials.
@@ -127,7 +123,6 @@ router.use("/web-forms", webFormsRouter);
 // Provider webhooks must be PUBLIC (callbacks have no Bearer token).
 // Each handler verifies provider signatures internally and always returns 200.
 router.use("/webhooks", webhooksRouter);
-router.use("/automations", automationsWebhookRouter); // public webhook sub-routes only
 // Vapi tool callbacks live at /vapi-tools (top-level so the dump-route-
 // matrix mount-regex parser, which only captures the first path segment,
 // reports the correct mount path). They are public — bearer-gated per
