@@ -191,18 +191,27 @@ router.post("/", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, r
   const userId = (req as any).user?.id as number | undefined;
   const firmId: number | null = (req as any).user?.firm_id ?? (req as any).firmId ?? null;
   try {
-    const [row] = await db.insert(automationWorkflowsTable).values({
-      name: parsed.data.name,
-      description: parsed.data.description ?? null,
-      graph: parsed.data.graph,
-      enabled: parsed.data.enabled ?? false,
-      trigger_type: parsed.data.trigger_type ?? "manual",
-      trigger_config: parsed.data.trigger_config ?? {},
-      tags: parsed.data.tags ?? [],
-      firm_id: firmId,
-      created_by_user_id: userId ?? null,
-    } as any).returning();
-    res.status(201).json(row);
+    // Cast jsonb fields explicitly to avoid Drizzle serialization issues
+    const graphJson = JSON.stringify(parsed.data.graph ?? { nodes: [], edges: [] });
+    const configJson = JSON.stringify(parsed.data.trigger_config ?? {});
+    const tagsJson = JSON.stringify(parsed.data.tags ?? []);
+    const [row] = await db.execute(sql`
+      INSERT INTO automation_workflows
+        (name, description, graph, enabled, trigger_type, trigger_config, tags, firm_id, created_by_user_id)
+      VALUES
+        (${parsed.data.name},
+         ${parsed.data.description ?? null},
+         ${graphJson}::jsonb,
+         ${parsed.data.enabled ?? false},
+         ${parsed.data.trigger_type ?? "manual"},
+         ${configJson}::jsonb,
+         ${tagsJson}::jsonb,
+         ${firmId},
+         ${userId ?? null})
+      RETURNING *
+    `) as any;
+    const rowData = row?.rows?.[0] ?? row?.[0] ?? row;
+    res.status(201).json(rowData);
   } catch (err: any) {
     logger.error({ err: err?.message, firmId, userId }, "automation POST insert failed");
     res.status(500).json({ status: "error", code: "insert_failed", message: err?.message ?? "Insert failed" });
