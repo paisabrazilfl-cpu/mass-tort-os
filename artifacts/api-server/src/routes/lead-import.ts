@@ -180,13 +180,18 @@ function mapRowToLead(row: Record<string, string>, columnMapping: Record<string,
   return lead;
 }
 
-async function checkDuplicate(lead: Record<string, any>): Promise<{ isDuplicate: boolean; matchId?: number; reason?: string }> {
+// Dedup is scoped to the caller's firm: email/phone uniqueness is per-firm,
+// not global — two different firms may legitimately hold the same claimant.
+async function checkDuplicate(
+  lead: Record<string, any>,
+  firmId: number,
+): Promise<{ isDuplicate: boolean; matchId?: number; reason?: string }> {
   try {
     if (lead.email) {
       const emailMatches = await db
         .select({ id: leadsTable.id, name: leadsTable.name, email: leadsTable.email })
         .from(leadsTable)
-        .where(ilike(leadsTable.email, lead.email.trim()))
+        .where(and(ilike(leadsTable.email, lead.email.trim()), eq(leadsTable.firm_id, firmId)))
         .limit(1);
 
       if (emailMatches.length > 0) {
@@ -205,9 +210,11 @@ async function checkDuplicate(lead: Record<string, any>): Promise<{ isDuplicate:
     }
 
     if (incomingPhones.length > 0) {
+      // Scope phone dedup to the caller's firm — no cross-tenant comparison.
       const existingLeads = await db
         .select({ id: leadsTable.id, name: leadsTable.name, phone: leadsTable.phone, phone_primary: leadsTable.phone_primary })
         .from(leadsTable)
+        .where(eq(leadsTable.firm_id, firmId))
         .limit(5000);
 
       for (const existing of existingLeads) {
@@ -290,7 +297,7 @@ router.post("/execute", requirePermission(Permission.LEAD_IMPORT_EXECUTE), async
     }
 
     const mapping = column_mapping || autoMapColumns(headers);
-    const user = (req as any).user;
+    const user = req.user!;
 
     const [batch] = await db
       .insert(importBatchesTable)
@@ -299,14 +306,14 @@ router.post("/execute", requirePermission(Permission.LEAD_IMPORT_EXECUTE), async
         status: "processing",
         total_rows: rows.length,
         column_mapping: mapping,
-        created_by: user?.username || "system",
+        created_by: user.email,
       })
       .returning();
 
     await auditLog("import_batch", String(batch.id), "import_batch_started", {
       filename,
       total_rows: rows.length,
-      user_email: user?.email,
+      user_email: user.email,
     });
 
     res.status(202).json({
@@ -316,7 +323,7 @@ router.post("/execute", requirePermission(Permission.LEAD_IMPORT_EXECUTE), async
       message: "Import started. Each lead will be individually validated, deduped, and conflict-checked.",
     });
 
-    processImportBatch(batch.id, rows, mapping, req).catch(err => {
+    processImportBatch(batch.id, rows, mapping, user.firm_id).catch(err => {
       logger.error({ err, batch_id: batch.id }, "Import batch processing failed");
     });
   } catch (err) {
@@ -329,7 +336,7 @@ async function processImportBatch(
   batchId: number,
   rows: Record<string, string>[],
   columnMapping: Record<string, string>,
-  req: any
+  firmId: number,
 ) {
   let successCount = 0;
   let duplicateCount = 0;
@@ -354,7 +361,7 @@ async function processImportBatch(
         continue;
       }
 
-      const dedupResult = await checkDuplicate(leadData);
+      const dedupResult = await checkDuplicate(leadData, firmId);
       if (dedupResult.isDuplicate) {
         await db.insert(importRowsTable).values({
           batch_id: batchId,
@@ -398,6 +405,7 @@ async function processImportBatch(
       const { _import_warnings: importWarnings, ...leadColumns } = leadData;
       const insertData: Record<string, any> = {
         ...leadColumns,
+        firm_id: firmId,
         status: conflictResult.has_conflict ? "review_required" : "new",
         source: leadColumns.source || "csv_import",
         diagnosis_confirmed: leadColumns.diagnosis_confirmed || false,

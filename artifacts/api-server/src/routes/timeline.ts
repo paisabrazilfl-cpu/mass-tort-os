@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, leadsTable, faxResultsTable, documentsTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and } from "drizzle-orm";
 import { decryptLeadFields } from "../lib/encryption";
 import { Permission, requirePermission } from "../lib/rbac";
 
@@ -10,7 +10,9 @@ router.get("/lead/:id", requirePermission(Permission.TIMELINE_VIEW), async (req,
   const leadId = parseInt(String(req.params.id), 10);
   if (isNaN(leadId)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
 
-  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+  const firmId = req.user!.firm_id;
+  const [lead] = await db.select().from(leadsTable)
+    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
 
   // Task #8: bind AAD to lead.id so a swapped ciphertext from another row

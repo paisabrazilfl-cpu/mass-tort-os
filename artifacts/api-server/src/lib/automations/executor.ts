@@ -1227,6 +1227,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       tortType,
       email,
       phone,
+      firmId: s.ctx.firmId,
     });
     if (existing) {
       return { lead_id: existing.leadId, deduped: true, matched_by: existing.matchedBy };

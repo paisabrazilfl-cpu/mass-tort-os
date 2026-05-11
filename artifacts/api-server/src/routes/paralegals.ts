@@ -61,6 +61,12 @@ router.get("/", requirePermission(Permission.PARALEGAL_VIEW), async (req, res) =
     ? sql`count(*) filter (where ${leadsTable.status} not in ('signed','rejected') and ${leadsTable.id} is not null) asc, ${paralegalsTable.id} asc`
     : sql`count(*) filter (where ${leadsTable.status} = 'signed') desc`;
 
+  // Scope lead counts to the caller's firm so load figures represent their
+  // own firm's work — a paralegal shared across firms would otherwise look
+  // artificially busier. paralegalsTable has no firm_id, so we apply the
+  // firm filter on the LEFT JOIN condition only (rows without any matching
+  // leads are still returned, just with zero counts).
+  const firmId = req.user!.firm_id;
   const rows = await db
     .select({
       id: paralegalsTable.id,
@@ -76,7 +82,13 @@ router.get("/", requirePermission(Permission.PARALEGAL_VIEW), async (req, res) =
       active_cases: sql<number>`count(*) filter (where ${leadsTable.status} not in ('signed','rejected') and ${leadsTable.id} is not null)::int`,
     })
     .from(paralegalsTable)
-    .leftJoin(leadsTable, eq(paralegalsTable.id, leadsTable.assigned_to))
+    .leftJoin(
+      leadsTable,
+      and(
+        eq(paralegalsTable.id, leadsTable.assigned_to),
+        eq(leadsTable.firm_id, firmId),
+      ),
+    )
     .where(and(tortPredicate, statePredicate))
     .groupBy(
       paralegalsTable.id,
@@ -140,10 +152,11 @@ router.get("/:id", requirePermission(Permission.PARALEGAL_VIEW), auditAction("vi
   const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
   if (!p) { res.status(404).json({ status: "error", code: "not_found", message: "Paralegal not found" }); return; }
 
+  const firmId = req.user!.firm_id;
   const leads = await db
     .select()
     .from(leadsTable)
-    .where(eq(leadsTable.assigned_to, id))
+    .where(and(eq(leadsTable.assigned_to, id), eq(leadsTable.firm_id, firmId)))
     .orderBy(desc(leadsTable.updated_at));
 
   const signedCount = leads.filter(l => l.status === "signed").length;
@@ -178,13 +191,13 @@ router.delete("/:id", requirePermission(Permission.PARALEGAL_MANAGE), auditActio
     res.status(404).json({ status: "error", code: "not_found", message: "Paralegal not found" });
     return;
   }
-  // Null out leads.assigned_to so we never leave orphaned references,
-  // then delete the paralegal. Drizzle returns the updated rows so we can
-  // report the count to the caller without a separate SELECT.
+  // Null out leads.assigned_to within the caller's firm only — we must not
+  // touch other firms' lead assignments even if the paralegal row is shared.
+  const firmId = req.user!.firm_id;
   const unassignedLeads = await db
     .update(leadsTable)
     .set({ assigned_to: null })
-    .where(eq(leadsTable.assigned_to, id))
+    .where(and(eq(leadsTable.assigned_to, id), eq(leadsTable.firm_id, firmId)))
     .returning({ id: leadsTable.id });
   const leadsUnassigned = unassignedLeads.length;
   await db.delete(paralegalsTable).where(eq(paralegalsTable.id, id));
@@ -205,13 +218,14 @@ router.get("/:id/performance", requirePermission(Permission.PARALEGAL_VIEW), aud
   const [p] = await db.select().from(paralegalsTable).where(eq(paralegalsTable.id, id));
   if (!p) { res.status(404).json({ status: "error", code: "not_found", message: "Paralegal not found" }); return; }
 
+  const firmId = req.user!.firm_id;
   const leads = await db
     .select({
       status: leadsTable.status,
       count: sql<number>`count(*)::int`,
     })
     .from(leadsTable)
-    .where(eq(leadsTable.assigned_to, id))
+    .where(and(eq(leadsTable.assigned_to, id), eq(leadsTable.firm_id, firmId)))
     .groupBy(leadsTable.status);
 
   const totalAssigned = leads.reduce((sum, l) => sum + l.count, 0);

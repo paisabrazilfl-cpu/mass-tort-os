@@ -56,6 +56,12 @@ export type DedupInput = {
    * not supported.
    */
   tortType: string;
+  /**
+   * When provided, dedup is scoped to this firm — only leads belonging to
+   * the same firm are considered. Without it the search is global (preserved
+   * for public intake surfaces that cannot resolve a firm from the request).
+   */
+  firmId?: number | null;
 };
 
 const PHONE_SCAN_LIMIT = 1000;
@@ -91,6 +97,8 @@ export async function findExistingLeadForIntake(
   const tortType = (input.tortType ?? "").trim();
   if (!tortType) return null;
 
+  const firmPred = input.firmId != null ? eq(leadsTable.firm_id, input.firmId) : undefined;
+
   // ---- Path 0: canonical lookup_hash short-circuit (Task #15) -------------
   // When the submitter provides BOTH email and phone, we can skip the entire
   // O(N)-decrypt phone scan loop with a single indexed equality query against
@@ -105,7 +113,7 @@ export async function findExistingLeadForIntake(
       const fastRows = await db
         .select({ id: leadsTable.id })
         .from(leadsTable)
-        .where(eq(leadsTable.lookup_hash, fastHash))
+        .where(and(eq(leadsTable.lookup_hash, fastHash), ...(firmPred ? [firmPred] : [])))
         .limit(1);
       if (fastRows.length > 0 && fastRows[0]) {
         return { leadId: fastRows[0].id, matchedBy: "email" };
@@ -131,6 +139,7 @@ export async function findExistingLeadForIntake(
             // email is treated as a literal value, not a SQL pattern.
             sql`lower(${leadsTable.email}) = ${email.toLowerCase()}`,
             eq(leadsTable.tort_type, tortType),
+            ...(firmPred ? [firmPred] : []),
           ),
         )
         .limit(1);
@@ -164,6 +173,7 @@ export async function findExistingLeadForIntake(
             // writes `phone`. Filtering on `phone` alone would miss
             // every phone_primary-only row and silently degrade dedup.
             or(isNotNull(leadsTable.phone), isNotNull(leadsTable.phone_primary)),
+            ...(firmPred ? [firmPred] : []),
           ),
         )
         .limit(PHONE_SCAN_LIMIT);

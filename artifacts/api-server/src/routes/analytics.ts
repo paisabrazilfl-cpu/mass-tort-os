@@ -179,7 +179,9 @@ router.get("/predictive/lead/:id", requirePermission(Permission.ANALYTICS_PREDIC
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
   try {
-    const score = await scoreLeadPredictive(id);
+    // Pass firmId to enforce ownership — scoreLeadPredictive will 404 if the
+    // lead belongs to a different firm, preventing cross-tenant IDOR.
+    const score = await scoreLeadPredictive(id, req.user!.firm_id);
     res.json(score);
   } catch (err: any) {
     notFound(res, "Lead not found or scoring failed");
@@ -188,17 +190,17 @@ router.get("/predictive/lead/:id", requirePermission(Permission.ANALYTICS_PREDIC
 
 router.get("/predictive/batch", requirePermission(Permission.ANALYTICS_VIEW), async (req, res) => {
   const limit = parseInt(req.query.limit as string) || 50;
-  const predictions = await getBatchPredictions(limit);
+  const predictions = await getBatchPredictions(limit, req.user!.firm_id);
   res.json(predictions);
 });
 
-router.get("/predictive/by-tort", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
-  const predictions = await getTortPredictions();
+router.get("/predictive/by-tort", requirePermission(Permission.ANALYTICS_VIEW), async (req, res) => {
+  const predictions = await getTortPredictions(req.user!.firm_id);
   res.json(predictions);
 });
 
-router.get("/predictive/model", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
-  const stats = await getModelStats();
+router.get("/predictive/model", requirePermission(Permission.ANALYTICS_VIEW), async (req, res) => {
+  const stats = await getModelStats(req.user!.firm_id);
   res.json(stats);
 });
 

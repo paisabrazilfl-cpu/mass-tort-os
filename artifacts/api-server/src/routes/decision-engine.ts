@@ -27,9 +27,9 @@ const router = Router();
 // policy auditable in this file rather than buried in a shared middleware.
 router.use(authMiddleware);
 
-router.get("/portfolio", requirePermission(Permission.DECISION_ENGINE_VIEW), async (_req, res) => {
+router.get("/portfolio", requirePermission(Permission.DECISION_ENGINE_VIEW), async (req, res) => {
   try {
-    const summary = await buildPortfolioSummary();
+    const summary = await buildPortfolioSummary(req.user!.firm_id);
     res.json(summary);
   } catch (e) {
     logger.error({ err: e }, "portfolio build failed");
@@ -76,8 +76,8 @@ router.post("/leads/:id/recompute", requirePermission(Permission.DECISION_ENGINE
   res.json(result);
 });
 
-router.post("/recompute-all", requirePermission(Permission.DECISION_ENGINE_MANAGE), async (_req, res) => {
-  const result = await recomputeAllScores();
+router.post("/recompute-all", requirePermission(Permission.DECISION_ENGINE_MANAGE), async (req, res) => {
+  const result = await recomputeAllScores(req.user!.firm_id);
   res.json(result);
 });
 
