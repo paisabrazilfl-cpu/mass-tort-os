@@ -1,12 +1,10 @@
-import { Router, type IRouter } from "express";
-import { HealthCheckResponse } from "@workspace/api-zod";
+import { Router, type Request, type Response, type IRouter } from "express";
 
 const router: IRouter = Router();
-const BUILD_VERSION = "v3-20260511-autofix";
+const BUILD_VERSION = "v20260511-fixes";
 
-function healthHandler(_req: import("express").Request, res: import("express").Response): void {
-  const data = HealthCheckResponse.parse({ status: "ok" });
-  res.json({ ...data, version: BUILD_VERSION, ts: Date.now() });
+function healthHandler(_req: Request, res: Response): void {
+  res.json({ status: "ok", version: BUILD_VERSION });
 }
 
 router.get("/healthz", healthHandler);
