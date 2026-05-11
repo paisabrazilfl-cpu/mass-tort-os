@@ -117,6 +117,44 @@ router.get("/node-catalog", requirePermission(Permission.AUTOMATIONS_VIEW), (_re
 });
 
 
+// ── ONE-SHOT MIGRATION: create missing tables ──────────────────────────────
+router.post("/migrate-now", requirePermission(Permission.AUTOMATIONS_MANAGE), async (_req, res) => {
+  const results: { stmt: string; ok: boolean; err?: string }[] = [];
+  const stmts = [
+    `CREATE TABLE IF NOT EXISTS competitive_intel_advertisers (
+       id serial PRIMARY KEY, firm_id integer NOT NULL,
+       advertiser_id text NOT NULL, label text NOT NULL, notes text,
+       added_by_user_id integer NOT NULL, last_fetched_at timestamp,
+       last_ad_count integer, created_at timestamp NOT NULL DEFAULT now()
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ci_advertisers_firm_adv ON competitive_intel_advertisers(firm_id, advertiser_id)`,
+    `CREATE TABLE IF NOT EXISTS competitive_intel_snapshots (
+       id serial PRIMARY KEY, advertiser_id integer NOT NULL,
+       firm_id integer NOT NULL, ads jsonb NOT NULL DEFAULT '[]',
+       ad_count integer NOT NULL DEFAULT 0, fetched_at timestamp NOT NULL DEFAULT now()
+     )`,
+    `CREATE TABLE IF NOT EXISTS self_heal_sessions (
+       id serial PRIMARY KEY, firm_id integer, prompt text NOT NULL,
+       status varchar(30) NOT NULL DEFAULT 'pending', plan text, pr_url text,
+       created_by_user_id integer, created_at timestamp NOT NULL DEFAULT now(),
+       updated_at timestamp NOT NULL DEFAULT now()
+     )`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS trigger_source varchar(40) NOT NULL DEFAULT 'manual'`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS input jsonb NOT NULL DEFAULT '{}'`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS output jsonb`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS step_log jsonb NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS error text`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS firm_id integer`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS started_by_user_id integer`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS completed_at timestamp`,
+  ];
+  for (const stmt of stmts) {
+    try { await pool.query(stmt); results.push({ stmt: stmt.slice(0, 60), ok: true }); }
+    catch (e: any) { results.push({ stmt: stmt.slice(0, 60), ok: false, err: e?.message?.slice(0, 80) }); }
+  }
+  res.json({ migrated: true, results });
+});
+
 // ── DEBUG: raw table dump (admin only) ──────────────────────────────────
 router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), async (_req, res) => {
   try {
