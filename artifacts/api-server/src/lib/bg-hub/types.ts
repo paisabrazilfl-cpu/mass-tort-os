@@ -53,6 +53,24 @@ export interface BackgroundLaneResult {
   checked_at: string;
   raw?: unknown;
   error?: string;
+  /**
+   * Optional smart-link(s) the operator can click to run the lookup
+   * manually when no automated adapter exists for this jurisdiction /
+   * source. Each entry is a prefilled URL pointing at the canonical
+   * public search form (NSOPW for sex-offender, BOP for federal
+   * inmate, state bar / SoS for attorney / business entity, etc).
+   *
+   * The lane status is NOT changed by the presence of this field —
+   * status still reflects "have we received evidence?" The UI uses
+   * these links to turn a 5-website manual workflow into a one-click
+   * jump. Adding a smart-link does NOT count as having run the check.
+   */
+  manual_action_urls?: Array<{
+    label: string;
+    url: string;
+    /** Free-text reason this fallback exists. Shown next to the button. */
+    note?: string;
+  }>;
 }
 
 export interface BackgroundHubResult {

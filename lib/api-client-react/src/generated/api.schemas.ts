@@ -1129,6 +1129,12 @@ export const BackgroundHubLaneResultStatus = {
   NOT_RUN: "NOT_RUN",
 } as const;
 
+export interface BackgroundHubLaneResultManualActionUrl {
+  label: string;
+  url: string;
+  note?: string | null;
+}
+
 export interface BackgroundHubLaneResult {
   lane: BackgroundHubLaneResultLane;
   status: BackgroundHubLaneResultStatus;
@@ -1140,6 +1146,12 @@ export interface BackgroundHubLaneResult {
   /** Adapter-specific evidence payload (shape varies by lane). */
   raw?: unknown;
   error?: string | null;
+  /**
+   * Smart-links to public-records search forms the operator can click
+   * to run the lookup manually. Present on lanes that require a
+   * human-in-the-loop check.
+   */
+  manual_action_urls?: BackgroundHubLaneResultManualActionUrl[];
 }
 
 export type BackgroundHubResultFinalStatus =

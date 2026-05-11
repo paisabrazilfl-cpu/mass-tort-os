@@ -3740,6 +3740,26 @@ components:
         error:
           type: string
           nullable: true
+        manual_action_urls:
+          type: array
+          description: >-
+            Smart-links to public-records search forms the operator can
+            click to run the lookup manually. Present on lanes that
+            require a human-in-the-loop check (NSOPW, state bar, SoS,
+            BOP, property records). Lane status reflects evidence
+            already received — adding a smart-link does NOT count as
+            having run the check.
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+              url:
+                type: string
+              note:
+                type: string
+                nullable: true
+            required: [label, url]
       required: [lane, status, score, flags, notes, sources, checked_at]
 
     BackgroundHubResult:

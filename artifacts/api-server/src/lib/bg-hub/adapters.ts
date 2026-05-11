@@ -9,6 +9,15 @@ import { searchPcl } from "../pacer/pcl-client";
 
 import { BACKGROUND_SOURCES } from "./sources";
 import { statusFromFlags } from "./escalation";
+import { searchEdgar } from "./sec-edgar";
+import {
+  bopInmateSearchUrl,
+  nsopwSearchUrl,
+  propertyRecordsSearchUrl,
+  stateBarSearchUrl,
+  stateSosSearchUrl,
+  vineLinkSearchUrl,
+} from "./smart-links";
 import type { BackgroundLane, BackgroundLaneResult, LeadLike } from "./types";
 
 // Adapters wrap (don't replace) existing real validators where we have them,
@@ -28,6 +37,7 @@ function makeResult(
   raw?: unknown,
   extraNotes: string[] = [],
   error?: string,
+  manualActionUrls?: BackgroundLaneResult["manual_action_urls"],
 ): BackgroundLaneResult {
   const evaluated = statusFromFlags(lane, flags);
   return {
@@ -40,6 +50,7 @@ function makeResult(
     checked_at: new Date().toISOString(),
     raw,
     error,
+    manual_action_urls: manualActionUrls,
   };
 }
 
@@ -153,11 +164,23 @@ export async function adaptPhone(lead: LeadLike): Promise<BackgroundLaneResult> 
 }
 
 // ---------------------------------------------------------------------------
-// Residency — honest stub. We have no live county-property-records adapter.
+// Residency — honest stub for automation, but emits a prefilled smart-link
+// to the local county property-records / appraiser portal so the operator
+// can run the lookup in one click. NCOA / county-records-aggregator
+// automation requires a paid integration (Smarty, ATTOM, LexisNexis Risk)
+// that we don't ship — the smart-link path is the free, ethical fallback.
 // ---------------------------------------------------------------------------
 export async function adaptResidency(lead: LeadLike): Promise<BackgroundLaneResult> {
   const haveAddress = Boolean(lead.address && lead.city && lead.state);
   const flags = haveAddress ? ["no_residency_corroboration"] : ["residency_not_checked"];
+  const propertyUrl = propertyRecordsSearchUrl(lead);
+  const manualUrls = propertyUrl
+    ? [{
+        label: `Search ${lead.city ?? "local"} property records`,
+        url: propertyUrl,
+        note: "Verify the lead is listed on a current property/tax assessment for this address.",
+      }]
+    : undefined;
   return makeResult(
     "residency",
     flags,
@@ -170,6 +193,8 @@ export async function adaptResidency(lead: LeadLike): Promise<BackgroundLaneResu
     haveAddress
       ? ["Operator: confirm via county property/tax assessor lookup."]
       : ["Address incomplete — residency cannot be checked."],
+    undefined,
+    manualUrls,
   );
 }
 
@@ -269,24 +294,57 @@ export async function adaptCriminalCourt(lead: LeadLike): Promise<BackgroundLane
 }
 
 // ---------------------------------------------------------------------------
-// Incarceration — honest stub. Federal BOP has no stable JSON API.
+// Incarceration — stub for live data (Federal BOP has no stable JSON API
+// and most state DOCs are web-only). We emit smart-links to BOP's public
+// inmate locator and VINELink (which covers ~46 states) so the operator
+// can run the lookup in two clicks instead of typing the name into five
+// websites. Full automation requires a paid VINELink partner API key.
 // ---------------------------------------------------------------------------
 export async function adaptIncarceration(lead: LeadLike): Promise<BackgroundLaneResult> {
+  const manualUrls: BackgroundLaneResult["manual_action_urls"] = [
+    {
+      label: "Search Federal BOP Inmate Locator",
+      url: bopInmateSearchUrl(lead),
+      note: "Confirms federal-prison custody status. BOP terms of use forbid automated queries; click to run manually.",
+    },
+  ];
+  const vine = vineLinkSearchUrl(lead);
+  if (vine) {
+    manualUrls.push({
+      label: lead.state ? `VINELink (${lead.state} state DOC)` : "VINELink (all-state inmate locator)",
+      url: vine,
+      note: "State + county custody lookup. Covers ~46 states.",
+    });
+  }
   return makeResult(
     "incarceration",
     ["incarceration_check_not_run"],
     {
       searched_name: fullName(lead),
-      manual_sources: ["Federal BOP Inmate Locator", "State DOC", "County jail lookup"],
+      manual_sources: ["Federal BOP Inmate Locator", "VINELink (state DOC)", "County jail lookup"],
     },
-    ["Operator: BOP/DOC lookups must be done by hand — no live adapter wired."],
+    ["Operator: click a smart-link below to run the lookup. Full automation requires a paid VINELink partner API."],
+    undefined,
+    manualUrls,
   );
 }
 
 // ---------------------------------------------------------------------------
-// Sex offender (NSOPW) — honest stub. NSOPW prohibits automated scraping.
+// Sex offender (NSOPW) — full automation is structurally impossible
+// (NSOPW's TOS forbids automated queries). We emit a prefilled NSOPW
+// search URL that the operator clicks; their browser session runs the
+// query as a human user, which is not what NSOPW prohibits. The lane
+// status STILL reports manual-check-required so the result of the
+// manual lookup must be recorded explicitly.
 // ---------------------------------------------------------------------------
 export async function adaptNSOPW(lead: LeadLike): Promise<BackgroundLaneResult> {
+  const manualUrls: BackgroundLaneResult["manual_action_urls"] = [
+    {
+      label: "Search NSOPW (National Sex Offender Public Website)",
+      url: nsopwSearchUrl(lead),
+      note: "Click to run the lookup manually in your browser. NSOPW terms forbid automated queries; a human-clicked prefilled search is the compliant path.",
+    },
+  ];
   return makeResult(
     "sex_offender_nsopw",
     ["nsopw_manual_check_required"],
@@ -296,24 +354,52 @@ export async function adaptNSOPW(lead: LeadLike): Promise<BackgroundLaneResult> 
       searched_zip: lead.zip,
       source: "https://www.nsopw.gov/",
       automation_policy:
-        "No fake PASS. Manual NSOPW lookup required — automated scraping is prohibited by NSOPW terms of use.",
+        "No fake PASS. Manual NSOPW lookup required — automated scraping is prohibited by NSOPW terms of use. The smart-link below opens NSOPW with the lead's name prefilled.",
     },
-    ["Open NSOPW manually and record the result before clearing this lane."],
+    ["Click the smart-link below to run NSOPW. Record the result before clearing this lane."],
+    undefined,
+    manualUrls,
   );
 }
 
 // ---------------------------------------------------------------------------
-// Attorney — honest stub. State bar lookups vary state-to-state.
+// Attorney — full automation requires per-state bar API integrations
+// (10+ unique APIs, each paid or rate-limited). We emit a deep-link to
+// the lead's state-of-record bar lookup where the URL is documented
+// (CA, NY, TX, FL, IL, PA, OH, GA, NC, WA) and a DuckDuckGo bang
+// fallback otherwise. PACER attorney-search is also surfaced for
+// federal admissions.
 // ---------------------------------------------------------------------------
 export async function adaptAttorney(lead: LeadLike): Promise<BackgroundLaneResult> {
+  const bar = stateBarSearchUrl(lead);
+  const manualUrls: BackgroundLaneResult["manual_action_urls"] = [
+    {
+      label: bar.coverage === "deep_link"
+        ? `Search ${lead.state ?? "state"} bar — prefilled`
+        : `Search ${lead.state ?? "state"} bar (landing page)`,
+      url: bar.url,
+      note: bar.coverage === "deep_link"
+        ? "Confirms attorney good-standing in their state of admission. Result loads with the lead's name prefilled."
+        : "No documented deep-link for this state — landing page opens; paste the name into the form.",
+    },
+  ];
   return makeResult(
     "attorney",
     ["attorney_not_checked"],
     {
       searched_name: fullName(lead),
+      searched_state: lead.state,
       manual_source:
         "State bar lookup required only if the lead claims attorney status or legal-entity connection.",
+      coverage: bar.coverage,
     },
+    [
+      bar.coverage === "deep_link"
+        ? "Click below to run the state bar lookup — name is prefilled."
+        : "No deep-link known for this state; click below to open the search page and paste the name.",
+    ],
+    undefined,
+    manualUrls,
   );
 }
 
@@ -504,13 +590,21 @@ export async function adaptPacer(lead: LeadLike): Promise<BackgroundLaneResult> 
 }
 
 // ---------------------------------------------------------------------------
-// Business entity — honest stub. SAM.gov and Secretary-of-State searches
-// are not wired. Skipped entirely (NOT_RUN) when the lead has no business name.
+// Business entity — hybrid: live SEC EDGAR + state-SoS smart-links.
+//
+// SEC EDGAR covers publicly-traded companies, large LLCs, and anyone
+// who's done a Reg D filing — roughly 10K entities. That's a real
+// PASS-or-MATCH signal: if EDGAR returns a hit, we surface the
+// CIK/ticker/filings URL and the lane goes PASS. If EDGAR returns
+// no hit we still emit the smart-link to the state SoS portal for
+// manual confirmation of small entities, and the lane stays REVIEW.
+//
+// OpenCorporates would close the small-LLC gap, but it's a paid
+// integration we don't ship. Operators who pay for it can register
+// a sync handler under integration-sync.ts.
 // ---------------------------------------------------------------------------
 export async function adaptBusiness(lead: LeadLike): Promise<BackgroundLaneResult> {
   if (!lead.business_name?.trim()) {
-    // Use NOT_RUN directly because the precondition isn't met. Bypass
-    // the flag taxonomy here — there are no flags to score.
     return {
       lane: "business_entity",
       status: "NOT_RUN",
@@ -522,12 +616,74 @@ export async function adaptBusiness(lead: LeadLike): Promise<BackgroundLaneResul
       raw: { business_name: null },
     };
   }
+  const businessName = lead.business_name.trim();
+
+  // SEC EDGAR live lookup. No API key required — SEC requires a polite
+  // User-Agent which the client sets from EDGAR_CONTACT_EMAIL.
+  let edgar: Awaited<ReturnType<typeof searchEdgar>>;
+  try {
+    edgar = await searchEdgar(businessName);
+  } catch (err) {
+    edgar = { status: "error", matches: [], fetched_at: null, note: (err as Error).message };
+  }
+
+  // SoS smart-link fallback — always emit so the operator can audit
+  // small-business entities that don't show up in EDGAR.
+  const sos = stateSosSearchUrl(lead);
+  const manualUrls: BackgroundLaneResult["manual_action_urls"] = [];
+  if (sos) {
+    manualUrls.push({
+      label: sos.coverage === "deep_link"
+        ? `Search ${lead.state ?? "state"} Secretary of State — prefilled`
+        : `Search ${lead.state ?? "state"} Secretary of State (landing page)`,
+      url: sos.url,
+      note: sos.coverage === "deep_link"
+        ? "Confirms the entity is registered and in good standing with the state. Pre-filled with the business name."
+        : "No documented deep-link for this state — landing page opens; paste the business name into the form.",
+    });
+  }
+
+  if (edgar.status === "ok" && edgar.matches.length > 0) {
+    // We found a registered SEC entity matching the name. PASS — but
+    // surface the matches so the operator can sanity-check that the
+    // CIK is actually the right company (name collisions are rare but
+    // non-zero — "Apple Inc" vs "Apple Corps", for example).
+    return makeResult(
+      "business_entity",
+      [],
+      {
+        business_name: businessName,
+        sec_matches: edgar.matches,
+        fetched_at: edgar.fetched_at,
+      },
+      [`SEC EDGAR: ${edgar.matches.length} registered entity match${edgar.matches.length === 1 ? "" : "es"} found.`],
+      undefined,
+      manualUrls,
+    );
+  }
+
+  // No SEC hit OR SEC was unreachable. Surface as manual-review with
+  // smart-links; this is the common case for small LLCs / partnerships.
+  const flags = edgar.status === "error"
+    ? ["manual_entity_check_required"] // EDGAR unreachable — still need a manual check
+    : ["manual_entity_check_required"]; // No EDGAR hit — small entity, manual check
   return makeResult(
     "business_entity",
-    ["manual_entity_check_required"],
+    flags,
     {
-      business_name: lead.business_name,
-      manual_sources: ["Secretary of State (NASS directory)", "SAM.gov", "OpenCorporates"],
+      business_name: businessName,
+      sec_matches: [],
+      sec_status: edgar.status,
+      sec_note: edgar.note,
+      fetched_at: edgar.fetched_at,
+      manual_sources: ["Secretary of State (NASS directory)", "OpenCorporates (paid)", "SAM.gov (federal contractors)"],
     },
+    [
+      edgar.status === "error"
+        ? `SEC EDGAR unreachable: ${edgar.note}. Falling back to manual SoS lookup.`
+        : "Not found in SEC EDGAR (entity is below SEC reporting threshold or unregistered with SEC). Run the state SoS lookup below.",
+    ],
+    undefined,
+    manualUrls,
   );
 }

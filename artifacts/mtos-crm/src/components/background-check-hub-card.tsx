@@ -26,12 +26,12 @@ const LANE_LABEL: Record<string, string> = {
   address: "Address Verification",
   email: "Email Validation",
   phone: "Phone Validation",
-  residency: "Residency Cross-Check (manual property-records lookup)",
+  residency: "Residency Cross-Check (manual property-records lookup; one-click smart-link)",
   criminal_court: "Criminal / Court Records",
-  incarceration: "Incarceration Status (manual lookup)",
-  sex_offender_nsopw: "Sex Offender Registry (NSOPW — manual lookup)",
-  attorney: "Attorney Conflict Check (manual bar lookup)",
-  business_entity: "Business Entity Check (manual)",
+  incarceration: "Incarceration Status (BOP + VINELink smart-links)",
+  sex_offender_nsopw: "Sex Offender Registry (NSOPW smart-link; TOS forbids automation)",
+  attorney: "Attorney Conflict Check (state bar smart-links)",
+  business_entity: "Business Entity Check (SEC EDGAR live + state SoS smart-links)",
   pacer_federal: "PACER (Federal Courts)",
 };
 
@@ -39,14 +39,14 @@ const LANE_LABEL: Record<string, string> = {
 // operator gets the prompt to run the lookup manually, but they will
 // always resolve to REVIEW_REQUIRED — never to a green PASS — so a buyer
 // looking at the badge cluster can't misread "all green" as automated
-// clearance. Source of truth: lib/bg-hub/adapters.ts comments
-// ("honest stub" markers).
+// clearance. Source of truth: lib/bg-hub/escalation.ts → STUB_LANES.
+// business_entity was demoted out of this set when the SEC EDGAR live
+// adapter shipped.
 const ADVISORY_MANUAL_LANES = new Set<string>([
   "residency",
   "incarceration",
   "sex_offender_nsopw",
   "attorney",
-  "business_entity",
 ]);
 
 function statusBadge(status: string) {
@@ -207,6 +207,28 @@ function LaneRow({ lane }: { lane: BackgroundHubLaneResult }) {
             <li key={i}>• {n}</li>
           ))}
         </ul>
+      )}
+      {lane.manual_action_urls && lane.manual_action_urls.length > 0 && (
+        <div className="space-y-1.5 border-t pt-2">
+          <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">
+            One-click manual lookups
+          </div>
+          {lane.manual_action_urls.map((m, i) => (
+            <div key={i} className="flex items-start gap-2">
+              <a
+                href={m.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center text-xs font-medium text-blue-700 hover:text-blue-900 hover:underline"
+              >
+                {m.label} →
+              </a>
+              {m.note && (
+                <span className="text-[11px] text-muted-foreground italic">{m.note}</span>
+              )}
+            </div>
+          ))}
+        </div>
       )}
       {pacerCases.length > 0 && (
         <PacerHitsTable cases={pacerCases} truncated={pacerTruncated} />

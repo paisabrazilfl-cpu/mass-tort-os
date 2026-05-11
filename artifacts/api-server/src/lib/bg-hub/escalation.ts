@@ -140,12 +140,18 @@ export interface FlagEvaluation {
 // all-green badge cluster as automated clearance. If you add a real adapter
 // for one of these lanes, REMOVE its entry from this set and let the normal
 // flag taxonomy decide.
+//
+// business_entity is NOT in this set anymore: it has a live SEC EDGAR
+// adapter (lib/bg-hub/sec-edgar.ts). EDGAR covers public companies + large
+// LLCs + Reg-D filers (~10 K entities). When EDGAR returns a hit the
+// lane resolves PASS via the normal taxonomy. When EDGAR returns no hit
+// the adapter still emits `manual_entity_check_required` → REVIEW so
+// small unregistered entities aren't silently cleared.
 export const STUB_LANES: ReadonlySet<BackgroundLane> = new Set([
   "residency",
   "incarceration",
   "sex_offender_nsopw",
   "attorney",
-  "business_entity",
 ]);
 
 // Translate a set of observed flags into a status + score for one lane.
