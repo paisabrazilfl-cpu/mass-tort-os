@@ -593,4 +593,68 @@ router.post("/assist", requirePermission(Permission.AUTOMATIONS_MANAGE), async (
 // Exported for tests. Keep them out of the catalog/handler surface.
 export const __assistInternals = { validateAssistGraph, buildCatalogSummary, assistGraphSchema };
 
+
+// ── Public inbound webhook receiver for trigger.webhook workflows ──────────
+// This is the entry point for n8n / Zapier / Make to call INTO MTOS.
+// Mounted at /api/automations/webhook/:slug — public, no JWT required.
+// Auth: optional HMAC-SHA256 via trigger_config.secret (X-MTOS-Signature header).
+export const webhookTriggerRouter = Router();
+
+webhookTriggerRouter.post("/:slug", async (req, res) => {
+  const slug = String(req.params["slug"] ?? "").trim();
+  if (!slug) {
+    res.status(400).json({ status: "error", code: "missing_slug", message: "Slug required" });
+    return;
+  }
+  try {
+    await ensureAutomationSchema();
+    const rows = await db
+      .select()
+      .from(automationWorkflowsTable)
+      .where(
+        and(
+          eq(automationWorkflowsTable.enabled, true),
+          eq(automationWorkflowsTable.trigger_type, "trigger.webhook"),
+          sql`${automationWorkflowsTable.trigger_config}->>'path' = ${slug}`,
+        ),
+      )
+      .limit(1);
+    const wf = rows[0];
+    if (!wf) {
+      res.status(404).json({ status: "error", code: "not_found", message: "No active webhook workflow for this slug" });
+      return;
+    }
+    const secret = (wf.trigger_config as Record<string, string> | null)?.secret;
+    if (secret) {
+      const rawBody = (req as any).rawBody as Buffer | undefined;
+      const sig = String(req.headers["x-mtos-signature"] ?? "");
+      if (!rawBody || rawBody.length === 0) {
+        res.status(400).json({ status: "error", code: "no_raw_body", message: "Raw body unavailable" });
+        return;
+      }
+      const expected = "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+      const a = Buffer.from(expected, "utf8");
+      const b = Buffer.from(sig, "utf8");
+      if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+        res.status(401).json({ status: "error", code: "invalid_signature", message: "Signature mismatch" });
+        return;
+      }
+    }
+    const input = (req.body ?? {}) as Record<string, unknown>;
+    runWorkflow({
+      workflowId: wf.id,
+      firmId: wf.firm_id,
+      triggerSource: `webhook:${slug}`,
+      input,
+    }).catch((err: Error) =>
+      logger.error({ err, workflowId: wf.id, slug }, "webhook trigger runWorkflow failed"),
+    );
+    res.status(202).json({ ok: true, workflowId: wf.id, slug });
+  } catch (err: any) {
+    logger.error({ err, slug }, "webhook trigger handler error");
+    res.status(500).json({ status: "error", code: "internal_error", message: "Internal error" });
+  }
+});
+
+
 export default router;
