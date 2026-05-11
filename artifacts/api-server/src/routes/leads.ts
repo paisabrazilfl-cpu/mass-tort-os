@@ -793,7 +793,7 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
       },
       firmId: lead.firm_id ?? null,
       source: "leads.patch",
-    });
+    }).catch(() => {});
   }
 });
 
