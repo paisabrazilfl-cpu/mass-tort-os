@@ -72,12 +72,15 @@ router.get("/config", requirePermission(Permission.SELF_HEAL_MANAGE), (_req, res
 
 router.get("/", requirePermission(Permission.SELF_HEAL_MANAGE), async (req, res) => {
   try {
-    const firmId = (req as any).user?.firm_id;
-    const where = firmId != null ? `firm_id = ${Number(firmId)}` : "1=1";
+    const firmId = (req as any).user?.firm_id ?? (req as any).firmId;
+    const where = firmId != null ? "firm_id = " + Number(firmId) : "1=1";
     const raw = await pool.query(
-      `SELECT * FROM self_heal_sessions WHERE ${where} ORDER BY created_at DESC LIMIT 50`
+      "SELECT * FROM self_heal_sessions WHERE " + where + " ORDER BY created_at DESC LIMIT 50"
     );
-    res.json({ sessions: rows });
+    res.json({ sessions: raw.rows ?? [] });
+  } catch (err: any) {
+    res.json({ sessions: [] });
+  }
 });
 
 router.post("/", requirePermission(Permission.SELF_HEAL_MANAGE), async (req, res) => {
