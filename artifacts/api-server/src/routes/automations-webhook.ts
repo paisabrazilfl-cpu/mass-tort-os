@@ -55,15 +55,26 @@ router.post("/webhook/:slugOrId", async (req, res) => {
       res.status(401).json({ error: "x-mtos-signature header required" });
       return;
     }
-    const { createHmac } = await import("node:crypto");
-    const rawBody = JSON.stringify(req.body);
+    // Use the EXACT bytes the caller signed. JSON.stringify(req.body) was
+    // the previous implementation; that reorders object keys and drops
+    // insignificant whitespace, so every legitimate webhook silently 401s.
+    // app.ts attaches rawBody for /api/automations/webhook/* alongside the
+    // existing /api/webhooks/* capture.
+    const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+    if (!rawBody || rawBody.length === 0) {
+      logger.warn({ slugOrId, workflowId: wf.id }, "automations webhook: raw body missing — body parser misconfig");
+      res.status(401).json({ error: "Raw body required for signature verification" });
+      return;
+    }
+    const { createHmac, timingSafeEqual } = await import("node:crypto");
     const expected = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
-    // Constant-time comparison to prevent timing attacks
-    const crypto = await import("node:crypto");
-    const sigOk = crypto.timingSafeEqual(
-      Buffer.from(providedSig, "utf8"),
-      Buffer.from(expected, "utf8")
-    );
+    const providedBuf = Buffer.from(providedSig, "utf8");
+    const expectedBuf = Buffer.from(expected, "utf8");
+    // timingSafeEqual throws if the buffers differ in length; check first so
+    // a malformed header doesn't surface as a 500.
+    const sigOk =
+      providedBuf.length === expectedBuf.length &&
+      timingSafeEqual(providedBuf, expectedBuf);
     if (!sigOk) {
       res.status(401).json({ error: "Invalid signature" });
       return;

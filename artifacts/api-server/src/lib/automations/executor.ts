@@ -331,8 +331,14 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   "crm.qualify_lead": async (s) => {
     const idRaw = resolveOrLiteral(s, s.node.data?.params?.leadId);
     const leadId = Number(idRaw);
-    const [row] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId)).limit(1);
-    if (!row) throw new Error(`Lead ${leadId} not found`);
+    // Firm-scope the read so an automation in firm A can't read or branch on
+    // a lead in firm B. The run's firmId flows down from runWorkflow's
+    // dispatch and is required for any leads-table touch.
+    const scope = s.ctx.firmId != null
+      ? and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId))
+      : eq(leadsTable.id, leadId);
+    const [row] = await db.select().from(leadsTable).where(scope).limit(1);
+    if (!row) throw new Error(`Lead ${leadId} not found in firm ${s.ctx.firmId ?? "<none>"}`);
     // Simple deterministic qualification using existing qualification_status
     // — full decision-engine wiring lives in lib/decision-engine; here we
     // just route based on whatever the lead already says (operators can
@@ -545,15 +551,32 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
 
   // ───────── AI
   "ai.extract_fields": async (s) => {
-    const text = String(resolveOrLiteral(s, s.node.data?.params?.text ?? s.input?.text ?? "") || "");
+    const p = s.node.data?.params ?? {};
+    const text = String(resolveOrLiteral(s, p.text ?? s.input?.text ?? "") || "");
     if (!text) throw new Error("ai.extract_fields requires text input.");
-    const fields = await analyzeDocumentText(text);
+    // Catalog declares `schema` (required JSON object describing the
+    // extraction fields) and `model` (LLM override). Honor both. Schema is
+    // forwarded as a hint into the extractor; model overrides the default
+    // selection via the central provider router.
+    const schemaParam = p.schema;
+    const modelParam = typeof p.model === "string" && p.model ? p.model : undefined;
+    const fields = await analyzeDocumentText(text, {
+      schemaHint: schemaParam ?? null,
+      model: modelParam,
+    });
     return { fields };
   },
   "ai.summarize": async (s) => {
-    const text = String(resolveOrLiteral(s, s.node.data?.params?.text ?? s.input?.text ?? "") || "");
+    const p = s.node.data?.params ?? {};
+    const text = String(resolveOrLiteral(s, p.text ?? s.input?.text ?? "") || "");
     if (!text) throw new Error("ai.summarize requires text input.");
-    const maxTokens = Number(s.node.data?.params?.maxTokens ?? 400);
+    // Catalog exposes `maxWords` to operators; convert to a maxTokens
+    // budget for callLLM (~1.3 tokens per word as a generous upper bound).
+    // Backwards-compat: legacy graphs may still pass `maxTokens` directly.
+    const maxWords = Number(p.maxWords ?? 0);
+    const maxTokens = maxWords > 0
+      ? Math.max(64, Math.ceil(maxWords * 1.3))
+      : Number(p.maxTokens ?? 400);
     const summary = await callLLM({
       module: "drafting-ai",
       systemPrompt: "You are a concise legal summarization assistant. Reply in plain prose, no preamble.",
@@ -566,11 +589,18 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const p = s.node.data?.params ?? {};
     const prompt = String(resolveOrLiteral(s, p.prompt ?? s.input?.prompt) ?? "");
     if (!prompt) throw new Error("ai.draft requires a prompt.");
+    // Catalog field is named `system` (the operator-visible label). Accept
+    // both `system` and the legacy `systemPrompt` for graphs saved against
+    // older builds. Same for `maxTokens` — not in the catalog today, but
+    // an undeclared key here would silently fall back to the default and
+    // surprise an operator who set it.
+    const systemPrompt = String(p.system ?? p.systemPrompt ?? "You are a legal drafting assistant. Reply with the requested document content only — no preamble.");
+    const maxTokens = Number(p.maxTokens ?? 800);
     const draft = await callLLM({
       module: "drafting-ai",
-      systemPrompt: String(p.systemPrompt ?? "You are a legal drafting assistant. Reply with the requested document content only — no preamble."),
+      systemPrompt,
       prompt,
-      maxTokens: Number(p.maxTokens ?? 800),
+      maxTokens,
     });
     return { draft };
   },
@@ -678,9 +708,19 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     // (integer) and record the paralegal table id there. Operators reading this
     // column need to know it can be either a user_id or a paralegal_id depending
     // on origin — the source-of-truth is the audit_log entry below.
+    //
+    // Firm-scope the UPDATE so a workflow running in firm A cannot reassign a
+    // lead owned by firm B. RETURNING surfaces a no-op when the row is
+    // out-of-firm and the explicit throw makes that visible to the operator.
+    const assignScope = s.ctx.firmId != null
+      ? and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId))
+      : eq(leadsTable.id, leadId);
     const [updated] = await db.update(leadsTable)
       .set({ assigned_to: paralegalId, updated_at: new Date() } as any)
-      .where(eq(leadsTable.id, leadId)).returning();
+      .where(assignScope).returning();
+    if (!updated) {
+      throw new Error(`crm.assign_paralegal: lead ${leadId} not found in firm ${s.ctx.firmId ?? "<none>"}`);
+    }
     await db.insert(auditLogTable).values({
       action: "automation.assign_paralegal",
       entity_type: "lead",
@@ -738,8 +778,13 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const leadIdRaw = resolveOrLiteral(s, s.node.data?.params?.leadId ?? s.input?.lead_id ?? s.input?.lead?.id);
     const leadId = Number(leadIdRaw);
     if (!Number.isInteger(leadId)) throw new Error("crm.background_check requires a resolvable leadId.");
-    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
-    if (!lead) throw new Error(`Lead ${leadId} not found.`);
+    // Firm scope: bg-hub decrypts PII off the lead row — reading another
+    // firm's lead here would leak SSN/DOB/address into this firm's run log.
+    const bgScope = s.ctx.firmId != null
+      ? and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId))
+      : eq(leadsTable.id, leadId);
+    const [lead] = await db.select().from(leadsTable).where(bgScope);
+    if (!lead) throw new Error(`Lead ${leadId} not found in firm ${s.ctx.firmId ?? "<none>"}.`);
     const result = await runBackgroundCheckHub(lead);
     // bg-hub final_status is one of clear|flagged|incomplete — map "incomplete"
     // onto the catalog's "error" output so the editor renders a real edge.
@@ -771,6 +816,19 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const leadIdRaw = resolveOrLiteral(s, s.node.data?.params?.leadId ?? s.input?.lead_id ?? s.input?.lead?.id);
     const leadId = Number(leadIdRaw);
     if (!Number.isInteger(leadId)) throw new Error("crm.decision_engine requires a resolvable leadId.");
+    // Firm scope: confirm the lead belongs to this run's firm before letting
+    // the decision engine read it, score it, and persist convexity flags
+    // back to the row. Without this, a firm-A workflow could mutate firm-B
+    // scoring state and trigger downstream automations on the wrong tenant.
+    if (s.ctx.firmId != null) {
+      const [exists] = await db
+        .select({ id: leadsTable.id })
+        .from(leadsTable)
+        .where(and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId)));
+      if (!exists) {
+        throw new Error(`crm.decision_engine: lead ${leadId} not found in firm ${s.ctx.firmId}`);
+      }
+    }
     const result = await computeAndPersistLeadScore(leadId);
     if (!result) {
       return { __branch: "review", value: { reason: "no_score" } };
@@ -1262,6 +1320,12 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       last_name: submission["last_name"] as any,
       source: "automation",
       status: "new",
+      // Stamp firm_id from the run context so every automation-created lead
+      // is reachable through the firm-scoped list/detail endpoints. Without
+      // this, the row inserts with firm_id NULL and is invisible to the
+      // creating firm's UI (and would also have been a privilege-escalation
+      // surface if any later route did a NULL-firm fallback).
+      firm_id: s.ctx.firmId ?? null,
     } as any).returning();
     return { lead_id: created.id, deduped: false };
   },

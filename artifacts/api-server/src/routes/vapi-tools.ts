@@ -50,16 +50,53 @@ function constantTimeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ab, bb);
 }
 
+function clientIpOf(req: Request): string {
+  // Best-effort caller IP for the audit trail. Prefers the leftmost entry
+  // of x-forwarded-for (the original client), with the socket address as
+  // the fallback when the request didn't cross a proxy.
+  const xff = req.headers["x-forwarded-for"];
+  const first = (Array.isArray(xff) ? xff[0] : xff)?.split(",")[0]?.trim();
+  return first || req.socket.remoteAddress || "unknown";
+}
+
 async function checkBearer(req: Request): Promise<boolean> {
   const auth = req.headers.authorization;
   if (typeof auth !== "string" || !auth.toLowerCase().startsWith("bearer ")) {
+    // Log every rejected attempt with the caller IP + path so brute-force
+    // enumeration of the static tool bearer leaves an audit trail. Without
+    // this, an attacker can iterate the bearer-token space and the only
+    // signal we get is silent 401s. Logged at warn so it surfaces in pino's
+    // default level without flooding info.
+    logger.warn(
+      { ip: clientIpOf(req), path: req.path, reason: "missing_or_malformed_bearer" },
+      "vapi-tools: bearer auth rejected",
+    );
     return false;
   }
   const provided = auth.slice(7).trim();
-  if (!provided) return false;
+  if (!provided) {
+    logger.warn(
+      { ip: clientIpOf(req), path: req.path, reason: "empty_bearer" },
+      "vapi-tools: bearer auth rejected",
+    );
+    return false;
+  }
   const creds = await loadVapiCredentials();
-  if (!creds?.toolBearer) return false;
-  return constantTimeEqual(provided, creds.toolBearer);
+  if (!creds?.toolBearer) {
+    logger.warn(
+      { ip: clientIpOf(req), path: req.path, reason: "no_vapi_integration_configured" },
+      "vapi-tools: bearer auth rejected — no active Vapi integration with a toolBearer secret",
+    );
+    return false;
+  }
+  const ok = constantTimeEqual(provided, creds.toolBearer);
+  if (!ok) {
+    logger.warn(
+      { ip: clientIpOf(req), path: req.path, reason: "bearer_mismatch" },
+      "vapi-tools: bearer auth rejected",
+    );
+  }
+  return ok;
 }
 
 function normalizePhone(raw: string): string {

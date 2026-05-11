@@ -1,6 +1,6 @@
 import { Router, Response } from "express";
 import { db, integrationsTable } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { PRESET_INTEGRATIONS } from "../lib/integration-presets";
@@ -9,6 +9,7 @@ import { encrypt, decrypt } from "../lib/encryption";
 import { logger } from "../lib/logger";
 import { pingLeadWebhook } from "../lib/lead-webhook-dispatcher";
 import { badRequest } from "../lib/http-errors";
+import { requireFirmId } from "../lib/firm-scope";
 import crypto from "crypto";
 
 const router = Router();
@@ -84,9 +85,24 @@ function decryptRowCredentials(row: any): DecryptedCredentials {
 /**
  * Look up credentials by integration id. Use this when a workflow knows
  * the specific integration row it wants to call (preferred).
+ *
+ * `firmId` MUST be supplied by any caller that has request context (HTTP
+ * routes, automation runs, workers acting on a specific firm). It is
+ * intentionally OPTIONAL only for inbound webhook handlers that receive
+ * callbacks from external providers without a firm context — those callers
+ * MUST verify the signature matches before trusting the row. A `firmId`
+ * argument scopes the lookup to that firm so a forged id cannot cross
+ * tenants; passing `undefined` keeps the old global-lookup behavior but
+ * logs a warning.
  */
-export async function getIntegrationCredentialsById(id: number): Promise<DecryptedCredentials | null> {
-  const [row] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
+export async function getIntegrationCredentialsById(id: number, firmId?: number): Promise<DecryptedCredentials | null> {
+  const conditions = firmId === undefined
+    ? [eq(integrationsTable.id, id)]
+    : [eq(integrationsTable.id, id), eq(integrationsTable.firm_id, firmId)];
+  if (firmId === undefined) {
+    logger.warn({ id }, "getIntegrationCredentialsById called without firmId — cross-tenant scope is NOT enforced; only safe inside a signature-verified webhook handler");
+  }
+  const [row] = await db.select().from(integrationsTable).where(and(...conditions));
   if (!row || row.status !== "active") return null;
   return decryptRowCredentials(row);
 }
@@ -95,17 +111,25 @@ export async function getIntegrationCredentialsById(id: number): Promise<Decrypt
  * Convenience helper for cases where only the provider key is known.
  * Returns the most recent active integration for that provider; logs a warning
  * if multiple are present so the caller can switch to id-based lookup.
+ *
+ * Same firm-scoping contract as `getIntegrationCredentialsById`.
  */
-export async function getIntegrationCredentials(provider: string): Promise<DecryptedCredentials | null> {
+export async function getIntegrationCredentials(provider: string, firmId?: number): Promise<DecryptedCredentials | null> {
+  const conditions = firmId === undefined
+    ? [eq(integrationsTable.provider, provider)]
+    : [eq(integrationsTable.provider, provider), eq(integrationsTable.firm_id, firmId)];
+  if (firmId === undefined) {
+    logger.warn({ provider }, "getIntegrationCredentials called without firmId — cross-tenant scope is NOT enforced");
+  }
   const rows = await db
     .select()
     .from(integrationsTable)
-    .where(eq(integrationsTable.provider, provider))
+    .where(and(...conditions))
     .orderBy(desc(integrationsTable.created_at));
   const active = rows.filter(r => r.status === "active");
   if (active.length === 0) return null;
   if (active.length > 1) {
-    logger.warn({ provider, count: active.length }, "Multiple active integrations share this provider — using most recent. Prefer getIntegrationCredentialsById().");
+    logger.warn({ provider, firm_id: firmId ?? null, count: active.length }, "Multiple active integrations share this provider — using most recent. Prefer getIntegrationCredentialsById().");
   }
   return decryptRowCredentials(active[0]);
 }
@@ -136,14 +160,28 @@ function maskRow(row: any) {
   };
 }
 
-router.get("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (_req, res) => {
-  const rows = await db.select().from(integrationsTable).orderBy(desc(integrationsTable.created_at));
+// Drizzle predicate: integrations row belongs to the caller's firm. Every
+// CRUD handler ANDs this against the row id so an admin in firm A cannot
+// read or rotate firm B's API keys via the integrations surface.
+function integrationFirmScope(req: import("express").Request) {
+  return eq(integrationsTable.firm_id, requireFirmId(req));
+}
+
+router.get("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
+  const rows = await db
+    .select()
+    .from(integrationsTable)
+    .where(integrationFirmScope(req))
+    .orderBy(desc(integrationsTable.created_at));
   res.json(rows.map(maskRow));
 });
 
 router.get("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseIntegrationId(res, req.params.id); if (id === null) return;
-  const [row] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
+  const [row] = await db
+    .select()
+    .from(integrationsTable)
+    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
   if (!row) { res.status(404).json({ error: "Integration not found" }); return; }
   res.json(maskRow(row));
 });
@@ -157,11 +195,14 @@ router.post("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, 
   // Keep a short non-reversible reference for audit/UI display continuity.
   const apiKeyRef = api_key ? crypto.createHash("sha256").update(String(api_key)).digest("hex").slice(0, 16) : null;
 
+  const firmId = requireFirmId(req);
+
   // Two-step insert: we need the row id before we can encrypt creds with id-scoped AAD.
   const [created] = await db.insert(integrationsTable).values({
     name,
     type,
     provider,
+    firm_id: firmId,
     status: "active",
     api_url: api_url || null,
     api_key_hash: apiKeyRef,
@@ -178,18 +219,21 @@ router.post("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, 
   };
   const [row] = await db.update(integrationsTable)
     .set({ config: finalConfig })
-    .where(eq(integrationsTable.id, created.id))
+    .where(and(eq(integrationsTable.id, created.id), eq(integrationsTable.firm_id, firmId)))
     .returning();
 
   await auditLog("integration", String(req.user?.id || 0), "integration_created", {
-    provider, name, type, credential_keys: Object.keys(credentials),
+    provider, name, type, firm_id: firmId, credential_keys: Object.keys(credentials),
   });
   res.status(201).json(maskRow(row));
 });
 
 router.patch("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseIntegrationId(res, req.params.id); if (id === null) return;
-  const [existing] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
+  const [existing] = await db
+    .select()
+    .from(integrationsTable)
+    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
 
   const { name, status, api_url, webhook_url, config, sync_direction, field_mapping, api_key } = req.body;
@@ -215,14 +259,21 @@ router.patch("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (r
     };
   }
 
-  const [updated] = await db.update(integrationsTable).set(updates).where(eq(integrationsTable.id, id)).returning();
+  const [updated] = await db
+    .update(integrationsTable)
+    .set(updates)
+    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)))
+    .returning();
   await auditLog("integration", String(req.user?.id || 0), "integration_updated", { id, changes: Object.keys(updates) });
   res.json(maskRow(updated));
 });
 
 router.delete("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseIntegrationId(res, req.params.id); if (id === null) return;
-  const [deleted] = await db.delete(integrationsTable).where(eq(integrationsTable.id, id)).returning();
+  const [deleted] = await db
+    .delete(integrationsTable)
+    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)))
+    .returning();
   if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
   await auditLog("integration", String(req.user?.id || 0), "integration_deleted", { id, provider: deleted.provider });
   res.json({ success: true });
@@ -230,7 +281,10 @@ router.delete("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (
 
 router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseIntegrationId(res, req.params.id); if (id === null) return;
-  const [row] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
+  const [row] = await db
+    .select()
+    .from(integrationsTable)
+    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
 
   // Verify credential decryption works end-to-end. Only secret fields count —
@@ -381,7 +435,10 @@ router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
 
 router.post("/:id/sync", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseIntegrationId(res, req.params.id); if (id === null) return;
-  const [integration] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
+  const [integration] = await db
+    .select()
+    .from(integrationsTable)
+    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
   if (!integration) { res.status(404).json({ error: "Not found" }); return; }
 
   // Honest stub: there is no per-provider sync handler in this codebase yet,

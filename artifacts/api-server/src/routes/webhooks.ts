@@ -41,6 +41,7 @@ import { getFastenWebhookSecret } from "../lib/fasten/client";
 import { fastenConnectionsTable } from "@workspace/db";
 import { enqueueJob } from "../lib/queue";
 import { getEmailVerifier, getSmsVerifier, type VerifyContext, type SignatureStatus } from "../lib/webhook-verifiers";
+import { markWebhookProcessed } from "../lib/webhook-idempotency";
 import { invalidateStripeConfiguredCache } from "../lib/subscription-gate";
 import type Stripe from "stripe";
 
@@ -115,13 +116,36 @@ async function applyEnvelopeEvent(provider: string, evt: NormalizedEvent): Promi
  * If multiple are active we just take the first; admins are advised to keep one per provider.
  */
 async function loadProviderSecret(provider: string, secretField: string): Promise<string | null> {
+  // Multi-firm note: provider webhooks (Stripe, Dropbox Sign, DocuSign, …)
+  // arrive from external services with no firm context in the URL. We try
+  // EVERY active integration row for the provider in turn — the one whose
+  // secret successfully verifies the signature IS the firm the callback
+  // belongs to (cryptographic discovery). Returning the first secret here
+  // and trusting it would let firm B's secret silently validate firm A's
+  // signature; the caller's signature check guards against that, but to be
+  // explicit we also surface a warning when more than one firm has the same
+  // provider active so an operator can resolve the ambiguity. Each call
+  // returns one secret at a time so the existing single-secret callers keep
+  // working in the single-firm shell.
   const rows = await db
     .select()
     .from(integrationsTable)
     .where(eq(integrationsTable.provider, provider));
-  for (const row of rows) {
-    if (row.status !== "active") continue;
-    const creds = await getIntegrationCredentialsById(row.id);
+  const active = rows.filter((r) => r.status === "active");
+  if (active.length === 0) return null;
+  if (active.length > 1) {
+    const distinctFirms = new Set(active.map((r) => r.firm_id));
+    if (distinctFirms.size > 1) {
+      logger.warn(
+        { provider, secretField, firmCount: distinctFirms.size, firmIds: [...distinctFirms] },
+        "loadProviderSecret: multiple firms have the same provider active — webhook routing is firm-ambiguous until each firm gets a distinct webhook URL",
+      );
+    }
+  }
+  for (const row of active) {
+    // Pass row.firm_id into the credential lookup so the AAD-scoped decrypt
+    // path stays explicit about whose row we are reading.
+    const creds = await getIntegrationCredentialsById(row.id, row.firm_id ?? undefined);
     const val = creds && (creds as Record<string, unknown>)[secretField];
     if (typeof val === "string" && val.length > 0) return val;
   }
@@ -798,16 +822,27 @@ function buildVerifyCtx(req: import("express").Request): VerifyContext {
  */
 async function loadProviderForWebhook(provider: string): Promise<{
   integrationId: number | null;
+  firmId: number | null;
   creds: import("./integrations").DecryptedCredentials | null;
 }> {
   const rows = await db
-    .select({ id: integrationsTable.id, status: integrationsTable.status })
+    .select({ id: integrationsTable.id, status: integrationsTable.status, firm_id: integrationsTable.firm_id })
     .from(integrationsTable)
     .where(eq(integrationsTable.provider, provider));
-  const active = rows.find((r) => r.status === "active");
-  if (!active) return { integrationId: null, creds: null };
-  const creds = await getIntegrationCredentialsById(active.id);
-  return { integrationId: active.id, creds };
+  const active = rows.filter((r) => r.status === "active");
+  if (active.length === 0) return { integrationId: null, firmId: null, creds: null };
+  if (active.length > 1) {
+    const distinctFirms = new Set(active.map((r) => r.firm_id));
+    if (distinctFirms.size > 1) {
+      logger.warn(
+        { provider, firmCount: distinctFirms.size, firmIds: [...distinctFirms] },
+        "loadProviderForWebhook: multiple firms have this provider active — picking the first match. Per-firm webhook URLs are required for full disambiguation.",
+      );
+    }
+  }
+  const chosen = active[0];
+  const creds = await getIntegrationCredentialsById(chosen.id, chosen.firm_id ?? undefined);
+  return { integrationId: chosen.id, firmId: chosen.firm_id ?? null, creds };
 }
 
 router.post("/email/:provider", async (req, res) => {
@@ -822,7 +857,7 @@ router.post("/email/:provider", async (req, res) => {
     ? [req.body]
     : [];
 
-  const { integrationId, creds } = await loadProviderForWebhook(provider);
+  const { integrationId, firmId, creds } = await loadProviderForWebhook(provider);
 
   // Verify ONCE per request — provider sigs cover the whole rawBody.
   const verifier = getEmailVerifier(provider);
@@ -839,10 +874,32 @@ router.post("/email/:provider", async (req, res) => {
     const externalId = pickFirstString(evt, ["MessageID", "messageId", "message_id", "id", "sg_message_id"]);
     const eventType = pickFirstString(evt, ["RecordType", "event", "type", "EventType"]) ?? "unknown";
     const recipient = pickFirstString(evt, ["Recipient", "recipient", "email", "To"]);
+
+    // Idempotency: skip duplicates from provider retries. We dedup on the
+    // composite (provider, externalId+eventType) because some providers
+    // (SendGrid, Postmark) re-use a single message id across delivered /
+    // opened / clicked events — each event type is a distinct first
+    // sighting from our perspective.
+    const dedupKey = externalId ? `${externalId}:${eventType}` : null;
+    const isFirstSighting = dedupKey
+      ? await markWebhookProcessed({
+          provider,
+          externalEventId: dedupKey,
+          firmId,
+          integrationId,
+          eventType,
+        })
+      : true;
+    if (!isFirstSighting) continue;
+
     try {
       await db.insert(emailEventsTable).values({
         integration_id: integrationId,
-        firm_id: null,   // email correlation requires an outbound email_messages table; not yet shipped
+        // firmId is resolved from the matched integration row. Until the
+        // outbound email_messages table ships (per-message firm), this is
+        // the best correlation we have — better than NULL which made the
+        // events un-filterable per firm.
+        firm_id: firmId,
         lead_id: null,
         provider,
         external_message_id: externalId,
@@ -866,7 +923,7 @@ router.post("/fax/:provider", async (req, res) => {
   }
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
 
-  const { integrationId } = await loadProviderForWebhook(provider);
+  const { integrationId, firmId } = await loadProviderForWebhook(provider);
   // No documented common signature schemes for srfax/efax/phaxio/documo/telnyx_fax
   // (Telnyx Fax uses the same Ed25519 scheme as its SMS API but the v2 raw fax
   // webhook is opt-in and rarely configured). Mark unverified.
@@ -889,10 +946,31 @@ router.post("/fax/:provider", async (req, res) => {
     return Number.isFinite(n) ? n : null;
   })();
 
+  // Idempotency: dedup retries from the fax provider. Some providers
+  // (Phaxio, Documo) push a status-change event every time the queue
+  // state flips, so we key on externalId + eventType to keep each
+  // distinct transition while suppressing the literal retry.
+  const dedupKey = externalId ? `${externalId}:${eventType}` : null;
+  const isFirstSighting = dedupKey
+    ? await markWebhookProcessed({
+        provider,
+        externalEventId: dedupKey,
+        firmId,
+        integrationId,
+        eventType,
+      })
+    : true;
+  if (!isFirstSighting) {
+    res.json({ ok: true, deduped: true });
+    return;
+  }
+
   try {
     await db.insert(faxEventsTable).values({
       integration_id: integrationId,
-      firm_id: null,   // fax correlation requires an outbound fax_messages table; not yet shipped
+      // firmId resolved from the matched integration. Outbound fax_messages
+      // correlation will tighten this once the outbound table ships.
+      firm_id: firmId,
       lead_id: null,
       provider,
       external_fax_id: externalId,
@@ -920,7 +998,7 @@ router.post("/sms/:provider", async (req, res) => {
   }
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
 
-  const { integrationId, creds } = await loadProviderForWebhook(provider);
+  const { integrationId, firmId, creds } = await loadProviderForWebhook(provider);
   const verifier = getSmsVerifier(provider);
   let signatureStatus: SignatureStatus = "unverified";
   if (verifier) signatureStatus = verifier(buildVerifyCtx(req), creds);
@@ -948,6 +1026,24 @@ router.post("/sms/:provider", async (req, res) => {
     if (["sent", "queued", "accepted"].includes(s)) return s;
     return s.slice(0, 30);
   })();
+
+  // Idempotency: providers retry every 5xx / timeout. Without a dedup
+  // ledger a duplicate retry would re-stamp delivered_at / failed_at and
+  // re-fire any automation that listens on the row. markWebhookProcessed
+  // claims the (provider, externalId) pair atomically.
+  const isFirstSighting = externalId
+    ? await markWebhookProcessed({
+        provider,
+        externalEventId: externalId,
+        firmId,
+        integrationId,
+        eventType: status,
+      })
+    : true;
+  if (!isFirstSighting) {
+    res.json({ ok: true, signature_status: signatureStatus, deduped: true });
+    return;
+  }
 
   // SECURITY: only mutate sms_messages when the signature was actually
   // verified. "unverified" means we either lack the secret or the header

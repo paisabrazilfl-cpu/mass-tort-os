@@ -793,7 +793,13 @@ export const NODE_CATALOG: NodeDefinition[] = [
     icon: "Square", color: "bg-slate-500",
     params: [
       { key: "output", label: "Return value (JSON)", type: "json", placeholder: '{"status":"done","lead_id":"input.lead.id"}' },
-    ], outputs: 0,
+    ],
+    // utility.end is a sink — no downstream edges are allowed. The handler
+    // emits the synthetic branch name "__end__" that the executor treats as
+    // a stop signal (see executor.ts → utility.end). Declaring the branch
+    // here pins the contract so the catalog↔handler parity test catches any
+    // future regression that adds a real outgoing edge to End.
+    outputs: ["__end__"],
   },
 ];
 

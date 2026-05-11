@@ -41,6 +41,7 @@ import adminSelfHealRouter from "./admin-self-heal";
 import adminCompetitiveIntelRouter from "./admin-competitive-intel";
 import adminEventCatalogRouter from "./admin-event-catalog";
 import formsApiDirectoryRouter from "./forms-api-directory";
+import automationsWebhookRouter from "./automations-webhook";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -60,6 +61,11 @@ markPublic(healthRouter, "health");
 markPublic(formsPublicRouter, "forms-public");
 markPublic(webFormsRouter, "web-forms");
 markPublic(webhooksRouter, "webhooks");
+// Inbound automation webhook (n8n / Zapier / Make / custom) — HMAC-SHA256
+// signed against rawBody. Mounted at /api/automations BEFORE authMiddleware
+// so providers without a JWT can reach it; the authed automations router
+// below is mounted at the same prefix and only handles other paths.
+markPublic(automationsWebhookRouter, "automations-webhook");
 // Vapi tool callbacks: PUBLIC because Vapi authenticates with a static
 // bearer token (the assistant's tool secret), not a session JWT. Each
 // handler verifies the bearer at request time against vault credentials.
@@ -128,6 +134,11 @@ router.use("/webhooks", webhooksRouter);
 // reports the correct mount path). They are public — bearer-gated per
 // handler against the active vapi integration row.
 router.use("/vapi-tools", vapiToolsRouter);
+// Public inbound automation trigger (HMAC-signed). Must mount BEFORE
+// authMiddleware. Only exposes POST /automations/webhook/:slugOrId; every
+// other /api/automations/* path falls through to the protected router
+// mounted further down.
+router.use("/automations", automationsWebhookRouter);
 router.use(authMiddleware);
 // Firm context loads req.firm from the firm_id JWT claim stamped by the
 // auth middleware. Mounted before the subscription gate so the gate (and

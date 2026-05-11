@@ -107,59 +107,13 @@ router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), as
 });
 
 // ── List workflows ────────────────────────────────────────────────────────────
-
-router.post("/webhook/:slugOrId", async (req, res) => {
-  const slugOrId = req.params.slugOrId;
-  const providedSig = req.headers["x-mtos-signature"] as string | undefined;
-
-  // Look up the workflow by id or external slug in trigger_config
-  let wf: { id: number; trigger_config: unknown } | undefined;
-  try {
-    const raw = await pool.query(
-      `SELECT id, trigger_config FROM automation_workflows
-       WHERE enabled = true
-         AND trigger_type = 'trigger.webhook'
-         AND (id::text = $1 OR trigger_config->>'slug' = $1)
-       LIMIT 1`,
-      [slugOrId]
-    );
-    wf = raw.rows[0];
-  } catch { /* db error */ }
-
-  if (!wf) {
-    // Return 200 to avoid leaking workflow existence (prevents enumeration)
-    res.json({ ok: true });
-    return;
-  }
-
-  // Verify HMAC-SHA256 signature if secret is configured
-  const config = (wf.trigger_config ?? {}) as Record<string, unknown>;
-  const secret = config["secret"] as string | undefined;
-  if (secret) {
-    if (!providedSig) {
-      res.status(401).json({ error: "Missing x-mtos-signature header" });
-      return;
-    }
-    // Compute expected HMAC-SHA256 over raw body
-    const { createHmac } = await import("node:crypto");
-    const rawBody = JSON.stringify(req.body);
-    const expected = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
-    if (providedSig !== expected) {
-      res.status(401).json({ error: "Invalid signature" });
-      return;
-    }
-  }
-
-  // Dispatch fire-and-forget — respond 200 immediately (provider timeout safe)
-  res.json({ ok: true, workflow_id: wf.id });
-  const { dispatchTrigger } = await import("../lib/automations/dispatch");
-  dispatchTrigger("trigger.webhook", {
-    input: { body: req.body, headers: req.headers, slug: slugOrId },
-    firmId: null,
-    source: "webhook.public",
-  }).catch(() => {});
-});
-
+//
+// NOTE: POST /webhook/:slugOrId is intentionally NOT defined here. The public
+// webhook handler lives in `routes/automations-webhook.ts` and is mounted at
+// `/api/automations` BEFORE the auth middleware in `routes/index.ts`. The
+// previous in-file copy of the route sat behind authMiddleware and was
+// therefore unreachable to external providers — every signed callback 401d.
+//
 router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   await repairSchema();
   const firmId = (req as any).firmId as number | undefined;
