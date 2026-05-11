@@ -15,6 +15,44 @@ import {
 } from "../lib/automations/recursive-retry";
 import { logger } from "../lib/logger";
 
+
+/** Ensure automation_workflows and automation_runs have all required columns. Idempotent. */
+async function ensureAutomationSchema(): Promise<void> {
+  const stmts = [
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS name varchar(200) NOT NULL DEFAULT 'untitled'`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS description text`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS graph jsonb NOT NULL DEFAULT '{"nodes":[],"edges":[]}'`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT false`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS trigger_type varchar(40) NOT NULL DEFAULT 'manual'`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS trigger_config jsonb NOT NULL DEFAULT '{}'`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS firm_id integer`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS created_by_user_id integer`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT now()`,
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS updated_at timestamp NOT NULL DEFAULT now()`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS workflow_id integer`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS firm_id integer`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS status varchar(20) NOT NULL DEFAULT 'pending'`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS trigger_source varchar(40) NOT NULL DEFAULT 'manual'`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS input jsonb NOT NULL DEFAULT '{}'`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS output jsonb`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS step_log jsonb NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS error text`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS started_by_user_id integer`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS started_at timestamp NOT NULL DEFAULT now()`,
+    `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS completed_at timestamp`,
+  ];
+  for (const stmt of stmts) {
+    await db.execute(sql`${sql.raw(stmt)}`).catch(() => {});
+  }
+}
+
+let _schemaEnsured = false;
+async function ensureOnce(): Promise<void> {
+  if (_schemaEnsured) return;
+  await ensureAutomationSchema();
+  _schemaEnsured = true;
+}
 const router = Router();
 router.use(authMiddleware);
 
@@ -147,6 +185,7 @@ router.get("/:id", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, r
 router.post("/", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
   const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
+  await ensureOnce();
   const userId = (req as any).user?.id as number | undefined;
   const firmId = (req as any).firmId as number | undefined;
   const [row] = await db.insert(automationWorkflowsTable).values({
