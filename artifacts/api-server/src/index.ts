@@ -3,8 +3,7 @@ import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
 import { seedDefaultFirm, seedSuperAdmin, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
 import { workerLoop } from "./worker";
-import { db } from "@workspace/db";
-import { sql } from "drizzle-orm";
+import { db, pool } from "@workspace/db";
 
 const NODE_ENV = process.env["NODE_ENV"];
 const IS_DEV = NODE_ENV === "development";
@@ -81,7 +80,7 @@ async function runSchemaRepair(): Promise<void> {
 
   for (const stmt of repairs) {
     try {
-      await db.execute(sql.raw(stmt));
+      await pool.query(stmt);
     } catch (err: any) {
       // Non-fatal: log and continue — some repairs may fail if constraints clash
       logger.warn({ err: err?.message, stmt: stmt.slice(0, 80) }, "Schema repair stmt failed (non-fatal)");
