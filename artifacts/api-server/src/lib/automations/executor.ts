@@ -42,7 +42,7 @@ import { callLLM } from "../ai-provider";
 import { getSearchAdapter } from "../search";
 import { saveFile, readFile } from "../vault";
 import { runBackgroundCheckHub } from "../bg-hub/hub";
-import { lookupNpiAndMatch } from "../taxonomy-engine";
+import { lookupNpiAndMatch, lookupNpiByNumber } from "../taxonomy-engine";
 import { serpapiAdvertiserAds, isSerpapiConfigured, SerpapiError } from "../serpapi-client";
 import { computeAndPersistLeadScore } from "../decision-engine-service";
 import { analyzeDocumentText } from "../ai-fields";
@@ -400,17 +400,30 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const html = String(resolveOrLiteral(s, p.html) ?? "");
     const fromOverride = p.from ? String(resolveOrLiteral(s, p.from)) : undefined;
     if (!to || !subject || !html) throw new Error("integration.send_email requires to, subject, and html");
-    const creds = await getIntegrationCredentials("sendgrid");
-    if (!creds) throw new Error("SendGrid integration is not configured.");
-    const adapter = getEmailAdapter("sendgrid")!;
+    // Multi-provider: route through resolveProvider so the firm's chosen
+    // email integration is used (sendgrid / postmark / mailgun / resend /
+    // aws_ses / brevo). The previous implementation hardcoded sendgrid,
+    // which silently failed for every firm that had configured anything
+    // else. `workflow-handlers.ts` already uses this pattern; this brings
+    // the visual workflow editor to parity with the scheduled workflow path.
+    const resolved = await resolveProvider("email", {});
+    if (!isResolved(resolved)) {
+      throw new Error(`integration.send_email: no email provider configured (${resolved.reason}). Pick one on the Workflow Settings page.`);
+    }
+    const adapter = getEmailAdapter(resolved.provider);
+    if (!adapter) {
+      throw new Error(`integration.send_email: no adapter wired for provider "${resolved.provider}".`);
+    }
+    const creds = resolved.credentials as Record<string, unknown>;
     const fromEmail = fromOverride
-      || (typeof (creds as any).from_email === "string" ? (creds as any).from_email : "")
+      || (typeof creds.from_email === "string" ? creds.from_email : "")
       || process.env["EMAIL_FROM_ADDRESS"]
       || "";
-    if (!fromEmail) throw new Error("SendGrid integration has no from_email configured.");
-    const result = await adapter.send(creds, { to, subject, html, fromEmail });
-    if (!result.ok) throw new Error(`SendGrid send failed: ${result.code}: ${result.message}`);
-    return { ok: true, messageId: result.externalMessageId };
+    if (!fromEmail) throw new Error(`integration.send_email: ${resolved.provider} integration has no from_email configured.`);
+    const fromName = (typeof creds.from_name === "string" ? creds.from_name : undefined) || "MTOS";
+    const result = await adapter.send(resolved.credentials, { to, fromEmail, fromName, subject, html });
+    if (!result.ok) throw new Error(`${resolved.provider} send failed: ${result.code}: ${result.message}`);
+    return { ok: true, provider: resolved.provider, messageId: result.externalMessageId };
   },
   "integration.send_fax": async (s) => {
     const p = s.node.data?.params ?? {};
@@ -418,15 +431,22 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const documentUrl = String(resolveOrLiteral(s, p.documentUrl) ?? "").trim();
     if (!to || !documentUrl) throw new Error("integration.send_fax requires to and documentUrl");
     const safeUrl = await assertSafeOutboundUrl(documentUrl);
-    const creds = await getIntegrationCredentials("srfax");
-    if (!creds) throw new Error("SRFax integration is not configured.");
-    const adapter = getFaxAdapter("srfax")!;
+    // Multi-provider: route through resolveProvider for fax (srfax / efax /
+    // phaxio / documo / telnyx_fax). Previously hardcoded to srfax.
+    const resolved = await resolveProvider("fax", {});
+    if (!isResolved(resolved)) {
+      throw new Error(`integration.send_fax: no fax provider configured (${resolved.reason}). Pick one on the Workflow Settings page.`);
+    }
+    const adapter = getFaxAdapter(resolved.provider);
+    if (!adapter) {
+      throw new Error(`integration.send_fax: no adapter wired for provider "${resolved.provider}".`);
+    }
     const docRes = await fetch(safeUrl.toString());
     if (!docRes.ok) throw new Error(`Could not fetch document at ${documentUrl}: HTTP ${docRes.status}`);
     const pdf = Buffer.from(await docRes.arrayBuffer());
     const fileName = safeUrl.pathname.split("/").pop() || "document.pdf";
-    const result = await adapter.send(creds, { toNumber: to, pdf, fileName });
-    if (!result.ok) throw new Error(`SRFax send failed: ${result.code}: ${result.message}`);
+    const result = await adapter.send(resolved.credentials, { toNumber: to, pdf, fileName });
+    if (!result.ok) throw new Error(`${resolved.provider} send failed: ${result.code}: ${result.message}`);
     return { ok: true, externalId: (result as any).externalFaxId };
   },
   "integration.send_esign": async (s) => {
@@ -794,20 +814,25 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   },
   "crm.npi_lookup": async (s) => {
     // Catalog declares a single `npi` param. The NPPES helper supports both
-    // raw NPI numbers (10-digit) and "first last" strings, so we accept both
-    // shapes here for operator convenience.
+    // raw NPI numbers (10-digit) and "first last" strings; we route to the
+    // appropriate NPPES query mode based on the input shape so operators
+    // can paste whichever form they have on hand.
     const p = s.node.data?.params ?? {};
     const npi = String(resolveOrLiteral(s, p.npi ?? s.input?.npi) ?? "").trim();
     if (!npi) throw new Error("crm.npi_lookup requires `npi` (NPI number or 'first last').");
-    let first = "", last = "", diagnosis = "";
-    if (/^\d{10}$/.test(npi)) {
-      // Raw NPI — we don't have a direct number lookup wired; fall back to
-      // surfacing the number so downstream nodes can use it.
-      return { npi, lookup: "deferred", note: "Direct NPI-by-number lookup not wired; use first/last query." };
+    const diagnosis = String(resolveOrLiteral(s, s.input?.diagnosis) ?? "");
+    const digitsOnly = npi.replace(/\D/g, "");
+    if (digitsOnly.length === 10 && /^\d{10}$/.test(digitsOnly)) {
+      // Direct NPI-by-number lookup against the NPPES `number=` query mode.
+      // Returns the same envelope shape as the name-search path plus the
+      // registered first/last name so a downstream node can sanity-check
+      // it against what the lead provided.
+      const result = await lookupNpiByNumber(digitsOnly, diagnosis);
+      return result;
     }
     const parts = npi.split(/\s+/);
-    first = parts[0] ?? ""; last = parts.slice(1).join(" ");
-    diagnosis = String(resolveOrLiteral(s, s.input?.diagnosis) ?? "");
+    const first = parts[0] ?? "";
+    const last = parts.slice(1).join(" ");
     if (!first || !last) throw new Error("crm.npi_lookup `npi` must be a 10-digit NPI or 'first last'.");
     const result = await lookupNpiAndMatch(first, last, diagnosis);
     return result;

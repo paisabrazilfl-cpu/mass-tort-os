@@ -10,6 +10,7 @@ import { logger } from "../lib/logger";
 import { pingLeadWebhook } from "../lib/lead-webhook-dispatcher";
 import { badRequest } from "../lib/http-errors";
 import { requireFirmId } from "../lib/firm-scope";
+import { getSyncHandler, listSyncableProviders } from "../lib/integration-sync";
 import crypto from "crypto";
 
 const router = Router();
@@ -441,24 +442,77 @@ router.post("/:id/sync", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
     .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
   if (!integration) { res.status(404).json({ error: "Not found" }); return; }
 
-  // Honest stub: there is no per-provider sync handler in this codebase yet,
-  // so we don't pretend to have synced records and we don't bump
-  // `last_sync_at` (that column is meant to reflect a real sync). We still
-  // emit the audit row so a future implementation has a clear hook and so
-  // operators can see who clicked Sync. Records-synced is 0, not a random
-  // number, and `implemented: false` lets the UI render an honest message.
-  await auditLog("integration", String(req.user?.id || 0), "integration_sync_requested", {
+  // Resolve the per-provider sync handler from the registry. If none is
+  // registered the provider is event-driven (Stripe / Telnyx / Vapi /
+  // DocuSign / Dropbox Sign / etc.) or simply doesn't support a
+  // pull-style sync yet. Return 501 with a machine-readable envelope and
+  // the canonical list of providers that DO support sync so the UI can
+  // hide the button instead of misleading the operator.
+  const handler = getSyncHandler(integration.provider);
+  if (!handler) {
+    await auditLog("integration", String(req.user?.id || 0), "integration_sync_unsupported", {
+      id,
+      provider: integration.provider,
+      syncable_providers: listSyncableProviders(),
+    });
+    res.status(501).json({
+      status: "error",
+      code: "sync_not_supported",
+      success: false,
+      implemented: false,
+      provider: integration.provider,
+      syncable_providers: listSyncableProviders(),
+      message: `${integration.provider} is event-driven (or no sync handler is registered). The UI should disable the Sync button for this provider. Currently syncable: ${listSyncableProviders().join(", ") || "(none)"}.`,
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
+  let outcome;
+  try {
+    outcome = await handler(integration as any);
+  } catch (err) {
+    logger.error({ err, provider: integration.provider, id }, "integration sync handler threw");
+    await auditLog("integration", String(req.user?.id || 0), "integration_sync_failed", {
+      id,
+      provider: integration.provider,
+      err: String((err as Error)?.message ?? err).slice(0, 500),
+    });
+    res.status(500).json({
+      status: "error",
+      code: "sync_failed",
+      success: false,
+      implemented: true,
+      provider: integration.provider,
+      message: String((err as Error)?.message ?? err).slice(0, 500),
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
+  // Real sync ran (even if it found nothing to do). Bump last_sync_at on
+  // the row so the UI's "last synced" timestamp reflects the actual call.
+  await db
+    .update(integrationsTable)
+    .set({ last_sync_at: new Date() })
+    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
+
+  await auditLog("integration", String(req.user?.id || 0), "integration_sync_ran", {
     id,
     provider: integration.provider,
-    handler_implemented: false,
+    ok: outcome.ok,
+    records_synced: outcome.records_synced,
   });
 
   res.json({
-    success: false,
-    implemented: false,
-    records_synced: 0,
-    direction: integration.sync_direction,
-    message: `Sync handler for ${integration.provider} is not yet implemented. The credential vault is wired up — once a provider-specific sync worker is added, this button will run it.`,
+    status: outcome.ok ? "ok" : "error",
+    success: outcome.ok,
+    implemented: true,
+    records_synced: outcome.records_synced,
+    direction: outcome.direction,
+    details: outcome.details ?? null,
+    error: outcome.error ?? null,
+    provider: integration.provider,
     timestamp: new Date().toISOString(),
   });
 });

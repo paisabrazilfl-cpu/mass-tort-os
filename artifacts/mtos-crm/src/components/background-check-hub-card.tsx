@@ -26,14 +26,28 @@ const LANE_LABEL: Record<string, string> = {
   address: "Address Verification",
   email: "Email Validation",
   phone: "Phone Validation",
-  residency: "Residency Cross-Check",
+  residency: "Residency Cross-Check (manual property-records lookup)",
   criminal_court: "Criminal / Court Records",
-  incarceration: "Incarceration Status",
-  sex_offender_nsopw: "Sex Offender Registry (NSOPW)",
-  attorney: "Attorney Conflict Check",
-  business_entity: "Business Entity Check",
+  incarceration: "Incarceration Status (manual lookup)",
+  sex_offender_nsopw: "Sex Offender Registry (NSOPW — manual lookup)",
+  attorney: "Attorney Conflict Check (manual bar lookup)",
+  business_entity: "Business Entity Check (manual)",
   pacer_federal: "PACER (Federal Courts)",
 };
+
+// Lanes that have no live data adapter today. UI surfaces them so the
+// operator gets the prompt to run the lookup manually, but they will
+// always resolve to REVIEW_REQUIRED — never to a green PASS — so a buyer
+// looking at the badge cluster can't misread "all green" as automated
+// clearance. Source of truth: lib/bg-hub/adapters.ts comments
+// ("honest stub" markers).
+const ADVISORY_MANUAL_LANES = new Set<string>([
+  "residency",
+  "incarceration",
+  "sex_offender_nsopw",
+  "attorney",
+  "business_entity",
+]);
 
 function statusBadge(status: string) {
   switch (status) {

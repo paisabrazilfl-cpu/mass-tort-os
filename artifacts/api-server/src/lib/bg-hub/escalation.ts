@@ -114,10 +114,25 @@ export interface FlagEvaluation {
   notes: string[];
 }
 
+// Lanes with no live data adapter today (lib/bg-hub/adapters.ts "honest stub"
+// markers). These can never return a clean PASS — even when their adapter
+// emits zero flags we force REVIEW_REQUIRED so a buyer cannot misread an
+// all-green badge cluster as automated clearance. If you add a real adapter
+// for one of these lanes, REMOVE its entry from this set and let the normal
+// flag taxonomy decide.
+export const STUB_LANES: ReadonlySet<BackgroundLane> = new Set([
+  "residency",
+  "incarceration",
+  "sex_offender_nsopw",
+  "attorney",
+  "business_entity",
+]);
+
 // Translate a set of observed flags into a status + score for one lane.
 // Precedence is: any FAIL flag → FAIL; otherwise any REVIEW flag → REVIEW;
 // otherwise any UNKNOWN flag → REVIEW (because we don't trust silent drift);
-// otherwise PASS.
+// otherwise PASS — UNLESS the lane is in STUB_LANES, in which case the best
+// achievable status is REVIEW_REQUIRED.
 export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEvaluation {
   const rules = BACKGROUND_ESCALATION_RULES[lane];
   if (!rules) {
@@ -150,6 +165,16 @@ export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEval
       status: "REVIEW_REQUIRED",
       score: 60,
       notes: [`Unknown flags require review: ${unknownHits.join(", ")}`],
+    };
+  }
+  if (STUB_LANES.has(lane)) {
+    // Defense in depth. A stub-lane adapter that returned an empty flag
+    // array would otherwise resolve to PASS via the line below. Force
+    // REVIEW so the operator is always prompted to run the manual lookup.
+    return {
+      status: "REVIEW_REQUIRED",
+      score: 50,
+      notes: ["No live data adapter for this lane — manual operator lookup required."],
     };
   }
   return {

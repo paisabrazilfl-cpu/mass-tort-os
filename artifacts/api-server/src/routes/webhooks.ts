@@ -820,11 +820,39 @@ function buildVerifyCtx(req: import("express").Request): VerifyContext {
  * the webhook still 200s but signature_status falls through to
  * "unverified".
  */
-async function loadProviderForWebhook(provider: string): Promise<{
+async function loadProviderForWebhook(
+  provider: string,
+  explicitIntegrationId?: number | null,
+): Promise<{
   integrationId: number | null;
   firmId: number | null;
   creds: import("./integrations").DecryptedCredentials | null;
 }> {
+  // Per-firm webhook URL path: if the inbound webhook URL carried an
+  // explicit integration id (e.g. /api/webhooks/sms/telnyx/i/42) we use
+  // that row directly instead of guessing among all active integrations
+  // for the provider. This is the disambiguation hook the prior audit
+  // flagged: providers like Telnyx send all callbacks to one URL, so
+  // until a firm registers its own per-firm URL with the provider the
+  // server has to guess. With this path, Firm B can configure Telnyx to
+  // POST to /api/webhooks/sms/telnyx/i/<firm-B-integration-id> and the
+  // server will route to that exact row, no ambiguity.
+  if (explicitIntegrationId && Number.isFinite(explicitIntegrationId)) {
+    const [row] = await db
+      .select({ id: integrationsTable.id, status: integrationsTable.status, firm_id: integrationsTable.firm_id, provider: integrationsTable.provider })
+      .from(integrationsTable)
+      .where(eq(integrationsTable.id, explicitIntegrationId));
+    if (!row || row.status !== "active") return { integrationId: null, firmId: null, creds: null };
+    if (row.provider !== provider) {
+      logger.warn(
+        { url_provider: provider, row_provider: row.provider, integration_id: row.id },
+        "loadProviderForWebhook: explicit integration id is for a different provider — refusing to route",
+      );
+      return { integrationId: null, firmId: null, creds: null };
+    }
+    const creds = await getIntegrationCredentialsById(row.id, row.firm_id ?? undefined);
+    return { integrationId: row.id, firmId: row.firm_id ?? null, creds };
+  }
   const rows = await db
     .select({ id: integrationsTable.id, status: integrationsTable.status, firm_id: integrationsTable.firm_id })
     .from(integrationsTable)
@@ -836,7 +864,7 @@ async function loadProviderForWebhook(provider: string): Promise<{
     if (distinctFirms.size > 1) {
       logger.warn(
         { provider, firmCount: distinctFirms.size, firmIds: [...distinctFirms] },
-        "loadProviderForWebhook: multiple firms have this provider active — picking the first match. Per-firm webhook URLs are required for full disambiguation.",
+        "loadProviderForWebhook: multiple firms have this provider active — picking the first match. Switch each firm to the per-firm /i/:integrationId URL to disambiguate.",
       );
     }
   }
@@ -845,7 +873,21 @@ async function loadProviderForWebhook(provider: string): Promise<{
   return { integrationId: chosen.id, firmId: chosen.firm_id ?? null, creds };
 }
 
-router.post("/email/:provider", async (req, res) => {
+// Parse the optional /i/:integrationId suffix from req.params. We accept
+// EITHER /api/webhooks/<channel>/:provider OR /api/webhooks/<channel>/:provider/i/:integrationId
+// using the same handler, which keeps Express route registrations simple.
+function readExplicitIntegrationId(req: import("express").Request): number | null {
+  const raw = (req.params as Record<string, string>).integrationId;
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// Two route shapes share the same handler:
+//   /api/webhooks/email/:provider                       — single-firm or "any active integration" routing
+//   /api/webhooks/email/:provider/i/:integrationId      — per-firm: provider posts to a URL that names the
+//                                                          exact integration row, no cross-firm ambiguity.
+router.post(["/email/:provider", "/email/:provider/i/:integrationId"], async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
   if (!EMAIL_EVENT_PROVIDERS.has(provider)) {
     notFound(res, "unknown_email_provider");
@@ -857,7 +899,7 @@ router.post("/email/:provider", async (req, res) => {
     ? [req.body]
     : [];
 
-  const { integrationId, firmId, creds } = await loadProviderForWebhook(provider);
+  const { integrationId, firmId, creds } = await loadProviderForWebhook(provider, readExplicitIntegrationId(req));
 
   // Verify ONCE per request — provider sigs cover the whole rawBody.
   const verifier = getEmailVerifier(provider);
@@ -915,7 +957,7 @@ router.post("/email/:provider", async (req, res) => {
   res.json({ ok: true, received: events.length, signature_status: signatureStatus });
 });
 
-router.post("/fax/:provider", async (req, res) => {
+router.post(["/fax/:provider", "/fax/:provider/i/:integrationId"], async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
   if (!FAX_EVENT_PROVIDERS.has(provider)) {
     notFound(res, "unknown_fax_provider");
@@ -923,7 +965,7 @@ router.post("/fax/:provider", async (req, res) => {
   }
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
 
-  const { integrationId, firmId } = await loadProviderForWebhook(provider);
+  const { integrationId, firmId } = await loadProviderForWebhook(provider, readExplicitIntegrationId(req));
   // No documented common signature schemes for srfax/efax/phaxio/documo/telnyx_fax
   // (Telnyx Fax uses the same Ed25519 scheme as its SMS API but the v2 raw fax
   // webhook is opt-in and rarely configured). Mark unverified.
@@ -986,7 +1028,7 @@ router.post("/fax/:provider", async (req, res) => {
   res.json({ ok: true, signature_status: signatureStatus });
 });
 
-router.post("/sms/:provider", async (req, res) => {
+router.post(["/sms/:provider", "/sms/:provider/i/:integrationId"], async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
   // twilio is allowed here so its signature scheme is enforced via the
   // shared verifier registry; bandwidth/plivo/messagebird/sinch are
@@ -998,7 +1040,7 @@ router.post("/sms/:provider", async (req, res) => {
   }
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
 
-  const { integrationId, firmId, creds } = await loadProviderForWebhook(provider);
+  const { integrationId, firmId, creds } = await loadProviderForWebhook(provider, readExplicitIntegrationId(req));
   const verifier = getSmsVerifier(provider);
   let signatureStatus: SignatureStatus = "unverified";
   if (verifier) signatureStatus = verifier(buildVerifyCtx(req), creds);
@@ -1108,7 +1150,7 @@ function normalizeVoiceStatus(raw: string | undefined): string {
   return s.slice(0, 30);
 }
 
-router.post("/voice/:provider", async (req, res) => {
+router.post(["/voice/:provider", "/voice/:provider/i/:integrationId"], async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
   if (!VOICE_EVENT_PROVIDERS.has(provider)) {
     notFound(res, "unknown_voice_provider");
@@ -1122,7 +1164,7 @@ router.post("/voice/:provider", async (req, res) => {
   // `x-<provider>-signature` header (HMAC-SHA256 over rawBody). Anything
   // we cannot verify falls back to "unverified" and is blocked from
   // persisting below.
-  const { creds: voiceCreds } = await loadProviderForWebhook(provider);
+  const { creds: voiceCreds } = await loadProviderForWebhook(provider, readExplicitIntegrationId(req));
   let signatureStatus: SignatureStatus = "unverified";
   const voiceSecret = typeof voiceCreds?.client_secret === "string" ? voiceCreds.client_secret : null;
   const voiceSig =

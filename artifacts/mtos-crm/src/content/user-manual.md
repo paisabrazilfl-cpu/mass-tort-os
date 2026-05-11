@@ -526,11 +526,14 @@ All four are converted into structured `AttemptOutcome`s and fed to `recursiveRe
   - **Action:** `execute`, `modify`, `reject`, `review`.
 - **AI verification step:** `lib/ai-extract.ts` runs an LLM check of clinical details against vault documents and emits "Reliability" + "Truthfulness" scores.
 
-### 11.4 Praxis AI (Predictive) — `/predictive`
+### 11.4 Praxis Predictive Scoring — `/predictive`
 - **Permission:** `analytics:predictive:lead`.
 - **Endpoints:** `GET /api/analytics/predictive/batch`, `GET /api/analytics/predictive/lead/:id`, `GET /api/analytics/predictive/model`.
-- **Output for a lead:** `conversion_probability` (0-100), `risk_score` (0-100), `quality_tier` ∈ {`platinum`, `gold`, `silver`, `bronze`, `unqualified`}, plus a positive/negative-impact factor list.
-- **Inputs used:** `leads` columns — medical history, age, location, tort type.
+- **What it is:** a deterministic **weighted-feature scorer**, NOT a trained machine-learning model. The `total_training_samples` field name is a legacy misnomer kept for API stability — the actual value is "leads scored" (the front-end label was updated to reflect this; `lib/predictive-scoring.ts:14-15`). The `model_accuracy` field is an honest backtest against signed-vs-rejected outcomes, not an ML training metric.
+- **Output for a lead:** `conversion_probability` (0-100), `risk_score` (0-100), `quality_tier` ∈ {`platinum`, `gold`, `silver`, `bronze`, `unqualified`}, plus a positive/negative-impact factor list derived from the same feature weights that produced the score.
+- **Inputs used:** `leads` columns — fraud_score, npi_verified, diagnosis_confirmed, was_at_location, presence of email/phone/address, ad_spend, source.
+
+> **Marketing note.** Do not market this as "trained AI" or "machine-learning predictive model." It is a hand-tuned weighted scorer with backtest accuracy reporting. "Predictive scoring" / "lead-quality scoring" / "explainable scoring" are accurate; "trained on your data" / "ML model" are not.
 
 ### 11.5 Bright lines (always require a human)
 The AI / system will **never** do the following unattended:
