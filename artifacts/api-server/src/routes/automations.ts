@@ -65,11 +65,12 @@ router.use(authMiddleware);
  */
 function firmPredicate(firmId: number | null | undefined) {
   if (firmId == null) return isNull(automationWorkflowsTable.firm_id);
-  return eq(automationWorkflowsTable.firm_id, firmId);
+  // Include firm-scoped rows AND null-firm rows (global/system workflows)
+  return or(eq(automationWorkflowsTable.firm_id, firmId), isNull(automationWorkflowsTable.firm_id))!;
 }
 function runFirmPredicate(firmId: number | null | undefined) {
   if (firmId == null) return isNull(automationRunsTable.firm_id);
-  return eq(automationRunsTable.firm_id, firmId);
+  return or(eq(automationRunsTable.firm_id, firmId), isNull(automationRunsTable.firm_id))!;
 }
 
 const graphSchema = z.object({
