@@ -304,6 +304,10 @@ app.listen(port, async (err) => {
         }).catch(() => {});
       }, 60_000);
       logger.info("Schedule poller started (60s interval)");
+
+    // Start CI poller (recursive: IDLE→POLL→DETECT→TEST→AI_REVIEW→GATE→COMPLETE/RETRY/ABORT)
+    const { startCiPoller } = await import("./lib/ci-poller");
+    startCiPoller();
     })().catch((err) => logger.error({ err }, "Schedule poller failed to start"));
 
   } else {
