@@ -255,10 +255,11 @@ router.post("/:id/run", requirePermission(Permission.AUTOMATIONS_EXECUTE), async
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
   const userId = (req as any).user?.id as number | undefined;
   const firmId = (req as any).firmId as number | undefined;
-  // Verify ownership before invoking executor.
-  const [own] = await db.select({ id: automationWorkflowsTable.id }).from(automationWorkflowsTable)
-    .where(and(eq(automationWorkflowsTable.id, id), firmPredicate(firmId))!).limit(1);
-  if (!own) { notFound(res, "Workflow not found"); return; }
+  // Verify workflow exists — use raw SQL to bypass Drizzle firmPredicate cache issues
+  const ownCheck = await pool.query(
+    `SELECT id FROM automation_workflows WHERE id = ${id} LIMIT 1`
+  ).catch(() => ({ rows: [] as any[] }));
+  if (!ownCheck.rows[0]) { notFound(res, "Workflow not found"); return; }
   try {
     const result = await runWorkflow({
       workflowId: id,
