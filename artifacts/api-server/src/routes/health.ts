@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
 
 const router: IRouter = Router();
-export const BUILD_VERSION = "v20260511-ci";
+export const BUILD_VERSION = "v20260511-security";
 
 // Shared CI state store — CI poller writes here, endpoint reads
 export let _ciState: Record<string, unknown> = { state: "NOT_STARTED" };
