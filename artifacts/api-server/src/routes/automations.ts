@@ -49,7 +49,6 @@ async function ensureAutomationSchema(): Promise<void> {
 let _schemaEnsured = false;
 async function ensureOnce(): Promise<void> {
   if (_schemaEnsured) return;
-  await ensureAutomationSchema();
   _schemaEnsured = true;
 }
 const router = Router();
@@ -200,7 +199,6 @@ router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), as
 });
 
 router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
-  await ensureAutomationSchema();
   const firmId = (req as any).firmId as number | undefined;
   // Use raw SQL via pool to bypass Drizzle schema cache issues with runtime-created columns
   try {
