@@ -93,6 +93,24 @@ function finalStatusHeadline(result: BackgroundHubResult) {
   }
 }
 
+// Sub-headline reporting just the lanes that actually run an adapter.
+// Lets the operator see "automated checks cleared" without the headline
+// being dragged to REVIEW by the 5 advisory stub lanes. Keep this
+// strictly informational — the gating decision still uses `final_status`.
+function liveLanesHeadline(result: BackgroundHubResult) {
+  switch (result.final_status_live_lanes_only) {
+    case BackgroundHubResultFinalStatus.PASS:
+      return { color: "text-emerald-700", label: "Automated checks: PASS" };
+    case BackgroundHubResultFinalStatus.REVIEW_REQUIRED:
+      return { color: "text-amber-700", label: "Automated checks: REVIEW" };
+    case BackgroundHubResultFinalStatus.FAIL:
+      return { color: "text-red-700", label: "Automated checks: FAIL" };
+    case BackgroundHubResultFinalStatus.NOT_RUN:
+    default:
+      return { color: "text-muted-foreground", label: "Automated checks: NOT RUN" };
+  }
+}
+
 interface PacerCase {
   case_number?: string;
   title?: string;
@@ -209,6 +227,7 @@ function LaneRow({ lane }: { lane: BackgroundHubLaneResult }) {
 
 function ResultBlock({ result }: { result: BackgroundHubResult }) {
   const headline = finalStatusHeadline(result);
+  const live = liveLanesHeadline(result);
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between border rounded-md p-3 bg-slate-50">
@@ -216,6 +235,10 @@ function ResultBlock({ result }: { result: BackgroundHubResult }) {
           <headline.Icon className={`h-5 w-5 ${headline.color}`} />
           <div>
             <div className={`font-semibold text-sm ${headline.color}`}>{headline.label}</div>
+            <div className={`text-xs ${live.color}`}>
+              {live.label}
+              {" "}({result.summary.live_lanes_pass}/{result.summary.live_lanes_total} live lanes)
+            </div>
             <div className="text-xs text-muted-foreground">
               Overall score: {result.overall_score} / 100 ·
               {" "}{result.summary.pass} pass · {result.summary.review_required} review ·

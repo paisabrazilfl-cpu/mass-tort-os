@@ -2,12 +2,23 @@ import type { BackgroundLane, BackgroundStatus } from "./types";
 
 // Per-lane flag taxonomy. A lane's adapter emits flags from this vocabulary;
 // the arbiter (statusFromFlags) maps the observed set to PASS / FAIL /
-// REVIEW_REQUIRED. Keep this table small and explicit — drift between
-// adapter-emitted flags and rules causes the "unknown_hits" branch to fire,
-// which is REVIEW_REQUIRED on purpose so the operator notices.
+// REVIEW_REQUIRED / NOT_RUN. Keep this table small and explicit — drift
+// between adapter-emitted flags and rules causes the "unknown_hits"
+// branch to fire, which is REVIEW_REQUIRED on purpose so the operator
+// notices.
+//
+// Categories:
+//   fail   — hard adverse signal. Lane resolves FAIL immediately.
+//   review — non-decisive signal. Lane resolves REVIEW_REQUIRED.
+//   skip   — adapter deliberately skipped (e.g. sub-source not
+//            configured, irrelevant for this lead). If a lane emits
+//            ONLY skip flags, it resolves NOT_RUN so the UI distinguishes
+//            "we didn't run this" from "we ran it and it needs review."
+//            Skip flags combined with review/fail flags lose to the
+//            stronger signal.
 export const BACKGROUND_ESCALATION_RULES: Record<
   BackgroundLane,
-  { fail: readonly string[]; review: readonly string[] }
+  { fail: readonly string[]; review: readonly string[]; skip?: readonly string[] }
 > = {
   address: {
     fail: [
@@ -53,11 +64,20 @@ export const BACKGROUND_ESCALATION_RULES: Record<
       "similar_name_match",
       "court_records_found_review",
       "court_source_unreachable",
-      // OFAC sanctions check is a CONFIGURED source (gated on OFAC_API_KEY).
-      // When it's skipped or unreachable we MUST escalate to REVIEW — a
-      // configured source that wasn't actually checked must never resolve to
-      // a silent PASS. See adaptCriminalCourt.
+      // OFAC unreachable at run-time (network error, provider returned 5xx)
+      // → REVIEW: we tried, we got nothing, operator should look. This is
+      // distinct from `ofac_unconfigured` which routes to NOT_RUN below.
       "ofac_unavailable",
+    ],
+    skip: [
+      // OFAC was deliberately skipped because the source isn't configured
+      // (legacy paid path with no OFAC_API_KEY AND Treasury disabled). Pre-
+      // flight signal — different from "we tried and failed." If the lane
+      // has NO other flags, this resolves NOT_RUN so the operator
+      // distinguishes a missing-key install from a genuinely-needs-review
+      // lead. With the Treasury free path enabled (default), this branch
+      // is essentially unreachable.
+      "ofac_unconfigured",
     ],
   },
 
@@ -142,9 +162,13 @@ export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEval
       notes: [`No escalation rule for lane "${lane}" — treated as review.`],
     };
   }
+  const skipList = rules.skip ?? [];
   const failHits = flags.filter((f) => rules.fail.includes(f));
   const reviewHits = flags.filter((f) => rules.review.includes(f));
-  const unknownHits = flags.filter((f) => !rules.fail.includes(f) && !rules.review.includes(f));
+  const skipHits = flags.filter((f) => skipList.includes(f));
+  const unknownHits = flags.filter(
+    (f) => !rules.fail.includes(f) && !rules.review.includes(f) && !skipList.includes(f),
+  );
 
   if (failHits.length > 0) {
     return {
@@ -165,6 +189,17 @@ export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEval
       status: "REVIEW_REQUIRED",
       score: 60,
       notes: [`Unknown flags require review: ${unknownHits.join(", ")}`],
+    };
+  }
+  if (skipHits.length > 0) {
+    // Only skip flags present — the lane's sub-source was deliberately
+    // not run. Report NOT_RUN so the operator can distinguish "config
+    // gap" from "needs review." Score reflects the gap, not a clean
+    // outcome.
+    return {
+      status: "NOT_RUN",
+      score: 40,
+      notes: [`Sub-source skipped: ${skipHits.join(", ")}`],
     };
   }
   if (STUB_LANES.has(lane)) {

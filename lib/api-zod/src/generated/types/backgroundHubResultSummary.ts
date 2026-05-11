@@ -11,4 +11,9 @@ export type BackgroundHubResultSummary = {
   review_required: number;
   fail: number;
   not_run: number;
+  live_lanes_total: number;
+  live_lanes_pass: number;
+  live_lanes_review: number;
+  live_lanes_fail: number;
+  live_lanes_not_run: number;
 };

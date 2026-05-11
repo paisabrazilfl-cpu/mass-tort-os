@@ -205,16 +205,33 @@ export async function adaptCriminalCourt(lead: LeadLike): Promise<BackgroundLane
       flags.push("court_records_found_review");
     }
     // OFAC honesty check: runBackgroundCheck() can return status: "clean"
-    // even when OFAC was never actually queried (key missing) or unreachable
-    // (provider HTTP error). It records the issue in `bg.notes` rather than
-    // mutating the headline status. We must inspect the notes and escalate
-    // to REVIEW so a partially-checked lead never silently PASSes through
-    // the criminal_court lane just because the court half came back clean.
-    const ofacSkipped = (bg.notes ?? []).some((n) =>
-      /ofac.*(skipped|unavailable|unconfigured|not\s+configured|provider)/i.test(n),
+    // even when OFAC was never actually queried or unreachable. It records
+    // the issue in `bg.notes` rather than mutating the headline status. We
+    // split that into two outcomes:
+    //
+    //   ofac_unconfigured — operator deliberately disabled Treasury and
+    //                       didn't supply an OFAC_API_KEY. Pre-flight
+    //                       signal, routes to NOT_RUN via the `skip`
+    //                       category in escalation.ts.
+    //   ofac_unavailable  — we tried and got nothing back (5xx, network
+    //                       error, malformed response). Routes to REVIEW.
+    //
+    // With the free Treasury SDN path enabled (default), the unconfigured
+    // branch is essentially unreachable. We keep emitting it so an
+    // operator who deliberately disables Treasury sees an honest NOT_RUN
+    // signal instead of a misleading REVIEW.
+    const ofacNotes = (bg.notes ?? []).filter((n) => /ofac/i.test(n));
+    const ofacUnconfigured = ofacNotes.some((n) =>
+      /skipped.*no\s+provider|unconfigured|not\s+configured/i.test(n),
     );
-    if (ofacSkipped) {
+    const ofacUnreachable = ofacNotes.some(
+      (n) => !/skipped.*no\s+provider|unconfigured|not\s+configured/i.test(n)
+        && /unavailable|provider returned|http \d|timeout|unreachable/i.test(n),
+    );
+    if (ofacUnreachable) {
       flags.push("ofac_unavailable");
+    } else if (ofacUnconfigured) {
+      flags.push("ofac_unconfigured");
     }
     // Same defense for the courts side: if the source-notes call out the
     // CourtListener fetch failed but bg.status didn't propagate "error",

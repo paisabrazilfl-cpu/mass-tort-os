@@ -1157,12 +1157,24 @@ export type BackgroundHubResultSummary = {
   review_required: number;
   fail: number;
   not_run: number;
+  live_lanes_total: number;
+  live_lanes_pass: number;
+  live_lanes_review: number;
+  live_lanes_fail: number;
+  live_lanes_not_run: number;
 };
 
 export interface BackgroundHubResult {
   lead_id: number;
   version: string;
+  /** Whole-hub aggregate (includes advisory stub lanes). Strict gate. */
   final_status: BackgroundHubResultFinalStatus;
+  /**
+   * Aggregate restricted to lanes with a live data adapter. UI uses this
+   * to render "automated checks cleared" without falsely implying that
+   * the manual-lookup stub lanes have run.
+   */
+  final_status_live_lanes_only: BackgroundHubResultFinalStatus;
   overall_score: number;
   checked_at: string;
   summary: BackgroundHubResultSummary;

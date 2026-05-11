@@ -58,7 +58,24 @@ export interface BackgroundLaneResult {
 export interface BackgroundHubResult {
   lead_id: number;
   version: string;
+  /**
+   * Whole-hub status: aggregates EVERY lane, including the 5 advisory
+   * stub lanes that intentionally always return REVIEW_REQUIRED until
+   * a live adapter is built. This is what a strict gate should consult
+   * — a lead is not "fully cleared" until those manual lookups are done.
+   */
   final_status: BackgroundStatus;
+  /**
+   * Live-lanes-only aggregate: same precedence (FAIL → REVIEW → NOT_RUN
+   * → PASS) but evaluated ONLY against lanes that have a live data
+   * adapter (see lib/bg-hub/escalation.ts → STUB_LANES). This is what
+   * the operator UI shows when reporting "all automated checks
+   * cleared" — it lets a buyer distinguish "the system actually found
+   * something" from "we haven't built adapters for these advisory
+   * lanes yet." A PASS here does NOT mean the lead is fully cleared;
+   * it means every adapter we shipped came back clean.
+   */
+  final_status_live_lanes_only: BackgroundStatus;
   overall_score: number;
   checked_at: string;
   summary: {
@@ -66,6 +83,12 @@ export interface BackgroundHubResult {
     review_required: number;
     fail: number;
     not_run: number;
+    // Same counts but restricted to live (non-stub) lanes.
+    live_lanes_total: number;
+    live_lanes_pass: number;
+    live_lanes_review: number;
+    live_lanes_fail: number;
+    live_lanes_not_run: number;
   };
   results: BackgroundLaneResult[];
 }

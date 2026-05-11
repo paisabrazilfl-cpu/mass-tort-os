@@ -3752,6 +3752,16 @@ components:
         final_status:
           type: string
           enum: [PASS, REVIEW_REQUIRED, FAIL, NOT_RUN]
+          description: >-
+            Whole-hub aggregate over EVERY lane, including advisory stub
+            lanes that always REVIEW. Strict gate.
+        final_status_live_lanes_only:
+          type: string
+          enum: [PASS, REVIEW_REQUIRED, FAIL, NOT_RUN]
+          description: >-
+            Aggregate restricted to lanes with a live data adapter. Lets
+            the UI render "all automated checks cleared" while still
+            showing manual-lookup lanes pending.
         overall_score:
           type: integer
         checked_at:
@@ -3767,7 +3777,26 @@ components:
               type: integer
             not_run:
               type: integer
-          required: [pass, review_required, fail, not_run]
+            live_lanes_total:
+              type: integer
+            live_lanes_pass:
+              type: integer
+            live_lanes_review:
+              type: integer
+            live_lanes_fail:
+              type: integer
+            live_lanes_not_run:
+              type: integer
+          required:
+            - pass
+            - review_required
+            - fail
+            - not_run
+            - live_lanes_total
+            - live_lanes_pass
+            - live_lanes_review
+            - live_lanes_fail
+            - live_lanes_not_run
         results:
           type: array
           items:
@@ -3776,6 +3805,7 @@ components:
         - lead_id
         - version
         - final_status
+        - final_status_live_lanes_only
         - overall_score
         - checked_at
         - summary

@@ -10,6 +10,7 @@ import {
   adaptPhone,
   adaptResidency,
 } from "./adapters";
+import { STUB_LANES } from "./escalation";
 import { BACKGROUND_SOURCES } from "./sources";
 import {
   BG_HUB_VERSION,
@@ -77,11 +78,25 @@ export async function runBackgroundCheckHub(lead: LeadLike): Promise<BackgroundH
     };
   });
 
+  // Live lanes = the ones with a real data adapter today. Stub lanes
+  // (residency, incarceration, NSOPW, attorney, business_entity) are
+  // structurally REVIEW_REQUIRED forever per escalation.ts's STUB_LANES
+  // pin — so including them in any "all automated checks cleared" signal
+  // means that signal can never be PASS. Split the aggregate so the
+  // operator UI can render "automated checks: PASS" while still showing
+  // "full clearance still needs manual lookups" in the stub-lane band.
+  const liveLaneResults = results.filter((r) => !STUB_LANES.has(r.lane));
+
   const summary = {
     pass: results.filter((r) => r.status === "PASS").length,
     review_required: results.filter((r) => r.status === "REVIEW_REQUIRED").length,
     fail: results.filter((r) => r.status === "FAIL").length,
     not_run: results.filter((r) => r.status === "NOT_RUN").length,
+    live_lanes_total: liveLaneResults.length,
+    live_lanes_pass: liveLaneResults.filter((r) => r.status === "PASS").length,
+    live_lanes_review: liveLaneResults.filter((r) => r.status === "REVIEW_REQUIRED").length,
+    live_lanes_fail: liveLaneResults.filter((r) => r.status === "FAIL").length,
+    live_lanes_not_run: liveLaneResults.filter((r) => r.status === "NOT_RUN").length,
   };
 
   // Average score, treating NOT_RUN as 0. This is a deliberate choice: the
@@ -96,6 +111,7 @@ export async function runBackgroundCheckHub(lead: LeadLike): Promise<BackgroundH
     lead_id: lead.id,
     version: BG_HUB_VERSION,
     final_status: getFinalStatus(results),
+    final_status_live_lanes_only: getFinalStatus(liveLaneResults),
     overall_score: overallScore,
     checked_at: new Date().toISOString(),
     summary,
