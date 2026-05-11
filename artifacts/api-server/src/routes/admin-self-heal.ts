@@ -21,10 +21,12 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
-import { db, pool, selfHealSessionsTable } from "@workspace/db";
+import { db, selfHealSessionsTable } from "@workspace/db";
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { badRequest, notFound } from "../lib/http-errors";
+import { logger } from "../lib/logger";
+import { requireFirmId } from "../lib/firm-scope";
 import {
   createSession as julesCreateSession,
   getSession as julesGetSession,
@@ -71,15 +73,32 @@ router.get("/config", requirePermission(Permission.SELF_HEAL_MANAGE), (_req, res
 });
 
 router.get("/", requirePermission(Permission.SELF_HEAL_MANAGE), async (req, res) => {
+  // Parameterized Drizzle query replaces the previous raw `pool.query` that
+  // string-concatenated firm_id into the WHERE clause and fell back to `1=1`
+  // when the JWT lacked a firm claim — which returned every firm's sessions
+  // to whoever managed to slip in with an unscoped token. requireFirmId()
+  // is the new contract: missing/invalid claim → 500 via the middleware
+  // chain's error boundary, never a silent cross-tenant read.
+  const firmId = requireFirmId(req);
   try {
-    const firmId = (req as any).user?.firm_id ?? (req as any).firmId;
-    const where = firmId != null ? "firm_id = " + Number(firmId) : "1=1";
-    const raw = await pool.query(
-      "SELECT * FROM self_heal_sessions WHERE " + where + " ORDER BY created_at DESC LIMIT 50"
-    );
-    res.json({ sessions: raw.rows ?? [] });
-  } catch (err: any) {
-    res.json({ sessions: [] });
+    const sessions = await db
+      .select()
+      .from(selfHealSessionsTable)
+      .where(eq(selfHealSessionsTable.firm_id, firmId))
+      .orderBy(desc(selfHealSessionsTable.created_at))
+      .limit(50);
+    res.json({ sessions });
+  } catch (err) {
+    // Surface the failure rather than masking it as `{sessions: []}` — an
+    // empty array previously made it impossible to distinguish "no work"
+    // from "decryption or DB exploded". A 500 trips alerting and an empty
+    // result keeps rendering for the operator's last good state.
+    logger.error({ err, firm_id: firmId }, "admin/self-heal: list query failed");
+    res.status(500).json({
+      status: "error",
+      code: "self_heal_list_failed",
+      message: "Failed to list self-heal sessions",
+    });
   }
 });
 

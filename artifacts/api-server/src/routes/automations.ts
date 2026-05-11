@@ -304,26 +304,59 @@ router.post("/assist", requirePermission(Permission.AUTOMATIONS_MANAGE), async (
     "Available node types: " + JSON.stringify(NODE_CATALOG.map((n: any) => n.type)),
   ].join("\n");
 
-  const attempt = async (perspectiveIndex: number, previousError?: string): Promise<AttemptOutcome> => {
-    const cue = perspectiveCue(perspectiveIndex);
-    const userMsg = [
-      parsed.data.prompt,
-      previousError ? "Previous attempt failed: " + previousError + ". " + cue : "",
-    ].filter(Boolean).join("\n");
-    try {
-      const text = await callLLM([{ role: "user", content: userMsg }], { system: systemPrompt, maxTokens: 4096 });
-      const clean = text.replace(/```json|```/g, "").trim();
-      const obj = JSON.parse(clean);
-      const g = graphSchema.safeParse(obj.graph ?? obj);
-      if (!g.success) return { success: false, error: "bad_shape: " + JSON.stringify(g.error.flatten()).slice(0, 200) };
-      return { success: true, value: { graph: g.data } };
-    } catch (err: any) {
-      return { success: false, error: String(err?.message ?? err).slice(0, 200) };
-    }
-  };
+  const result = await recursiveRetry({
+    maxAttempts: 3,
+    maxTotalMs: 30_000,
+    attempt: async ({ perspectiveIndex, previousError }) => {
+      const cue = perspectiveCue(perspectiveIndex);
+      const userMsg = [
+        parsed.data.prompt,
+        previousError
+          ? [
+              `Previous attempt failed with ${previousError.code}: ${previousError.message}`,
+              cue,
+            ].filter(Boolean).join("\n")
+          : cue,
+      ].filter(Boolean).join("\n");
 
-  const result = await recursiveRetry(attempt, { maxAttempts: 3, maxTotalMs: 30000 });
-  res.json({ ...result });
+      try {
+        // callLLM takes a single LLMRequest object, not a chat-message array
+        // (see lib/ai-provider.ts). Concatenate the user message into `prompt`
+        // and pass the role-system text via `systemPrompt`.
+        const text = await callLLM({
+          module: "automations-assist",
+          prompt: userMsg,
+          systemPrompt,
+          maxTokens: 4096,
+        });
+        const clean = text.replace(/```json|```/g, "").trim();
+        const obj = JSON.parse(clean);
+        const g = graphSchema.safeParse(obj.graph ?? obj);
+        if (!g.success) {
+          return {
+            ok: false as const,
+            errorCode: "bad_shape",
+            errorMessage: JSON.stringify(g.error.flatten()).slice(0, 500),
+          };
+        }
+        return { ok: true as const, value: { graph: g.data } };
+      } catch (err: any) {
+        return {
+          ok: false as const,
+          errorCode: "llm_or_json_error",
+          errorMessage: String(err?.message ?? err).slice(0, 500),
+        };
+      }
+    },
+  });
+
+  if (!result.ok) {
+    res.status(422).json(result);
+    return;
+  }
+
+  res.json(result);
 });
 
 export default router;
+

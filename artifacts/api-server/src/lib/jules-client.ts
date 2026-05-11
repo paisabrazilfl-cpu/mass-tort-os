@@ -184,9 +184,15 @@ export function getDefaultSourceName(): string | null {
     return cachedSource;
   }
   try {
-    // Lazy/sync read of .git/config to keep this dependency-free.
-    const fs = await import("node:fs");
-    const path = await import("node:path");
+    // Lazy/sync read of .git/config to keep this dependency-free. Use
+    // require() rather than dynamic import because getDefaultSourceName is
+    // a SYNCHRONOUS function (the route module reads it with no await);
+    // dynamic-import returns a promise and would yield a syntax error inside
+    // a non-async function.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("node:fs") as typeof import("node:fs");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require("node:path") as typeof import("node:path");
     let dir = process.cwd();
     for (let i = 0; i < 6; i++) {
       const cfg = path.join(dir, ".git", "config");

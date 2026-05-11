@@ -1,5 +1,5 @@
 import { db, leadsTable, formConfigurationsTable } from "@workspace/db";
-import { sql, desc } from "drizzle-orm";
+import { sql, desc, eq } from "drizzle-orm";
 import { logger } from "./logger";
 
 export interface PredictiveScore {
@@ -203,8 +203,18 @@ export async function getModelStats(): Promise<ModelStats> {
   };
 }
 
-export async function getBatchPredictions(limit = 50): Promise<PredictiveScore[]> {
-  const leads = await db.select({ id: leadsTable.id }).from(leadsTable).orderBy(desc(leadsTable.created_at)).limit(limit);
+export async function getBatchPredictions(limit = 50, firmId?: number): Promise<PredictiveScore[]> {
+  // Firm scope is required for batch surfaces — without it the analytics
+  // endpoint would return predictions for leads outside the caller's firm.
+  // We keep the parameter optional so internal callers (CLI, jobs running
+  // with no request context) can still operate against all rows by passing
+  // `undefined` explicitly.
+  const leads = await db
+    .select({ id: leadsTable.id })
+    .from(leadsTable)
+    .where(firmId === undefined ? undefined : eq(leadsTable.firm_id, firmId))
+    .orderBy(desc(leadsTable.created_at))
+    .limit(limit);
   const results: PredictiveScore[] = [];
   for (const lead of leads) {
     try {
@@ -216,7 +226,7 @@ export async function getBatchPredictions(limit = 50): Promise<PredictiveScore[]
   return results;
 }
 
-export async function getTortPredictions(): Promise<{ tort_type: string; avg_conversion: number; avg_risk: number; count: number }[]> {
+export async function getTortPredictions(firmId?: number): Promise<{ tort_type: string; avg_conversion: number; avg_risk: number; count: number }[]> {
   // Build a label → canonical-id index from form_configurations so historic
   // leads whose `tort_type` holds the human label ("Roundup") get merged
   // into the same bucket as those holding the slug ("roundup"). Same root-

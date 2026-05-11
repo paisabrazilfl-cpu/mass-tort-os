@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db, casesTable, analysisTable, caseDocumentsTable, auditLogTable, jobQueueTable } from "@workspace/db";
-import { eq, or, desc } from "drizzle-orm";
+import { eq, or, and, desc } from "drizzle-orm";
 import { CreateCaseBody, UploadCaseFileBody } from "@workspace/api-zod";
 import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
 import { auditLog } from "../lib/audit";
@@ -10,6 +10,7 @@ import crypto from "crypto";
 import type { AuthUser } from "../lib/rbac";
 import { Permission, requirePermission, auditAction, denyForbidden } from "../lib/rbac";
 import { badRequest, notFound, forbidden } from "../lib/http-errors";
+import { requireFirmId } from "../lib/firm-scope";
 
 /**
  * Cases viewer-ownership predicate, factored out so the role × route test
@@ -67,9 +68,12 @@ router.post("/", requirePermission(Permission.CASE_CREATE), auditAction("create_
   const created_by_user_id =
     req.user && req.user.id > 0 ? req.user.id : null;
 
-  const job_id = await enqueueJob("create_case", { case_id, data, created_by_user_id });
+  // Multi-tenant stamp: carry the caller's firm into the worker so the new
+  // row is bound to the right firm at INSERT time, not patched up later.
+  const firm_id = requireFirmId(req);
+  const job_id = await enqueueJob("create_case", { case_id, data, created_by_user_id, firm_id });
 
-  await auditLog("case", case_id, "intake_submitted", { data, created_by_user_id }, {
+  await auditLog("case", case_id, "intake_submitted", { data, created_by_user_id, firm_id }, {
     ip_address: req.ip,
     user_agent: req.get("user-agent"),
   });
@@ -77,12 +81,34 @@ router.post("/", requirePermission(Permission.CASE_CREATE), auditAction("create_
   res.status(201).json({ case_id, status: "queued", job_id });
 });
 
+// Firm-scoped existence check shared by every /:id mutation route below.
+// Returns true if the case belongs to the caller's firm; writes 404 and
+// returns false otherwise. Centralised so a future route added on /:id can't
+// silently skip the tenant check by forgetting to import it.
+async function assertCaseInFirm(
+  req: import("express").Request,
+  res: import("express").Response,
+  case_id: string,
+): Promise<boolean> {
+  const firmId = requireFirmId(req);
+  const [row] = await db
+    .select({ id: casesTable.id })
+    .from(casesTable)
+    .where(and(eq(casesTable.id, case_id), eq(casesTable.firm_id, firmId)));
+  if (!row) {
+    notFound(res, "Case not found");
+    return false;
+  }
+  return true;
+}
+
 router.post("/:id/upload", requirePermission(Permission.CASE_UPLOAD), auditAction("upload_case_file"), async (req, res) => {
   const case_id = String(req.params.id);
   if (!validateCaseId(case_id)) {
     res.status(400).json({ status: "error", code: "invalid_case_id", message: "Invalid case ID format (expected UUID)" });
     return;
   }
+  if (!(await assertCaseInFirm(req, res, case_id))) return;
 
   const parsed = UploadCaseFileBody.safeParse(req.body);
   if (!parsed.success) {
@@ -155,6 +181,7 @@ router.patch("/:id/status", requirePermission(Permission.CASE_ANALYZE), async (r
     badRequest(res, "Invalid case ID format");
     return;
   }
+  if (!(await assertCaseInFirm(req, res, case_id))) return;
   const parsed = PatchCaseStatusBody.safeParse(req.body);
   if (!parsed.success) {
     badRequest(res, "Invalid request body", parsed.error.issues);
@@ -185,6 +212,7 @@ router.post("/:id/analyze", requirePermission(Permission.CASE_ANALYZE), async (r
     badRequest(res, "Invalid case ID format");
     return;
   }
+  if (!(await assertCaseInFirm(req, res, case_id))) return;
 
   const job_id = await enqueueJob("analyze_case", { case_id });
 
@@ -197,10 +225,11 @@ router.post("/:id/analyze", requirePermission(Permission.CASE_ANALYZE), async (r
 });
 
 router.get("/", requirePermission(Permission.CASE_VIEW_OWN, Permission.CASE_VIEW_ANY), async (req, res) => {
-  // Ownership filter: viewer sees only rows they own (created_by_user_id)
-  // or are assigned to (assigned_to). paralegal/attorney/admin see all
-  // rows — paralegals must triage the whole intake queue. Rows with both
-  // ownership columns NULL are visible only to paralegal+.
+  // Multi-tenant scope first: every list MUST be filtered to the caller's
+  // firm. Combined with the ownership filter for the viewer role below.
+  // Rows with NULL firm_id (pre-backfill legacy) are excluded everywhere
+  // until `scripts/backfill-cases-firm-id.sql` runs.
+  const firmId = requireFirmId(req);
   const user = req.user!;
   const isViewerOnly = user.role === "viewer";
   const rows = isViewerOnly
@@ -208,9 +237,12 @@ router.get("/", requirePermission(Permission.CASE_VIEW_OWN, Permission.CASE_VIEW
         .select()
         .from(casesTable)
         .where(
-          or(
-            eq(casesTable.created_by_user_id, user.id),
-            eq(casesTable.assigned_to, user.id),
+          and(
+            eq(casesTable.firm_id, firmId),
+            or(
+              eq(casesTable.created_by_user_id, user.id),
+              eq(casesTable.assigned_to, user.id),
+            ),
           ),
         )
         .orderBy(desc(casesTable.created_at))
@@ -218,6 +250,7 @@ router.get("/", requirePermission(Permission.CASE_VIEW_OWN, Permission.CASE_VIEW
     : await db
         .select()
         .from(casesTable)
+        .where(eq(casesTable.firm_id, firmId))
         .orderBy(desc(casesTable.created_at))
         .limit(100);
   res.json(rows);
@@ -299,11 +332,14 @@ router.get("/:id", requirePermission(Permission.CASE_VIEW_OWN, Permission.CASE_V
     return;
   }
 
-  // Fetch the case first so we can 404 fast without touching the children.
+  // Fetch the case scoped to the caller's firm. A row in another firm
+  // returns 404 — we intentionally do not distinguish "doesn't exist" from
+  // "exists elsewhere" so the case-id space stays opaque across tenants.
+  const firmId = requireFirmId(req);
   const [caseRow] = await db
     .select()
     .from(casesTable)
-    .where(eq(casesTable.id, case_id));
+    .where(and(eq(casesTable.id, case_id), eq(casesTable.firm_id, firmId)));
 
   if (!caseRow) {
     notFound(res, "Case not found");
@@ -311,9 +347,7 @@ router.get("/:id", requirePermission(Permission.CASE_VIEW_OWN, Permission.CASE_V
   }
 
   // Ownership check: mirrors the GET / filter. Only the viewer role is
-  // restricted; paralegal+ see every case.
-  // We emit 403 (not 404) so the CRM can show a clear "no access" banner;
-  // case ids are opaque UUIDs so existence-leak is low-value.
+  // restricted; paralegal+ see every case in their firm.
   const user = req.user!;
   if (!isCaseVisibleToUser(user, caseRow)) {
     denyForbidden(req, res, "case_ownership_denied", "Insufficient permissions", {

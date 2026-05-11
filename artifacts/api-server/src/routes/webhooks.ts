@@ -16,6 +16,7 @@ import { Router } from "express";
 import { dispatchTrigger } from "../lib/automations/dispatch";
 import {
   db,
+  pool,
   documentEnvelopesTable,
   integrationsTable,
   firmsTable,

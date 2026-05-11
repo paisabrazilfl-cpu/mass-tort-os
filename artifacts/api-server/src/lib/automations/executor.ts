@@ -11,6 +11,7 @@
  */
 import {
   db,
+  pool,
   automationRunsTable,
   automationWorkflowsTable,
   leadsTable,
@@ -615,7 +616,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     // Use pool.query() with parameterized values — safe against SQL injection
     // io.sql_query only allows SELECT/WITH so no write risk
     const result = await pool.query(queryText, params);
-    return { rows: result.rows }; };
+    return { rows: result.rows };
   },
   "io.read_file": async (s) => {
     // Catalog param: `key` is a logical vault object key, conventionally
@@ -1181,8 +1182,10 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     }
 
     const language = String(p.language ?? "en");
-    const buf = await readFile(documentId);
-    const text = buf.toString("utf-8");
+    // vault.readFile already returns a utf-8 string; the prior code called
+    // .toString("utf-8") which is a Buffer API and is a no-op on String
+    // (TS rejected it because String#toString takes no args).
+    const text = await readFile(documentId);
     return { document_id: documentId, text, raw_text: text, language };
   },
   "documents.medical_extract": async (s) => {

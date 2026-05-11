@@ -52,16 +52,22 @@ async function findWorkflows(
   triggerType: string,
   firmId: number | null | "any",
 ): Promise<Array<{ id: number; firm_id: number | null }>> {
-  // Use raw pool.query to bypass Drizzle firmPredicate cache issues
-  let where = `enabled = true AND trigger_type = '${triggerType}'`;
-  if (firmId !== "any" && firmId != null) {
-    where += ` AND (firm_id = ${firmId} OR firm_id IS NULL)`;
-  } else if (firmId == null) {
-    where += ` AND firm_id IS NULL`;
-  }
+  // Raw SQL path is retained for compatibility, but it MUST stay
+  // parameterized. This function accepts trigger names from dispatcher
+  // callers; string interpolation here would turn a malformed trigger into
+  // SQL injection inside a privileged automation surface.
   try {
+    const params: unknown[] = [triggerType];
+    const where = ["enabled = true", "trigger_type = $1"];
+    if (firmId !== "any" && firmId != null) {
+      params.push(firmId);
+      where.push(`(firm_id = $${params.length} OR firm_id IS NULL)`);
+    } else if (firmId == null) {
+      where.push("firm_id IS NULL");
+    }
     const raw = await pool.query(
-      `SELECT id, firm_id FROM automation_workflows WHERE ${where}`
+      `SELECT id, firm_id FROM automation_workflows WHERE ${where.join(" AND ")}`,
+      params,
     );
     return raw.rows ?? [];
   } catch {
@@ -85,62 +91,59 @@ async function findWorkflows(
 async function executeWithRetry(
   wf: { id: number; firm_id: number | null },
   opts: DispatchOptions,
-  attempt: number = 0,
 ): Promise<void> {
-  const maxRetries = opts.maxRetries ?? MAX_RETRIES;
+  const maxRetries = Math.max(1, Math.min(6, Math.floor(opts.maxRetries ?? MAX_RETRIES)));
+  let lastError: unknown = null;
 
-  // RECURSION_GATE — max iterations reached
-  if (attempt >= maxRetries) {
-    logger.warn(
-      { workflowId: wf.id, attempt, maxRetries, source: opts.source },
-      "dispatchTrigger: RECURSION_GATE:HOLD — max retries exhausted",
-    );
-    return;
-  }
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      // ACTING state
+      const result = await runWorkflow({
+        workflowId: wf.id,
+        firmId: wf.firm_id,
+        triggerSource: opts.source,
+        input: opts.input,
+      });
 
-  try {
-    // ACTING state
-    const result = await runWorkflow({
-      workflowId: wf.id,
-      firmId: wf.firm_id,
-      triggerSource: opts.source,
-      input: opts.input,
-    });
+      // RESULT_CLASSIFYING
+      if (result.status === "completed") {
+        logger.info(
+          { workflowId: wf.id, runId: result.runId, status: result.status, attempt },
+          "dispatchTrigger: COMPLETE",
+        );
+        return;
+      }
 
-    // RESULT_CLASSIFYING
-    if (result.status === "completed" || result.status === "failed") {
-      // COMPLETE — terminal states don't retry
-      logger.info(
-        { workflowId: wf.id, runId: result.runId, status: result.status, attempt },
-        "dispatchTrigger: COMPLETE",
-      );
-      return;
+      lastError = new Error(result.error ?? `Workflow ${wf.id} failed with no error message`);
+      const retryable = isRetryable(lastError);
+      if (!retryable || attempt + 1 >= maxRetries) {
+        logger.error(
+          { err: String(lastError).slice(0, 200), workflowId: wf.id, runId: result.runId, attempt, retryable },
+          "dispatchTrigger: ABORT — workflow run failed permanently",
+        );
+        return;
+      }
+    } catch (err: unknown) {
+      lastError = err;
+      const retryable = isRetryable(err);
+
+      if (!retryable || attempt + 1 >= maxRetries) {
+        logger.error(
+          { err: String(err).slice(0, 200), workflowId: wf.id, attempt, retryable },
+          "dispatchTrigger: ABORT — workflow run failed permanently",
+        );
+        return;
+      }
     }
 
-    // Unexpected status — treat as retryable
-    throw new Error(`Unexpected run status: ${result.status}`);
-
-  } catch (err: unknown) {
-    // RESULT_CLASSIFYING:FAILURE → RECURSION_GATE
-    const retryable = isRetryable(err);
-
-    if (!retryable || attempt + 1 >= maxRetries) {
-      // ABORT — non-retryable or exhausted
-      logger.error(
-        { err: String(err).slice(0, 200), workflowId: wf.id, attempt, retryable },
-        "dispatchTrigger: ABORT — workflow run failed permanently",
-      );
-      return;
-    }
-
-    // RECURSION_GATE:RETRY — backoff and recurse
+    // RECURSION_GATE:RETRY — bounded exponential backoff. Iterative by
+    // design: recursive state semantics without stack growth or runaway loops.
     const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt);
     logger.warn(
-      { workflowId: wf.id, attempt, backoff, err: String(err).slice(0, 100) },
+      { workflowId: wf.id, attempt, nextAttempt: attempt + 1, backoff, err: String(lastError).slice(0, 100) },
       "dispatchTrigger: RECURSION_GATE:RETRY — transient failure, backing off",
     );
     await sleep(backoff);
-    return executeWithRetry(wf, opts, attempt + 1);
   }
 }
 
@@ -175,8 +178,9 @@ export async function dispatchTrigger(
 
   // Fan out — each workflow gets its own recursive retry chain (fire-and-forget)
   for (const wf of workflows) {
-    executeWithRetry(wf, opts, 0).catch((err) => {
+    executeWithRetry(wf, opts).catch((err) => {
       logger.error({ err, workflowId: wf.id, triggerType }, "dispatchTrigger: uncaught error");
     });
   }
 }
+

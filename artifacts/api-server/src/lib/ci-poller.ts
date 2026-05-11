@@ -19,6 +19,11 @@ import { _ciState } from "../routes/health";
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 const MAX_CONSECUTIVE_FAILURES = 3;
 const BASE = process.env["API_BASE_URL"] ?? "http://localhost:" + (process.env["PORT"] ?? "8080");
+const CI_POLLER_TOKEN = process.env["CI_POLLER_TOKEN"] ?? process.env["MTOS_INTERNAL_API_TOKEN"] ?? "";
+
+function authHeaders(): Record<string, string> {
+  return CI_POLLER_TOKEN ? { Authorization: `Bearer ${CI_POLLER_TOKEN}` } : {};
+}
 
 // ── State ────────────────────────────────────────────────────────────────────
 interface CiState {
@@ -43,7 +48,10 @@ interface TestResult {
 async function httpGet(path: string): Promise<{ status: number; body: unknown; latencyMs: number }> {
   const start = Date.now();
   try {
-    const r = await fetch(BASE + path, { signal: AbortSignal.timeout(8000) });
+    const r = await fetch(BASE + path, {
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(8000),
+    });
     const body = await r.json().catch(() => ({}));
     return { status: r.status, body, latencyMs: Date.now() - start };
   } catch (err: any) {
@@ -72,8 +80,11 @@ async function getLatestCommitSha(): Promise<string | null> {
 }
 
 // ── Core test suite (mirrors manual §9–§12) ──────────────────────────────────
-const HEALTH_CHECKS: Array<{ path: string; label: string; mustReturn200: boolean }> = [
-  { path: "/api/healthz",                      label: "health",            mustReturn200: true },
+const PUBLIC_HEALTH_CHECKS: Array<{ path: string; label: string; mustReturn200: boolean }> = [
+  { path: "/api/healthz", label: "health", mustReturn200: true },
+];
+
+const AUTHENTICATED_HEALTH_CHECKS: Array<{ path: string; label: string; mustReturn200: boolean }> = [
   { path: "/api/automations/node-catalog",     label: "node-catalog",      mustReturn200: true },
   { path: "/api/automations",                  label: "automations-list",  mustReturn200: true },
   { path: "/api/automations/2",                label: "wf2-lead-intake",   mustReturn200: true },
@@ -94,9 +105,18 @@ const HEALTH_CHECKS: Array<{ path: string; label: string; mustReturn200: boolean
   { path: "/api/analytics/predictive/model",   label: "praxis-model",      mustReturn200: false },
 ];
 
+function healthChecksForCurrentConfig(): Array<{ path: string; label: string; mustReturn200: boolean }> {
+  // Without an internal bearer token, protected endpoints are expected to
+  // return 401/403. Treating them as failures creates a permanent false-red
+  // CI loop. In that configuration, only run public liveness checks.
+  return CI_POLLER_TOKEN
+    ? [...PUBLIC_HEALTH_CHECKS, ...AUTHENTICATED_HEALTH_CHECKS]
+    : PUBLIC_HEALTH_CHECKS;
+}
+
 async function runTestSuite(): Promise<TestResult[]> {
   const results: TestResult[] = [];
-  for (const check of HEALTH_CHECKS) {
+  for (const check of healthChecksForCurrentConfig()) {
     const { status, latencyMs } = await httpGet(check.path);
     const passed = check.mustReturn200 ? status === 200 : status >= 200 && status < 500;
     results.push({ endpoint: check.label, status, passed, latencyMs });
@@ -108,15 +128,12 @@ async function runTestSuite(): Promise<TestResult[]> {
 }
 
 // ── Recursion gate: decide next state ─────────────────────────────────────────
-function recursionGate(state: CiState): "CONTINUE" | "RETRY" | "ABORT" | "COMPLETE" {
-  // ABORT: too many consecutive failures
-  if (state.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-    return "ABORT";
-  }
-  // COMPLETE: all tests pass
-  const allPass = state.testResults.every(r => r.passed);
-  if (allPass) return "COMPLETE";
-  // RETRY: some failures but below max
+function recursionGate(state: CiState, failedCount: number): "RETRY" | "ABORT" | "COMPLETE" {
+  // COMPLETE: all tests pass and at least one check actually ran.
+  if (state.testResults.length > 0 && failedCount === 0) return "COMPLETE";
+  // ABORT must evaluate the failure that just happened, not the stale
+  // pre-increment counter. Otherwise the gate trips one full cycle late.
+  if (state.consecutiveFailures + 1 >= MAX_CONSECUTIVE_FAILURES) return "ABORT";
   return "RETRY";
 }
 
@@ -147,6 +164,8 @@ async function auditCiRun(state: CiState): Promise<void> {
 }
 
 // ── Main poller loop ──────────────────────────────────────────────────────────
+let cycleInFlight = false;
+
 let ciState: CiState = {
   state: "IDLE",
   iteration: 0,
@@ -158,6 +177,12 @@ let ciState: CiState = {
 };
 
 async function runCiCycle(): Promise<void> {
+  if (cycleInFlight) {
+    logger.warn("CI: previous cycle still running — skipping overlapping tick");
+    return;
+  }
+  cycleInFlight = true;
+  try {
   ciState.state = "POLLING";
   ciState.iteration++;
 
@@ -189,7 +214,7 @@ async function runCiCycle(): Promise<void> {
 
   // RECURSION_GATE
   ciState.state = "RECURSION_GATE";
-  const decision = recursionGate(ciState);
+  const decision = recursionGate(ciState, failed.length);
 
   if (decision === "COMPLETE") {
     ciState.consecutiveFailures = 0;
@@ -199,12 +224,12 @@ async function runCiCycle(): Promise<void> {
       "CI: COMPLETE — all tests pass"
     );
   } else if (decision === "ABORT") {
+    ciState.consecutiveFailures++;
     ciState.state = "ABORT";
     logger.error(
       { failures: failed.map(f => f.endpoint), consecutiveFailures: ciState.consecutiveFailures },
       "CI: ABORT — too many consecutive failures, operator intervention needed"
     );
-    ciState.consecutiveFailures = 0; // reset after abort signal
   } else {
     ciState.consecutiveFailures++;
     ciState.state = "IDLE";
@@ -226,6 +251,9 @@ async function runCiCycle(): Promise<void> {
     });
   } catch { /* non-fatal */ }
   await auditCiRun(ciState);
+  } finally {
+    cycleInFlight = false;
+  }
 }
 
 export function startCiPoller(): void {
@@ -242,3 +270,4 @@ export function startCiPoller(): void {
 }
 
 // State accessible via _ciState in health route
+

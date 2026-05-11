@@ -22,7 +22,8 @@ export type LLMModule =
   | "ai-ocr"
   | "drafting-ai"
   | "threat-analyzer"
-  | "lead-intelligence";
+  | "lead-intelligence"
+  | "automations-assist";
 
 const MODULE_ENV_KEY: Record<LLMModule, string> = {
   "ai-extract": "AI_PROVIDER_AI_EXTRACT",
@@ -31,6 +32,7 @@ const MODULE_ENV_KEY: Record<LLMModule, string> = {
   "drafting-ai": "AI_PROVIDER_DRAFTING_AI",
   "threat-analyzer": "AI_PROVIDER_THREAT_ANALYZER",
   "lead-intelligence": "AI_PROVIDER_LEAD_INTELLIGENCE",
+  "automations-assist": "AI_PROVIDER_AUTOMATIONS_ASSIST",
 };
 
 export interface LLMRequest {
