@@ -15,7 +15,7 @@
 | CRM web app | `artifacts/mtos-crm` | The React + Vite UI you click through. |
 | API server | `artifacts/api-server` | Express 5 backend serving `/api/*`. |
 | Worker | `artifacts/api-server` (`dev:worker`) | Polls the Postgres job queue and runs background jobs (OCR, e-sign, fax, AI extraction). |
-| Database | PostgreSQL | 48 tables managed by Drizzle ORM via `lib/db/src/schema`. |
+| Database | PostgreSQL | 41 tables managed by Drizzle ORM via `lib/db/src/schema`. |
 | Schema management | `drizzle-kit push` | Schema-vs-database workflow — no migrations directory. |
 
 All `/api/*` calls go through `authMiddleware` then a `requirePermission(...)` or `requireRole(...)` gate.
@@ -24,18 +24,19 @@ All `/api/*` calls go through `authMiddleware` then a `requirePermission(...)` o
 
 ## 2. Identity, authentication, and sessions
 
-### 2.1 The four roles
+### 2.1 The five roles
 
 Defined in `artifacts/api-server/src/lib/rbac.ts` (`UserRole`), in declared order:
 
 | # | Role | Hierarchy weight | Typical user |
 |---|------|---|---|
-| 1 | `admin` | 100 | Firm owner / IT lead. Has every permission. |
-| 2 | `attorney` | 75 | Licensed attorney handling cases. |
-| 3 | `paralegal` | 50 | Daily lead/case worker. |
-| 4 | `viewer` | 25 | Read-only observer (compliance, auditor). |
+| 1 | `super_admin` | 200 | Platform operator across firms. Has every permission and bypasses firm-scope checks. |
+| 2 | `admin` | 100 | Firm owner / IT lead. Has every permission inside their firm. |
+| 3 | `attorney` | 75 | Licensed attorney handling cases. |
+| 4 | `paralegal` | 50 | Daily lead/case worker. |
+| 5 | `viewer` | 25 | Read-only observer (compliance, auditor). |
 
-The `requireRole(...)` middleware grants access if your role's weight ≥ the required role's weight, so `admin` automatically passes any check.
+The `requireRole(...)` middleware grants access if your role's weight ≥ the required role's weight, so `super_admin` and `admin` automatically pass any check.
 
 ### 2.2 Email verification gate
 
@@ -145,9 +146,10 @@ Every permission name in the system, in declared order from `rbac.ts:94-235`. Th
 - `self_heal:manage`
 - `competitive_intel:manage`
 
-### 3.7 Default role → permission map (`ROLE_PERMISSIONS`, `rbac.ts:242-381`)
+### 3.7 Default role → permission map (`ROLE_PERMISSIONS`, `rbac.ts:243-381`)
 
-- **admin** receives `Object.values(Permission)` — every permission, including any added later.
+- **super_admin** receives `Object.values(Permission)` — every permission, and additionally bypasses the per-firm scope check enforced by `lib/firm-scope.ts` so platform operators can support multiple tenants.
+- **admin** receives `Object.values(Permission)` — every permission, including any added later, scoped to their own firm.
 - **attorney** receives the union of: every `lead:*` (except `delete` is also granted), `case:view:any/create/upload/analyze`, `paralegal:view`, `forms:config:view*`, `forms:submit/background_check/npi_verify/fraud_check/escalate_fbi`, `decision_engine:view`, `buyers:view`, `vendors:view/manage`, `lead_sources:view`, `templates:view`, `workflow_settings:view`, all `documents:*` (incl. `delete`/`redact`), `ocr:upload/view/ai_fields`, `drafting:*`, `image_objects:view/manage`, `npi:lookup`, `news:view`, `timeline:view`, `review_queue:view/resolve`, `dashboard:view`, `analytics:view`, `analytics:predictive:lead`, `calls:view/manage`, `sms:send`, `medical_records:view/manage`.
 - **paralegal** receives: `lead:view:own/create/update/qualify`, `lead_import:preview`, `case:view:own/create/upload/analyze`, `forms:config:view:public`, `forms:submit/background_check/npi_verify/fraud_check`, `vendors:view`, `buyers:view`, `lead_sources:view`, `templates:view`, `workflow_settings:view`, `documents:view/create/update/redact`, `ocr:upload/view/ai_fields`, `drafting:*`, `image_objects:view/manage`, `npi:lookup`, `news:view`, `timeline:view`, `review_queue:view`, `dashboard:view`, `analytics:predictive:lead`, `calls:view`, `sms:send`, `medical_records:view/manage`.
 - **viewer** receives: `lead:view:own`, `case:view:own`, `forms:config:view:public`, `buyers:view`, `lead_sources:view`, `templates:view`, `workflow_settings:view`, `documents:view`, `news:view`, `dashboard:view`, `calls:view`. Read-only.
@@ -181,7 +183,7 @@ Defined in `artifacts/api-server/src/lib/http-errors.ts`. **Memorize these shape
 These show up everywhere; learn them once.
 
 ### 5.1 Firm tenancy
-Every business table has a `firm_id`. Every authenticated query is scoped by `req.user.firm_id`. Cross-firm reads return **404** (never 403, to avoid leaking the row's existence).
+Every business table (leads, cases, automation runs, self-heal sessions, …) carries a `firm_id` column. Every authenticated query is scoped by `req.user.firm_id` via the canonical helper `artifacts/api-server/src/lib/firm-scope.ts` (`requireFirmId(req)` reads the value, `leadFirmScope(req)` produces the Drizzle predicate). Cross-firm reads return **404** (never 403, to avoid leaking the row's existence). The legacy `cases` rows are backfilled by `scripts/backfill-cases-firm-id.sql`; new rows are stamped by the create-case worker.
 
 ### 5.2 Audit log
 `auditLog(entity_type, entity_id, action, details)` writes an immutable row to `audit_log`. Common action strings — see §13.10 for the exhaustive list.
@@ -193,9 +195,9 @@ Every business table has a `firm_id`. Every authenticated query is scoped by `re
 - The vault enforces an **SSRF-safe path** check `assertWithinVault(targetPath)` (`artifacts/api-server/src/lib/vault.ts`).
 
 ### 5.4 Encryption at rest
-- AES-256-GCM with `ENCRYPTION_KEY_V2` (active) and `ENCRYPTION_KEY_V1` (rotation/legacy).
-- AAD (Additional Authenticated Data) is the **field name** for encrypted columns (e.g. `email`, `phone`), and the **row id** for vault credential records.
-- Decrypts attempt V2 then V1; writes always use V2.
+- AES-256-GCM. The active version is **V1**: `CURRENT_KEY_VERSION = 1` in `lib/encryption.ts:27`. V1 reads its key from `ENCRYPTION_KEY_V1` (or the legacy `ENCRYPTION_KEY` env var as a single backwards-compatible fallback). `ENCRYPTION_KEY_V2` is reserved for a future rotation; no row in the database is currently tagged `enc:v2:`.
+- AAD (Additional Authenticated Data) is `fieldName:entityId` for lead PII columns (so swapping a ciphertext from another row fails GCM verification), or just `fieldName` for legacy rows pre-Task #8 rebind. Vault-credential rows use the row id as AAD.
+- Writes always use `CURRENT_KEY_VERSION`; decrypts read the version embedded in the `enc:v<N>:<hasAAD>:<payload>` header and try the strict (field+entity) AAD first, then field-only, then no AAD, before logging `[DECRYPTION_ERROR]`. Bump `CURRENT_KEY_VERSION` and run `scripts/rotate-encryption-key.ts` to roll forward.
 
 ### 5.5 Recursive error fallback (planning surfaces only)
 `lib/automations/recursive-retry.ts` (`recursiveRetry({attempt, maxAttempts, maxTotalMs})`) wraps the AI Assistant in **Automations**:
@@ -589,7 +591,7 @@ Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surfa
 ### 12.4 Integrations — `/integrations`
 - **Permission:** `integrations:manage`.
 - **Categories in the vault:** `ai_llm`, `esignature`, `voice_ai`, `sms`, `email`, `fax`, `ocr`, `identity`, `payments`.
-- **Encryption:** AES-256-GCM with `ENCRYPTION_KEY_V2`. AAD = row id.
+- **Encryption:** AES-256-GCM at the active key version (currently V1 — see §5.4 for rotation policy). AAD = integration row id.
 - **Decrypt path:** `getIntegrationCredentialsById(id)` decrypts on demand. Plaintext is never persisted, never logged.
 - **Workflow:** Add → Test connection → Mark active → choose in **Workflow Settings** for the categories where you want it used.
 
@@ -760,7 +762,7 @@ Generic inbound message receivers exist at `/webhooks/{email,fax,sms,voice}/:pro
 | Self-Heal stuck in `dispatched` | `JULES_API_KEY` missing or invalid. | Add `JULES_API_KEY` via Integrations. |
 | Competitive Intel returns `serpapi_auth` | `SERPAPI_API_KEY` missing or revoked. | Re-add at Integrations / set the secret. |
 
-### 13.7 Database tables (48 total) — high-signal ones
+### 13.7 Database tables (41 total) — high-signal ones
 
 Full list managed by `lib/db/src/schema/`. The frequently-touched ones are:
 
