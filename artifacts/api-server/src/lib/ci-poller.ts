@@ -14,6 +14,7 @@
 
 import { logger } from "./logger";
 import { pool } from "@workspace/db";
+import { _ciState } from "../routes/health";
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -209,6 +210,21 @@ async function runCiCycle(): Promise<void> {
     ciState.state = "IDLE";
   }
 
+  // Update shared state store for /admin/ci-status endpoint
+  try {
+    const failed = ciState.testResults.filter((r: any) => !r.passed).map((r: any) => r.endpoint);
+    const passed_count = ciState.testResults.filter((r: any) => r.passed).length;
+    Object.assign(_ciState, {
+      state: ciState.state,
+      iteration: ciState.iteration,
+      consecutiveFailures: ciState.consecutiveFailures,
+      lastRunAt: ciState.lastRunAt?.toISOString(),
+      lastCommitSha: ciState.lastCommitSha,
+      passed: passed_count,
+      total: ciState.testResults.length,
+      failed,
+    });
+  } catch { /* non-fatal */ }
   await auditCiRun(ciState);
 }
 
@@ -225,6 +241,4 @@ export function startCiPoller(): void {
   }, POLL_INTERVAL_MS);
 }
 
-export function getCiState(): CiState {
-  return { ...ciState };
-}
+// State accessible via _ciState in health route
