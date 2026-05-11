@@ -72,7 +72,7 @@ router.get("/node-catalog", requirePermission(Permission.AUTOMATIONS_VIEW), (_re
 });
 
 router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
-  const firmId = (req as any).firmId as number | undefined;
+  const firmId = req.user!.firm_id;
   const rows = await db
     .select({
       id: automationWorkflowsTable.id,
@@ -93,7 +93,7 @@ router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res)
 router.get("/:id", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
-  const firmId = (req as any).firmId as number | undefined;
+  const firmId = req.user!.firm_id;
   const [row] = await db.select().from(automationWorkflowsTable)
     .where(and(eq(automationWorkflowsTable.id, id), firmPredicate(firmId))!)
     .limit(1);
@@ -104,8 +104,8 @@ router.get("/:id", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, r
 router.post("/", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
   const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
-  const userId = (req as any).user?.id as number | undefined;
-  const firmId = (req as any).firmId as number | undefined;
+  const userId = req.user!.id;
+  const firmId = req.user!.firm_id;
   const [row] = await db.insert(automationWorkflowsTable).values({
     name: parsed.data.name,
     description: parsed.data.description ?? null,
@@ -125,7 +125,7 @@ router.put("/:id", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req,
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   const parsed = upsertSchema.partial().safeParse(req.body);
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
-  const firmId = (req as any).firmId as number | undefined;
+  const firmId = req.user!.firm_id;
   const [row] = await db.update(automationWorkflowsTable).set({
     ...parsed.data,
     updated_at: new Date(),
@@ -139,7 +139,7 @@ router.put("/:id", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req,
 router.delete("/:id", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
-  const firmId = (req as any).firmId as number | undefined;
+  const firmId = req.user!.firm_id;
   // Verify ownership before delete.
   const [own] = await db.select({ id: automationWorkflowsTable.id }).from(automationWorkflowsTable)
     .where(and(eq(automationWorkflowsTable.id, id), firmPredicate(firmId))!).limit(1);
@@ -154,8 +154,8 @@ router.post("/:id/run", requirePermission(Permission.AUTOMATIONS_EXECUTE), async
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   const parsed = runBodySchema.safeParse(req.body ?? {});
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
-  const userId = (req as any).user?.id as number | undefined;
-  const firmId = (req as any).firmId as number | undefined;
+  const userId = req.user!.id;
+  const firmId = req.user!.firm_id;
   // Verify ownership before invoking executor.
   const [own] = await db.select({ id: automationWorkflowsTable.id }).from(automationWorkflowsTable)
     .where(and(eq(automationWorkflowsTable.id, id), firmPredicate(firmId))!).limit(1);
@@ -177,7 +177,7 @@ router.post("/:id/run", requirePermission(Permission.AUTOMATIONS_EXECUTE), async
 router.get("/:id/runs", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
-  const firmId = (req as any).firmId as number | undefined;
+  const firmId = req.user!.firm_id;
   // Verify ownership before exposing run history.
   const [own] = await db.select({ id: automationWorkflowsTable.id }).from(automationWorkflowsTable)
     .where(and(eq(automationWorkflowsTable.id, id), firmPredicate(firmId))!).limit(1);
@@ -193,7 +193,7 @@ router.get("/:id/runs", requirePermission(Permission.AUTOMATIONS_VIEW), async (r
 router.get("/runs/:runId", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   const runId = Number(req.params.runId);
   if (!Number.isInteger(runId)) { badRequest(res, "runId must be integer"); return; }
-  const firmId = (req as any).firmId as number | undefined;
+  const firmId = req.user!.firm_id;
   const [row] = await db.select().from(automationRunsTable)
     .where(and(eq(automationRunsTable.id, runId), runFirmPredicate(firmId))!)
     .limit(1);
