@@ -486,7 +486,7 @@ async function runWebFormPipeline(
     // straight to "input.lead.id" and have the doctor's-fax dispatch
     // happen automatically when the web form is submitted.
     const { dispatchTrigger } = await import("../lib/automations/dispatch");
-    void dispatchTrigger("trigger.form_submitted", {
+    dispatchTrigger("trigger.form_submitted", {
       input: {
         tort_id: tortId,
         tort_label: config.label,
@@ -510,7 +510,7 @@ async function runWebFormPipeline(
       // a multi-tenant risk in code review.)
       firmId: null,
       source: `web_form_${tortId}`,
-    });
+    }).catch(() => {});
   }
 
   // STEP 6: Optional confirmation email.
