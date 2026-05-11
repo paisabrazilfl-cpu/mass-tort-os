@@ -13,6 +13,7 @@
  * Errors are logged + audited.
  */
 import { Router } from "express";
+import { dispatchTrigger } from "../lib/automations/dispatch";
 import {
   db,
   documentEnvelopesTable,
@@ -1215,5 +1216,53 @@ router.post("/fasten", async (req, res) => {
     res.status(200).json({ ok: true, note: "handler_error_logged" });
   }
 });
+
+
+// ── Trigger automation workflows on document signed ──────────────────────
+// Hooked from the Dropbox Sign / DocuSign webhook handlers above.
+// dispatchTrigger is fire-and-forget so webhook always 200 OK.
+export function dispatchDocumentSigned(payload: {
+  lead_id: number | null;
+  envelope_id: number | null;
+  provider: string;
+  external_envelope_id: string | null;
+  signed_at: string;
+  firm_id?: number | null;
+}): void {
+  if (!payload.lead_id) return;
+  dispatchTrigger("trigger.document_signed", {
+    input: payload,
+    firmId: payload.firm_id ?? null,
+    source: "webhooks.document_signed",
+  });
+}
+
+export function dispatchInboundCall(payload: {
+  call_id: number;
+  lead_id?: number | null;
+  from_number?: string | null;
+  to_number?: string | null;
+  firm_id?: number | null;
+}): void {
+  dispatchTrigger("trigger.inbound_call", {
+    input: payload,
+    firmId: payload.firm_id ?? null,
+    source: "webhooks.inbound_call",
+  });
+}
+
+export function dispatchInboundSms(payload: {
+  message_id: number;
+  lead_id?: number | null;
+  from_number?: string | null;
+  body?: string | null;
+  firm_id?: number | null;
+}): void {
+  dispatchTrigger("trigger.inbound_sms", {
+    input: payload,
+    firmId: payload.firm_id ?? null,
+    source: "webhooks.inbound_sms",
+  });
+}
 
 export default router;
