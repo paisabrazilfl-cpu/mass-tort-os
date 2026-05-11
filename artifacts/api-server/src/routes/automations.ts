@@ -15,7 +15,7 @@ import {
 } from "../lib/automations/recu/** Ensure automation schema (idempotent) */
 /** Ensure automation_workflows and automation_runs have all required columns. Idempotent. */
 let _schemaDone = false;
-async function ensureAutomationSchema(): Promise<void> {
+async function /* REMOVED_ensureAutomationSchema */(): Promise<void> {
   if (_schemaDone) return;
   const stmts = [
     "ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS description text",
