@@ -23,6 +23,7 @@ import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
 import { dispatchEvent } from "../lib/event-dispatcher";
+import { dispatchTrigger } from "../lib/automations/dispatch";
 import { sendSmsViaRouter } from "../lib/sms/send";
 import { getFirmIdForUser } from "../lib/subscription-gate";
 
@@ -781,6 +782,19 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
   }
 
   res.json(decryptLeadFields(lead, String(lead.id)));
+
+  // Dispatch trigger.case_status_changed if status changed
+  if (lead && priorStatus && priorStatus !== lead.status) {
+    dispatchTrigger("trigger.case_status_changed", {
+      input: {
+        lead: { id: lead.id, status: lead.status, prior_status: priorStatus, firm_id: lead.firm_id },
+        from_status: priorStatus,
+        to_status: lead.status,
+      },
+      firmId: lead.firm_id ?? null,
+      source: "leads.patch",
+    });
+  }
 });
 
 router.delete("/:id", requirePermission(Permission.LEAD_DELETE), auditAction("delete_lead"), async (req, res) => {
