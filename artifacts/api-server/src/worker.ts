@@ -6,6 +6,7 @@
 import { db, casesTable, caseDocumentsTable, analysisTable, faxResultsTable, reviewQueueTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./lib/logger";
+import { dispatchTrigger } from "./lib/automations/dispatch";
 import { claimNextJob, markJobDone, markJobFailed, reclaimStaleProcessingJobs } from "./lib/queue";
 import { saveFile, readFile, listCaseFiles } from "./lib/vault";
 import { extractFeatures } from "./lib/ai-extract";
