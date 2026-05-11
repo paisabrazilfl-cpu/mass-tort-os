@@ -64,13 +64,19 @@ router.use(authMiddleware);
  * predicate so cross-tenant access is impossible even via direct ID lookup.
  */
 function firmPredicate(firmId: number | null | undefined) {
+  // Null firm_id on a workflow = accessible to all firms (global/system scope)
   if (firmId == null) return isNull(automationWorkflowsTable.firm_id);
-  // Include firm-scoped rows AND null-firm rows (global/system workflows)
-  return or(eq(automationWorkflowsTable.firm_id, firmId), isNull(automationWorkflowsTable.firm_id))!;
+  return or(
+    eq(automationWorkflowsTable.firm_id, firmId),
+    isNull(automationWorkflowsTable.firm_id),
+  )!;
 }
 function runFirmPredicate(firmId: number | null | undefined) {
   if (firmId == null) return isNull(automationRunsTable.firm_id);
-  return or(eq(automationRunsTable.firm_id, firmId), isNull(automationRunsTable.firm_id))!;
+  return or(
+    eq(automationRunsTable.firm_id, firmId),
+    isNull(automationRunsTable.firm_id),
+  )!;
 }
 
 const graphSchema = z.object({
