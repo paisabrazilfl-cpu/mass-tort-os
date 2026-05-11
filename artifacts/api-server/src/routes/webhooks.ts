@@ -1234,7 +1234,7 @@ export function dispatchDocumentSigned(payload: {
     input: payload,
     firmId: payload.firm_id ?? null,
     source: "webhooks.document_signed",
-  });
+  }).catch(() => {});
 }
 
 export function dispatchInboundCall(payload: {
@@ -1248,7 +1248,7 @@ export function dispatchInboundCall(payload: {
     input: payload,
     firmId: payload.firm_id ?? null,
     source: "webhooks.inbound_call",
-  });
+  }).catch(() => {});
 }
 
 export function dispatchInboundSms(payload: {
@@ -1262,7 +1262,7 @@ export function dispatchInboundSms(payload: {
     input: payload,
     firmId: payload.firm_id ?? null,
     source: "webhooks.inbound_sms",
-  });
+  }).catch(() => {});
 }
 
 export default router;
