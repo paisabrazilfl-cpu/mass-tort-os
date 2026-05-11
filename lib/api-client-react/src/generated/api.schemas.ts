@@ -1110,6 +1110,7 @@ export const BackgroundHubLaneResultLane = {
   address: "address",
   email: "email",
   phone: "phone",
+  phone_provenance: "phone_provenance",
   residency: "residency",
   criminal_court: "criminal_court",
   incarceration: "incarceration",

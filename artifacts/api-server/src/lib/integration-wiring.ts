@@ -138,6 +138,16 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   // client_secret=PACER password (mapped this way so the existing preset
   // field taxonomy covers it without introducing new field names).
   pacer: ["api_key", "client_secret"],
+
+  // Premium Background Check — Garbo (FCRA-compliant). api_url is
+  // optional and overrides the default base URL (useful for sandbox
+  // environments or future endpoint migrations). api_key is the auth
+  // token used as a Bearer header on every call.
+  garbo: ["api_key", "api_url"],
+
+  // Phone Provenance via Telnyx Number Lookup intentionally does NOT
+  // have its own integration row — it reuses the existing `telnyx`
+  // integration's api_key. See lib/bg-hub/phone-provenance.ts.
 };
 
 export type WiringStatus = "live" | "live_no_vault" | "vault_only";
@@ -190,6 +200,12 @@ const REGISTRY: Record<string, WiringInfo> = {
   pacer: {
     status: "live",
     note: "Federal court searches via PACER PCL Search API (lib/pacer/pcl-client.ts). Powers the dedicated 'pacer_federal' lane in the Background Check Hub. Requires api_key=PACER username + client_secret=PACER password. Per-page billing applies on the PACER side.",
+  },
+
+  // Premium Background Check — Garbo
+  garbo: {
+    status: "live",
+    note: "FCRA-compliant background check via Garbo's API (lib/bg-hub/garbo.ts). When configured, replaces the manual NSOPW smart-link with a live screen and augments the criminal-court lane with arrest + violence-related records. Falls back to smart-link path when api_key absent or API unreachable. Pay-per-lookup; sign up at https://garbo.io.",
   },
 
   // AI / LLM (vault-consuming providers)

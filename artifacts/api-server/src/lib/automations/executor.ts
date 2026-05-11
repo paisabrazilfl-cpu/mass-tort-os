@@ -805,7 +805,11 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       : eq(leadsTable.id, leadId);
     const [lead] = await db.select().from(leadsTable).where(bgScope);
     if (!lead) throw new Error(`Lead ${leadId} not found in firm ${s.ctx.firmId ?? "<none>"}.`);
-    const result = await runBackgroundCheckHub(lead);
+    // Pass the tort slug through so tort-policy.ts can skip irrelevant
+    // lanes (e.g. no NPI / physician checks for Roblox-style child-safety
+    // torts, no business-entity check for personal-injury). The lead's
+    // tort_type column is the canonical slug.
+    const result = await runBackgroundCheckHub(lead, { tortSlug: (lead as any).tort_type ?? null });
     // bg-hub final_status is one of clear|flagged|incomplete — map "incomplete"
     // onto the catalog's "error" output so the editor renders a real edge.
     const finalStatus = (result as any).final_status ?? "incomplete";

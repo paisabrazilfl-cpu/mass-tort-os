@@ -10,6 +10,9 @@ import { searchPcl } from "../pacer/pcl-client";
 import { BACKGROUND_SOURCES } from "./sources";
 import { statusFromFlags } from "./escalation";
 import { searchEdgar } from "./sec-edgar";
+import { _runGarboCheckWithOverride, isGarboConfigured } from "./garbo";
+import { _lookupPhoneProvenanceWithOverride } from "./phone-provenance";
+import { enrichEmail } from "./email-enrichment";
 import {
   bopInmateSearchUrl,
   nsopwSearchUrl,
@@ -111,9 +114,14 @@ export async function adaptEmail(lead: LeadLike): Promise<BackgroundLaneResult> 
   if (result.suggestion) {
     flags.push("typo_suggestion");
   }
-  // Role-based heuristic on top of the validator (operator-facing).
-  if (/^(admin|info|support|sales|contact|noreply|no-reply)@/i.test(email)) {
-    flags.push("role_based_email");
+  // Email enrichment — disposable / role / free-provider signals from
+  // lib/bg-hub/email-enrichment.ts. The existing validator already
+  // emits some of these via its internal regex; we merge the canonical
+  // flag set here so the curated disposable-domain list (40+ entries)
+  // is the source of truth instead of the validator's smaller list.
+  const enrichment = enrichEmail(email);
+  for (const f of enrichment.flags) {
+    if (!flags.includes(f)) flags.push(f);
   }
   // Never claim SMTP was checked — we don't do mailbox probing.
   flags.push("smtp_not_checked");
@@ -330,33 +338,100 @@ export async function adaptIncarceration(lead: LeadLike): Promise<BackgroundLane
 }
 
 // ---------------------------------------------------------------------------
-// Sex offender (NSOPW) — full automation is structurally impossible
-// (NSOPW's TOS forbids automated queries). We emit a prefilled NSOPW
-// search URL that the operator clicks; their browser session runs the
-// query as a human user, which is not what NSOPW prohibits. The lane
-// status STILL reports manual-check-required so the result of the
-// manual lookup must be recorded explicitly.
+// Sex offender (NSOPW + Garbo) — hybrid lane.
+//
+// Direct NSOPW scraping is forbidden by their TOS, but Garbo (an
+// FCRA-compliant API-first provider) aggregates the sex-offender
+// registry data from compliant sources we can lawfully consume.
+// When the operator has wired up a Garbo integration we run the live
+// check; otherwise we fall back to the NSOPW prefilled smart-link the
+// operator clicks manually.
+//
+// Garbo signal mapping:
+//   hit with is_sex_offender_registry=true → flag "garbo_sex_offender_hit" → FAIL
+//   error / network failure                → flag "garbo_unreachable"     → REVIEW
+//   ok with empty hits                     → no flags                     → PASS
+//                                            (NSOPW smart-link still surfaced
+//                                            as a manual-confirm option)
 // ---------------------------------------------------------------------------
 export async function adaptNSOPW(lead: LeadLike): Promise<BackgroundLaneResult> {
   const manualUrls: BackgroundLaneResult["manual_action_urls"] = [
     {
       label: "Search NSOPW (National Sex Offender Public Website)",
       url: nsopwSearchUrl(lead),
-      note: "Click to run the lookup manually in your browser. NSOPW terms forbid automated queries; a human-clicked prefilled search is the compliant path.",
+      note: "Manual fallback — click to run the lookup yourself. Always available regardless of Garbo configuration.",
     },
   ];
+
+  const garboConfigured = await isGarboConfigured().catch(() => false);
+  if (!garboConfigured) {
+    return makeResult(
+      "sex_offender_nsopw",
+      ["nsopw_manual_check_required"],
+      {
+        searched_name: fullName(lead),
+        searched_state: lead.state,
+        searched_zip: lead.zip,
+        source: "https://www.nsopw.gov/",
+        automation_policy:
+          "No fake PASS. Configure a Garbo integration (Settings → Integrations → Garbo) for live automated screening, or run NSOPW manually via the smart-link.",
+      },
+      ["Click the smart-link below to run NSOPW. Record the result before clearing this lane."],
+      undefined,
+      manualUrls,
+    );
+  }
+
+  // Garbo is configured — run the live check.
+  const garbo = await _runGarboCheckWithOverride({
+    first_name: lead.first_name ?? "",
+    last_name: lead.last_name ?? "",
+    date_of_birth: lead.dob ?? null,
+    state: lead.state ?? null,
+    email: lead.email ?? null,
+    phone: lead.phone ?? null,
+  });
+
+  if (garbo.status === "unconfigured") {
+    // Race: configured-check passed, then the row got disabled.
+    // Degrade gracefully to the smart-link path.
+    return makeResult(
+      "sex_offender_nsopw",
+      ["nsopw_manual_check_required"],
+      { searched_name: fullName(lead), garbo_status: "unconfigured", garbo_note: garbo.note },
+      ["Garbo integration disappeared between configuration check and call. Fall back to manual NSOPW lookup."],
+      undefined,
+      manualUrls,
+    );
+  }
+  if (garbo.status === "error") {
+    return makeResult(
+      "sex_offender_nsopw",
+      ["garbo_unreachable"],
+      { searched_name: fullName(lead), garbo_status: "error", garbo_note: garbo.note },
+      [`Garbo unreachable — falling back to manual NSOPW lookup. Reason: ${garbo.note}`],
+      garbo.note,
+      manualUrls,
+    );
+  }
+  // ok
+  const registryHits = garbo.hits.filter((h) => h.is_sex_offender_registry || h.category === "sexual");
+  const flags: string[] = [];
+  if (registryHits.length > 0) flags.push("garbo_sex_offender_hit");
   return makeResult(
     "sex_offender_nsopw",
-    ["nsopw_manual_check_required"],
+    flags,
     {
       searched_name: fullName(lead),
-      searched_state: lead.state,
-      searched_zip: lead.zip,
-      source: "https://www.nsopw.gov/",
-      automation_policy:
-        "No fake PASS. Manual NSOPW lookup required — automated scraping is prohibited by NSOPW terms of use. The smart-link below opens NSOPW with the lead's name prefilled.",
+      garbo_status: "ok",
+      garbo_hits_total: garbo.hits.length,
+      garbo_sex_offender_hits: registryHits,
+      garbo_all_hits: garbo.hits,
+      checked_at: garbo.checked_at,
     },
-    ["Click the smart-link below to run NSOPW. Record the result before clearing this lane."],
+    registryHits.length > 0
+      ? [`Garbo: ${registryHits.length} sex-offender registry hit${registryHits.length === 1 ? "" : "s"}.`]
+      : ["Garbo: no sex-offender registry hits."],
     undefined,
     manualUrls,
   );
@@ -687,3 +762,42 @@ export async function adaptBusiness(lead: LeadLike): Promise<BackgroundLaneResul
     manualUrls,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Phone provenance — live carrier + line-type + portability lookup via
+// Telnyx Number Lookup. Reuses the existing `telnyx` integration row's
+// api_key (set up for SMS send) so most operators get this lane "free"
+// the moment they enable Telnyx SMS. Classifies into low/moderate/high
+// burner-risk; high-risk verdicts (non-fixed-VOIP, known burner
+// carriers) emit REVIEW flags so a paralegal looks before the lead
+// gets routed to a buyer.
+// ---------------------------------------------------------------------------
+export async function adaptPhoneProvenance(lead: LeadLike): Promise<BackgroundLaneResult> {
+  const phone = (lead.phone ?? "").trim();
+  if (!phone) {
+    return makeResult("phone_provenance", ["phone_provenance_unconfigured"], { phone: null }, [
+      "No phone on lead — provenance check skipped.",
+    ]);
+  }
+  // Pass the firm context through if the LeadLike has it available; we
+  // intentionally don't require it (the helper falls back to env when
+  // there's no integration row, so single-firm deployments keep working).
+  const result = await _lookupPhoneProvenanceWithOverride(phone);
+  const flags = [...result.flags];
+  return makeResult(
+    "phone_provenance",
+    flags,
+    {
+      phone: result.phone,
+      line_type: result.line_type,
+      carrier: result.carrier,
+      country_code: result.country_code,
+      recently_ported: result.recently_ported,
+      risk: result.risk,
+      status: result.status,
+      note: result.note,
+    },
+    result.note ? [result.note] : [],
+  );
+}
+

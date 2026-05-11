@@ -26,6 +26,7 @@ const LANE_LABEL: Record<string, string> = {
   address: "Address Verification",
   email: "Email Validation",
   phone: "Phone Validation",
+  phone_provenance: "Phone Provenance (Telnyx live carrier + burner-risk classification)",
   residency: "Residency Cross-Check (manual property-records lookup; one-click smart-link)",
   criminal_court: "Criminal / Court Records",
   incarceration: "Incarceration Status (BOP + VINELink smart-links)",

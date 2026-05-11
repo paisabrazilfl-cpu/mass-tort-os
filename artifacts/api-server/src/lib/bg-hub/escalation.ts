@@ -37,6 +37,10 @@ export const BACKGROUND_ESCALATION_RULES: Record<
   },
 
   email: {
+    // disposable_domain stays in the FAIL bucket — a throwaway address
+    // on a mass-tort intake is ~100% fraud. role_based_email is
+    // REVIEW because a real claimant can legitimately submit from a
+    // shared family mailbox (rare, but documented).
     fail: ["missing_email", "invalid_email_format", "no_mx_records", "disposable_domain"],
     review: ["email_not_checked", "role_based_email", "smtp_not_checked", "typo_suggestion"],
   },
@@ -44,6 +48,33 @@ export const BACKGROUND_ESCALATION_RULES: Record<
   phone: {
     fail: ["missing_phone", "invalid_phone_format", "number_disconnected"],
     review: ["phone_not_checked", "voip", "prepaid", "carrier_unknown"],
+  },
+
+  // Phone provenance is the live counterpart to the format-only `phone`
+  // lane. Telnyx returns line-type and carrier; we classify into a
+  // burner-risk verdict. High-risk verdicts (non-fixed-VOIP, known
+  // burner carriers) are review-worthy, not fail-worthy — false
+  // positives on phones are common (a real claimant on Google Voice
+  // is plausible), so the lane escalates to human eyes rather than
+  // auto-rejecting the lead.
+  phone_provenance: {
+    fail: [],
+    review: [
+      "phone_non_fixed_voip",
+      "phone_voip",
+      "phone_toll_free",
+      "phone_known_burner_carrier",
+      "phone_recently_ported",
+      "phone_carrier_unknown",
+      "phone_lookup_unreachable",
+      "phone_unparseable",
+    ],
+    skip: [
+      // No Telnyx integration configured. NOT_RUN, not REVIEW: the
+      // operator hasn't opted into this signal yet, and we shouldn't
+      // gate intake on a check they haven't enabled.
+      "phone_provenance_unconfigured",
+    ],
   },
 
   residency: {
@@ -87,11 +118,17 @@ export const BACKGROUND_ESCALATION_RULES: Record<
   },
 
   sex_offender_nsopw: {
-    fail: ["confirmed_registry_match"],
+    // garbo_sex_offender_hit is the live-screen FAIL signal. NSOPW
+    // direct hits via smart-link don't reach here as flags (they're
+    // recorded as operator-edited notes), but when Garbo is configured
+    // a positive sex-offender registry match comes through as a hard
+    // fail.
+    fail: ["confirmed_registry_match", "garbo_sex_offender_hit"],
     review: [
       "nsopw_manual_check_required",
       "possible_registry_match",
       "source_unavailable",
+      "garbo_unreachable",
     ],
   },
 

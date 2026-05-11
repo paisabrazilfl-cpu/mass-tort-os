@@ -1142,6 +1142,12 @@ router.post(
         // leads table has no business_name column — claimants are people, not
         // entities. Hub will resolve to NOT_RUN for the business_entity lane.
         business_name: null,
+      }, {
+        // Tort-aware lane gating: bg-hub skips irrelevant lanes per the
+        // policy matrix in lib/bg-hub/tort-policy.ts. Child-safety torts
+        // (Roblox, Discord, …) skip business-entity + attorney; data-breach
+        // torts skip the medical-style lanes; etc.
+        tortSlug: (lead as any).tort_type ?? null,
       });
       // Persist a snapshot row (history ledger). Failure to persist is logged
       // but does not block the response — the hub result is still useful.
