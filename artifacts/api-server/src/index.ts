@@ -47,44 +47,129 @@ if (Number.isNaN(port) || port <= 0) {
 // Runs at boot to add columns that were added to Drizzle schema after the
 // table was first created via drizzle-kit push. Safe to run every boot.
 async function runSchemaRepair(): Promise<void> {
-  const repairs: string[] = [
-    // automation_workflows — columns added post-initial-creation
+  // Phase 1: CREATE tables that may not exist in the Render DB
+  const creates: string[] = [
+    `CREATE TABLE IF NOT EXISTS firms (
+      id serial PRIMARY KEY,
+      name varchar(255) NOT NULL,
+      slug varchar(100) NOT NULL UNIQUE,
+      billing_email varchar(255),
+      stripe_customer_id varchar(100),
+      stripe_subscription_id varchar(100),
+      subscription_status varchar(30) NOT NULL DEFAULT 'inactive',
+      current_period_end timestamp,
+      plan_price_id varchar(100),
+      notes text,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    )`,
+    `CREATE TABLE IF NOT EXISTS automation_workflows (
+      id serial PRIMARY KEY,
+      firm_id integer,
+      name varchar(200) NOT NULL DEFAULT 'untitled',
+      description text,
+      graph jsonb NOT NULL DEFAULT '{"nodes":[],"edges":[]}',
+      enabled boolean NOT NULL DEFAULT false,
+      trigger_type varchar(40) NOT NULL DEFAULT 'manual',
+      trigger_config jsonb NOT NULL DEFAULT '{}',
+      tags jsonb NOT NULL DEFAULT '[]',
+      created_by_user_id integer,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS automation_workflows_firm_idx ON automation_workflows(firm_id, updated_at)`,
+    `CREATE INDEX IF NOT EXISTS automation_workflows_trigger_idx ON automation_workflows(trigger_type, enabled)`,
+    `CREATE TABLE IF NOT EXISTS automation_runs (
+      id serial PRIMARY KEY,
+      workflow_id integer NOT NULL,
+      firm_id integer,
+      status varchar(20) NOT NULL DEFAULT 'pending',
+      trigger_source varchar(40) NOT NULL DEFAULT 'manual',
+      input jsonb NOT NULL DEFAULT '{}',
+      output jsonb,
+      step_log jsonb NOT NULL DEFAULT '[]',
+      error text,
+      started_by_user_id integer,
+      started_at timestamp NOT NULL DEFAULT now(),
+      completed_at timestamp
+    )`,
+    `CREATE INDEX IF NOT EXISTS automation_runs_workflow_idx ON automation_runs(workflow_id, started_at)`,
+    `CREATE INDEX IF NOT EXISTS automation_runs_firm_status_idx ON automation_runs(firm_id, status, started_at)`,
+    `CREATE TABLE IF NOT EXISTS api_keys (
+      id serial PRIMARY KEY,
+      firm_id integer NOT NULL,
+      created_by_user_id integer NOT NULL,
+      name text NOT NULL,
+      key_hash text NOT NULL UNIQUE,
+      key_prefix text NOT NULL,
+      scopes text[] NOT NULL DEFAULT '{}',
+      last_used_at timestamp,
+      revoked_at timestamp,
+      created_at timestamp NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS api_keys_hash_idx ON api_keys(key_hash)`,
+    `CREATE INDEX IF NOT EXISTS api_keys_firm_idx ON api_keys(firm_id)`,
+    `CREATE TABLE IF NOT EXISTS api_key_audit (
+      id serial PRIMARY KEY,
+      api_key_id integer NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+      route text NOT NULL,
+      method text NOT NULL,
+      status_code integer NOT NULL,
+      ip_address text,
+      user_agent text,
+      occurred_at timestamp NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS api_key_audit_key_idx ON api_key_audit(api_key_id, occurred_at)`,
+    `CREATE INDEX IF NOT EXISTS api_key_audit_occurred_idx ON api_key_audit(occurred_at)`,
+    `CREATE TABLE IF NOT EXISTS workflow_settings (
+      id serial PRIMARY KEY,
+      scope varchar(100) NOT NULL UNIQUE,
+      esign_provider_integration_id integer,
+      fax_provider_integration_id integer,
+      email_provider_integration_id integer,
+      sms_provider_integration_id integer,
+      voice_provider_integration_id integer,
+      llm_default_provider_integration_id integer,
+      llm_drafting_provider_integration_id integer,
+      default_email_from_name varchar(255),
+      default_email_from_address varchar(255),
+      default_fax_from_number varchar(50),
+      auto_send_on_approval boolean NOT NULL DEFAULT true,
+      auto_fax_doctor_on_signed_hipaa boolean NOT NULL DEFAULT true,
+      esign_resend_after_days integer NOT NULL DEFAULT 3,
+      esign_expire_after_days integer NOT NULL DEFAULT 14,
+      max_send_retries integer NOT NULL DEFAULT 3,
+      notify_on_failure_email varchar(255),
+      med_records_cover_letter_template_id integer,
+      metadata jsonb NOT NULL DEFAULT '{}',
+      notes text,
+      updated_by_user_id integer,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO workflow_settings(scope) VALUES('global') ON CONFLICT(scope) DO NOTHING`,
+  ];
+
+  // Phase 2: ALTER TABLE to add any columns still missing
+  const alters: string[] = [
     `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '[]'`,
     `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS trigger_config jsonb NOT NULL DEFAULT '{}'`,
     `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS trigger_type varchar(40) NOT NULL DEFAULT 'manual'`,
     `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS description text`,
-    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS created_by_user_id integer`,
     `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS firm_id integer`,
-    // automation_runs — make sure all columns exist
+    `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS created_by_user_id integer`,
     `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS trigger_source varchar(40) NOT NULL DEFAULT 'manual'`,
     `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS step_log jsonb NOT NULL DEFAULT '[]'`,
     `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS output jsonb`,
     `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS firm_id integer`,
     `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS started_by_user_id integer`,
     `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS completed_at timestamp`,
-    // api_keys — make sure revoked_at exists (not the old boolean revoked)
     `ALTER TABLE api_keys DROP COLUMN IF EXISTS revoked`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS revoked_at timestamp`,
-    // api_key_audit — ensure table exists
-    `CREATE TABLE IF NOT EXISTS api_key_audit (
-       id serial PRIMARY KEY,
-       api_key_id integer NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
-       route text NOT NULL,
-       method text NOT NULL,
-       status_code integer NOT NULL,
-       ip_address text,
-       user_agent text,
-       occurred_at timestamp NOT NULL DEFAULT now()
-    )`,
   ];
 
-  for (const stmt of repairs) {
-    try {
-      await pool.query(stmt);
-    } catch (err: any) {
-      // Non-fatal: log and continue — some repairs may fail if constraints clash
-      logger.warn({ err: err?.message, stmt: stmt.slice(0, 80) }, "Schema repair stmt failed (non-fatal)");
-    }
+  for (const stmt of [...creates, ...alters]) {
+    try { await pool.query(stmt); } catch { /* IF NOT EXISTS — safe to ignore */ }
   }
   logger.info("Schema repair complete");
 }
