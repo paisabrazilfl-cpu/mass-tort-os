@@ -3,6 +3,8 @@ import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
 import { seedDefaultFirm, seedSuperAdmin, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
 import { workerLoop } from "./worker";
+import { db } from "@workspace/db";
+import { sql } from "drizzle-orm";
 
 const NODE_ENV = process.env["NODE_ENV"];
 const IS_DEV = NODE_ENV === "development";
