@@ -128,11 +128,17 @@ router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), as
       `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'automation_workflows' ORDER BY ordinal_position`
     ).catch(() => ({ rows: [] }));
     const rows = await pool.query(`SELECT id, name, firm_id, enabled, trigger_type FROM automation_workflows LIMIT 20`).catch(() => ({ rows: [] }));
+    const runsExist = await pool.query(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'automation_runs') AS exists`).catch(() => ({rows:[{exists:false}]}));
+    const runsCols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'automation_runs' ORDER BY ordinal_position`).catch(() => ({rows:[]}));
+    const runsRows = await pool.query(`SELECT id, workflow_id, status, started_at FROM automation_runs ORDER BY id DESC LIMIT 5`).catch((e: any) => ({ rows: [], error: e?.message }));
+    // CI tables
+    const ciExist = await pool.query(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'competitive_intel_advertisers') AS exists`).catch(() => ({rows:[{exists:false}]}));
+    const shExist = await pool.query(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'self_heal_sessions') AS exists`).catch(() => ({rows:[{exists:false}]}));
     res.json({
-      table_exists: tableExists.rows[0]?.exists,
-      row_count: rowCount.rows[0]?.count,
-      columns: cols.rows,
-      rows: rows.rows,
+      automation_workflows: { exists: tableExists.rows[0]?.exists, count: rowCount.rows[0]?.count, rows: rows.rows },
+      automation_runs: { exists: runsExist.rows[0]?.exists, columns: runsCols.rows.map((r: any) => r.column_name), rows: (runsRows as any).rows, error: (runsRows as any).error },
+      competitive_intel_advertisers: { exists: ciExist.rows[0]?.exists },
+      self_heal_sessions: { exists: shExist.rows[0]?.exists },
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message });
@@ -279,11 +285,14 @@ router.get("/:id/runs", requirePermission(Permission.AUTOMATIONS_VIEW), async (r
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   try {
     const raw = await pool.query(
-      `SELECT id, workflow_id, status, trigger_source, started_at, completed_at, error,
-       COALESCE(step_log, '[]'::jsonb) AS step_log
+      `SELECT id, workflow_id, status, COALESCE(trigger_source,'manual') AS trigger_source,
+       started_at, completed_at, error
        FROM automation_runs WHERE workflow_id = ${id}
        ORDER BY started_at DESC LIMIT 50`
-    );
+    ).catch(async () => {
+      // Fallback: try without trigger_source if column missing
+      return pool.query(`SELECT id, workflow_id, status, started_at, completed_at, error FROM automation_runs WHERE workflow_id = ${id} ORDER BY started_at DESC LIMIT 50`);
+    });
     res.json(raw.rows ?? []);
   } catch (err: any) {
     logger.error({ err: err?.message }, "automations /:id/runs failed");
@@ -297,15 +306,12 @@ router.get("/runs/:runId", requirePermission(Permission.AUTOMATIONS_VIEW), async
   if (!Number.isInteger(runId)) { badRequest(res, "runId must be integer"); return; }
   try {
     const raw = await pool.query(
-      `SELECT id, workflow_id, status, trigger_source, input, output,
-       COALESCE(step_log, '[]'::jsonb) AS steps,
-       error, started_at, completed_at, started_by_user_id
-       FROM automation_runs WHERE id = ${runId} LIMIT 1`
+      `SELECT * FROM automation_runs WHERE id = ${runId} LIMIT 1`
     );
     const row = raw.rows[0];
     if (!row) { notFound(res, "Run not found"); return; }
-    // Normalize: expose step_log as both 'step_log' and 'steps'
-    res.json({ ...row, step_log: row.steps, runId: row.id });
+    const stepLog = row.step_log ?? [];
+    res.json({ ...row, steps: stepLog, step_log: stepLog, runId: row.id });
   } catch (err: any) {
     logger.error({ err: err?.message }, "automations /runs/:runId failed");
     notFound(res, "Run not found");
