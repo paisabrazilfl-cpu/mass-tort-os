@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, automationWorkflowsTable, automationRunsTable } from "@workspace/db";
+import { db, pool, automationWorkflowsTable, automationRunsTable } from "@workspace/db";
 import { eq, desc, and, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
@@ -192,8 +192,6 @@ router.post("/", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, r
   const userId = (req as any).user?.id as number | undefined;
   const firmId: number | null = (req as any).user?.firm_id ?? (req as any).firmId ?? null;
   try {
-    // Parameterized INSERT via raw pg pool — bypasses Drizzle jsonb serialization completely
-    const pool = (db as any).$client;
     const qr = await pool.query(
       `INSERT INTO automation_workflows
          (name, description, graph, enabled, trigger_type, trigger_config, tags, firm_id, created_by_user_id)
