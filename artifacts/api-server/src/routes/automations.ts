@@ -112,7 +112,7 @@ router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res)
   const firmId = (req as any).firmId as number | undefined;
   try {
     const raw = await pool.query(
-      "SELECT id, name, COALESCE(description,'') AS description, enabled, COALESCE(trigger_type,'manual') AS trigger_type, COALESCE(tags,'[]':jsonb) AS tags, updated_at, created_at FROM automation_workflows WHERE " + fWhere(firmId) + " ORDER BY updated_at DESC"
+      "SELECT id, name, COALESCE(description,'') AS description, enabled, COALESCE(trigger_type,'manual') AS trigger_type, COALESCE(tags,'[]'::jsonb) AS tags, updated_at, created_at FROM automation_workflows WHERE " + fWhere(firmId) + " ORDER BY updated_at DESC"
     );
     res.json(raw.rows ?? []);
   } catch (err: any) {
