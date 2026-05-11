@@ -1265,4 +1265,52 @@ export function dispatchInboundSms(payload: {
   }).catch(() => {});
 }
 
+
+// ── Automation workflow webhook trigger (PUBLIC — external provider callbacks) ──
+// Mounted on the public webhooks router so no JWT is needed.
+// Security: HMAC-SHA256 per-workflow slug+secret. Returns 200 for unknown slugs.
+router.post("/automation-trigger/:slugOrId", async (req, res) => {
+  const slugOrId = (req.params.slugOrId ?? "").slice(0, 100);
+  if (!slugOrId) { res.json({ ok: true }); return; }
+
+  const providedSig = req.headers["x-mtos-signature"] as string | undefined;
+
+  let wf: { id: number; trigger_config: unknown } | undefined;
+  try {
+    const raw = await pool.query<{ id: number; trigger_config: unknown }>(
+      `SELECT id, trigger_config FROM automation_workflows
+       WHERE enabled = true AND trigger_type = 'trigger.webhook'
+         AND (id::text = $1 OR trigger_config->>'slug' = $1) LIMIT 1`,
+      [slugOrId]
+    );
+    wf = raw.rows[0];
+  } catch { res.json({ ok: true }); return; }
+
+  if (!wf) { res.json({ ok: true }); return; } // no enumeration
+
+  const config = (wf.trigger_config ?? {}) as Record<string, unknown>;
+  const secret = typeof config["secret"] === "string" ? config["secret"] : null;
+
+  if (secret) {
+    if (!providedSig) { res.status(401).json({ error: "x-mtos-signature required" }); return; }
+    const { createHmac, timingSafeEqual } = await import("node:crypto");
+    const expected = "sha256=" + createHmac("sha256", secret).update(JSON.stringify(req.body)).digest("hex");
+    try {
+      if (!timingSafeEqual(Buffer.from(providedSig), Buffer.from(expected))) {
+        res.status(401).json({ error: "Invalid signature" }); return;
+      }
+    } catch { res.status(401).json({ error: "Invalid signature" }); return; }
+  }
+
+  res.json({ ok: true, workflow_id: wf.id });
+  try {
+    const { dispatchTrigger } = await import("../lib/automations/dispatch");
+    dispatchTrigger("trigger.webhook", {
+      input: { body: req.body, slug: slugOrId },
+      firmId: null,
+      source: "webhooks.automation-trigger",
+    }).catch(() => {});
+  } catch { /* non-fatal */ }
+});
+
 export default router;
