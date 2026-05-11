@@ -8,7 +8,7 @@ import { NODE_CATALOG } from "../lib/automations/node-catalog";
 import { runWorkflow } from "../lib/automations/executor";
 import { callLLM } from "../lib/ai-provider";
 import { getAiConstitutionPreamble } from "../lib/ai-constitution";
-import { recursiveRetry, perspectiveCue, type AttemptOutcome } from "../lib/automations/recursive-retry";
+import { recursiveRetry, perspectiveCue } from "../lib/automations/recursive-retry";
 import { logger } from "../lib/logger";
 
 // BUILD_VERSION: v20260511-clean
@@ -248,7 +248,7 @@ router.post("/assist", requirePermission(Permission.AUTOMATIONS_MANAGE), async (
     await getAiConstitutionPreamble(),
     "You are an automation workflow builder for the MTOS mass-tort CRM.",
     "Output ONLY valid JSON with shape: { graph: { nodes: [...], edges: [...] } }",
-    "Available node types: " + JSON.stringify(require("../lib/automations/node-catalog").NODE_CATALOG.map((n: any) => n.type)),
+    "Available node types: " + JSON.stringify(NODE_CATALOG.map((n: any) => n.type)),
   ].join("\n");
 
   const attempt = async (perspectiveIndex: number, previousError?: string): Promise<AttemptOutcome> => {
