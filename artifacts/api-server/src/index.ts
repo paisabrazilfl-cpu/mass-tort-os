@@ -3,6 +3,10 @@ import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
 import { seedDefaultFirm, seedSuperAdmin, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
 import { workerLoop } from "./worker";
+import { db, automationWorkflowsTable } from "@workspace/db";
+import { eq, and } from "drizzle-orm";
+import { Cron } from "croner";
+import { runWorkflow } from "./lib/automations/executor";
 
 const NODE_ENV = process.env["NODE_ENV"];
 const IS_DEV = NODE_ENV === "development";
@@ -126,4 +130,57 @@ app.listen(port, async (err) => {
   } else {
     logger.info("In-process worker disabled (dev mode — separate worker workflow handles jobs)");
   }
+
+  // ── trigger.schedule cron poller ──────────────────────────────────────────
+  // Polls every 60 s and fires any enabled trigger.schedule automation whose
+  // cron expression matches the current minute. Uses `croner` for expression
+  // parsing; fires workflows asynchronously so slow automations never block
+  // the poller itself.
+  //
+  // Scheduling semantics: we compare the next run time of the expression
+  // against now + 60 s. If the next run falls within that window, this
+  // invocation of the poller is responsible for firing it. This means at
+  // most one fire per minute for any given cron expression, with ≤ 1 s jitter
+  // from the setInterval drift.
+  function shouldFireCron(expr: string): boolean {
+    try {
+      const job = new Cron(expr, { paused: true });
+      const next = job.nextRun();
+      if (!next) return false;
+      const diff = next.getTime() - Date.now();
+      return diff >= 0 && diff < 60_000;
+    } catch {
+      return false;
+    }
+  }
+
+  setInterval(async () => {
+    try {
+      const rows = await db
+        .select()
+        .from(automationWorkflowsTable)
+        .where(
+          and(
+            eq(automationWorkflowsTable.enabled, true),
+            eq(automationWorkflowsTable.trigger_type, "trigger.schedule"),
+          ),
+        );
+      for (const wf of rows) {
+        const cron = (wf.trigger_config as Record<string, unknown>)?.cron;
+        if (typeof cron === "string" && shouldFireCron(cron)) {
+          runWorkflow({
+            workflowId: wf.id,
+            firmId: wf.firm_id,
+            triggerSource: "schedule",
+            input: {},
+          }).catch((err) => {
+            logger.error({ err, workflowId: wf.id, cron }, "schedule trigger run failed");
+          });
+        }
+      }
+    } catch (err) {
+      logger.error({ err }, "schedule poller error");
+    }
+  }, 60_000);
+  logger.info("trigger.schedule cron poller started (60s interval)");
 });

@@ -82,9 +82,18 @@ app.use("/api/web-forms", cors({
   maxAge: 86400,
 }));
 // Strict CORS for the CRM admin app and all other authenticated routes.
+// REPL_SLUG may not be injected in autoscale; fall back to ALLOWED_ORIGIN
+// and PUBLIC_BASE_URL so monitoring and the SPA still work in production
+// even if the Replit env var is absent. If none resolve, lock down to false
+// (deny all cross-origin) rather than silently allowing everything.
+const prodOrigins: string[] = [
+  process.env.REPL_SLUG ? `https://${process.env.REPL_SLUG}.replit.app` : null,
+  process.env.ALLOWED_ORIGIN ?? null,
+  process.env.PUBLIC_BASE_URL ?? null,
+].filter((o): o is string => Boolean(o));
 app.use(cors({
   origin: process.env.NODE_ENV === "production"
-    ? [process.env.REPL_SLUG ? `https://${process.env.REPL_SLUG}.replit.app` : ""].filter(Boolean)
+    ? (prodOrigins.length > 0 ? prodOrigins : false)
     : true,
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -100,7 +109,10 @@ app.use(cors({
 app.use(express.json({
   limit: "55mb",
   verify: (req, _res, buf) => {
-    if (req.url?.startsWith("/api/webhooks/") && buf && buf.length > 0) {
+    if (
+      (req.url?.startsWith("/api/webhooks/") || req.url?.startsWith("/api/automations/webhook/"))
+      && buf && buf.length > 0
+    ) {
       (req as unknown as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
     }
   },

@@ -22,6 +22,7 @@ import { Permission, requirePermission, auditAction, canBypassOwnership, denyFor
 import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
+import { dispatchTrigger } from "../lib/automations/dispatch";
 import { dispatchEvent } from "../lib/event-dispatcher";
 import { sendSmsViaRouter } from "../lib/sms/send";
 
@@ -422,6 +423,27 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
         },
       });
 
+      // Internal automation trigger — fan out to any enabled trigger.lead_created workflows.
+      void dispatchTrigger("trigger.lead_created", {
+        input: {
+          lead: {
+            id: lead.id,
+            first_name: lead.first_name ?? null,
+            last_name: lead.last_name ?? null,
+            email: lead.email ?? null,
+            phone_primary: lead.phone_primary ?? null,
+            tort_type: lead.tort_type ?? null,
+            state: lead.state ?? null,
+            status: lead.status ?? null,
+            source: lead.source ?? null,
+            tcpa_consent: lead.tcpa_consent ?? false,
+            created_at: lead.created_at ? new Date(lead.created_at).toISOString() : new Date().toISOString(),
+          },
+        },
+        firmId: lead.firm_id ?? null,
+        source: "lead_created",
+      });
+
       res.status(201).json({
         ...decryptLeadFields(lead, String(lead.id)),
         _conflict: {
@@ -489,6 +511,27 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
       source: lead.source ?? null,
       created_at: lead.created_at ? new Date(lead.created_at).toISOString() : new Date().toISOString(),
     },
+  });
+
+  // Internal automation trigger — fan out to any enabled trigger.lead_created workflows.
+  void dispatchTrigger("trigger.lead_created", {
+    input: {
+      lead: {
+        id: lead.id,
+        first_name: lead.first_name ?? null,
+        last_name: lead.last_name ?? null,
+        email: lead.email ?? null,
+        phone_primary: lead.phone_primary ?? null,
+        tort_type: lead.tort_type ?? null,
+        state: lead.state ?? null,
+        status: lead.status ?? null,
+        source: lead.source ?? null,
+        tcpa_consent: lead.tcpa_consent ?? false,
+        created_at: lead.created_at ? new Date(lead.created_at).toISOString() : new Date().toISOString(),
+      },
+    },
+    firmId: lead.firm_id ?? null,
+    source: "lead_created",
   });
 
   res.status(201).json(decryptLeadFields(lead, String(lead.id)));

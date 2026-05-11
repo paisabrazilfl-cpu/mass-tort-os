@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **256 checked / 39 public / 217 protected / 0 unprotected.**
+Boot-time count: **259 checked / 42 public / 217 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -656,6 +656,8 @@ Boot-time count: **256 checked / 39 public / 217 protected / 0 unprotected.**
 | auth | POST | `/api/auth/register` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | GET | `/api/auth/users` | ✓ | ✓ |  |  |  | — | `users:list` | ✓ |
 | auth | GET | `/api/auth/verify-email` |  |  |  |  | ✓ | — | — | ✓ |
+| automation-webhook | _ALL | `/api/automation-webhook/:slug` |  |  | ✓ |  |  | — | — | — |
+| automation-webhook | POST | `/api/automation-webhook/:slug` |  |  | ✓ |  |  | — | — | — |
 | automations | POST | `/api/automations/:id/run` | ✓ | ✓ |  |  |  | — | `automations:execute` | ✓ |
 | automations | GET | `/api/automations/:id/runs` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | automations | DELETE | `/api/automations/:id` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
@@ -754,6 +756,7 @@ Boot-time count: **256 checked / 39 public / 217 protected / 0 unprotected.**
 | forms | GET | `/api/forms/web-config/:tortId` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
 | forms | PUT | `/api/forms/web-config/:tortId` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
 | forms | GET | `/api/forms/web-config` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
+| health | GET | `/api/health/health` |  |  | ✓ |  |  | — | — | — |
 | health | GET | `/api/health/healthz` |  |  | ✓ |  |  | — | — | — |
 | image-objects | GET | `/api/image-objects/:id/integrity` | ✓ | ✓ |  |  |  | — | `image_objects:view` | ✓ |
 | image-objects | DELETE | `/api/image-objects/:id` | ✓ | ✓ |  |  |  | — | `image_objects:delete` | ✓ |

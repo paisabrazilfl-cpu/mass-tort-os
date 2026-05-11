@@ -24,6 +24,7 @@
     "@workspace/integrations-anthropic-ai": "workspace:*",
     "@workspace/integrations-openai-ai-server": "workspace:*",
     "cors": "^2",
+    "croner": "^10.0.1",
     "drizzle-orm": "catalog:",
     "express": "^5",
     "express-rate-limit": "^8.3.2",

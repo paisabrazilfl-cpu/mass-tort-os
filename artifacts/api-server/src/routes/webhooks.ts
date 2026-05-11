@@ -38,6 +38,7 @@ import { verifyFastenSignature } from "../lib/fasten/webhook";
 import { getFastenWebhookSecret } from "../lib/fasten/client";
 import { fastenConnectionsTable } from "@workspace/db";
 import { enqueueJob } from "../lib/queue";
+import { dispatchTrigger } from "../lib/automations/dispatch";
 import { getEmailVerifier, getSmsVerifier, type VerifyContext, type SignatureStatus } from "../lib/webhook-verifiers";
 import { invalidateStripeConfiguredCache } from "../lib/subscription-gate";
 import type Stripe from "stripe";
@@ -105,6 +106,17 @@ async function applyEnvelopeEvent(provider: string, evt: NormalizedEvent): Promi
     } catch (err) {
       logger.error({ err, envelope_id: env.id }, "onEnvelopeSigned threw — ignoring to keep webhook 200");
     }
+    // Dispatch internal automation trigger for trigger.document_signed workflows.
+    void dispatchTrigger("trigger.document_signed", {
+      input: {
+        envelope_id: env.id,
+        lead_id: env.lead_id ?? null,
+        external_envelope_id: evt.externalEnvelopeId,
+        provider,
+      },
+      firmId: (env as unknown as { firm_id?: number | null }).firm_id ?? null,
+      source: `webhook:${provider}`,
+    });
   }
 }
 
@@ -587,6 +599,17 @@ async function applyVapiEvent(body: unknown): Promise<void> {
           updated_at: new Date(),
         })
         .where(eq(callLogsTable.id, row.id));
+      // Dispatch trigger.inbound_call to any enabled automation workflows.
+      void dispatchTrigger("trigger.inbound_call", {
+        input: {
+          call_id: row.id,
+          vapi_call_id: vapiCallId,
+          lead_id: row.lead_id ?? null,
+          duration,
+        },
+        firmId: row.firm_id ?? null,
+        source: "vapi_webhook",
+      });
       return;
     }
     case "intake-result": {
@@ -686,6 +709,23 @@ async function applyTelnyxSmsEvent(body: unknown): Promise<void> {
       setFailed = true;
       errorDetail = p.data?.payload?.errors?.[0]?.detail ?? "telnyx_failed";
       break;
+    case "message.received": {
+      // Inbound SMS — dispatch trigger but do not update outbound sms_messages table.
+      // Cast to a wider type because TelnyxSmsWebhookPayload models outbound-only fields.
+      type InboundPl = { from?: { phone_number?: string }; text?: string; to?: Array<{ phone_number?: string }> };
+      const inboundPl = p.data?.payload as unknown as InboundPl | undefined;
+      void dispatchTrigger("trigger.inbound_sms", {
+        input: {
+          message_id: messageId,
+          from: inboundPl?.from?.phone_number ?? null,
+          body: inboundPl?.text ?? null,
+          to: inboundPl?.to?.[0]?.phone_number ?? null,
+        },
+        firmId: null,
+        source: "telnyx_webhook",
+      });
+      return;
+    }
     default:
       logger.info({ eventType }, "telnyx sms webhook: unhandled event type");
       return;

@@ -42,6 +42,7 @@ import adminCompetitiveIntelRouter from "./admin-competitive-intel";
 import adminEventCatalogRouter from "./admin-event-catalog";
 import adminWebhookDeliveriesRouter from "./admin-webhook-deliveries";
 import formsApiDirectoryRouter from "./forms-api-directory";
+import automationWebhookRouter from "./automation-webhook";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -61,6 +62,10 @@ markPublic(healthRouter, "health");
 markPublic(formsPublicRouter, "forms-public");
 markPublic(webFormsRouter, "web-forms");
 markPublic(webhooksRouter, "webhooks");
+// Automation webhook triggers: slug+secret is the credential, no Bearer.
+// Already marked public inside automation-webhook.ts via markPublic().
+// Label alias kept for the route-matrix validator's label uniqueness check.
+labelRouter(automationWebhookRouter, "automation-webhook");
 // Vapi tool callbacks: PUBLIC because Vapi authenticates with a static
 // bearer token (the assistant's tool secret), not a session JWT. Each
 // handler verifies the bearer at request time against vault credentials.
@@ -125,6 +130,9 @@ router.use("/web-forms", webFormsRouter);
 // Provider webhooks must be PUBLIC (callbacks have no Bearer token).
 // Each handler verifies provider signatures internally and always returns 200.
 router.use("/webhooks", webhooksRouter);
+// Automation webhook trigger receiver — PUBLIC, slug+secret = credential.
+// Mounted BEFORE authMiddleware so external systems don't need a JWT.
+router.use("/automations/webhook", automationWebhookRouter);
 // Vapi tool callbacks live at /vapi-tools (top-level so the dump-route-
 // matrix mount-regex parser, which only captures the first path segment,
 // reports the correct mount path). They are public — bearer-gated per

@@ -6,6 +6,7 @@ import { CreateCaseBody, UploadCaseFileBody } from "@workspace/api-zod";
 import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
 import { auditLog } from "../lib/audit";
 import { updateCaseStatus } from "../lib/case-status";
+import { dispatchTrigger } from "../lib/automations/dispatch";
 import crypto from "crypto";
 import type { AuthUser } from "../lib/rbac";
 import { Permission, requirePermission, auditAction, denyForbidden } from "../lib/rbac";
@@ -170,6 +171,18 @@ router.patch("/:id/status", requirePermission(Permission.CASE_ANALYZE), async (r
   if (!result.ok) {
     notFound(res);
     return;
+  }
+  // Dispatch trigger.case_status_changed to any enabled automation workflows.
+  if (result.transitioned) {
+    void dispatchTrigger("trigger.case_status_changed", {
+      input: {
+        case_id,
+        from_status: result.old_status,
+        to_status: result.new_status,
+      },
+      firmId: req.user?.firm_id ?? null,
+      source: "case_update",
+    });
   }
   res.json({
     case_id,
