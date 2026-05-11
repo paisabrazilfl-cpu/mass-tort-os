@@ -185,8 +185,8 @@ export function getDefaultSourceName(): string | null {
   }
   try {
     // Lazy/sync read of .git/config to keep this dependency-free.
-    const fs = require("node:fs") as typeof import("node:fs");
-    const path = require("node:path") as typeof import("node:path");
+    const fs = await import("node:fs");
+    const path = await import("node:path");
     let dir = process.cwd();
     for (let i = 0; i < 6; i++) {
       const cfg = path.join(dir, ".git", "config");
