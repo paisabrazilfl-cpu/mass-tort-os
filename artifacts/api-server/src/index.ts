@@ -148,6 +148,37 @@ async function runSchemaRepair(): Promise<void> {
       updated_at timestamp NOT NULL DEFAULT now()
     )`,
     `INSERT INTO workflow_settings(scope) VALUES('global') ON CONFLICT(scope) DO NOTHING`,
+    `CREATE TABLE IF NOT EXISTS competitive_intel_advertisers (
+      id serial PRIMARY KEY,
+      firm_id integer NOT NULL,
+      advertiser_id text NOT NULL,
+      label text NOT NULL,
+      notes text,
+      added_by_user_id integer NOT NULL,
+      last_fetched_at timestamp,
+      last_ad_count integer,
+      created_at timestamp NOT NULL DEFAULT now()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ci_advertisers_firm_adv ON competitive_intel_advertisers(firm_id, advertiser_id)`,
+    `CREATE TABLE IF NOT EXISTS competitive_intel_snapshots (
+      id serial PRIMARY KEY,
+      advertiser_id integer NOT NULL,
+      firm_id integer NOT NULL,
+      ads jsonb NOT NULL DEFAULT '[]',
+      ad_count integer NOT NULL DEFAULT 0,
+      fetched_at timestamp NOT NULL DEFAULT now()
+    )`,
+    `CREATE TABLE IF NOT EXISTS self_heal_sessions (
+      id serial PRIMARY KEY,
+      firm_id integer,
+      prompt text NOT NULL,
+      status varchar(30) NOT NULL DEFAULT 'pending',
+      plan text,
+      pr_url text,
+      created_by_user_id integer,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    )`,
   ];
 
   // Phase 2: ALTER TABLE to add any columns still missing
