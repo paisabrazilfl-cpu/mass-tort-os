@@ -52,7 +52,7 @@ router.post("/", requirePermission(Permission.BUYERS_MANAGE), auditAction("creat
     return;
   }
   try {
-    const [row] = await db.insert(buyersTable).values(parsed.data as any).returning();
+    const [row] = await db.insert(buyersTable).values(parsed.data as typeof parsed.data & Record<string,unknown>).returning();
     res.status(201).json(row);
   } catch (e: any) {
     if (String(e?.message || "").includes("duplicate")) {
