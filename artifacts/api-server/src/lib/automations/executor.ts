@@ -378,7 +378,10 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const entityType = String(s.node.data?.params?.entityType ?? "");
     const entityId = String(s.node.data?.params?.entityId ?? "");
     const details = s.node.data?.params?.details ?? {};
-    await db.insert(auditLogTable).values({ action, entity_type: entityType, entity_id: entityId, details } as any);
+    await pool.query(
+      "INSERT INTO audit_log (action, entity_type, entity_id, details, created_at) VALUES ($1, $2, $3, $4, now()) ON CONFLICT DO NOTHING",
+      [action, entityType, String(entityId ?? ""), JSON.stringify(details)]
+    ).catch(() => {}); // audit is non-fatal
     return { ok: true };
   },
 
