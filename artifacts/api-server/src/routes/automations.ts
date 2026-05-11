@@ -116,6 +116,29 @@ router.get("/node-catalog", requirePermission(Permission.AUTOMATIONS_VIEW), (_re
   res.json({ nodes: NODE_CATALOG });
 });
 
+
+// ── DEBUG: raw table dump (admin only) ──────────────────────────────────
+router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), async (_req, res) => {
+  try {
+    const tableExists = await pool.query(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'automation_workflows') AS exists`
+    );
+    const rowCount = await pool.query(`SELECT COUNT(*) FROM automation_workflows`).catch(() => ({ rows: [{ count: "error" }] }));
+    const cols = await pool.query(
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'automation_workflows' ORDER BY ordinal_position`
+    ).catch(() => ({ rows: [] }));
+    const rows = await pool.query(`SELECT id, name, firm_id, enabled, trigger_type FROM automation_workflows LIMIT 20`).catch(() => ({ rows: [] }));
+    res.json({
+      table_exists: tableExists.rows[0]?.exists,
+      row_count: rowCount.rows[0]?.count,
+      columns: cols.rows,
+      rows: rows.rows,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
+});
+
 router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   await ensureAutomationSchema();
   const firmId = (req as any).firmId as number | undefined;
