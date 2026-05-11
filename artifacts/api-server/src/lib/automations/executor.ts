@@ -341,10 +341,27 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     return { __branch: branch, value: { lead: row } };
   },
   "crm.create_case": async (s) => {
-    const data = (s.node.data?.params?.data ?? {}) as Record<string, any>;
-    const id = data.id ?? crypto.randomUUID();
-    const [row] = await db.insert(casesTable).values({ id, ...data } as any).returning();
-    return { case: row };
+    const p = s.node.data?.params ?? {};
+    const extraData = (p.data ?? {}) as Record<string, any>;
+    const leadIdRaw = resolveOrLiteral(s, p.leadId ?? s.vars?.lead_id ?? s.input?.lead_id);
+    const leadId = Number(leadIdRaw) || undefined;
+    const id = extraData.id ?? crypto.randomUUID();
+    // created_by_user_id: required NOT NULL — use the run's user or system user 1
+    const createdBy = s.ctx.firmId ?? 1;
+    const [row] = await db.insert(casesTable).values({
+      id,
+      created_by_user_id: createdBy,
+      data: leadId ? { lead_id: leadId, ...extraData } : extraData,
+      status: extraData.status ?? "open",
+    } as any).returning();
+    if (leadId) {
+      // Link case to lead via audit trail
+      await db.insert(auditLogTable).values({
+        entity_type: "case", entity_id: id,
+        action: "case.created", details: { lead_id: leadId, source: "automation" },
+      } as any).catch(() => {});
+    }
+    return { case: row, case_id: id };
   },
   "crm.add_note": async (s) => {
     // Notes are stored as audit_log entries with action "note_added".
@@ -1138,19 +1155,35 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       return { __branch: "failed", value: { error: "send_failed", message, fax_results_id: faxResultId, lead_id: leadId } };
     }
   },
-  "documents.ocr_extract": async (s) => {
-    // Catalog params: `documentId` (vault key) and `language`. We don't have
-    // an image-OCR provider wired here; instead we read the file as text from
-    // the vault and pass it through the medical extractor. This is honest:
-    // for non-text docs the operator must run real OCR upstream first.
+    "documents.ocr_extract": async (s) => {
     const p = s.node.data?.params ?? {};
-    const documentId = String(resolveOrLiteral(s, p.documentId ?? s.input?.documentId) ?? "");
-    if (!documentId) throw new Error("documents.ocr_extract requires `documentId` (vault key).");
+    let documentId = String(resolveOrLiteral(s, p.documentId) ?? "").trim();
+
+    // If documentId looks like a numeric fax_result_id, resolve the vault_path
+    if (/^\d+$/.test(documentId)) {
+      const faxRow = await db.execute(
+        sql`SELECT vault_path, raw_text FROM fax_results WHERE id = ${Number(documentId)} LIMIT 1`
+      ).catch(() => null);
+      const faxRec = (faxRow as any)?.rows?.[0] ?? (faxRow as any)?.[0];
+      if (faxRec?.vault_path) {
+        documentId = faxRec.vault_path;
+      } else if (faxRec?.raw_text) {
+        // Already have raw text — skip OCR and return it directly
+        return { text: faxRec.raw_text, raw_text: faxRec.raw_text, ocr_skipped: true };
+      }
+    }
+
+    // If still no valid vault path, return the raw_text from input if available
+    if (!documentId || /^\d+$/.test(documentId)) {
+      const rawText = String(s.input?.raw_text ?? s.vars?.raw_text ?? "");
+      if (rawText) return { text: rawText, raw_text: rawText, ocr_skipped: true };
+      throw new Error("documents.ocr_extract requires \`documentId\` (vault key).");
+    }
+
+    const language = String(p.language ?? "en");
     const buf = await readFile(documentId);
-    const text = Buffer.isBuffer(buf) ? buf.toString("utf8") : String(buf ?? "");
-    if (!text) throw new Error(`documents.ocr_extract: document '${documentId}' is empty or non-text. Run real OCR upstream first.`);
-    const fields = await analyzeDocumentText(text);
-    return { documentId, fields };
+    const text = buf.toString("utf-8");
+    return { document_id: documentId, text, raw_text: text, language };
   },
   "documents.medical_extract": async (s) => {
     // Catalog params: `documentId`, optional `schema` (advisory — analyze
