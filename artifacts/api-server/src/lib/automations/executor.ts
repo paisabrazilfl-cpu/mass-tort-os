@@ -262,9 +262,10 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   // ───────── Data
   "data.set": async (s) => {
     const name = String(s.node.data?.params?.name ?? "");
-    const value = s.node.data?.params?.value;
+    // Resolve expressions so "input.lead" becomes the actual lead object
+    const value = resolveOrLiteral(s, s.node.data?.params?.value);
     if (name) s.vars[name] = value;
-    return s.input;
+    return s.input; // pass input through unchanged
   },
   "data.transform": async (s) => {
     const code = String(s.node.data?.params?.code ?? "return input;");
