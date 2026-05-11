@@ -185,21 +185,28 @@ router.get("/:id", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, r
 router.post("/", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
   const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
-  await ensureOnce();
+  try { await ensureOnce(); } catch (schemaErr: any) {
+    logger.warn({ err: schemaErr?.message }, "ensureOnce failed (non-fatal)");
+  }
   const userId = (req as any).user?.id as number | undefined;
-  const firmId = (req as any).firmId as number | undefined;
-  const [row] = await db.insert(automationWorkflowsTable).values({
-    name: parsed.data.name,
-    description: parsed.data.description ?? null,
-    graph: parsed.data.graph,
-    enabled: parsed.data.enabled ?? false,
-    trigger_type: parsed.data.trigger_type ?? "manual",
-    trigger_config: parsed.data.trigger_config ?? {},
-    tags: parsed.data.tags ?? [],
-    firm_id: firmId ?? null,
-    created_by_user_id: userId ?? null,
-  } as any).returning();
-  res.status(201).json(row);
+  const firmId: number | null = (req as any).user?.firm_id ?? (req as any).firmId ?? null;
+  try {
+    const [row] = await db.insert(automationWorkflowsTable).values({
+      name: parsed.data.name,
+      description: parsed.data.description ?? null,
+      graph: parsed.data.graph,
+      enabled: parsed.data.enabled ?? false,
+      trigger_type: parsed.data.trigger_type ?? "manual",
+      trigger_config: parsed.data.trigger_config ?? {},
+      tags: parsed.data.tags ?? [],
+      firm_id: firmId,
+      created_by_user_id: userId ?? null,
+    } as any).returning();
+    res.status(201).json(row);
+  } catch (err: any) {
+    logger.error({ err: err?.message, firmId, userId }, "automation POST insert failed");
+    res.status(500).json({ status: "error", code: "insert_failed", message: err?.message ?? "Insert failed" });
+  }
 });
 
 router.put("/:id", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
