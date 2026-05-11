@@ -144,16 +144,19 @@ router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res)
   const firmId = (req as any).firmId as number | undefined;
   // Use raw SQL via pool to bypass Drizzle schema cache issues with runtime-created columns
   try {
-    const whereClause = firmId != null
-      ? `(firm_id = ${firmId} OR firm_id IS NULL)`
-      : `firm_id IS NULL`;
+    // Firm filter: include firm-scoped AND null-firm rows.
+    // Super-admin users may have firmId=null — treat as no filter.
+    let where = "1=1";
+    if (firmId != null) {
+      where = `(firm_id = ${Number(firmId)} OR firm_id IS NULL)`;
+    }
     const raw = await pool.query(
       `SELECT id, name, COALESCE(description, '') AS description, enabled,
        COALESCE(trigger_type, 'manual') AS trigger_type,
        COALESCE(tags, '[]'::jsonb) AS tags,
        updated_at, created_at
        FROM automation_workflows
-       WHERE ${whereClause}
+       WHERE ${where}
        ORDER BY updated_at DESC`
     );
     res.json(raw.rows ?? []);
@@ -169,8 +172,8 @@ router.get("/:id", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, r
   const firmId = (req as any).firmId as number | undefined;
   try {
     const whereClause = firmId != null
-      ? `id = ${id} AND (firm_id = ${firmId} OR firm_id IS NULL)`
-      : `id = ${id} AND firm_id IS NULL`;
+      ? `id = ${id} AND (firm_id = ${Number(firmId)} OR firm_id IS NULL)`
+      : `id = ${id}`;
     const raw = await pool.query(
       `SELECT * FROM automation_workflows WHERE ${whereClause} LIMIT 1`
     );
