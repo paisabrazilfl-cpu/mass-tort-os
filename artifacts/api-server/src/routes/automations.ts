@@ -191,26 +191,30 @@ router.post("/", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, r
   const userId = (req as any).user?.id as number | undefined;
   const firmId: number | null = (req as any).user?.firm_id ?? (req as any).firmId ?? null;
   try {
-    // Cast jsonb fields explicitly to avoid Drizzle serialization issues
+    // Use raw pg execute to bypass Drizzle jsonb serialization issues
     const graphJson = JSON.stringify(parsed.data.graph ?? { nodes: [], edges: [] });
     const configJson = JSON.stringify(parsed.data.trigger_config ?? {});
     const tagsJson = JSON.stringify(parsed.data.tags ?? []);
-    const [row] = await db.execute(sql`
-      INSERT INTO automation_workflows
+    const enabledVal = (parsed.data.enabled ?? false) ? "true" : "false";
+    const triggerType = parsed.data.trigger_type ?? "manual";
+    const nameVal = parsed.data.name;
+    const descVal = parsed.data.description ?? null;
+    const result = await db.execute(sql.raw(
+      `INSERT INTO automation_workflows
         (name, description, graph, enabled, trigger_type, trigger_config, tags, firm_id, created_by_user_id)
-      VALUES
-        (${parsed.data.name},
-         ${parsed.data.description ?? null},
-         ${graphJson}::jsonb,
-         ${parsed.data.enabled ?? false},
-         ${parsed.data.trigger_type ?? "manual"},
-         ${configJson}::jsonb,
-         ${tagsJson}::jsonb,
-         ${firmId},
-         ${userId ?? null})
-      RETURNING *
-    `) as any;
-    const rowData = row?.rows?.[0] ?? row?.[0] ?? row;
+       VALUES (
+         ${db.execute(sql`SELECT ${nameVal}::text`).then ? `'${nameVal.replace(/'/g,"''")}'` : "NULL"},
+         ${descVal == null ? "NULL" : `'${String(descVal).replace(/'/g,"''")}'`},
+         '${graphJson.replace(/'/g,"''")}'::jsonb,
+         ${enabledVal}::boolean,
+         '${triggerType.replace(/'/g,"''")}'::varchar,
+         '${configJson.replace(/'/g,"''")}'::jsonb,
+         '${tagsJson.replace(/'/g,"''")}'::jsonb,
+         ${firmId == null ? "NULL" : firmId},
+         ${userId == null ? "NULL" : userId}
+       ) RETURNING *`
+    )) as any;
+    const rowData = result?.rows?.[0] ?? result?.[0] ?? result;
     res.status(201).json(rowData);
   } catch (err: any) {
     logger.error({ err: err?.message, firmId, userId }, "automation POST insert failed");
