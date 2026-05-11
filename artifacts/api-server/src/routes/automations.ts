@@ -108,9 +108,6 @@ router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), as
 
 // ── List workflows ────────────────────────────────────────────────────────────
 
-// ── Public webhook trigger — external providers POST here ─────────────────────
-// Security: requires slug (workflow ID or external_id) + HMAC-SHA256 secret
-// Rate limited by API gateway. No auth token needed (provider callback).
 router.post("/webhook/:slugOrId", async (req, res) => {
   const slugOrId = req.params.slugOrId;
   const providedSig = req.headers["x-mtos-signature"] as string | undefined;
