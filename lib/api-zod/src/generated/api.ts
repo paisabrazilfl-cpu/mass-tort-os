@@ -2275,3 +2275,74 @@ export const SendLeadSmsResponse = zod.object({
     status: zod.string(),
   }),
 });
+
+/**
+ * @summary List outbound webhook delivery attempts with filters
+ */
+export const listWebhookDeliveriesQueryPageDefault = 1;
+
+export const listWebhookDeliveriesQueryPageSizeDefault = 50;
+export const listWebhookDeliveriesQueryPageSizeMax = 200;
+
+export const ListWebhookDeliveriesQueryParams = zod.object({
+  integration_id: zod.coerce.number().optional(),
+  event: zod.coerce.string().optional(),
+  status: zod.enum(["success", "failure", "all"]).optional(),
+  since: zod.date().optional(),
+  until: zod.date().optional(),
+  page: zod.coerce
+    .number()
+    .min(1)
+    .default(listWebhookDeliveriesQueryPageDefault),
+  page_size: zod.coerce
+    .number()
+    .min(1)
+    .max(listWebhookDeliveriesQueryPageSizeMax)
+    .default(listWebhookDeliveriesQueryPageSizeDefault),
+});
+
+export const ListWebhookDeliveriesResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    rows: zod.array(
+      zod.object({
+        id: zod.number(),
+        integration_id: zod.number(),
+        event: zod.string(),
+        delivery_id: zod.string(),
+        status_code: zod.number().nullish(),
+        response_ms: zod.number().nullish(),
+        attempt: zod.number(),
+        last_error: zod.string().nullish(),
+        payload_hash: zod.string().nullish(),
+        is_test: zod.number(),
+        occurred_at: zod.string(),
+        integration_name: zod.string().nullish(),
+        integration_provider: zod.string().nullish(),
+      }),
+    ),
+    page: zod.number(),
+    page_size: zod.number(),
+    total: zod.number(),
+  }),
+});
+
+/**
+ * @summary Re-fire the stored payload of a delivery row with a fresh timestamp
+ */
+
+export const ResendWebhookDeliveryParams = zod.object({
+  id: zod.coerce.number().min(1),
+});
+
+export const ResendWebhookDeliveryResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    delivery_id: zod.string(),
+    response_status: zod.number(),
+    latency_ms: zod.number(),
+    signed: zod.boolean(),
+    success: zod.boolean(),
+    error: zod.string().nullish(),
+  }),
+});

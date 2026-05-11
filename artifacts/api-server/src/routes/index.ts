@@ -40,6 +40,7 @@ import adminApiKeysRouter from "./admin-api-keys";
 import adminSelfHealRouter from "./admin-self-heal";
 import adminCompetitiveIntelRouter from "./admin-competitive-intel";
 import adminEventCatalogRouter from "./admin-event-catalog";
+import adminWebhookDeliveriesRouter from "./admin-webhook-deliveries";
 import formsApiDirectoryRouter from "./forms-api-directory";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
@@ -105,6 +106,7 @@ labelRouter(adminApiKeysRouter, "admin-api-keys");
 labelRouter(adminSelfHealRouter, "admin-self-heal");
 labelRouter(adminCompetitiveIntelRouter, "admin-competitive-intel");
 labelRouter(adminEventCatalogRouter, "admin-event-catalog");
+labelRouter(adminWebhookDeliveriesRouter, "admin-webhook-deliveries");
 labelRouter(formsApiDirectoryRouter, "forms-api-directory");
 
 const router: IRouter = Router();
@@ -172,6 +174,7 @@ router.use("/admin/api-keys", adminApiKeysRouter);
 router.use("/admin/self-heal", adminSelfHealRouter);
 router.use("/admin/competitive-intel", adminCompetitiveIntelRouter);
 router.use("/admin/event-catalog", adminEventCatalogRouter);
+router.use("/admin/webhook-deliveries", adminWebhookDeliveriesRouter);
 router.use("/admin/forms-api-directory", formsApiDirectoryRouter);
 router.use("/automations", automationsRouter);
 

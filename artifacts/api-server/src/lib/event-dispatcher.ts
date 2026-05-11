@@ -21,7 +21,7 @@
  */
 import crypto from "crypto";
 import { and, eq } from "drizzle-orm";
-import { db, integrationsTable } from "@workspace/db";
+import { db, integrationsTable, webhookDeliveriesTable } from "@workspace/db";
 import { decrypt } from "./encryption";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
@@ -168,25 +168,41 @@ async function deliverEvent<P extends Record<string, unknown>>(
   };
   const body = JSON.stringify(fullPayload);
 
+  const payloadHash = crypto.createHash("sha256").update(body).digest("hex");
+
   for (const integ of targets) {
     const secret = decryptIntegrationApiKey(integ);
     const headers = buildHeaders(env, secret, body);
     const result = await postWithTimeout(integ.webhook_url, body, headers);
     const ok = result.status >= 200 && result.status < 300;
 
-    await auditLog("integration", "system", "webhook_dispatched", {
-      integration_id: integ.id,
-      provider: integ.provider,
-      event: env.event,
-      delivery_id: env.delivery_id,
-      target_url: integ.webhook_url,
-      response_status: result.status || null,
-      latency_ms: result.latencyMs,
-      success: ok,
-      signed: !!secret,
-      test: env.isTest || undefined,
-      error: result.error ?? null,
-    });
+    await Promise.all([
+      db.insert(webhookDeliveriesTable).values({
+        integration_id: integ.id,
+        event: env.event,
+        delivery_id: env.delivery_id,
+        status_code: result.status || null,
+        response_ms: result.latencyMs,
+        attempt: 1,
+        last_error: result.error ?? null,
+        payload_hash: payloadHash,
+        payload: fullPayload as Record<string, unknown>,
+        is_test: env.isTest ? 1 : 0,
+      }),
+      auditLog("integration", "system", "webhook_dispatched", {
+        integration_id: integ.id,
+        provider: integ.provider,
+        event: env.event,
+        delivery_id: env.delivery_id,
+        target_url: integ.webhook_url,
+        response_status: result.status || null,
+        latency_ms: result.latencyMs,
+        success: ok,
+        signed: !!secret,
+        test: env.isTest || undefined,
+        error: result.error ?? null,
+      }),
+    ]);
 
     if (!ok) {
       logger.warn(
@@ -243,20 +259,35 @@ export async function pingIntegration(
   const headers = buildHeaders(env, secret, body);
   const result = await postWithTimeout(row.webhook_url, body, headers);
   const ok = result.status >= 200 && result.status < 300;
+  const payloadHash = crypto.createHash("sha256").update(body).digest("hex");
 
-  await auditLog("integration", "system", "webhook_dispatched", {
-    integration_id: row.id,
-    provider: row.provider,
-    event: env.event,
-    delivery_id: env.delivery_id,
-    target_url: row.webhook_url,
-    response_status: result.status || null,
-    latency_ms: result.latencyMs,
-    success: ok,
-    signed: !!secret,
-    test_ping: true,
-    error: result.error ?? null,
-  });
+  await Promise.all([
+    db.insert(webhookDeliveriesTable).values({
+      integration_id: row.id,
+      event: env.event,
+      delivery_id: env.delivery_id,
+      status_code: result.status || null,
+      response_ms: result.latencyMs,
+      attempt: 1,
+      last_error: result.error ?? null,
+      payload_hash: payloadHash,
+      payload: fullPayload as Record<string, unknown>,
+      is_test: 1,
+    }),
+    auditLog("integration", "system", "webhook_dispatched", {
+      integration_id: row.id,
+      provider: row.provider,
+      event: env.event,
+      delivery_id: env.delivery_id,
+      target_url: row.webhook_url,
+      response_status: result.status || null,
+      latency_ms: result.latencyMs,
+      success: ok,
+      signed: !!secret,
+      test_ping: true,
+      error: result.error ?? null,
+    }),
+  ]);
 
   return {
     attempted: true,

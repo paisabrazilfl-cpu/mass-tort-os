@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **254 checked / 39 public / 215 protected / 0 unprotected.**
+Boot-time count: **256 checked / 39 public / 217 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -631,6 +631,8 @@ Boot-time count: **254 checked / 39 public / 215 protected / 0 unprotected.**
 | admin-self-heal | GET | `/api/admin-self-heal/config` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
 | admin-self-heal | GET | `/api/admin-self-heal/` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
 | admin-self-heal | POST | `/api/admin-self-heal/` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
+| admin-webhook-deliveries | POST | `/api/admin-webhook-deliveries/:id/resend` | ✓ | ✓ |  |  |  | — | `integrations:manage` | ✓ |
+| admin-webhook-deliveries | GET | `/api/admin-webhook-deliveries/` | ✓ | ✓ |  |  |  | — | `integrations:manage` | ✓ |
 | analytics | GET | `/api/analytics/conversion-funnel` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/overview` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/paralegal-leaderboard` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |

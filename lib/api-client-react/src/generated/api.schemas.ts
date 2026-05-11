@@ -1343,6 +1343,48 @@ export interface SendLeadSmsEnvelope {
   data: SendLeadSmsResult;
 }
 
+export interface WebhookDeliveryRow {
+  id: number;
+  integration_id: number;
+  event: string;
+  delivery_id: string;
+  status_code?: number | null;
+  response_ms?: number | null;
+  attempt: number;
+  last_error?: string | null;
+  payload_hash?: string | null;
+  is_test: number;
+  occurred_at: string;
+  integration_name?: string | null;
+  integration_provider?: string | null;
+}
+
+export interface WebhookDeliveriesPayload {
+  rows: WebhookDeliveryRow[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface WebhookDeliveriesEnvelope {
+  status: string;
+  data: WebhookDeliveriesPayload;
+}
+
+export interface WebhookResendResult {
+  delivery_id: string;
+  response_status: number;
+  latency_ms: number;
+  signed: boolean;
+  success: boolean;
+  error?: string | null;
+}
+
+export interface WebhookResendEnvelope {
+  status: string;
+  data: WebhookResendResult;
+}
+
 export type ListLeadsParams = {
   status?: ListLeadsStatus;
   tort_type?: string;
@@ -1527,4 +1569,30 @@ export const ListCallsStatus = {
   completed: "completed",
   failed: "failed",
   no_answer: "no_answer",
+} as const;
+
+export type ListWebhookDeliveriesParams = {
+  integration_id?: number;
+  event?: string;
+  status?: ListWebhookDeliveriesStatus;
+  since?: string;
+  until?: string;
+  /**
+   * @minimum 1
+   */
+  page?: number;
+  /**
+   * @minimum 1
+   * @maximum 200
+   */
+  page_size?: number;
+};
+
+export type ListWebhookDeliveriesStatus =
+  (typeof ListWebhookDeliveriesStatus)[keyof typeof ListWebhookDeliveriesStatus];
+
+export const ListWebhookDeliveriesStatus = {
+  success: "success",
+  failure: "failure",
+  all: "all",
 } as const;

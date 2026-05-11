@@ -39,5 +39,6 @@ export * from "./fasten_connections";
 export * from "./api_keys";
 export * from "./self_heal_sessions";
 export * from "./competitive_intel";
+export * from "./webhook_deliveries";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";
