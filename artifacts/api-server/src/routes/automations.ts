@@ -117,64 +117,26 @@ router.get("/node-catalog", requirePermission(Permission.AUTOMATIONS_VIEW), (_re
 });
 
 router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
+  await ensureAutomationSchema();
   const firmId = (req as any).firmId as number | undefined;
+  // Use raw SQL via pool to bypass Drizzle schema cache issues with runtime-created columns
   try {
-    // First try: ensure all required columns exist (idempotent)
-    const repairs = [
-      `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '[]'`,
-      `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS trigger_type varchar(40) NOT NULL DEFAULT 'manual'`,
-      `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS trigger_config jsonb NOT NULL DEFAULT '{}'`,
-      `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS description text`,
-      `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS created_by_user_id integer`,
-      `ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS firm_id integer`,
-      `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS trigger_source varchar(40) NOT NULL DEFAULT 'manual'`,
-      `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS step_log jsonb NOT NULL DEFAULT '[]'`,
-      `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS output jsonb`,
-      `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS firm_id integer`,
-      `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS started_by_user_id integer`,
-      `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS completed_at timestamp`,
-    ];
-    for (const stmt of repairs) {
-      await db.execute(sql`${sql.raw(stmt)}`).catch(() => {});
-    }
-  } catch { /* non-fatal */ }
-
-  try {
-    const rows = await db
-      .select({
-        id: automationWorkflowsTable.id,
-        name: automationWorkflowsTable.name,
-        description: automationWorkflowsTable.description,
-        enabled: automationWorkflowsTable.enabled,
-        trigger_type: automationWorkflowsTable.trigger_type,
-        tags: automationWorkflowsTable.tags,
-        updated_at: automationWorkflowsTable.updated_at,
-        created_at: automationWorkflowsTable.created_at,
-      })
-      .from(automationWorkflowsTable)
-      .where(firmPredicate(firmId))
-      .orderBy(desc(automationWorkflowsTable.updated_at));
-    res.json(rows);
+    const whereClause = firmId != null
+      ? `(firm_id = ${firmId} OR firm_id IS NULL)`
+      : `firm_id IS NULL`;
+    const raw = await pool.query(
+      `SELECT id, name, COALESCE(description, '') AS description, enabled,
+       COALESCE(trigger_type, 'manual') AS trigger_type,
+       COALESCE(tags, '[]'::jsonb) AS tags,
+       updated_at, created_at
+       FROM automation_workflows
+       WHERE ${whereClause}
+       ORDER BY updated_at DESC`
+    );
+    res.json(raw.rows ?? []);
   } catch (err: any) {
-    logger.error({ err: err?.message }, "automations GET failed after repair attempt");
-    // Last resort: raw SQL that works even if Drizzle schema is out of sync
-    try {
-      const raw = await db.execute(sql`
-        SELECT id, name,
-          COALESCE(description, '') as description,
-          enabled,
-          COALESCE(trigger_type, 'manual') as trigger_type,
-          COALESCE(tags, '[]'::jsonb) as tags,
-          updated_at, created_at
-        FROM automation_workflows
-        WHERE (${sql.raw(firmId != null ? `firm_id = ${firmId}` : `firm_id IS NULL`)})
-        ORDER BY updated_at DESC
-      `);
-      res.json((raw as any).rows ?? raw);
-    } catch (err2: any) {
-      logger.error({ err: err2?.message }, "automations GET raw fallback also failed");
-      res.json([]);
-    }
+    logger.error({ err: err?.message }, "automations GET failed");
+    res.json([]);
   }
 });
 
@@ -182,11 +144,20 @@ router.get("/:id", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, r
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   const firmId = (req as any).firmId as number | undefined;
-  const [row] = await db.select().from(automationWorkflowsTable)
-    .where(and(eq(automationWorkflowsTable.id, id), firmPredicate(firmId))!)
-    .limit(1);
-  if (!row) { notFound(res, "Workflow not found"); return; }
-  res.json(row);
+  try {
+    const whereClause = firmId != null
+      ? `id = ${id} AND (firm_id = ${firmId} OR firm_id IS NULL)`
+      : `id = ${id} AND firm_id IS NULL`;
+    const raw = await pool.query(
+      `SELECT * FROM automation_workflows WHERE ${whereClause} LIMIT 1`
+    );
+    const row = raw.rows[0];
+    if (!row) { notFound(res, "Workflow not found"); return; }
+    res.json(row);
+  } catch (err: any) {
+    logger.error({ err: err?.message }, "automations GET /:id failed");
+    notFound(res, "Workflow not found");
+  }
 });
 
 router.post("/", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
