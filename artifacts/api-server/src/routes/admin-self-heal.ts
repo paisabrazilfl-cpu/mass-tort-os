@@ -21,7 +21,7 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
-import { db, selfHealSessionsTable } from "@workspace/db";
+import { db, pool, selfHealSessionsTable } from "@workspace/db";
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { badRequest, notFound } from "../lib/http-errors";
@@ -71,13 +71,13 @@ router.get("/config", requirePermission(Permission.SELF_HEAL_MANAGE), (_req, res
 });
 
 router.get("/", requirePermission(Permission.SELF_HEAL_MANAGE), async (req, res) => {
-  const rows = await db
-    .select()
-    .from(selfHealSessionsTable)
-    .where(eq(selfHealSessionsTable.firm_id, req.user!.firm_id))
-    .orderBy(desc(selfHealSessionsTable.created_at))
-    .limit(50);
-  res.json({ sessions: rows });
+  try {
+    const firmId = (req as any).user?.firm_id;
+    const where = firmId != null ? `firm_id = ${Number(firmId)}` : "1=1";
+    const raw = await pool.query(
+      `SELECT * FROM self_heal_sessions WHERE ${where} ORDER BY created_at DESC LIMIT 50`
+    );
+    res.json({ sessions: rows });
 });
 
 router.post("/", requirePermission(Permission.SELF_HEAL_MANAGE), async (req, res) => {
