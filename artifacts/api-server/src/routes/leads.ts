@@ -24,7 +24,6 @@ import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
 import { dispatchEvent } from "../lib/event-dispatcher";
 import { sendSmsViaRouter } from "../lib/sms/send";
-import { getFirmIdForUser } from "../lib/subscription-gate";
 
 // Thrown by buildLeadFilters when a date query param parses to Invalid Date.
 // Caught at each route call site and converted to a 400 with a structured
@@ -722,8 +721,7 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
     import("../lib/workflow-engine")
       .then(({ enqueueLeadApprovalPackets }) => enqueueLeadApprovalPackets(lead.id))
       .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error("[workflow-engine] dispatch failed for lead", lead.id, err);
+        logger.error({ err, lead_id: lead.id }, "workflow-engine dispatch failed on status update");
       });
   }
 
@@ -879,8 +877,7 @@ router.post("/:id/qualify", requirePermission(Permission.LEAD_QUALIFY), auditAct
     import("../lib/workflow-engine")
       .then(({ enqueueLeadApprovalPackets }) => enqueueLeadApprovalPackets(lead.id))
       .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error("[workflow-engine] dispatch failed for lead", lead.id, err);
+        logger.error({ err, lead_id: lead.id }, "workflow-engine dispatch failed on eligibility update");
       });
   }
 
@@ -1022,7 +1019,7 @@ router.post(
     }
 
     const user = req.user!;
-    const firmId = await getFirmIdForUser(user.id);
+    const firmId = user.firm_id;
 
     const result = await sendSmsViaRouter({
       to: phone,

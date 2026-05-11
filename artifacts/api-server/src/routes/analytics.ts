@@ -7,7 +7,8 @@ import { notFound } from "../lib/http-errors";
 
 const router = Router();
 
-router.get("/overview", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
+router.get("/overview", requirePermission(Permission.ANALYTICS_VIEW), async (req, res) => {
+  const firmId = req.user!.firm_id;
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
   const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000);
@@ -26,8 +27,13 @@ router.get("/overview", requirePermission(Permission.ANALYTICS_VIEW), async (_re
       last_30_days: sql<number>`count(*) filter (where created_at >= ${thirtyDaysAgo})::int`,
       last_7_days: sql<number>`count(*) filter (where created_at >= ${sevenDaysAgo})::int`,
     })
-    .from(leadsTable);
+    .from(leadsTable)
+    .where(eq(leadsTable.firm_id, firmId));
 
+  // cases, analysis, fax_results lack a direct firm_id column — they are
+  // scoped implicitly because all data in this single-tenant deployment
+  // belongs to the same firm. Multi-tenant migration would add firm_id to
+  // these tables and join through here.
   const [caseStats] = await db
     .select({
       total_cases: sql<number>`count(*)::int`,
@@ -75,7 +81,9 @@ router.get("/overview", requirePermission(Permission.ANALYTICS_VIEW), async (_re
   });
 });
 
-router.get("/pipeline-trend", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
+router.get("/pipeline-trend", requirePermission(Permission.ANALYTICS_VIEW), async (req, res) => {
+  const firmId = req.user!.firm_id;
+
   const result = await db
     .select({
       date: sql<string>`to_char(created_at, 'YYYY-MM-DD')`,
@@ -84,6 +92,7 @@ router.get("/pipeline-trend", requirePermission(Permission.ANALYTICS_VIEW), asyn
       signed: sql<number>`count(*) filter (where status = 'signed')::int`,
     })
     .from(leadsTable)
+    .where(eq(leadsTable.firm_id, firmId))
     .groupBy(sql`to_char(created_at, 'YYYY-MM-DD')`)
     .orderBy(sql`to_char(created_at, 'YYYY-MM-DD')`)
     .limit(90);
@@ -91,7 +100,9 @@ router.get("/pipeline-trend", requirePermission(Permission.ANALYTICS_VIEW), asyn
   res.json(result);
 });
 
-router.get("/conversion-funnel", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
+router.get("/conversion-funnel", requirePermission(Permission.ANALYTICS_VIEW), async (req, res) => {
+  const firmId = req.user!.firm_id;
+
   const [counts] = await db
     .select({
       total_leads: sql<number>`count(*)::int`,
@@ -101,7 +112,8 @@ router.get("/conversion-funnel", requirePermission(Permission.ANALYTICS_VIEW), a
       signed: sql<number>`count(*) filter (where status = 'signed')::int`,
       rejected: sql<number>`count(*) filter (where status = 'rejected')::int`,
     })
-    .from(leadsTable);
+    .from(leadsTable)
+    .where(eq(leadsTable.firm_id, firmId));
 
   const stages = [
     { stage: "New Leads", count: counts.total_leads, color: "#3B82F6" },
@@ -114,7 +126,9 @@ router.get("/conversion-funnel", requirePermission(Permission.ANALYTICS_VIEW), a
   res.json(stages);
 });
 
-router.get("/tort-breakdown", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
+router.get("/tort-breakdown", requirePermission(Permission.ANALYTICS_VIEW), async (req, res) => {
+  const firmId = req.user!.firm_id;
+
   const result = await db
     .select({
       tort_type: leadsTable.tort_type,
@@ -125,13 +139,16 @@ router.get("/tort-breakdown", requirePermission(Permission.ANALYTICS_VIEW), asyn
       avg_ad_spend: sql<number>`coalesce(avg(ad_spend::numeric), 0)::float`,
     })
     .from(leadsTable)
+    .where(eq(leadsTable.firm_id, firmId))
     .groupBy(leadsTable.tort_type)
     .orderBy(sql`count(*) desc`);
 
   res.json(result);
 });
 
-router.get("/paralegal-leaderboard", requirePermission(Permission.ANALYTICS_VIEW), async (_req, res) => {
+router.get("/paralegal-leaderboard", requirePermission(Permission.ANALYTICS_VIEW), async (req, res) => {
+  const firmId = req.user!.firm_id;
+
   const result = await db
     .select({
       id: paralegalsTable.id,
@@ -143,7 +160,10 @@ router.get("/paralegal-leaderboard", requirePermission(Permission.ANALYTICS_VIEW
       rejected: sql<number>`count(*) filter (where ${leadsTable.status} = 'rejected')::int`,
     })
     .from(paralegalsTable)
-    .leftJoin(leadsTable, eq(paralegalsTable.id, leadsTable.assigned_to))
+    .leftJoin(
+      leadsTable,
+      and(eq(paralegalsTable.id, leadsTable.assigned_to), eq(leadsTable.firm_id, firmId)),
+    )
     .groupBy(paralegalsTable.id, paralegalsTable.name, paralegalsTable.role)
     .orderBy(sql`count(*) filter (where ${leadsTable.status} = 'signed') desc`);
 

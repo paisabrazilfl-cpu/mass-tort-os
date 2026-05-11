@@ -6,6 +6,7 @@ import { Permission, requirePermission } from "../lib/rbac";
 const router = Router();
 
 router.get("/stats", requirePermission(Permission.DASHBOARD_VIEW), async (req, res) => {
+  const firmId = req.user!.firm_id;
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfWeek = new Date(startOfToday);
@@ -22,7 +23,8 @@ router.get("/stats", requirePermission(Permission.DASHBOARD_VIEW), async (req, r
       leads_today: sql<number>`count(*) filter (where created_at >= ${startOfToday})::int`,
       leads_this_week: sql<number>`count(*) filter (where created_at >= ${startOfWeek})::int`,
     })
-    .from(leadsTable);
+    .from(leadsTable)
+    .where(eq(leadsTable.firm_id, firmId));
 
   const total = counts.total ?? 0;
   const qualified = counts.qualified ?? 0;
@@ -51,12 +53,15 @@ router.get("/stats", requirePermission(Permission.DASHBOARD_VIEW), async (req, r
 });
 
 router.get("/pipeline", requirePermission(Permission.DASHBOARD_VIEW), async (req, res) => {
+  const firmId = req.user!.firm_id;
+
   const byStatus = await db
     .select({
       status: leadsTable.status,
       count: sql<number>`count(*)::int`,
     })
     .from(leadsTable)
+    .where(eq(leadsTable.firm_id, firmId))
     .groupBy(leadsTable.status);
 
   const byTortType = await db
@@ -67,6 +72,7 @@ router.get("/pipeline", requirePermission(Permission.DASHBOARD_VIEW), async (req
       signed: sql<number>`count(*) filter (where status = 'signed')::int`,
     })
     .from(leadsTable)
+    .where(eq(leadsTable.firm_id, firmId))
     .groupBy(leadsTable.tort_type)
     .orderBy(sql`count(*) desc`);
 
@@ -77,6 +83,8 @@ router.get("/pipeline", requirePermission(Permission.DASHBOARD_VIEW), async (req
 });
 
 router.get("/recent-activity", requirePermission(Permission.DASHBOARD_VIEW), async (req, res) => {
+  const firmId = req.user!.firm_id;
+
   const recentLeads = await db
     .select({
       id: leadsTable.id,
@@ -88,6 +96,7 @@ router.get("/recent-activity", requirePermission(Permission.DASHBOARD_VIEW), asy
       updated_at: leadsTable.updated_at,
     })
     .from(leadsTable)
+    .where(eq(leadsTable.firm_id, firmId))
     .orderBy(sql`${leadsTable.updated_at} DESC`)
     .limit(20);
 
