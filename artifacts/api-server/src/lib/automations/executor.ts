@@ -608,14 +608,11 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
       throw new Error("io.sql_query only allows SELECT/WITH queries.");
     }
-    const params = (s.node.data?.params?.params ?? []) as any[];
-    const result = await db.execute(sql.raw(queryText.replace(/\$(\d+)/g, (_, i) => {
-      const v = params[Number(i) - 1];
-      if (v == null) return "NULL";
-      if (typeof v === "number") return String(v);
-      return `'${String(v).replace(/'/g, "''")}'`;
-    })));
-    return { rows: (result as any).rows ?? result };
+        const params = (s.node.data?.params?.params ?? []) as unknown[];
+    // Use pool.query() with parameterized values — safe against SQL injection
+    // io.sql_query only allows SELECT/WITH so no write risk
+    const result = await pool.query(queryText, params);
+    return { rows: result.rows }; };
   },
   "io.read_file": async (s) => {
     // Catalog param: `key` is a logical vault object key, conventionally
