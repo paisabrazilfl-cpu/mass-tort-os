@@ -112,6 +112,7 @@ const runBodySchema = z.object({
 });
 
 router.get("/node-catalog", requirePermission(Permission.AUTOMATIONS_VIEW), (_req, res) => {
+  // BUILD_SENTINEL_V3
   res.json({ nodes: NODE_CATALOG });
 });
 
