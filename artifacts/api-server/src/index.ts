@@ -260,6 +260,21 @@ app.listen(port, async (err) => {
     workerLoop().catch((err) => {
       logger.error({ err }, "In-process worker loop crashed");
     });
+
+    // Schedule poller — fires trigger.schedule every 60s for cron-based workflows
+    (async () => {
+      const { dispatchTrigger } = await import("./lib/automations/dispatch");
+      setInterval(() => {
+        const now = new Date();
+        dispatchTrigger("trigger.schedule", {
+          input: { fired_at: now.toISOString(), minute: now.getMinutes(), hour: now.getHours() },
+          firmId: "any" as any,
+          source: "schedule_poller",
+        }).catch(() => {});
+      }, 60_000);
+      logger.info("Schedule poller started (60s interval)");
+    })().catch((err) => logger.error({ err }, "Schedule poller failed to start"));
+
   } else {
     logger.info("In-process worker disabled (dev mode — separate worker workflow handles jobs)");
   }
