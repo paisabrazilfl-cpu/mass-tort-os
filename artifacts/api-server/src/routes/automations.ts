@@ -191,31 +191,26 @@ router.post("/", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, r
   const userId = (req as any).user?.id as number | undefined;
   const firmId: number | null = (req as any).user?.firm_id ?? (req as any).firmId ?? null;
   try {
-    // Use raw pg execute to bypass Drizzle jsonb serialization issues
-    const graphJson = JSON.stringify(parsed.data.graph ?? { nodes: [], edges: [] });
-    const configJson = JSON.stringify(parsed.data.trigger_config ?? {});
-    const tagsJson = JSON.stringify(parsed.data.tags ?? []);
-    const enabledVal = (parsed.data.enabled ?? false) ? "true" : "false";
-    const triggerType = parsed.data.trigger_type ?? "manual";
-    const nameVal = parsed.data.name;
-    const descVal = parsed.data.description ?? null;
-    const result = await db.execute(sql.raw(
+    // Parameterized INSERT via raw pg pool — bypasses Drizzle jsonb serialization completely
+    const pool = (db as any).$client;
+    const qr = await pool.query(
       `INSERT INTO automation_workflows
-        (name, description, graph, enabled, trigger_type, trigger_config, tags, firm_id, created_by_user_id)
-       VALUES (
-         ${db.execute(sql`SELECT ${nameVal}::text`).then ? `'${nameVal.replace(/'/g,"''")}'` : "NULL"},
-         ${descVal == null ? "NULL" : `'${String(descVal).replace(/'/g,"''")}'`},
-         '${graphJson.replace(/'/g,"''")}'::jsonb,
-         ${enabledVal}::boolean,
-         '${triggerType.replace(/'/g,"''")}'::varchar,
-         '${configJson.replace(/'/g,"''")}'::jsonb,
-         '${tagsJson.replace(/'/g,"''")}'::jsonb,
-         ${firmId == null ? "NULL" : firmId},
-         ${userId == null ? "NULL" : userId}
-       ) RETURNING *`
-    )) as any;
-    const rowData = result?.rows?.[0] ?? result?.[0] ?? result;
-    res.status(201).json(rowData);
+         (name, description, graph, enabled, trigger_type, trigger_config, tags, firm_id, created_by_user_id)
+       VALUES ($1, $2, $3::jsonb, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
+       RETURNING *`,
+      [
+        parsed.data.name,
+        parsed.data.description ?? null,
+        JSON.stringify(parsed.data.graph ?? { nodes: [], edges: [] }),
+        parsed.data.enabled ?? false,
+        parsed.data.trigger_type ?? "manual",
+        JSON.stringify(parsed.data.trigger_config ?? {}),
+        JSON.stringify(parsed.data.tags ?? []),
+        firmId ?? null,
+        userId ?? null,
+      ]
+    );
+    res.status(201).json(qr.rows[0]);
   } catch (err: any) {
     logger.error({ err: err?.message, firmId, userId }, "automation POST insert failed");
     res.status(500).json({ status: "error", code: "insert_failed", message: err?.message ?? "Insert failed" });
