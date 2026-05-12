@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Mass Tort OS — Technical White Paper</title>
+<style>
+:root {
+  --ink: #0f172a;
+  --muted: #475569;
+  --rule: #cbd5e1;
+  --code-bg: #f1f5f9;
+  --accent: #1e40af;
+  --table-stripe: #f8fafc;
+}
+* { box-sizing: border-box; }
+html, body { background: #fff; color: var(--ink); }
+body {
+  max-width: 7.5in;
+  margin: 0 auto;
+  padding: 0.75in 0.5in;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 11pt;
+  line-height: 1.55;
+}
+h1, h2, h3, h4 { color: var(--ink); line-height: 1.25; }
+h1 { font-size: 24pt; margin: 0 0 12pt; border-bottom: 1px solid var(--rule); padding-bottom: 8pt; }
+h2 { font-size: 16pt; margin: 24pt 0 8pt; color: var(--accent); }
+h3 { font-size: 13pt; margin: 18pt 0 6pt; }
+h4 { font-size: 11pt; margin: 14pt 0 4pt; color: var(--muted); }
+p  { margin: 0 0 8pt; }
+ul, ol { margin: 0 0 10pt 24pt; padding: 0; }
+li { margin: 2pt 0; }
+hr { border: 0; border-top: 1px solid var(--rule); margin: 18pt 0; }
+blockquote {
+  margin: 8pt 0;
+  padding: 8pt 14pt;
+  border-left: 3px solid var(--accent);
+  background: var(--table-stripe);
+  color: var(--muted);
+  font-style: italic;
+}
+code {
+  font-family: "SF Mono", Menlo, Consolas, "Roboto Mono", monospace;
+  font-size: 9.5pt;
+  background: var(--code-bg);
+  padding: 1.5px 4px;
+  border-radius: 3px;
+}
+pre {
+  background: var(--code-bg);
+  padding: 10pt 12pt;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 9pt;
+  line-height: 1.4;
+  margin: 10pt 0;
+}
+pre code { background: transparent; padding: 0; font-size: inherit; }
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid currentColor; }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10pt 0;
+  font-size: 10pt;
+}
+th, td { text-align: left; padding: 5pt 8pt; vertical-align: top; border: 1px solid var(--rule); }
+th { background: var(--code-bg); font-weight: 600; }
+tbody tr:nth-child(even) { background: var(--table-stripe); }
+strong { color: var(--ink); font-weight: 600; }
+
+@page {
+  size: letter;
+  margin: 0.6in 0.5in;
+}
+@media print {
+  body { max-width: 100%; padding: 0; }
+  h1 { page-break-before: avoid; }
+  h2, h3 { page-break-after: avoid; }
+  pre, table, blockquote { page-break-inside: avoid; }
+  a { color: var(--ink); border-bottom: none; }
+}
+</style>
+</head>
+<body>
+<h1>Mass Tort OS — Technical White Paper</h1>
+<p><strong>Audience:</strong> law-firm partners, IT leads, and operations directors evaluating a CRM for mass-tort claimant intake and case management.</p>
+<p><strong>Goal:</strong> explain what the system is, how it is built, what it does, and — equally — what it does not yet do. Every architectural claim in this document is backed by a file path you can open in the repository and verify against the smoke-test harness shipped alongside it.</p>
+<hr/>
+<h2>1. Executive summary</h2>
+<p>Mass Tort OS (MTOS) is a multi-tenant CRM and intake-automation platform purpose-built for mass-tort and personal-injury practices. It handles the workflow from public lead capture through qualification, document automation, signed retainer, and case hand-off — with the compliance disclosures, audit trail, and fraud signals a plaintiff's firm requires when screening hundreds of leads per day.</p>
+<p>The product targets the specific operational stack mass-tort firms actually run:</p>
+<ul><li><strong>Lead acquisition</strong> through vendor webhooks, embeddable web forms, CSV imports, Vapi voice agents, and direct API.</li><li><strong>Qualification gates</strong> that combine deterministic conflict-checking (Boolean Gatekeeper rules) with explainable lead-quality scoring (Praxis).</li><li><strong>Document automation</strong> that fires e-sign packets and medical-records fax requests on qualified-status transition, with provider-agnostic adapters for SendGrid / Postmark / Mailgun / AWS SES, SRFax / eFax / Phaxio / Documo / Telnyx Fax, and DocuSign / Dropbox Sign.</li><li><strong>Live background screening</strong> across address, email, phone, criminal court, OFAC sanctions, PACER federal courts, and SEC EDGAR — plus one-click prefilled smart-links for the four lookups that cannot be lawfully or technically automated (NSOPW, federal BOP, state bar, state property records).</li><li><strong>Multi-tenant isolation</strong> enforced at the database predicate level via a single canonical helper, audited by both static smoke tests and the catalog↔handler parity test.</li></ul>
+<p>Recent reinforcement focused on three things buyers will probe in a demo: (a) cross-tenant data isolation, (b) honesty about what the system can vs cannot automate, and (c) end-to-end evidence — a 56-probe smoke harness that gates every claim in this document against the actual source code.</p>
+<hr/>
+<h2>2. The problem space</h2>
+<p>A mass-tort firm running a TV or Meta campaign for, say, the hair-relaxer or Camp Lejeune dockets receives hundreds of inbound calls and form submissions per day. Roughly:</p>
+<ul><li><strong>20–40%</strong> are duplicates already on file or already attached to a competing firm.</li><li><strong>5–15%</strong> are professional plaintiffs with prior claim histories.</li><li><strong>10–25%</strong> are outside the qualifying medical, exposure, or jurisdictional window.</li><li>A non-trivial <strong>3–8%</strong> carry adverse public-records signals (sex-offender registry, active criminal docket, sanctions hit, bankruptcy in flight that the trustee will claim from).</li></ul>
+<p>Every minute a paralegal spends manually working a lead that will ultimately fail qualification is a minute they are not working a lead that will retain. The cost-per-signed-retainer (CPSR) economics of mass-tort make the difference between "process this in 3 minutes" and "process this in 30 minutes" the difference between break-even and a 4× return on ad spend.</p>
+<p>MTOS is built around that economic reality. Every adapter, gate, and audit hook in the system is designed to reduce time-to-decision on a lead without sacrificing accuracy or compliance posture.</p>
+<hr/>
+<h2>3. Architecture</h2>
+<p>MTOS is a pnpm monorepo. The relevant packages:</p>
+<pre class="lang-plain"><code>artifacts/
+  api-server/     — Express 5 + Drizzle ORM, esbuild-bundled; serves API and worker.
+  mtos-crm/       — React 19 + Vite SPA, served by api-server in production.
+  mockup-sandbox/ — Design exploration; not deployed.
+  n8n/            — Optional self-hosted automation runner.
+
+lib/
+  db/                  — Drizzle schema (42 tables); single source of truth.
+  api-spec/            — OpenAPI YAML; generates the typed client.
+  api-zod/             — Zod schemas + TS types generated from the OpenAPI.
+  api-client-react/    — Tanstack Query hooks generated from the OpenAPI.
+  integrations/        — Vault-shared adapter packages.</code></pre>
+<p>The API server runs as two entrypoints from the same codebase: a <code>server</code> (HTTP) and a <code>worker</code> (background-job queue consumer). Both share the encrypted credential vault and the audit log.</p>
+<p>The data store is <strong>PostgreSQL 16</strong>. 42 schema modules under <code>lib/db/src/schema/</code> define the table set; the canonical list is documented at §13.7 of the in-product manual.</p>
+<h3>3.1 Multi-tenant model</h3>
+<p>MTOS is built as a <strong>single-firm shell that scales to multi-firm SaaS</strong> without rearchitecture. Every business table carries a <code>firm_id</code> column. Every authenticated request carries a <code>firm_id</code> claim in its JWT, stamped by the auth middleware (<code>lib/rbac.ts</code>) and validated by the firm-context middleware (<code>lib/firm-context.ts</code>) before any route handler executes.</p>
+<p>The contract is enforced by a single helper:</p>
+<pre class="lang-ts"><code>// artifacts/api-server/src/lib/firm-scope.ts
+export function requireFirmId(req: Request): number {
+  const firmId = req.user?.firm_id;
+  if (typeof firmId !== "number") throw new MissingFirmContextError();
+  return firmId;
+}
+
+export function leadFirmScope(req: Request) {
+  return eq(leadsTable.firm_id, requireFirmId(req));
+}</code></pre>
+<p>Every read, mutation, and aggregate query against <code>leadsTable</code>, <code>casesTable</code>, <code>integrationsTable</code>, <code>competitive_intel_*</code>, <code>self_heal_sessions</code>, etc. <strong>ANDs this predicate into the WHERE clause</strong>. A <code>grep</code> for <code>leadFirmScope(req)</code> in <code>routes/leads.ts</code> returns four-plus call sites; <code>integrationFirmScope(req)</code> in <code>routes/integrations.ts</code> returns five-plus. The smoke test (<code>pnpm smoke</code>) probes these counts and fails CI if they regress.</p>
+<p>Cross-firm reads return <strong>404 Not Found</strong>, not 403, so the existence of a row in another firm cannot be inferred by status code.</p>
+<p>For inbound provider webhooks — which arrive with no firm context — the system supports two URL shapes per channel:</p>
+<pre class="lang-plain"><code>POST /api/webhooks/sms/telnyx                    (single-firm-shell convenience)
+POST /api/webhooks/sms/telnyx/i/:integrationId   (per-firm disambiguation)</code></pre>
+<p>When the explicit integration id is present, <code>loadProviderForWebhook</code> reads that row directly and refuses to route if the row's provider does not match the URL segment — eliminating cross-firm signature-verification ambiguity in deployments with more than one firm active for the same provider.</p>
+<h3>3.2 Encryption at rest</h3>
+<p>Personally identifiable claimant data (SSN, DOB, diagnosis, medications, address, phone, notes, etc.) is encrypted column-level with <strong>AES-256-GCM</strong>. The encryption key is versioned: <code>CURRENT_KEY_VERSION = 1</code> today; rotation to V2 is a runtime constant change plus a re-encryption script.</p>
+<p>Additional Authenticated Data (AAD) is <code>fieldName:entityId</code> for lead PII columns, so a ciphertext extracted from one row cannot be pasted into another row and decrypt successfully — AES-GCM's auth tag verification rejects the swap.</p>
+<p>Vault credentials (integration API keys) follow the same scheme with the integration row id as the AAD scope.</p>
+<p>Decryption is version-aware: every ciphertext carries an <code>enc:v&lt;N&gt;:&lt;hasAAD&gt;:&lt;payload&gt;</code> header, and the decryptor walks an AAD-fallback chain (strict field+entity → field-only → none) for backwards compatibility with rows encrypted before the rebind step landed. Failures log <code>[DECRYPTION_ERROR]</code> rather than throwing.</p>
+<h3>3.3 RBAC</h3>
+<p>Five roles (<code>super_admin</code>, <code>admin</code>, <code>attorney</code>, <code>paralegal</code>, <code>viewer</code>) with numeric hierarchy weights and a fine-grained permission enum. <code>requireRole(...)</code> middleware enforces hierarchy ("at least attorney"); <code>requirePermission(...)</code> enforces individual capabilities ("can export leads").</p>
+<p><code>ROLE_PERMISSIONS</code> maps each role to its default permission set; super_admin receives <code>Object.values(Permission)</code> plus the ability to bypass the per-firm scope check — explicitly so a platform operator can support multi-tenant customers.</p>
+<p>The viewer role triggers per-row ownership filtering on the leads and cases tables: a viewer sees only leads they created or are assigned to. Paralegal and above see the full firm intake queue.</p>
+<h3>3.4 Audit log</h3>
+<p>Every state-changing action writes a row to <code>audit_log</code> via <code>auditLog(entity_type, entity_id, action, details, { ip_address, user_agent })</code>. The action vocabulary is documented exhaustively at §13.10 of the in-product manual and includes lead lifecycle events (created / qualified / rejected / disqualified), case events (intake_submitted / file_upload_queued / analysis_queued), user events (role_changed / force_logout), integration events (created / updated / sync_ran / sync_unsupported), and competitive-intel lookups.</p>
+<p>Audit writes are fire-and-forget so an audit-DB hiccup never escalates a 200 to a 500; the write path catches and logs any failure.</p>
+<hr/>
+<h2>4. Lead intake and qualification</h2>
+<p>A lead enters MTOS through one of five channels:</p>
+<table><thead><tr><th>Channel</th><th>Mount</th><th>Auth</th></tr></thead><tbody><tr><td><strong>Operator intake form</strong></td><td><code>POST /api/leads</code></td><td>Authenticated; firm-scoped on insert</td></tr><tr><td><strong>Public web form</strong></td><td><code>POST /api/web-forms/:tortId/submit</code></td><td>Public; TrustedForm + TCPA-consent capture; enqueued to the worker for validation + dedup before insert</td></tr><tr><td><strong>CSV import</strong></td><td><code>POST /api/lead-import/preview</code> then <code>/execute</code></td><td>Authenticated; preview returns row-level errors; execute is idempotent on the <code>lookup_hash</code></td></tr><tr><td><strong>Vapi voice tool callback</strong></td><td><code>POST /api/vapi-tools/create-lead</code></td><td>Static-bearer (constant-time compared); every bearer mismatch logs the caller IP for audit</td></tr><tr><td><strong>Webhook trigger from n8n / Zapier / Make</strong></td><td><code>POST /api/automations/webhook/:slug</code></td><td>Public; HMAC-SHA256 over the raw request bytes (not the JSON-restringified body)</td></tr></tbody></table>
+<p>Every intake path runs the same downstream pipeline:</p>
+<ol><li><strong>Conflict check</strong> (<code>runFullConflictCheck</code>) — verifies the claimant is not already represented for this tort by another firm (per the cross-firm exclusion list) and is not on the firm's internal block list.</li><li><strong>Encryption</strong> — all PII fields encrypted with the lead's <code>id</code> rebound as AAD on insert (Task #8 contract).</li><li><strong>Lookup hash</strong> — SHA-256 over the normalized <code>(tort_type | email | phone10)</code> triple, indexed so subsequent dedup is a single index lookup, not a decrypt-loop scan.</li><li><strong>Decision Engine score</strong> — <code>computeAndPersistLeadScore</code> writes <code>convexity_score</code>, <code>convexity_action</code>, <code>convexity_rationale</code>, and the <code>convexity_ruin_flags</code> array to the row asynchronously; never blocks the intake response.</li><li><strong>Outbound webhook dispatch</strong> — every active automation integration (n8n / Zapier / Make / custom) receives a signed <code>lead.created</code> event payload.</li></ol>
+<h3>4.1 Boolean Gatekeeper qualification</h3>
+<p><code>POST /api/leads/:id/qualify</code> runs three deterministic gates:</p>
+<ul><li><code>diagnosis_confirmed</code></li><li><code>was_at_location</code></li><li><code>tort_type</code> is present and non-empty</li></ul>
+<p>All three must pass for the lead to transition from <code>new</code> → <code>qualified</code>. The transition fires <code>enqueueLeadApprovalPackets(leadId)</code> which kicks the document automation chain (see §6).</p>
+<p>The gates are intentionally deterministic. The AI / heuristic / machine-learned signals (Praxis predictive scoring, see §5.2) are advisory inputs to the operator's decision, not gates on the workflow itself. The AI Constitution (<code>docs/AI_CONSTITUTION.md</code>) lists the bright lines: the AI never unilaterally qualifies a lead, sends an e-sign packet, purchases PACER documents, modifies TCPA consent text, or transmits a HIPAA release.</p>
+<hr/>
+<h2>5. The Decision Engine and Praxis Predictive</h2>
+<p>Two related but distinct scoring surfaces.</p>
+<h3>5.1 Decision Engine — convexity scoring</h3>
+<p><code>lib/decision-engine-service.ts</code> runs a hand-crafted rule-based scorer over the lead's medical, exposure, and source signals, producing five outputs persisted to the row:</p>
+<ul><li><code>convexity_score</code>: <code>convex</code> / <code>neutral</code> / <code>concave</code> — qualitative label.</li><li><code>convexity_action</code>: <code>execute</code> / <code>modify</code> / <code>reject</code> / <code>review</code> — recommended next step.</li><li><code>convexity_rationale</code>: free text explaining the action.</li><li><code>convexity_ruin_flags</code>: array of disqualifying signals (e.g. <code>exposure_outside_window</code>, <code>diagnosis_unrelated_to_tort</code>).</li><li><code>convexity_missing_fields</code>: array of fields the engine needs to complete the score.</li></ul>
+<p>The same <code>result</code> object that produces the action also produces the rationale. The lead-detail UI reads these columns directly. There is no possibility for the displayed "why" to diverge from the actual decision — the verification is captured by a unit test and one of the smoke probes.</p>
+<h3>5.2 Praxis — predictive scoring</h3>
+<p><code>/api/analytics/predictive/*</code> returns three numbers per lead:</p>
+<ul><li><code>conversion_probability</code> (0–100)</li><li><code>risk_score</code> (0–100)</li><li><code>quality_tier</code> ∈ {<code>platinum</code>, <code>gold</code>, <code>silver</code>, <code>bronze</code>, <code>unqualified</code>}</li></ul>
+<p>Plus a factor-list breakdown (positive and negative impacts) so the score is explainable, not a black box.</p>
+<p><strong>Honesty note carried in the source itself</strong> (<code>lib/predictive-scoring.ts</code>):</p>
+<blockquote><code>total_training_samples</code> was a misnomer — no actual ML training happens. This is a hand-tuned weighted-feature scorer with backtest accuracy reporting. The frontend label was changed to "Leads Scored."</blockquote>
+<p>This document does not market Praxis as a trained ML model. It is a transparent weighted-feature heuristic with a backtest-accuracy honest signal computed against the firm's historical signed-vs-rejected outcomes. Buyers who want true ML on lead conversion are encouraged to layer their own model on the same input feature set; the heuristic ships as the default.</p>
+<hr/>
+<h2>6. Document automation</h2>
+<p>The <code>qualified</code> state transition fires <code>enqueueLeadApprovalPackets(leadId)</code> (<code>lib/workflow-engine.ts</code>). The workflow produces and dispatches:</p>
+<ol><li><strong>HIPAA release + retainer agreement</strong> to the claimant via e-sign (DocuSign or Dropbox Sign, depending on <code>workflow_settings.esign_provider_integration_id</code>).</li><li><strong>Medical records request</strong> to the treating physician's office via fax (SRFax / eFax / Phaxio / Documo / Telnyx Fax, depending on <code>workflow_settings.fax_provider_integration_id</code>).</li><li><strong>Outbound notification email</strong> to the operator's chosen address (SendGrid / Postmark / Mailgun / Resend / AWS SES / Brevo).</li></ol>
+<p>Each provider category resolves through <code>lib/provider-router.ts</code>, which checks (in priority order) buyer-level overrides → workflow-settings global → environment-variable default. Adapters live in <code>lib/{esign,fax,email,voice,sms}/index.ts</code> registries. Adding a new provider requires writing one adapter file conforming to the registry's interface and registering it in the registry's <code>getRegistry()</code> builder — no other code changes.</p>
+<p>The visual workflow editor (Automations page) exposes the same send-email and send-fax operations as drag-and-drop nodes that respect the firm's chosen provider via the same router — fixed in the recent reinforcement pass after an audit discovered the editor was previously hardcoded to SendGrid and SRFax regardless of operator configuration.</p>
+<p>Provider callbacks (envelope signed / fax delivered / SMS delivery report) flow through <code>routes/webhooks.ts</code>. Every callback:</p>
+<ul><li>Verifies signature against the matched integration's webhook secret using the raw request bytes captured by Express's <code>verify</code> hook before JSON parsing.</li><li>Records the event in the appropriate per-channel events table (<code>email_events</code>, <code>fax_events</code>, <code>sms_messages</code>, <code>document_envelopes.events[]</code>).</li><li>Stamps the resolved <code>firm_id</code> and <code>integration_id</code> for cross-firm-safe filtering.</li><li>Dedups against <code>processed_webhook_events</code> (unique on <code>provider, external_event_id</code>) so a provider retry does not double-fire downstream automations.</li></ul>
+<hr/>
+<h2>7. The Background Check Hub</h2>
+<p>Eleven verification lanes, each producing one of four statuses: <code>PASS</code>, <code>REVIEW_REQUIRED</code>, <code>FAIL</code>, <code>NOT_RUN</code>. The hub exposes two aggregate verdicts on every result so the UI can distinguish "all automated checks cleared" from "every lane, including manual-lookup lanes, cleared":</p>
+<ul><li><code>final_status</code> — strict aggregate over every lane, including the four advisory stub lanes that always require human eyes. This is the gate for hard decisions.</li><li><code>final_status_live_lanes_only</code> — restricted to lanes with a live data adapter. When this is <code>PASS</code>, the operator can honestly tell counsel "the system actually screened and found nothing."</li></ul>
+<p>Each lane also carries optional <code>manual_action_urls</code>: prefilled public-records search URLs the operator clicks to run the lookup their browser session, not the server, executes. These are the smart-link buttons that turn five-tabs-of-typing into five clicks.</p>
+<table><thead><tr><th>#</th><th>Lane</th><th>State</th><th>Source</th></tr></thead><tbody><tr><td>1</td><td><code>address</code></td><td><strong>live</strong></td><td>Internal validator + USPS-style normalization</td></tr><tr><td>2</td><td><code>email</code></td><td><strong>live</strong></td><td>MX + format + 40-domain curated disposable-domain list + role-based local-part detection</td></tr><tr><td>3</td><td><code>phone</code></td><td><strong>live</strong></td><td>Phone-format validation</td></tr><tr><td>4</td><td><code>phone_provenance</code></td><td><strong>live</strong> when Telnyx configured</td><td>Telnyx Number Lookup — line type, carrier, portability, derived burner-risk verdict</td></tr><tr><td>5</td><td><code>residency</code></td><td>smart-link</td><td>County property-records portal deep-link (FL / TX / CA prefilled; other states fall through to a search-engine bang)</td></tr><tr><td>6</td><td><code>criminal_court</code></td><td><strong>live</strong></td><td>CourtListener REST v4 + free Treasury OFAC SDN screening</td></tr><tr><td>7</td><td><code>incarceration</code></td><td>smart-link</td><td>Federal BOP inmate locator + VINELink state DOC search, both prefilled</td></tr><tr><td>8</td><td><code>sex_offender_nsopw</code></td><td><strong>hybrid</strong></td><td>Live FCRA-compliant screen via Garbo when configured; otherwise prefilled NSOPW smart-link</td></tr><tr><td>9</td><td><code>attorney</code></td><td>smart-link</td><td>State bar lookup — ten states deep-linked (CA, NY, TX, FL, IL, PA, OH, GA, NC, WA), others fall through to a search-engine bang</td></tr><tr><td>10</td><td><code>business_entity</code></td><td><strong>live</strong></td><td>SEC EDGAR <code>company_tickers.json</code> against ~10,000 SEC-registered entities; small-LLC fallback via state SoS smart-link</td></tr><tr><td>11</td><td><code>pacer_federal</code></td><td><strong>live</strong> when PACER credentials configured</td><td>PACER PCL Search API (per-page billing)</td></tr></tbody></table>
+<p>The four lanes pinned to <code>REVIEW_REQUIRED</code> regardless of adapter output — <code>residency</code>, <code>incarceration</code>, <code>sex_offender_nsopw</code> (when Garbo absent), <code>attorney</code> — are explicitly listed in <code>lib/bg-hub/escalation.ts:STUB_LANES</code>. The UI labels them honestly with the source ("manual property-records lookup", "BOP + VINELink smart-links", etc.) so a buyer cannot mistake an amber REVIEW badge for "the system tried and found nothing."</p>
+<h3>7.1 Tort-aware lane gating</h3>
+<p>Not every tort needs every lane. <code>lib/bg-hub/tort-policy.ts</code> categorizes torts by slug and decides which lanes run.</p>
+<table><thead><tr><th>Category</th><th>Examples</th><th>Lanes skipped or downgraded</th></tr></thead><tbody><tr><td><code>medical_injury</code></td><td>Camp Lejeune, Roundup, talc, hair relaxer, PFAS, hernia mesh</td><td>none — every lane runs</td></tr><tr><td><code>pharmaceutical_injury</code></td><td>Zantac, Tylenol-autism, Ozempic, NEC baby formula</td><td>none — every lane runs</td></tr><tr><td><code>child_safety</code></td><td>Roblox, Discord, Snap, Meta, Instagram, Character.ai, TikTok</td><td><code>business_entity</code> + <code>attorney</code> skipped; <code>incarceration</code> / <code>pacer_federal</code> / <code>residency</code> advisory</td></tr><tr><td><code>consumer_fraud</code></td><td>Class-action false-advertising</td><td><code>incarceration</code>, <code>sex_offender_nsopw</code>, <code>attorney</code> skipped</td></tr><tr><td><code>data_breach</code></td><td>T-Mobile, Equifax, BIPA</td><td>every medical-style lane skipped</td></tr><tr><td><code>securities</code></td><td>10b-5 class actions</td><td>identity-style lanes skipped; <code>business_entity</code> + <code>attorney</code> are the point</td></tr><tr><td><code>premises_liability</code></td><td>slip-and-fall, building defect</td><td><code>attorney</code> skipped; criminal_court + residency + pacer core</td></tr><tr><td><code>unknown</code></td><td>unrecognized slug</td><td>run everything (safe default)</td></tr></tbody></table>
+<p><code>runBackgroundCheckHub(lead, { tortSlug })</code> is the public signature. Skipped lanes are <strong>omitted</strong> from the response entirely; advisory lanes run but their REVIEW/FAIL results are downgraded to NOT_RUN so they're informational only and never gate intake. The smoke harness asserts the categorization for Roblox, Camp Lejeune, and Zantac, and asserts that <code>child_safety</code> skips business + attorney.</p>
+<hr/>
+<h2>8. Integration architecture</h2>
+<p><code>routes/integrations.ts</code> exposes a firm-scoped CRUD surface backed by the <code>integrations</code> table. Every CRUD verb ANDs <code>firm_id = requireFirmId(req)</code> into the WHERE clause. Credentials are encrypted column-level with AAD scoped to the integration row id, so the same plaintext key encrypted under two different row ids produces two different ciphertexts and cannot be cross-decrypted.</p>
+<p>Integration <strong>categories</strong> advertised in the vault: <code>ai_llm</code>, <code>esignature</code>, <code>voice_ai</code>, <code>sms</code>, <code>email</code>, <code>fax</code>, <code>ocr</code>, <code>identity</code>, <code>payments</code>, <code>background_check</code>, <code>web_search</code>, <code>court_records</code>.</p>
+<p>The <strong>preset table</strong> (<code>lib/integration-presets.ts</code>) lists ~60 provider presets with category, score, recommended flag, pricing model, and documentation URL. Each preset declares the credential fields the UI should collect (<code>api_key</code>, <code>client_id</code>, <code>client_secret</code>, etc.).</p>
+<p>The <strong>wiring registry</strong> (<code>lib/integration-wiring.ts</code>) is the source of truth for whether a provider has live adapter code. A boot-time consistency check fails the process if the wiring registry references a provider that has no preset, or if a preset's required fields are missing from the wiring entry. This catches drift between marketing and implementation at the deploy boundary.</p>
+<p>The <strong>sync handler registry</strong> (<code>lib/integration-sync.ts</code>) is consulted by <code>POST /api/integrations/:id/sync</code>. Providers without a registered handler return HTTP <strong>501 Not Implemented</strong> plus <code>syncable_providers: [...]</code> so the UI can hide or disable the Sync button rather than displaying one that does nothing. Fasten is the only provider with a registered live sync today (medical records); event-driven providers (Stripe, Telnyx, Vapi, DocuSign, Dropbox Sign) honestly do not support pull-style sync.</p>
+<h3>8.1 Premium screening via Garbo</h3>
+<p>When the operator pastes a Garbo (https://garbo.io) API key into Settings → Integrations, the <code>sex_offender_nsopw</code> lane switches from smart-link manual workflow to a live FCRA-compliant screen. Garbo aggregates the sex-offender registry data NSOPW prohibits scraping, plus arrest and violence-related public records, into a single API call.</p>
+<p><code>lib/bg-hub/garbo.ts</code> ships a complete adapter scaffold: firm-scoped credential lookup, Bearer auth, timeout handling, fail-open error envelope, response normalization to the hub's flag vocabulary. Three lines marked <code>OPERATOR-CONFIRM</code> carry the exact endpoint path / request body / response field-name mapping; those are filled in from Garbo's developer docs after the operator obtains an API key. The smoke harness probes that the scaffold exists and the credential lookup wires through the encrypted vault.</p>
+<hr/>
+<h2>9. AI surfaces</h2>
+<p>Three layers, in priority order from "AI-as-product" to "AI-as-utility":</p>
+<ol><li><strong>AI Constitution</strong> (<code>docs/AI_CONSTITUTION.md</code>) — a single canonical document loaded by <code>lib/ai-constitution.ts</code> and prepended to every LLM call's system prompt. Defines the bright lines: actions the AI will never take unattended (final qualification decision, e-sign send, PACER purchase, TCPA modification, HIPAA release transmission).</li></ol>
+<ol><li><strong>AI Provider Router</strong> (<code>lib/ai-provider.ts</code>) — abstracts over Anthropic, OpenAI, Google Gemini, OpenRouter, Groq, DeepSeek, Perplexity, Mistral, Cohere, xAI, Fireworks. Modules name their use case (<code>ai-extract</code>, <code>ai-fields</code>, <code>ai-ocr</code>, <code>drafting-ai</code>, <code>threat-analyzer</code>, <code>lead-intelligence</code>, <code>automations-assist</code>) and the router picks a provider per the firm's workflow settings, with the live-no-vault Anthropic Replit AI SDK as the fallback. Adapter selection is invariant across providers — change a setting, switch providers, no code change.</li></ol>
+<ol><li><strong>AI as workflow nodes</strong> — the Automations editor exposes <code>ai.extract_fields</code>, <code>ai.summarize</code>, <code>ai.draft</code> as drag-and-drop nodes, plus AI-Assist that builds the workflow graph itself from a natural-language prompt. AI-Assist runs through a recursive retry harness (<code>lib/automations/recursive-retry.ts</code>) that re-attempts with perspective-shift cues, a sha256-based circuit breaker to detect identical failures, and hard caps on attempts and wall-clock budget.</li></ol>
+<p>What AI does NOT do in MTOS:</p>
+<ul><li>It is not the qualification decision-maker — that is the deterministic Boolean Gatekeeper in <code>routes/leads.ts</code>.</li><li>It is not a trained ML model — the Praxis Predictive surface is a hand-tuned weighted-feature heuristic, transparently documented.</li><li>It is not auto-released — every drafted document goes through Doc Review before any send.</li></ul>
+<hr/>
+<h2>10. Compliance and security posture</h2>
+<h3>10.1 Encryption — column-level AES-256-GCM with versioned AAD; documented at §5.4 of the in-product manual; rotation procedure shipped in <code>scripts/rotate-encryption-key.ts</code>.</h3>
+<h3>10.2 RBAC — five roles, hierarchy weights, fine-grained permission enum, per-row ownership filtering for viewer role. Validated by a boot-time <code>validateRouteTable</code> walk that throws if any non-public route is missing an auth middleware or permission gate.</h3>
+<h3>10.3 Audit log — every state-changing action persists an immutable row with <code>(entity_type, entity_id, action, details, occurred_at, ip_address, user_agent)</code>. Read-only from the application layer.</h3>
+<h3>10.4 TCPA — <code>tcpa_consent</code> boolean + TrustedForm certificate URL + ping URL + cert token + IP + user agent + timestamp captured at form-submit time. Public web-form submissions cannot proceed without explicit consent capture.</h3>
+<h3>10.5 PHI / HIPAA — claimant medical fields (<code>diagnosis</code>, <code>diagnosis_date</code>, <code>medications</code>, <code>physician_*</code>) are encrypted at rest with AAD bound to the row id. The decision to send a HIPAA release is operator-initiated (Bright Lines policy); the AI never auto-sends. <strong>Customers handling protected health information are reminded that they must execute Business Associate Agreements (BAAs) with every downstream provider that touches PHI</strong> — Anthropic, OpenAI, Telnyx, Fasten, DocuSign, etc. MTOS does not paper those agreements for you.</h3>
+<h3>10.6 FCRA — claimant background screening via Garbo is the FCRA-compliant path. Consumer people-search APIs (BeenVerified, Spokeo, Whitepages class) are deliberately not integrated because they disclaim Consumer Reporting Agency status and using their data for claimant qualification is FCRA-illegal regardless of permissible-purpose stance.</h3>
+<h3>10.7 Multi-tenant isolation — <code>requireFirmId(req)</code> is the single canonical helper. Every business-table query AND-restricts on it. Cross-firm IDOR returns 404, not 403. The smoke harness probes that every CRUD verb in <code>routes/leads.ts</code>, <code>routes/cases.ts</code>, <code>routes/integrations.ts</code>, <code>routes/admin-self-heal.ts</code>, <code>routes/admin-competitive-intel.ts</code>, and <code>routes/analytics.ts</code> uses the helper.</h3>
+<h3>10.8 Webhook idempotency — every inbound provider callback is deduped against <code>processed_webhook_events</code> (unique on <code>provider, external_event_id</code>) so a provider retry does not double-fire downstream automations. The helper fails OPEN: a DB blip never silently drops a legitimate webhook.</h3>
+<h3>10.9 Per-firm webhook URLs — <code>/api/webhooks/{email,sms,fax,voice}/:provider/i/:integrationId</code> disambiguates the multi-firm cross-firm signature ambiguity that arises when two firms have the same provider active.</h3>
+<h3>10.10 Session tokens — JWTs with <code>tv</code> (token_version) claim. Force-logout bumps <code>mtos_users.token_version</code>, invalidating every outstanding token for that user in one DB write.</h3>
+<hr/>
+<h2>11. Recent reinforcement (audit-driven)</h2>
+<p>This document is written after a multi-commit hardening pass focused on production-readiness. Highlights:</p>
+<ul><li><strong>Cross-tenant data isolation</strong> closed across leads, cases, analytics, integrations, admin-self-heal, admin-competitive-intel, and the four automation handlers that touch <code>leadsTable</code>. <code>firm_id</code> column added to <code>casesTable</code> and <code>integrationsTable</code> with idempotent backfill SQL in <code>scripts/</code>.</li><li><strong>SQL injection vector</strong> in <code>admin-self-heal.ts</code> (a <code>1=1</code> fallback combined with string-concatenated firm_id) replaced with parameterized Drizzle and a strict <code>requireFirmId</code> contract.</li><li><strong>Public webhook surface</strong> for n8n / Zapier / Make rescued from a non-functional state: the handler lived behind <code>authMiddleware</code> so external providers could never reach it, AND it computed HMAC over <code>JSON.stringify(req.body)</code> (key-reordering, whitespace-dropping) so every signature mismatched. Now mounted at the public layer; HMAC computed over the raw request bytes captured by Express's <code>verify</code> hook.</li><li><strong>Automation editor send-email / send-fax nodes</strong> unbundled from their hardcoded SendGrid / SRFax dependencies; both now route through <code>resolveProvider(category)</code> to honor each firm's chosen integration.</li><li><strong>OFAC sanctions screening</strong> moved from a paid third-party (<code>search.ofac-api.com</code>) to free Treasury SDN list ingestion with 24h cache, fail-open on refresh.</li><li><strong>Background Check Hub</strong> restructured: SEC EDGAR live business-entity adapter; smart-link infrastructure for four lanes that can't be lawfully or technically scraped; tort-policy module so Roblox doesn't waste a check on physician verification it can't run; Garbo integration scaffold; new <code>final_status_live_lanes_only</code> UI signal.</li><li><strong>Smoke harness</strong> (<code>scripts/smoke.ts</code>) — 56 probes, all PASS, that gate every architectural claim in this document against the actual source file. Run <code>pnpm --filter @workspace/api-server smoke</code> to reproduce. The receipts are committed at <code>smoke-report.{md,json}</code>.</li></ul>
+<p>The git history on <code>claude/debug-codebase-s75LX</code> documents the pass in commits <code>7baf80e</code> (firm-scoping core) → <code>e323d85</code> (manual reconcile) → <code>9810296</code> (integrations + automation scoping) → <code>e1da6a3</code> (multi-provider + sync registry + bg-hub honesty) → <code>3b0e8d3</code> (Treasury OFAC + live-lanes status) → <code>91e6c39</code> (SEC EDGAR + smart-links + state deep-links) → <code>1b0abea</code> (Garbo + phone-provenance + tort-policy) → <code>7b919bb</code> (manual reconcile) → <code>7db6743</code> (smoke harness).</p>
+<hr/>
+<h2>12. What is not in the box</h2>
+<p>Honesty section. Buyers who probe for these in a demo will find them missing; the system surfaces each gap honestly to the operator.</p>
+<ul><li><strong>Residency / incarceration / state-bar full automation across all 50 states.</strong> Smart-link manual workflows ship; full automation requires paid integrations (Smarty + Lob NCOA for residency, VINELink partner API for incarceration, Martindale-Hubbell or per-state bar APIs for attorney). The smart-link infrastructure is built so adding each is a ~100-line patch when credentials arrive.</li><li><strong>NSOPW automated lookup without Garbo.</strong> NSOPW's terms of use prohibit automated queries. The lane emits a prefilled smart-link the operator clicks. Garbo subscription removes the manual step lawfully.</li><li><strong>NCOA / address-history bureau-tier lookup.</strong> Smarty or LexisNexis Risk integrations are wireable; not shipped.</li><li><strong>Sterling / Checkr / Accurate enterprise background-check wiring.</strong> Listed as integration presets but no live adapter code; vault-only today.</li><li><strong>OpenCorporates / SAM.gov full business-entity coverage.</strong> SEC EDGAR covers ~10K SEC-registered entities; small unregistered LLCs surface a state SoS smart-link.</li><li><strong>DB-level end-to-end test suite.</strong> Unit tests + smoke probes are 90+ deep with zero DB dependency; full DB-backed integration tests require a real PostgreSQL — operator-run in staging.</li><li><strong>SOC 2 attestation.</strong> Not paper-trailed; the security controls (encryption, audit, RBAC, multi-tenancy, webhook idempotency, MFA, force-logout, rate-limit) are in place to support a SOC 2 Type I path, but the audit itself is operator-procured.</li></ul>
+<hr/>
+<h2>13. Verification</h2>
+<p>This document ships alongside an executable verification suite. From the repository root:</p>
+<pre class="lang-plain"><code>pnpm typecheck                              # all 4 workspaces compile
+pnpm --filter @workspace/api-server test    # unit tests + parity tests
+pnpm --filter @workspace/api-server smoke   # 56-probe code-claims sanity</code></pre>
+<p>The smoke harness produces both <code>smoke-report.md</code> (human) and <code>smoke-report.json</code> (machine). A failing probe blocks CI. Adding a new claim to this document should be accompanied by adding a probe — drift between marketing and implementation is the single failure mode this project is most aggressive about preventing.</p>
+<p>For end-to-end live-deployment verification, the operator runs:</p>
+<pre class="lang-plain"><code>MTOS_BASE_URL=https://api.your-firm.com \
+MTOS_ADMIN_EMAIL=admin@your-firm.com \
+MTOS_ADMIN_PASSWORD=… \
+pnpm --filter @workspace/api-server smoke:http</code></pre>
+<p>The HTTP smoke is GET-only and safe to point at production. It walks 35+ documented endpoints and records HTTP status + envelope shape per route.</p>
+<hr/>
+<h2>14. Roadmap</h2>
+<p>Capabilities under design or scoped for the next quarter, in declining priority:</p>
+<ol><li><strong>Production-tier audit log retention + read API</strong> (operator-facing audit dashboard).</li><li><strong>Per-state SoS automation pilot</strong> (CA, DE, NY, TX, FL, IL) replacing the smart-link layer with API calls where the state exposes one.</li><li><strong>OpenCorporates integration</strong> for small-LLC business entity coverage.</li><li><strong>VINElink partner API integration</strong> for live state-DOC incarceration screening.</li><li><strong>MDL filing-window automation</strong> — claimant exposure-date / diagnosis-date validation against active MDL filing windows pulled live from court dockets.</li><li><strong>Per-firm webhook URL onboarding wizard</strong> — the existing <code>/i/:integrationId</code> URL pattern works; the UI affordance to display per-firm URLs to operators during integration setup is the gap.</li><li><strong>SOC 2 Type I evidence collection.</strong></li><li><strong>Encryption key rotation drill</strong> — exercise the rotation path on a non-production environment so the runbook is real, not theoretical.</li></ol>
+<hr/>
+<h2>15. Contact</h2>
+<p>Engineering decisions, architectural questions, security disclosures: operators are routed through the in-product <code>/api/admin/self-heal</code> channel (when configured against Jules) or via the audit log's <code>support_request</code> action.</p>
+<p>Document authored against branch <code>claude/debug-codebase-s75LX</code>, commit <code>7db6743</code>. Verifiable by <code>pnpm --filter @workspace/api-server smoke</code>.</p>
+<footer style="margin-top:24pt;padding-top:8pt;border-top:1px solid var(--rule);font-size:9pt;color:var(--muted);">
+Mass Tort OS — Technical White Paper · rendered from <code>docs/WHITEPAPER.md</code> · branch <code>claude/debug-codebase-s75LX</code>
+</footer>
+</body>
+</html>
