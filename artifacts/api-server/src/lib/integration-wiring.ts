@@ -208,6 +208,34 @@ const REGISTRY: Record<string, WiringInfo> = {
     note: "FCRA-compliant background check via Garbo's API (lib/bg-hub/garbo.ts). When configured, replaces the manual NSOPW smart-link with a live screen and augments the criminal-court lane with arrest + violence-related records. Falls back to smart-link path when api_key absent or API unreachable. Pay-per-lookup; sign up at https://garbo.io.",
   },
 
+  // Ad Platforms (vault-only today — credentials store + decrypt cleanly,
+  // but no live adapter ships in this build that pulls lead data, posts
+  // conversions, or reads spend reports). To activate any of these, write
+  // a lib/ads/<provider>/index.ts adapter that reads the encrypted creds
+  // through getIntegrationCredentialsById(id, firmId) and register it
+  // here under status:"live" with a real `note`. The integrations test
+  // page already returns honest "adapter_wired: false" for vault-only.
+  google_ads: {
+    status: "vault_only",
+    note: "Credentials store correctly (OAuth2 client_id/secret, developer token via api_key, refresh token via access_password, login_customer_id via account_sid). No live adapter wired yet — saving creds here lets a future ads-puller / conversion-uploader job find them. Real API contract: https://developers.google.com/google-ads/api/docs/start.",
+  },
+  google_adsense: {
+    status: "vault_only",
+    note: "Credentials store correctly (OAuth2 client_id/secret, refresh token via access_password, account name via account_sid). No live adapter wired. Most plaintiff's firms don't need AdSense — Google Ads (advertiser) is the relevant one. Real API contract: https://developers.google.com/adsense/management/reference/rest.",
+  },
+  meta_marketing: {
+    status: "vault_only",
+    note: "Credentials store correctly (App ID/Secret + long-lived access token + Ad Account ID). No live adapter wired. When activated, the canonical use case is auto-importing Facebook/Instagram lead-form submissions into MTOS via the Marketing API leadgen webhook. Real API contract: https://developers.facebook.com/docs/marketing-apis/.",
+  },
+  tiktok_ads: {
+    status: "vault_only",
+    note: "Credentials store correctly (App ID/Secret + access token + Advertiser ID). No live adapter wired. Real API contract: https://business-api.tiktok.com/portal/docs.",
+  },
+  linkedin_ads: {
+    status: "vault_only",
+    note: "Credentials store correctly (OAuth2 client_id/secret + access token + Ad Account URN). No live adapter wired. Real API contract: https://learn.microsoft.com/linkedin/marketing/.",
+  },
+
   // AI / LLM (vault-consuming providers)
   google_gemini: { status: "live", note: "LLM completions via Gemini v1beta generateContent." },
   openrouter: { status: "live", note: "LLM completions via OpenRouter unified chat completions API." },
