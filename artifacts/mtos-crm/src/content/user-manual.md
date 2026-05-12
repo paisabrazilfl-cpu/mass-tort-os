@@ -554,21 +554,42 @@ A human always confirms these. This is enforced via the AI Constitution (§5.6).
 - **UI:** searchable lead picker + chronological card list with Date · Title · Category badge · Source badge.
 
 ### 11.7 Background Check Hub
-Not its own page — appears as a button on every lead. Fans out across nine verification lanes (`lib/bg-hub/hub.ts`), each reporting honestly **pass / fail / unknown**:
+Not its own page — appears as a button on every lead. Fans out across **eleven verification lanes** (`lib/bg-hub/hub.ts:31-43`), each reporting honestly **PASS / FAIL / REVIEW_REQUIRED / NOT_RUN**. The hub exposes two aggregate verdicts on the result so the UI can distinguish "all automated checks cleared" from "every lane, including manual-lookup lanes, cleared":
 
-| # | Lane (`lib/bg-hub/hub.ts`) | What it checks |
-|---|---|---|
-| 1 | `address` | Residency history + address consistency. |
-| 2 | `email` | Deliverability + breach exposure. |
-| 3 | `phone` | Phone ownership + carrier risk. |
-| 4 | `residency` | State / duration requirements for the specific tort (e.g. Camp Lejeune). |
-| 5 | `criminal_court` | CourtListener + OFAC sanctions. |
-| 6 | `incarceration` | Incarceration during exposure window. |
-| 7 | `sex_offender_nsopw` | National Sex Offender Public Website. |
-| 8 | `attorney` | Claimant is a licensed attorney (conflict). |
-| 9 | `business_entity` | Corporate filings / business interests. |
+- `final_status` — strict aggregate over EVERY lane, including the 4 advisory stub lanes that always REVIEW. This is the gate to use for hard intake decisions.
+- `final_status_live_lanes_only` — aggregate restricted to lanes with a live data adapter. When this is PASS the operator can honestly say "the system actually screened and found nothing." See `lib/bg-hub/hub.ts:80-90`.
 
-Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surface depending on tort.
+Each lane result also carries an optional `manual_action_urls: [{label, url, note}]` array of **prefilled smart-links** (`lib/bg-hub/smart-links.ts`) so the operator can run any remaining manual lookups in one click rather than typing the name into five public-records portals.
+
+#### Lane inventory
+
+| # | Lane (`lib/bg-hub/hub.ts`) | Status | What it checks |
+|---|---|---|---|
+| 1 | `address` | **LIVE** | Internal validator (`lib/address-validator.ts`) — format + USPS-style + state-code normalization. |
+| 2 | `email` | **LIVE** | MX + format + curated 40-domain disposable list + role-based local-part detection (`lib/bg-hub/email-enrichment.ts`). |
+| 3 | `phone` | **LIVE** | Phone-format validation only. Carrier + line-type live in `phone_provenance` below. |
+| 4 | `phone_provenance` | **LIVE** (requires Telnyx) | Telnyx Number Lookup. Returns line type (mobile / fixed_voip / non_fixed_voip / toll_free), carrier, and a derived burner-risk verdict. Flags non-fixed-VOIP, known burner carriers (TextNow / Google Voice / Pinger / Bandwidth), and recently-ported numbers. Reuses the existing `telnyx` integration row's `api_key` — no separate signup. (`lib/bg-hub/phone-provenance.ts`) |
+| 5 | `residency` | **STUB + smart-link** | No live county-property-records adapter. The lane emits a smart-link to the lead's state/city property-records portal (FL / TX / CA deep-linked; other states fall through to a search-engine bang). Full automation requires a paid integration (Smarty / Lob NCOA / ATTOM). |
+| 6 | `criminal_court` | **LIVE** | CourtListener REST v4 (federal + state criminal records) + **free Treasury OFAC SDN screening** (`lib/ofac-treasury.ts`). The legacy paid `search.ofac-api.com` path is preserved behind `OFAC_USE_TREASURY=0`. |
+| 7 | `incarceration` | **STUB + smart-link** | Federal BOP has no public API. The lane emits smart-links to BOP's inmate locator and VINELink (~46 state DOCs). Full automation requires VINELink partner API. |
+| 8 | `sex_offender_nsopw` | **HYBRID** | When Garbo is configured (see below) the lane runs a live FCRA-compliant screen and emits `garbo_sex_offender_hit` (FAIL) or `garbo_unreachable` (REVIEW). When Garbo is NOT configured, the lane emits a prefilled NSOPW smart-link the operator clicks manually — NSOPW's TOS forbids server-side scraping but a human-clicked prefilled bookmark is compliant. |
+| 9 | `attorney` | **STUB + smart-link** | State bar lookups are state-by-state. Deep-links wired for CA, NY, TX, FL, IL, PA, OH, GA, NC, WA; other states fall through to a search-engine bang. Full automation requires Martindale-Hubbell (LexisNexis) or per-state bar API integrations. |
+| 10 | `business_entity` | **LIVE** (SEC EDGAR) | Live SEC EDGAR lookup against `data.sec.gov` company-tickers index (`lib/bg-hub/sec-edgar.ts`) — covers ~10K SEC-registered entities (public companies, large LLCs, Reg-D filers). Returns CIK / ticker / per-entry EDGAR URL. PASS on hit; small unregistered LLCs surface a state SoS smart-link for manual confirmation. |
+| 11 | `pacer_federal` | **LIVE** (requires PACER credentials) | PACER PCL Search API (`lib/pacer/pcl-client.ts`). Per-page billing applies on PACER's side. Hits never auto-FAIL — they surface as REVIEW with the docket URL because PCL returns party names without identity-confirming metadata. |
+
+#### Stub lanes (`lib/bg-hub/escalation.ts:STUB_LANES`)
+
+The four lanes pinned to `REVIEW_REQUIRED` regardless of adapter output: `residency`, `incarceration`, `sex_offender_nsopw` (when Garbo is not configured), and `attorney`. Adding a live adapter for one of these requires removing it from `STUB_LANES` so the flag taxonomy can let it resolve to PASS.
+
+#### Garbo integration (premium, replaces NSOPW stub)
+
+Garbo (https://garbo.io) is an API-first, FCRA-compliant background-check provider. When the operator pastes an API key into **Settings → Integrations → Garbo**, the `sex_offender_nsopw` lane switches from smart-link-only to a live screen on the next bg-hub run. See `lib/bg-hub/garbo.ts` for the adapter scaffold; three lines marked `OPERATOR-CONFIRM` need the actual endpoint + request shape from Garbo's developer docs.
+
+#### Tort-aware lane gating (`lib/bg-hub/tort-policy.ts`)
+
+Not every tort needs every lane. Roblox / Discord / Snap / Meta / Instagram / Character.ai / TikTok (`child_safety` category) skip `business_entity` and `attorney` and mark `incarceration` / `pacer_federal` / `residency` as advisory (run but never gate intake). Camp Lejeune / Roundup / talc / hair relaxer / PFAS / hernia mesh / Bard PowerPort (`medical_injury`) run every lane. Data-breach torts skip every medical-style lane. Securities torts skip identity lanes. The default for an unrecognized tort slug is **run everything** (safer than skipping).
+
+The hub signature is `runBackgroundCheckHub(lead, { tortSlug })`. Skipped lanes are **omitted** from the response entirely; advisory lanes run but their REVIEW/FAIL results are downgraded to NOT_RUN so they're informational only.
 
 ---
 
@@ -593,10 +614,13 @@ Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surfa
 
 ### 12.4 Integrations — `/integrations`
 - **Permission:** `integrations:manage`.
-- **Categories in the vault:** `ai_llm`, `esignature`, `voice_ai`, `sms`, `email`, `fax`, `ocr`, `identity`, `payments`.
+- **Firm scope:** every integration row carries `firm_id`. CRUD is AND-scoped via `requireFirmId(req)` (`routes/integrations.ts`). Cross-firm reads return 404; admin in Firm A cannot read or rotate Firm B's keys.
+- **Categories in the vault:** `ai_llm`, `esignature`, `voice_ai`, `sms`, `email`, `fax`, `ocr`, `identity`, `payments`, `background_check`, `web_search`, `court_records`.
 - **Encryption:** AES-256-GCM at the active key version (currently V1 — see §5.4 for rotation policy). AAD = integration row id.
-- **Decrypt path:** `getIntegrationCredentialsById(id)` decrypts on demand. Plaintext is never persisted, never logged.
+- **Decrypt path:** `getIntegrationCredentialsById(id, firmId)` decrypts on demand. Plaintext is never persisted, never logged. Optional `firmId` argument scopes the lookup to that firm — passing `undefined` (legacy callers) logs a warning.
 - **Workflow:** Add → Test connection → Mark active → choose in **Workflow Settings** for the categories where you want it used.
+- **Sync handler registry (`lib/integration-sync.ts`).** `POST /api/integrations/:id/sync` delegates to a per-provider registry. Providers without a registered handler return **HTTP 501** with `syncable_providers: [...]` so the UI can hide / disable the Sync button instead of running a no-op. Fasten is registered today (sync runs per-connection via `fasten_records_sync` jobs); other providers are event-driven and have no pull-style sync.
+- **Garbo (Background Check).** Paste `api_key` + optional `api_url` to enable the **`sex_offender_nsopw` lane to switch from smart-link manual workflow to a live FCRA-compliant screen** on the next bg-hub run (§11.7). See `lib/bg-hub/garbo.ts`.
 
 ### 12.5 Billing — `/billing`
 - **Permission:** `billing:manage`.
@@ -765,11 +789,11 @@ Generic inbound message receivers exist at `/webhooks/{email,fax,sms,voice}/:pro
 | Self-Heal stuck in `dispatched` | `JULES_API_KEY` missing or invalid. | Add `JULES_API_KEY` via Integrations. |
 | Competitive Intel returns `serpapi_auth` | `SERPAPI_API_KEY` missing or revoked. | Re-add at Integrations / set the secret. |
 
-### 13.7 Database tables (41 total) — high-signal ones
+### 13.7 Database tables (42 total) — high-signal ones
 
 Full list managed by `lib/db/src/schema/`. The frequently-touched ones are:
 
-`leads` (encrypted PII, see §7.2 columns) · `cases` (UUID PK, JSONB `data`) · `documents` · `audit_log` · `paralegals` · `vendors` · `buyers` · `lead_sources` · `form_configurations` · `decision_engine_settings` · `users` (with `mfa_enabled`, `totp_secret`, `token_version`) · `firms` · `firm_invites` · `integrations` · `template_assignments` · `document_templates` · `document_envelopes` · `fax_results` · `automation_workflows` · `automation_runs` · `competitive_intel_advertisers` · `competitive_intel_snapshots` · `self_heal_sessions` · `api_keys` · `image_objects`.
+`leads` (encrypted PII, see §7.2 columns) · `cases` (UUID PK, JSONB `data`, firm-scoped) · `documents` · `audit_log` · `paralegals` · `vendors` · `buyers` · `lead_sources` · `form_configurations` · `decision_engine_settings` · `users` (with `mfa_enabled`, `totp_secret`, `token_version`) · `firms` · `firm_invites` · `integrations` (firm-scoped) · `template_assignments` · `document_templates` · `document_envelopes` · `fax_results` · `automation_workflows` · `automation_runs` · `competitive_intel_advertisers` · `competitive_intel_snapshots` · `self_heal_sessions` · `api_keys` · `image_objects` · `processed_webhook_events` (idempotency ledger — see §13.11).
 
 ### 13.8 The full leads table schema
 
@@ -825,6 +849,29 @@ Emitted via `auditLog(entity_type, entity_id, action, details)`:
 - **`automation`:** `created`, `updated`, `enabled`, `disabled`, `executed`.
 - **`document`:** `created`, `signed`, `redacted`, `deleted`.
 - **General:** `export_leads`, `login_success`, `login_failed`.
+
+### 13.11 Inbound webhook idempotency
+
+Provider webhooks (Stripe, Telnyx, Vapi, Fasten, DocuSign, Dropbox Sign, generic email / SMS / fax / voice) are retried by the provider on any 5xx or timeout. Without dedup, a single physical delivery report would create N rows in `sms_messages` / `fax_events` / `email_events` and re-fire downstream automations.
+
+The `processed_webhook_events` table is the dedup ledger. The helper `markWebhookProcessed({ provider, externalEventId, firmId, integrationId, eventType })` in `artifacts/api-server/src/lib/webhook-idempotency.ts` is called before state-mutating handlers and atomically claims the `(provider, external_event_id)` pair via a unique index. Losers of the race ack 200 to the provider and skip the mutation.
+
+Failure mode: if the dedup write itself fails (DB blip), the helper fails **OPEN** — the event is processed normally — because dropping legitimate webhooks is worse than the occasional duplicate row during a DB outage.
+
+Retention: nothing auto-prunes the ledger today. A nightly `DELETE WHERE first_seen_at < now() - interval '30 days'` is safe once the provider's longest retry window has expired (3 days for Stripe, less elsewhere).
+
+### 13.12 Per-firm webhook URL variants
+
+Provider webhooks arrive without a firm-id in the URL by default, which is fine in the single-firm shell but ambiguous in multi-firm deployments. Each channel-level route accepts BOTH shapes:
+
+| Generic | Per-firm |
+|---|---|
+| `POST /api/webhooks/email/:provider` | `POST /api/webhooks/email/:provider/i/:integrationId` |
+| `POST /api/webhooks/sms/:provider` | `POST /api/webhooks/sms/:provider/i/:integrationId` |
+| `POST /api/webhooks/fax/:provider` | `POST /api/webhooks/fax/:provider/i/:integrationId` |
+| `POST /api/webhooks/voice/:provider` | `POST /api/webhooks/voice/:provider/i/:integrationId` |
+
+When the URL carries an explicit `:integrationId`, `loadProviderForWebhook` reads that row directly (with a refusal if the row's provider doesn't match the URL's `:provider`) — no cross-firm signature ambiguity. Operators in a multi-firm deployment should register the per-firm URL with each provider.
 
 ---
 
