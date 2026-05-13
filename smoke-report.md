@@ -8,7 +8,7 @@
 - ✅ CircuitBreaker module exists with expected exports — lib/ai/circuit-breaker.ts: CircuitBreaker class + get/allow/recordSuccess/recordFailure
 - ✅ ErrorClassifier module exists with four categories — lib/ai/error-classifier.ts: all 4 ErrorClass values + ProviderUnavailableError + PolicyViolationError
 - ✅ Observer module exists with emitAiStateTransition + PII redactor — lib/ai/observer.ts: emitAiStateTransition + PII redactor (SSN/phone/email/date) + 100ms collapse
-- ✅ NEW modules are NOT YET wired into production call paths (safety contract) — 4 production paths verified unchanged: modules exist but are not yet referenced
+- ✅ Phase 2 wiring: resilient-retry wrapper exists and is gated by AI_RESILIENCY_V2 env flag — resilient-retry.ts wires the v2 layer; routes/automations.ts opts in via isResiliencyV2Enabled() === (AI_RESILIENCY_V2 === "1"); flag absent → byte-identical to Phase 1
 
 ### manual citations
 - ✅ rbac.ts:51 actually contains UserRole union — rbac.ts:51 = "export type UserRole = "super_admin" | "admin" | "attorney" | "paralegal" | "vie"

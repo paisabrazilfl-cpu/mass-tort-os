@@ -355,8 +355,8 @@
   },
   {
     "section": "ai-resiliency v2",
-    "capability": "NEW modules are NOT YET wired into production call paths (safety contract)",
+    "capability": "Phase 2 wiring: resilient-retry wrapper exists and is gated by AI_RESILIENCY_V2 env flag",
     "outcome": "PASS",
-    "evidence": "4 production paths verified unchanged: modules exist but are not yet referenced"
+    "evidence": "resilient-retry.ts wires the v2 layer; routes/automations.ts opts in via isResiliencyV2Enabled() === (AI_RESILIENCY_V2 === \"1\"); flag absent → byte-identical to Phase 1"
   }
 ]

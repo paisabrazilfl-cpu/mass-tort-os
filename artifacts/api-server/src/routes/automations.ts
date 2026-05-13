@@ -9,6 +9,7 @@ import { runWorkflow } from "../lib/automations/executor";
 import { callLLM } from "../lib/ai-provider";
 import { getAiConstitutionPreamble } from "../lib/ai-constitution";
 import { recursiveRetry, perspectiveCue } from "../lib/automations/recursive-retry";
+import { resilientRetry, isResiliencyV2Enabled } from "../lib/ai/resilient-retry";
 import { logger } from "../lib/logger";
 
 // BUILD_VERSION: v20260511-clean
@@ -258,7 +259,23 @@ router.post("/assist", requirePermission(Permission.AUTOMATIONS_MANAGE), async (
     "Available node types: " + JSON.stringify(NODE_CATALOG.map((n: any) => n.type)),
   ].join("\n");
 
-  const result = await recursiveRetry({
+  // AI Resiliency v2 wiring. When AI_RESILIENCY_V2=1 is set, the AI
+  // Helper retry loop runs through resilientRetry which composes
+  // per-provider circuit breaker + error classifier + per-attempt
+  // timeout + structured state-transition events. When the flag is
+  // absent or any other value, the existing recursiveRetry path
+  // executes byte-identically to before — no behavior change.
+  //
+  // The wrapper itself catches its own exceptions and falls back to
+  // recursiveRetry if anything in the resiliency layer misbehaves,
+  // so even with the flag ON the worst case is "no v2 benefit," not
+  // "broken AI Helper."
+  const retryFn = isResiliencyV2Enabled()
+    ? <T,>(opts: Parameters<typeof recursiveRetry<T>>[0]) =>
+        resilientRetry<T>({ ...opts, provider: "automations-assist" })
+    : recursiveRetry;
+
+  const result = await retryFn({
     maxAttempts: 3,
     maxTotalMs: 30_000,
     attempt: async ({ perspectiveIndex, previousError }) => {

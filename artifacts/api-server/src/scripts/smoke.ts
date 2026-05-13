@@ -662,31 +662,55 @@ probe("ai-resiliency v2", "Observer module exists with emitAiStateTransition + P
   return "lib/ai/observer.ts: emitAiStateTransition + PII redactor (SSN/phone/email/date) + 100ms collapse";
 });
 
-probe("ai-resiliency v2", "NEW modules are NOT YET wired into production call paths (safety contract)", () => {
-  // The safety guarantee: this commit adds the three resiliency modules
-  // but does NOT wire them into recursive-retry / ai-provider /
-  // executor. Production behavior is byte-identical to before the
-  // commit. Verify by grepping every "live" callsite and asserting
-  // none of them imports the new modules.
-  const livePaths = [
+probe("ai-resiliency v2", "Phase 2 wiring: resilient-retry wrapper exists and is gated by AI_RESILIENCY_V2 env flag", () => {
+  // Phase 2 wiring contract:
+  //   1. lib/ai/resilient-retry.ts exists and exports resilientRetry +
+  //      isResiliencyV2Enabled (the flag-reader helper).
+  //   2. The flag reader checks the AI_RESILIENCY_V2 env var STRICTLY
+  //      against the string "1" — so any other value (including the
+  //      default of undefined / unset) keeps Phase 1 behavior.
+  //   3. routes/automations.ts imports the wrapper AND its only
+  //      reference to resilientRetry is gated behind
+  //      isResiliencyV2Enabled() — so when the flag is OFF, the AI
+  //      Helper's call path is byte-identical to the recursiveRetry
+  //      path that existed before this commit.
+  //   4. The other "live" callsites (recursive-retry.ts itself,
+  //      ai-provider.ts, executor.ts) still do NOT import the new
+  //      modules. resilient-retry.ts is the single permitted bridge.
+  const wrapper = read("artifacts/api-server/src/lib/ai/resilient-retry.ts");
+  mustContain(wrapper, "export function isResiliencyV2Enabled", "isResiliencyV2Enabled export");
+  mustContain(wrapper, "export async function resilientRetry", "resilientRetry export");
+  // Flag reader must be a strict-equality check against the literal "1".
+  mustContain(
+    wrapper,
+    /process\.env\[?\s*["']AI_RESILIENCY_V2["']\s*\]?\s*===\s*["']1["']/,
+    "strict-equality flag check (AI_RESILIENCY_V2 === \"1\")",
+  );
+
+  // routes/automations.ts must wire it behind the gate.
+  const route = read("artifacts/api-server/src/routes/automations.ts");
+  mustContain(route, "isResiliencyV2Enabled", "flag check imported into the route");
+  mustContain(route, "resilientRetry", "wrapper referenced in the route");
+  // The route must NOT call resilientRetry unconditionally — verify
+  // it's behind the gate by checking for the ternary / conditional
+  // pattern.
+  if (!/isResiliencyV2Enabled\(\)[\s\S]{0,200}resilientRetry/.test(route)) {
+    throw new Error("resilientRetry is called without an isResiliencyV2Enabled() gate — the safety contract requires the wrapper to be opt-in");
+  }
+
+  // No other production file should import the new modules.
+  const otherLivePaths = [
     "artifacts/api-server/src/lib/automations/recursive-retry.ts",
     "artifacts/api-server/src/lib/ai-provider.ts",
     "artifacts/api-server/src/lib/automations/executor.ts",
-    "artifacts/api-server/src/routes/automations.ts",
   ];
-  for (const p of livePaths) {
+  for (const p of otherLivePaths) {
     const body = readMaybe(p) ?? "";
-    if (/from\s+["'][^"']*ai\/circuit-breaker["']/.test(body)) {
-      throw new Error(`${p} imports circuit-breaker — wiring contract broken`);
-    }
-    if (/from\s+["'][^"']*ai\/error-classifier["']/.test(body)) {
-      throw new Error(`${p} imports error-classifier — wiring contract broken`);
-    }
-    if (/from\s+["'][^"']*ai\/observer["']/.test(body)) {
-      throw new Error(`${p} imports observer — wiring contract broken`);
+    if (/from\s+["'][^"']*ai\/(circuit-breaker|error-classifier|observer|resilient-retry)["']/.test(body)) {
+      throw new Error(`${p} imports a v2 module — only routes/automations.ts is permitted to bridge in (and it does so via isResiliencyV2Enabled gate)`);
     }
   }
-  return `${livePaths.length} production paths verified unchanged: modules exist but are not yet referenced`;
+  return "resilient-retry.ts wires the v2 layer; routes/automations.ts opts in via isResiliencyV2Enabled() === (AI_RESILIENCY_V2 === \"1\"); flag absent → byte-identical to Phase 1";
 });
 
 // =============================================================================
