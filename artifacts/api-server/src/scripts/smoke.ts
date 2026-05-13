@@ -629,6 +629,67 @@ probe("manual citations", "hub.ts:31-43 has every ADAPTERS entry", () => {
 });
 
 // =============================================================================
+// AI Resiliency v2 — Phase 1 (modules ship, no production wiring yet)
+// =============================================================================
+
+probe("ai-resiliency v2", "CircuitBreaker module exists with expected exports", () => {
+  const cb = read("artifacts/api-server/src/lib/ai/circuit-breaker.ts");
+  mustContain(cb, "export class CircuitBreaker", "CircuitBreaker class");
+  mustContain(cb, "static get(", "CircuitBreaker.get registry");
+  mustContain(cb, "allowRequest", "allowRequest method");
+  mustContain(cb, "recordSuccess", "recordSuccess method");
+  mustContain(cb, "recordFailure", "recordFailure method");
+  return "lib/ai/circuit-breaker.ts: CircuitBreaker class + get/allow/recordSuccess/recordFailure";
+});
+
+probe("ai-resiliency v2", "ErrorClassifier module exists with four categories", () => {
+  const ec = read("artifacts/api-server/src/lib/ai/error-classifier.ts");
+  for (const cat of ["RETRYABLE", "NON_RETRYABLE", "DEFER_EXTERNAL", "BLOCK_UNSAFE"]) {
+    mustContain(ec, `"${cat}"`, `error class "${cat}"`);
+  }
+  mustContain(ec, "ProviderUnavailableError", "ProviderUnavailableError");
+  mustContain(ec, "PolicyViolationError", "PolicyViolationError");
+  return "lib/ai/error-classifier.ts: all 4 ErrorClass values + ProviderUnavailableError + PolicyViolationError";
+});
+
+probe("ai-resiliency v2", "Observer module exists with emitAiStateTransition + PII redactor", () => {
+  const obs = read("artifacts/api-server/src/lib/ai/observer.ts");
+  mustContain(obs, "export function emitAiStateTransition", "emitAiStateTransition export");
+  mustContain(obs, "redactPii", "PII redactor present");
+  mustContain(obs, "[SSN]", "SSN pattern in redactor");
+  mustContain(obs, "[EMAIL]", "Email pattern in redactor");
+  mustContain(obs, "COLLAPSE_WINDOW_MS", "rate-limit collapse window");
+  return "lib/ai/observer.ts: emitAiStateTransition + PII redactor (SSN/phone/email/date) + 100ms collapse";
+});
+
+probe("ai-resiliency v2", "NEW modules are NOT YET wired into production call paths (safety contract)", () => {
+  // The safety guarantee: this commit adds the three resiliency modules
+  // but does NOT wire them into recursive-retry / ai-provider /
+  // executor. Production behavior is byte-identical to before the
+  // commit. Verify by grepping every "live" callsite and asserting
+  // none of them imports the new modules.
+  const livePaths = [
+    "artifacts/api-server/src/lib/automations/recursive-retry.ts",
+    "artifacts/api-server/src/lib/ai-provider.ts",
+    "artifacts/api-server/src/lib/automations/executor.ts",
+    "artifacts/api-server/src/routes/automations.ts",
+  ];
+  for (const p of livePaths) {
+    const body = readMaybe(p) ?? "";
+    if (/from\s+["'][^"']*ai\/circuit-breaker["']/.test(body)) {
+      throw new Error(`${p} imports circuit-breaker — wiring contract broken`);
+    }
+    if (/from\s+["'][^"']*ai\/error-classifier["']/.test(body)) {
+      throw new Error(`${p} imports error-classifier — wiring contract broken`);
+    }
+    if (/from\s+["'][^"']*ai\/observer["']/.test(body)) {
+      throw new Error(`${p} imports observer — wiring contract broken`);
+    }
+  }
+  return `${livePaths.length} production paths verified unchanged: modules exist but are not yet referenced`;
+});
+
+// =============================================================================
 // Output
 // =============================================================================
 

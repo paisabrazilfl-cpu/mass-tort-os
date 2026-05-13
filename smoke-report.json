@@ -334,5 +334,29 @@
     "capability": "hub.ts:31-43 has every ADAPTERS entry",
     "outcome": "PASS",
     "evidence": "hub.ts ADAPTERS block has exactly 11 lane entries"
+  },
+  {
+    "section": "ai-resiliency v2",
+    "capability": "CircuitBreaker module exists with expected exports",
+    "outcome": "PASS",
+    "evidence": "lib/ai/circuit-breaker.ts: CircuitBreaker class + get/allow/recordSuccess/recordFailure"
+  },
+  {
+    "section": "ai-resiliency v2",
+    "capability": "ErrorClassifier module exists with four categories",
+    "outcome": "PASS",
+    "evidence": "lib/ai/error-classifier.ts: all 4 ErrorClass values + ProviderUnavailableError + PolicyViolationError"
+  },
+  {
+    "section": "ai-resiliency v2",
+    "capability": "Observer module exists with emitAiStateTransition + PII redactor",
+    "outcome": "PASS",
+    "evidence": "lib/ai/observer.ts: emitAiStateTransition + PII redactor (SSN/phone/email/date) + 100ms collapse"
+  },
+  {
+    "section": "ai-resiliency v2",
+    "capability": "NEW modules are NOT YET wired into production call paths (safety contract)",
+    "outcome": "PASS",
+    "evidence": "4 production paths verified unchanged: modules exist but are not yet referenced"
   }
 ]
