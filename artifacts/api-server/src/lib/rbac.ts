@@ -455,7 +455,9 @@ export async function rotateRefreshToken(oldToken: string, userId: number): Prom
     `);
     logger.warn({ userId }, "Refresh token reuse detected — revoking ALL tokens for user");
     const { dispatchCriticalAlert } = await import("./security-alerts");
-    dispatchCriticalAlert("critical", "Refresh token reuse detected", `User ${userId}: possible token theft — all sessions revoked`).catch(() => {});
+    dispatchCriticalAlert("critical", "Refresh token reuse detected", `User ${userId}: possible token theft — all sessions revoked`).catch((err) => {
+      logger.error({ err, userId }, "Failed to dispatch token-theft alert");
+    });
     return null;
   }
 

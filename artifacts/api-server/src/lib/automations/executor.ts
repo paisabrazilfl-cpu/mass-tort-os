@@ -1545,15 +1545,6 @@ function resolveOrLiteral(s: StepContext, raw: any): any {
   return raw;
 }
 
-async function stubIntegration(name: string, s: StepContext): Promise<any> {
-  // For v1 these record what would have been sent; the real adapters live
-  // in lib/email, lib/fax, lib/esign, etc. Wiring each through requires a
-  // per-adapter call surface — done in follow-up. This keeps the engine
-  // testable end-to-end without surprise side effects.
-  logger.info({ node: s.node.type, params: s.node.data?.params, runId: s.ctx.runId }, `[automation] ${name} stub invoked`);
-  return { simulated: true, name, params: s.node.data?.params };
-}
-
 function runProcess(cmd: string, args: string[], stdin: string, s: StepContext, codeFlag?: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const timeoutMs = Number(s.node.data?.params?.timeoutMs ?? 15000);

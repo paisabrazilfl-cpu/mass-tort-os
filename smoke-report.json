@@ -132,6 +132,18 @@
     "evidence": "admin-self-heal.ts uses Drizzle + requireFirmId; no 1=1 fallback"
   },
   {
+    "section": "§9.7",
+    "capability": "Codebase-wide: no SQL `1=1` literal or `firm_id=\"+` concat in any route/lib",
+    "outcome": "PASS",
+    "evidence": "no `1=1` or `firm_id=\"+'` concat in any route/lib file"
+  },
+  {
+    "section": "§9.7",
+    "capability": "Codebase-wide: no `res.json([])` inside catch blocks",
+    "outcome": "PASS",
+    "evidence": "no silent `res.json([])` in catch blocks across routes/"
+  },
+  {
     "section": "§9.8",
     "capability": "Competitive Intel watchlist is firm-scoped",
     "outcome": "PASS",

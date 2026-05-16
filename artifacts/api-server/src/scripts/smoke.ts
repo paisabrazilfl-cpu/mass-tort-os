@@ -111,6 +111,34 @@ function countMatches(content: string, re: RegExp): number {
   return (content.match(re) ?? []).length;
 }
 
+// Walk every .ts file under one of these source roots, yielding {rel, content}.
+// Used by codebase-wide sweeps so a single static probe can catch a new SQL
+// concat or silent-error pattern showing up anywhere in the API surface.
+function* walkSourceFiles(roots: string[]): Generator<{ rel: string; content: string }> {
+  for (const root of roots) {
+    const absRoot = join(ROOT, root);
+    if (!existsSync(absRoot)) continue;
+    const stack: string[] = [absRoot];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      let entries;
+      try { entries = readdirSync(cur, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        const full = join(cur, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "__tests__") continue;
+          stack.push(full);
+        } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")) {
+          // Yield path relative to repo root for stable error reporting.
+          const rel = full.slice(ROOT.length + 1);
+          stack; // keep tsc happy about narrowing
+          yield { rel, content: readFileSync(full, "utf8") };
+        }
+      }
+    }
+  }
+}
+
 // =============================================================================
 // Part I — Foundations
 // =============================================================================
@@ -305,6 +333,49 @@ probe("§9.7", "Self-Heal list is firm-scoped via Drizzle (no SQL concat)", () =
     throw new Error("SQL concat still present");
   }
   return "admin-self-heal.ts uses Drizzle + requireFirmId; no 1=1 fallback";
+});
+
+// Codebase-wide sweep: every route file across the api-server. A new
+// regression in a different file would slip past the single-file §9.7 probe
+// above; this one catches "1=1" literals or `firm_id="+`-style concatenation
+// anywhere under src/routes or src/lib. Test files and the backfill SQL
+// script's docstring are allowed to mention the pattern.
+probe("§9.7", "Codebase-wide: no SQL `1=1` literal or `firm_id=\"+` concat in any route/lib", () => {
+  const offenders: string[] = [];
+  for (const { rel, content } of walkSourceFiles([
+    "artifacts/api-server/src/routes",
+    "artifacts/api-server/src/lib",
+  ])) {
+    // Allow the deliberate documentation in the backfill comment block and
+    // the smoke probe itself.
+    if (rel.endsWith("automations.ts") && content.includes("REMOVED: `fWhere(firmId)`")) {
+      // documentation of historical bug — string `1=1` appears in a comment
+    } else if (content.match(/(?<!\/\/[^\n]*)\b1\s*=\s*1\b/) && !rel.endsWith("smoke.ts")) {
+      offenders.push(`${rel}: '1=1' literal`);
+    }
+    if (content.match(/pool\.query\(\s*"[^"]*firm_id\s*=\s*"\s*\+/)) {
+      offenders.push(`${rel}: 'firm_id="+' concat`);
+    }
+  }
+  if (offenders.length) throw new Error(offenders.join("; "));
+  return "no `1=1` or `firm_id=\"+'` concat in any route/lib file";
+});
+
+// Codebase-wide sweep: no `res.json([])` inside a catch block. The historical
+// pattern silently turned database errors into "empty list" responses, which
+// masks production outages and trains the front-end to think empty == healthy.
+// All catches must return a proper error envelope via http-errors helpers.
+probe("§9.7", "Codebase-wide: no `res.json([])` inside catch blocks", () => {
+  const offenders: string[] = [];
+  const catchEmpty = /catch\s*\([^)]*\)\s*\{[^}]{0,200}res\.json\s*\(\s*\[\s*\]\s*\)/;
+  for (const { rel, content } of walkSourceFiles([
+    "artifacts/api-server/src/routes",
+  ])) {
+    if (rel.endsWith("smoke.ts")) continue;
+    if (catchEmpty.test(content)) offenders.push(rel);
+  }
+  if (offenders.length) throw new Error(offenders.join("; "));
+  return "no silent `res.json([])` in catch blocks across routes/";
 });
 
 probe("§9.8", "Competitive Intel watchlist is firm-scoped", () => {

@@ -1,15 +1,16 @@
 import { Router } from "express";
 import { db, pool, automationWorkflowsTable, automationRunsTable } from "@workspace/db";
-import { eq, desc, and, or, isNull, sql } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { z } from "zod/v4";
 import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
-import { badRequest, notFound } from "../lib/http-errors";
+import { badRequest, notFound, serverError } from "../lib/http-errors";
 import { NODE_CATALOG } from "../lib/automations/node-catalog";
 import { runWorkflow } from "../lib/automations/executor";
 import { callLLM } from "../lib/ai-provider";
 import { getAiConstitutionPreamble } from "../lib/ai-constitution";
 import { recursiveRetry, perspectiveCue } from "../lib/automations/recursive-retry";
 import { resilientRetry, isResiliencyV2Enabled } from "../lib/ai/resilient-retry";
+import { requireFirmId } from "../lib/firm-scope";
 import { logger } from "../lib/logger";
 
 // BUILD_VERSION: v20260511-clean
@@ -50,10 +51,23 @@ const router = Router();
 router.use(authMiddleware);
 
 // Firm scope helper — null firm_id = accessible to all firms (global)
-function fWhere(firmId: number | null | undefined): string {
-  if (firmId == null) return "1=1";
-  return "firm_id = " + Number(firmId) + " OR firm_id IS NULL";
-}
+// REMOVED: `fWhere(firmId)` raw-SQL helper. The original implementation
+// returned "1=1" when firmId was null and "firm_id = X OR firm_id IS NULL"
+// otherwise. Two bugs in one helper:
+//   1. The "1=1" fallback turned a missing firm context into "list every
+//      firm's workflows" — cross-firm data leak.
+//   2. The "OR firm_id IS NULL" branch leaked pre-backfill legacy rows to
+//      every firm regardless of their actual ownership.
+// AND the callers read firmId from `(req as any).firmId`, which is never
+// set anywhere in the codebase — `req.user.firm_id` and `req.firm.id` are
+// the real fields. So fWhere was effectively ALWAYS returning "1=1" in
+// production, leaking every workflow row across every firm.
+//
+// Replaced with `requireFirmId(req)` + parameterized Drizzle queries at
+// every callsite. Legacy NULL-firm_id rows must be backfilled via
+// `scripts/backfill-automation-workflows-firm-id.sql` before the new
+// scope takes effect; until then those rows are invisible to every firm
+// (safer than the previous "visible to every firm" failure mode).
 
 const graphSchema = z.object({
   nodes: z.array(z.object({
@@ -117,15 +131,26 @@ router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), as
 //
 router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   await repairSchema();
-  const firmId = (req as any).firmId as number | undefined;
   try {
-    const raw = await pool.query(
-      "SELECT id, name, COALESCE(description,'') AS description, enabled, COALESCE(trigger_type,'manual') AS trigger_type, COALESCE(tags,'[]'::jsonb) AS tags, updated_at, created_at FROM automation_workflows WHERE " + fWhere(firmId) + " ORDER BY updated_at DESC"
-    );
-    res.json(raw.rows ?? []);
+    const firmId = requireFirmId(req);
+    const rows = await db
+      .select({
+        id: automationWorkflowsTable.id,
+        name: automationWorkflowsTable.name,
+        description: automationWorkflowsTable.description,
+        enabled: automationWorkflowsTable.enabled,
+        trigger_type: automationWorkflowsTable.trigger_type,
+        tags: automationWorkflowsTable.tags,
+        updated_at: automationWorkflowsTable.updated_at,
+        created_at: automationWorkflowsTable.created_at,
+      })
+      .from(automationWorkflowsTable)
+      .where(eq(automationWorkflowsTable.firm_id, firmId))
+      .orderBy(desc(automationWorkflowsTable.updated_at));
+    res.json(rows);
   } catch (err: any) {
     logger.error({ err: err?.message }, "automations GET / failed");
-    res.json([]);
+    serverError(res, "Failed to list workflows");
   }
 });
 
@@ -133,13 +158,18 @@ router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res)
 router.get("/:id", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
-  const firmId = (req as any).firmId as number | undefined;
   try {
-    const raw = await pool.query("SELECT * FROM automation_workflows WHERE id=" + id + " AND (" + fWhere(firmId) + ") LIMIT 1");
-    if (!raw.rows[0]) { notFound(res, "Workflow not found"); return; }
-    res.json(raw.rows[0]);
+    const firmId = requireFirmId(req);
+    const [row] = await db
+      .select()
+      .from(automationWorkflowsTable)
+      .where(and(eq(automationWorkflowsTable.id, id), eq(automationWorkflowsTable.firm_id, firmId)))
+      .limit(1);
+    if (!row) { notFound(res, "Workflow not found"); return; }
+    res.json(row);
   } catch (err: any) {
-    notFound(res, "Workflow not found");
+    logger.error({ err: err?.message, id }, "automations GET /:id failed");
+    serverError(res, "Failed to load workflow");
   }
 });
 
@@ -148,20 +178,25 @@ router.post("/", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, r
   const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
   await repairSchema();
-  const userId = (req as any).user?.id as number | undefined;
-  const firmId = (req as any).firmId as number | undefined;
-  const [row] = await db.insert(automationWorkflowsTable).values({
-    name: parsed.data.name,
-    description: parsed.data.description ?? null,
-    graph: parsed.data.graph,
-    enabled: parsed.data.enabled ?? false,
-    trigger_type: parsed.data.trigger_type ?? "manual",
-    trigger_config: parsed.data.trigger_config ?? {},
-    tags: parsed.data.tags ?? [],
-    firm_id: firmId ?? null,
-    created_by_user_id: userId ?? null,
-  } as any).returning();
-  res.status(201).json(row);
+  try {
+    const firmId = requireFirmId(req);
+    const userId = req.user?.id;
+    const [row] = await db.insert(automationWorkflowsTable).values({
+      name: parsed.data.name,
+      description: parsed.data.description ?? null,
+      graph: parsed.data.graph,
+      enabled: parsed.data.enabled ?? false,
+      trigger_type: parsed.data.trigger_type ?? "manual",
+      trigger_config: parsed.data.trigger_config ?? {},
+      tags: parsed.data.tags ?? [],
+      firm_id: firmId,
+      created_by_user_id: userId ?? null,
+    } as any).returning();
+    res.status(201).json(row);
+  } catch (err: any) {
+    logger.error({ err: err?.message }, "automations POST / failed");
+    serverError(res, "Failed to create workflow");
+  }
 });
 
 // ── Update workflow ───────────────────────────────────────────────────────────
@@ -170,21 +205,34 @@ router.put("/:id", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req,
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   const parsed = upsertSchema.partial().safeParse(req.body);
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
-  const firmId = (req as any).firmId as number | undefined;
-  const [row] = await db.update(automationWorkflowsTable)
-    .set({ ...parsed.data, updated_at: new Date() } as any)
-    .where(and(eq(automationWorkflowsTable.id, id), or(eq(automationWorkflowsTable.firm_id, firmId!), isNull(automationWorkflowsTable.firm_id))!)!)
-    .returning();
-  if (!row) { notFound(res, "Workflow not found"); return; }
-  res.json(row);
+  try {
+    const firmId = requireFirmId(req);
+    const [row] = await db.update(automationWorkflowsTable)
+      .set({ ...parsed.data, updated_at: new Date() } as any)
+      .where(and(eq(automationWorkflowsTable.id, id), eq(automationWorkflowsTable.firm_id, firmId)))
+      .returning();
+    if (!row) { notFound(res, "Workflow not found"); return; }
+    res.json(row);
+  } catch (err: any) {
+    logger.error({ err: err?.message, id }, "automations PUT /:id failed");
+    serverError(res, "Failed to update workflow");
+  }
 });
 
 // ── Delete workflow ───────────────────────────────────────────────────────────
 router.delete("/:id", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
-  const r = await pool.query("DELETE FROM automation_workflows WHERE id=" + id).catch(() => ({ rowCount: 0 }));
-  res.json({ deleted: (r as any).rowCount ?? 1 });
+  try {
+    const firmId = requireFirmId(req);
+    const deleted = await db.delete(automationWorkflowsTable)
+      .where(and(eq(automationWorkflowsTable.id, id), eq(automationWorkflowsTable.firm_id, firmId)))
+      .returning({ id: automationWorkflowsTable.id });
+    res.json({ deleted: deleted.length });
+  } catch (err: any) {
+    logger.error({ err: err?.message, id }, "automations DELETE /:id failed");
+    serverError(res, "Failed to delete workflow");
+  }
 });
 
 // ── Run workflow ──────────────────────────────────────────────────────────────
@@ -193,21 +241,26 @@ router.post("/:id/run", requirePermission(Permission.AUTOMATIONS_EXECUTE), async
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   const parsed = runBodySchema.safeParse(req.body ?? {});
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
-  const userId = (req as any).user?.id as number | undefined;
-  const firmId = (req as any).firmId as number | undefined;
-  const check = await pool.query("SELECT id, firm_id FROM automation_workflows WHERE id=" + id + " LIMIT 1").catch(() => ({ rows: [] }));
-  if (!check.rows[0]) { notFound(res, "Workflow not found"); return; }
   try {
+    const firmId = requireFirmId(req);
+    const userId = req.user?.id;
+    const [check] = await db
+      .select({ id: automationWorkflowsTable.id })
+      .from(automationWorkflowsTable)
+      .where(and(eq(automationWorkflowsTable.id, id), eq(automationWorkflowsTable.firm_id, firmId)))
+      .limit(1);
+    if (!check) { notFound(res, "Workflow not found"); return; }
     const result = await runWorkflow({
       workflowId: id,
-      firmId: firmId ?? null,
+      firmId,
       input: (parsed.data.input ?? {}) as Record<string, unknown>,
       triggerSource: "manual",
       startedByUserId: userId ?? null,
     });
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err?.message ?? "Run failed" });
+    logger.error({ err: err?.message, id }, "automations POST /:id/run failed");
+    serverError(res, err?.message ?? "Run failed");
   }
 });
 
@@ -216,13 +269,25 @@ router.get("/:id/runs", requirePermission(Permission.AUTOMATIONS_VIEW), async (r
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   try {
-    const raw = await pool.query(
-      "SELECT id, workflow_id, status, COALESCE(trigger_source,'manual') AS trigger_source, started_at, completed_at, error FROM automation_runs WHERE workflow_id=" + id + " ORDER BY started_at DESC LIMIT 50"
-    );
-    res.json(raw.rows ?? []);
+    const firmId = requireFirmId(req);
+    const rows = await db
+      .select({
+        id: automationRunsTable.id,
+        workflow_id: automationRunsTable.workflow_id,
+        status: automationRunsTable.status,
+        trigger_source: automationRunsTable.trigger_source,
+        started_at: automationRunsTable.started_at,
+        completed_at: automationRunsTable.completed_at,
+        error: automationRunsTable.error,
+      })
+      .from(automationRunsTable)
+      .where(and(eq(automationRunsTable.workflow_id, id), eq(automationRunsTable.firm_id, firmId)))
+      .orderBy(desc(automationRunsTable.started_at))
+      .limit(50);
+    res.json(rows);
   } catch (err: any) {
-    logger.error({ err: err?.message }, "automations /:id/runs failed");
-    res.json([]);
+    logger.error({ err: err?.message, id }, "automations /:id/runs failed");
+    serverError(res, "Failed to load run history");
   }
 });
 
@@ -231,14 +296,18 @@ router.get("/runs/:runId", requirePermission(Permission.AUTOMATIONS_VIEW), async
   const runId = Number(req.params.runId);
   if (!Number.isInteger(runId)) { badRequest(res, "runId must be integer"); return; }
   try {
-    const raw = await pool.query("SELECT * FROM automation_runs WHERE id=" + runId + " LIMIT 1");
-    const row = raw.rows[0];
+    const firmId = requireFirmId(req);
+    const [row] = await db
+      .select()
+      .from(automationRunsTable)
+      .where(and(eq(automationRunsTable.id, runId), eq(automationRunsTable.firm_id, firmId)))
+      .limit(1);
     if (!row) { notFound(res, "Run not found"); return; }
     const sl = row.step_log ?? [];
     res.json({ ...row, steps: sl, runId: row.id });
   } catch (err: any) {
-    logger.error({ err: err?.message }, "automations /runs/:runId failed");
-    notFound(res, "Run not found");
+    logger.error({ err: err?.message, runId }, "automations /runs/:runId failed");
+    serverError(res, "Failed to load run");
   }
 });
 

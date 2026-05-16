@@ -81,7 +81,9 @@ export async function authenticateApiKey(plaintext: string): Promise<ApiKeyAuthR
   db.update(apiKeysTable)
     .set({ last_used_at: new Date() })
     .where(eq(apiKeysTable.id, row.id))
-    .catch(() => {});
+    .catch((err) => {
+      logger.warn({ err, api_key_id: row.id }, "api-key last_used_at update failed");
+    });
 
   return {
     id: row.id,

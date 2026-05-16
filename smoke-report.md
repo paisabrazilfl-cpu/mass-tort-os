@@ -1,6 +1,6 @@
 # MTOS Smoke Report
 
-**Probes:** 60 · **PASS:** 60 · **FAIL:** 0 · **SKIP:** 0
+**Probes:** 62 · **PASS:** 62 · **FAIL:** 0 · **SKIP:** 0
 
 ## :white_check_mark: Passes by section
 
@@ -112,6 +112,8 @@
 ### §9.7
 - ✅ Self-Heal returns 503 when JULES_API_KEY missing — admin-self-heal.ts returns 503 + code:jules_not_configured when key absent
 - ✅ Self-Heal list is firm-scoped via Drizzle (no SQL concat) — admin-self-heal.ts uses Drizzle + requireFirmId; no 1=1 fallback
+- ✅ Codebase-wide: no SQL `1=1` literal or `firm_id="+` concat in any route/lib — no `1=1` or `firm_id="+'` concat in any route/lib file
+- ✅ Codebase-wide: no `res.json([])` inside catch blocks — no silent `res.json([])` in catch blocks across routes/
 
 ### §9.8
 - ✅ Competitive Intel watchlist is firm-scoped — admin-competitive-intel.ts filters watchlist by firm_id
