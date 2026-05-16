@@ -37,11 +37,17 @@ const pool = new Pool({ connectionString: DATABASE_URL });
 
 async function main() {
   if (wantsReset) {
-    console.log("RESET_DB=1 — dropping public schema");
+    console.log("RESET_DB=1 — dropping public + drizzle schemas");
     await pool.query("DROP SCHEMA IF EXISTS public CASCADE");
     await pool.query("CREATE SCHEMA public");
     await pool.query("GRANT ALL ON SCHEMA public TO public");
-    console.log("public schema recreated");
+    // drizzle-orm's migrator tracks applied migrations in
+    // `drizzle.__drizzle_migrations`. Dropping public alone leaves that
+    // table behind and migrate then thinks every migration is already
+    // applied — producing the silent "migrate complete, 0 tables created"
+    // bug. Drop the drizzle schema too so the migrator starts clean.
+    await pool.query("DROP SCHEMA IF EXISTS drizzle CASCADE");
+    console.log("public + drizzle schemas recreated");
   } else {
     console.log("RESET_DB not set — skipping wipe, running migrations only");
   }
