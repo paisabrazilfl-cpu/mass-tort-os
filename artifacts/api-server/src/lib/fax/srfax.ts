@@ -60,10 +60,14 @@ export const srfaxAdapter: FaxAdapter = {
 
     let response: Response;
     try {
+      // 20 s cap. Fax submission is heavier than email but still completes
+      // in seconds under normal SRFax load. A hung provider would otherwise
+      // block the worker until the OS-level socket timeout fires (minutes).
       response = await fetch(SRFAX_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(20_000),
       });
     } catch (err) {
       logger.error({ err, provider: "srfax" }, "Network error sending fax");
@@ -120,6 +124,7 @@ export const srfaxAdapter: FaxAdapter = {
       const res = await fetch(SRFAX_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(10_000),
         body: JSON.stringify({
           action: "Get_FaxStatus",
           access_id: accessId,

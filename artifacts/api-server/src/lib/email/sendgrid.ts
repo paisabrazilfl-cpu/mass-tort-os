@@ -59,6 +59,10 @@ export const sendgridAdapter: EmailAdapter = {
 
     let response: Response;
     try {
+      // 15 s cap so a hung provider doesn't tie up the worker indefinitely.
+      // SendGrid's normal p99 is well under 2 s; an AbortError surfaces as
+      // a retryable network error so the queue's exponential-backoff retry
+      // path takes over.
       response = await fetch(url, {
         method: "POST",
         headers: {
@@ -66,6 +70,7 @@ export const sendgridAdapter: EmailAdapter = {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15_000),
       });
     } catch (err) {
       logger.error({ err }, "SendGrid network error");

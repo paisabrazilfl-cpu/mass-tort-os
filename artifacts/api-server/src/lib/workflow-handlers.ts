@@ -710,7 +710,19 @@ export async function handleSendWorkflowSms(payload: SendWorkflowSmsPayload): Pr
     return;
   }
 
-  const firmId = payload.firm_id ?? lead.firm_id ?? null;
+  // Derive firmId from the lead itself, not the job payload. The payload
+  // is enqueued by the workflow engine and survives across job retries —
+  // a stale or tampered payload could otherwise credit the SMS to the
+  // wrong firm in audit/metering. The lead row is the source of truth.
+  // We still log when the payload disagrees so a real bug doesn't get
+  // silently masked by the override.
+  if (payload.firm_id != null && lead.firm_id != null && payload.firm_id !== lead.firm_id) {
+    logger.warn(
+      { payload_firm_id: payload.firm_id, lead_firm_id: lead.firm_id, lead_id: payload.lead_id },
+      "send_workflow_sms: payload.firm_id disagrees with lead.firm_id — using lead.firm_id",
+    );
+  }
+  const firmId = lead.firm_id ?? null;
   const result = await sendSms({
     to: phone,
     body: payload.body,

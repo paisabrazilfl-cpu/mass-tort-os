@@ -70,6 +70,19 @@ interface WatchlistRow {
   created_at: string;
 }
 
+// Guard against javascript:/data: URLs from a third-party data source
+// (SerpAPI is upstream of these cards). Returns the URL if it parses as
+// http(s)://, null otherwise. Render <a> only when this returns non-null.
+function safeExternalUrl(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  try {
+    const u = new URL(raw, window.location.origin);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function relTime(iso: string | null | undefined): string {
   if (!iso) return "never";
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -102,11 +115,11 @@ function AdCard({ ad }: { ad: AdCreative }) {
         <div className="text-[11px] text-muted-foreground">
           Last: {ad.last_shown ?? "—"}
         </div>
-        {ad.destination_url && (
+        {ad.destination_url && safeExternalUrl(ad.destination_url) && (
           <a
-            href={ad.destination_url}
+            href={safeExternalUrl(ad.destination_url) ?? "#"}
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             className="text-[11px] text-violet-700 hover:underline inline-flex items-center gap-1"
           >
             Visit <ExternalLink className="h-3 w-3" />

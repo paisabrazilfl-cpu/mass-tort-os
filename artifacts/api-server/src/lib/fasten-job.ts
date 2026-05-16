@@ -17,7 +17,7 @@
  * `mode=retry-failed` — not re-pull the entire export, which can be expensive
  * and re-download data we already have.
  */
-import { db, fastenConnectionsTable, auditLogTable } from "@workspace/db";
+import { db, fastenConnectionsTable, auditLogTable, leadsTable } from "@workspace/db";
 import { and, eq, isNull, lt, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
@@ -84,6 +84,28 @@ export async function handleFastenRecordsSync(payload: FastenRecordsSyncPayload)
     .where(eq(fastenConnectionsTable.id, connection_id));
   if (!conn) {
     logger.warn({ connection_id }, "fasten_records_sync: connection row missing — skipping");
+    return;
+  }
+
+  // Multi-tenant guard: a job payload could survive long enough for the
+  // lead to be reassigned to another firm (or for an operator to enqueue
+  // with a manipulated connection_id). Confirm conn.firm_id matches the
+  // current lead's firm_id before pulling potentially-PHI records into
+  // the wrong tenant's case. Stops the job rather than running with the
+  // wrong firm — the operator can re-enqueue once the data is consistent.
+  const [lead] = await db
+    .select({ id: leadsTable.id, firm_id: leadsTable.firm_id })
+    .from(leadsTable)
+    .where(eq(leadsTable.id, lead_id));
+  if (!lead) {
+    logger.warn({ connection_id, lead_id }, "fasten_records_sync: lead missing — skipping");
+    return;
+  }
+  if (conn.firm_id != null && lead.firm_id != null && conn.firm_id !== lead.firm_id) {
+    logger.error(
+      { connection_id, lead_id, conn_firm_id: conn.firm_id, lead_firm_id: lead.firm_id },
+      "fasten_records_sync: connection firm_id disagrees with lead firm_id — refusing to sync",
+    );
     return;
   }
 

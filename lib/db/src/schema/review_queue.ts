@@ -11,8 +11,16 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
+// review_queue items are firm-owned: an OCR failure for firm A's lead must
+// not appear in firm B's review queue. Earlier versions of this table had
+// no firm_id at all, so GET /api/review-queue returned every firm's items
+// to any caller with REVIEW_QUEUE_VIEW. firm_id is nullable on the schema
+// for backward compatibility with legacy rows, but the routes now require
+// it and strict-scope every query; scripts/backfill-review-queue-firm-id.sql
+// derives firm_id for legacy rows from their parent entity (lead/case).
 export const reviewQueueTable = pgTable("review_queue", {
   id: serial("id").primaryKey(),
+  firm_id: integer("firm_id"),
   entity_type: varchar("entity_type", { length: 50 }).notNull(),
   entity_id: varchar("entity_id", { length: 100 }).notNull(),
   conflict_type: varchar("conflict_type", { length: 50 }).notNull(),
@@ -31,6 +39,7 @@ export const reviewQueueTable = pgTable("review_queue", {
   resolutionCreatedIdx: index("review_queue_resolution_created_at_idx").on(t.resolution, t.created_at),
   entityIdx: index("review_queue_entity_idx").on(t.entity_type, t.entity_id),
   createdAtIdx: index("review_queue_created_at_idx").on(t.created_at),
+  firmResolutionIdx: index("review_queue_firm_resolution_idx").on(t.firm_id, t.resolution, t.created_at),
 }));
 
 export const insertReviewQueueSchema = createInsertSchema(reviewQueueTable).omit({
