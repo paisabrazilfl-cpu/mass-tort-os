@@ -2,7 +2,9 @@
 
 > **This manual is exhaustive and granular.** Every page, button, field, status enum, role, permission, API endpoint, automation node, error code, and audit event in the system is documented below. Cross-references use exact code paths so engineers and operators see the same source of truth.
 
-**Version 2026.05.09** • Built directly from source: `artifacts/api-server/src`, `artifacts/mtos-crm/src`, `lib/db/src/schema`.
+**Version 2026.05.16** • Built directly from source: `artifacts/api-server/src`, `artifacts/mtos-crm/src`, `lib/db/src/schema`.
+
+> **Owner-level account.** `paisabrazilfl@gmail.com` is the platform owner. As `super_admin` they see EVERY firm, lead, case, audit log, integration, and admin panel across the system — including the hidden **Boss-Omega Dark Room** (§13.2), which is invisible to every other role. The role hierarchy is `super_admin > admin > attorney > paralegal > viewer` (§2.1). The billing banner and subscription gate are bypassed for `super_admin` and for any deploy where Stripe is unconfigured.
 
 ---
 
@@ -12,13 +14,19 @@
 
 | Layer | Where it lives | What it does |
 |---|---|---|
-| CRM web app | `artifacts/mtos-crm` | The React + Vite UI you click through. |
-| API server | `artifacts/api-server` | Express 5 backend serving `/api/*`. |
-| Worker | `artifacts/api-server` (`dev:worker`) | Polls the Postgres job queue and runs background jobs (OCR, e-sign, fax, AI extraction). |
-| Database | PostgreSQL | 41 tables managed by Drizzle ORM via `lib/db/src/schema`. |
-| Schema management | `drizzle-kit push` | Schema-vs-database workflow — no migrations directory. |
+| CRM web app | `artifacts/mtos-crm` | React 19 + Vite 7 UI you click through. |
+| Static + proxy server | `artifacts/mtos-crm/server.mjs` | Production-only Node stdlib server that serves the SPA bundle and reverse-proxies `/api/*` + `/webhook/*` to the api-server (so the SPA's same-origin fetches work across two Railway services). |
+| API server | `artifacts/api-server` | Express 5 backend serving `/api/*`. Boot-time fail-closes on missing required env (DATABASE_URL, SESSION_SECRET, ENCRYPTION_KEY_V1) in production/staging. |
+| Worker | `artifacts/api-server` (`dev:worker`) or in-process via `INPROC_WORKER=1` | Polls the Postgres job queue and runs background jobs (OCR, e-sign, fax, AI extraction, Fasten sync). |
+| Database | PostgreSQL 16 | 49 tables managed by Drizzle ORM via `lib/db/src/schema`. |
+| Schema management | `drizzle-kit generate` + `drizzle-kit migrate` (or the in-repo `pnpm --filter @workspace/db run bootstrap`) | SQL files committed under `lib/db/drizzle/`; `migrate` is non-interactive and idempotent via `__drizzle_migrations`. The legacy `drizzle-kit push` is still available but hangs on column-rename prompts in non-TTY environments. |
 
-All `/api/*` calls go through `authMiddleware` then a `requirePermission(...)` or `requireRole(...)` gate.
+All `/api/*` calls go through `authMiddleware` then a `requirePermission(...)` or `requireRole(...)` gate. The boot-time route-protection validator (`lib/route-protection.ts`) refuses to start if any non-public route is missing a permission gate.
+
+### 1.1 Deployment topologies
+
+- **Railway (current).** Two services — `api-server` (Node, runs the worker in-process) and `mtos-crm` (static + proxy via `server.mjs`) — plus the Postgres plugin. Per-service config in `artifacts/<svc>/railway.json`; full setup in `RAILWAY.md`. Required env documented in `.env.example`.
+- **Replit (legacy).** Deprecated. Removed in commit `a44e86d`.
 
 ---
 
@@ -216,11 +224,33 @@ Every business table (leads, cases, automation runs, self-heal sessions, …) ca
 ### 5.6 AI Constitution
 Single canonical document at `docs/AI_CONSTITUTION.md`. Loaded by `lib/ai-constitution.ts` and auto-injected into every AI helper's system prompt. Served at `GET /api/admin/ai-constitution` (`automations:view` permission; `?format=markdown` for raw text). Bright lines (the AI **never** does these unattended) are listed in §11.5.
 
+### 5.7 AI Resiliency v2 (opt-in)
+Layered on top of `recursiveRetry` (§5.5) when `AI_RESILIENCY_V2=1` is set. Default OFF — the wrapper falls back to plain `recursiveRetry` if anything in the resiliency layer throws unexpectedly, so the worst case is "no v2 benefit," never broken AI. Implementation in `lib/ai/`:
+
+| Module | Job |
+|---|---|
+| `circuit-breaker.ts` | Per-provider CLOSED/OPEN/HALF_OPEN state machine. OPEN fails fast without calling the inner attempt; HALF_OPEN admits exactly one probe; per-provider isolation (an Anthropic outage doesn't trip OpenAI's breaker). |
+| `error-classifier.ts` | `classifyError(err) → RETRYABLE | NON_RETRYABLE | BLOCK_UNSAFE | DEFER_EXTERNAL`. HTTP 401/403/400/422 → NON_RETRYABLE; 429/5xx → RETRYABLE; `PolicyViolationError` → BLOCK_UNSAFE; `ProviderUnavailableError` → DEFER_EXTERNAL. |
+| `observer.ts` | Emits one `emitAiStateTransition({callId, provider, fromState, toState, attempt, elapsedMs, errorClass, …})` per state change. Collapses rapid identical-state repeats inside a 100 ms window. PII redactor masks SSN, phone, email, DOB (with `-`, `.`, `/` separators), credit cards, and keyword-prefixed last-4 SSNs before they hit the log. 1024-entry LRU keeps memory bounded. |
+| `resilient-retry.ts` | The actual wrapper — composes the three above plus a per-attempt `AbortSignal.timeout` (default 30 s). Identical signature to `recursiveRetry` plus a required `provider` field and optional `attemptTimeoutMs` / `callId`. |
+
+### 5.8 Self-Heal (Jules) integration
+Wired through `lib/jules-client.ts` and exposed at `/api/admin/self-heal/*` (permission: `self_heal:manage`). Required env on the api-server: `JULES_API_KEY`. Optional: `JULES_DEFAULT_SOURCE` (e.g. `sources/github/<owner>/<repo>`) — set this once or pass `source_name` per request. The route refuses with `503 jules_not_configured` when `JULES_API_KEY` is absent. Sessions are firm-scoped via `requireFirmId`. Plans never auto-merge — the operator must `/:id/approve` (§9.7).
+
 ---
 
 # Part II — The CRM, page by page
 
 Each page is documented in the order it appears in the left sidebar. Every entry shows: route, required permission(s), every UI control, the API endpoints it calls, and notable behaviors.
+
+### Sidebar layout
+
+Top → bottom in the expanded sidebar:
+
+1. **Header strip** — logo + collapse toggle.
+2. **Route nav** (`components/layout/sidebar-nav.tsx`) — permission-filtered list of pages. Admin-only items (`Boss-Omega Dark Room`, `Self-Heal`, `Decision Engine`, `Competitive Intel`) only render when `user.role === "admin"` or `"super_admin"`.
+3. **Favorites panel** (`components/layout/favorites-panel.tsx`) — paste any `http(s)://` URL plus an optional label; click `+` to add, hover an item then click `×` to remove. Stored client-side in `localStorage["mtos.favorites"]` so it's per-device, not synced across logins. URLs are validated against an http/https whitelist before render so a pasted `javascript:` URL gets silently rejected. Items open in a new tab with `rel="noopener noreferrer"`.
+4. **User profile chip** — initials + name + role.
 
 ---
 

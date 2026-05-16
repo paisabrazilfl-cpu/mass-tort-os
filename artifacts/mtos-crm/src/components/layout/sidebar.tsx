@@ -1,5 +1,6 @@
 import { useAuth } from "@/contexts/auth-context";
 import { SidebarNav } from "./sidebar-nav";
+import { FavoritesPanel } from "./favorites-panel";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 
 function initials(name?: string | null, email?: string | null): string {
@@ -57,6 +58,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
         </button>
       </div>
       <SidebarNav />
+      <FavoritesPanel />
       <div className="p-4 border-t border-sidebar-border">
         <div className="flex items-center gap-3">
           <div
