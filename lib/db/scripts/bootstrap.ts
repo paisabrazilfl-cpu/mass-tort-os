@@ -46,11 +46,28 @@ async function main() {
     console.log("RESET_DB not set — skipping wipe, running migrations only");
   }
 
-  const db = drizzle(pool);
+  // Diagnostic: confirm we're talking to the same DB as the app.
+  const who = await pool.query("SELECT current_database() AS db, current_user AS usr, inet_server_addr()::text AS host, current_setting('search_path') AS sp");
+  console.log("connected:", JSON.stringify(who.rows[0]));
+
+  // List SQL files we're about to apply.
+  const fs = await import("node:fs");
   const migrationsFolder = path.resolve(__dirname, "..", "drizzle");
-  console.log(`migrate: applying from ${migrationsFolder}`);
+  const sqlFiles = fs.existsSync(migrationsFolder)
+    ? fs.readdirSync(migrationsFolder).filter((f) => f.endsWith(".sql")).sort()
+    : [];
+  console.log(`migrate: folder=${migrationsFolder} files=${JSON.stringify(sqlFiles)}`);
+
+  const db = drizzle(pool);
   await migrate(db, { migrationsFolder });
-  console.log("migrate: complete");
+  console.log("migrate: drizzle migrator returned");
+
+  // Verify tables exist.
+  const tables = await pool.query(
+    "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename",
+  );
+  console.log(`tables in public: ${tables.rows.length} → ${tables.rows.map((r: any) => r.tablename).join(', ').slice(0, 800)}`);
+
   await pool.end();
 }
 
