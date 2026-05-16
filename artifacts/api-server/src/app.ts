@@ -82,10 +82,21 @@ app.use("/api/web-forms", cors({
   maxAge: 86400,
 }));
 // Strict CORS for the CRM admin app and all other authenticated routes.
+//
+// Production callers come from the SPA host(s), which differ per environment
+// (Railway gives every service a *.up.railway.app URL plus any custom
+// domain). Read the allowlist from `ALLOWED_ORIGINS` (comma-separated).
+// When unset in production we fail-closed to an empty list so the browser
+// blocks every cross-origin request — safer than silently allowing any
+// origin. In dev (NODE_ENV !== "production") we still allow `true` (reflect
+// any origin) so local Vite dev servers work without env config.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: process.env.NODE_ENV === "production"
-    ? [process.env.REPL_SLUG ? `https://${process.env.REPL_SLUG}.replit.app` : ""].filter(Boolean)
-    : true,
+  origin: process.env.NODE_ENV === "production" ? ALLOWED_ORIGINS : true,
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
