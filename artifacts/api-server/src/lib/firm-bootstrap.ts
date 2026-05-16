@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { db } from "@workspace/db";
 import { firmsTable, usersTable } from "@workspace/db";
-import { eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger";
 
 async function hashPassword(password: string): Promise<string> {
@@ -41,7 +41,16 @@ export async function seedDefaultFirm(): Promise<SeedDefaultFirmResult> {
       .values({
         name: DEFAULT_FIRM_NAME,
         slug: DEFAULT_FIRM_SLUG,
-        subscription_status: "inactive",
+        // The default firm is the owner's free-tier workspace. The
+        // subscriptionGateMiddleware in lib/subscription-gate.ts ALREADY
+        // bypasses gating when no stripe integration row exists, but the
+        // CRM's BillingBanner only checks the stored status — so an
+        // "inactive" seed shows a red banner on first login. Seed as
+        // "active" so the owner doesn't see a billing warning on a
+        // self-hosted deploy that has no Stripe set up. If Stripe is
+        // later configured and a real subscription created, the stripe
+        // webhook handler is the source of truth and will overwrite this.
+        subscription_status: "active",
       })
       .returning({ id: firmsTable.id });
     if (!row) {
@@ -50,6 +59,14 @@ export async function seedDefaultFirm(): Promise<SeedDefaultFirmResult> {
     firmId = row.id;
     inserted = true;
   }
+
+  // Idempotent: existing default-firm rows from an older seed (or other
+  // deploys that wrote "inactive") get flipped to "active" so the
+  // BillingBanner doesn't keep showing after this commit ships.
+  await db
+    .update(firmsTable)
+    .set({ subscription_status: "active" })
+    .where(and(eq(firmsTable.slug, DEFAULT_FIRM_SLUG), eq(firmsTable.subscription_status, "inactive")));
 
   const result = await db
     .update(usersTable)

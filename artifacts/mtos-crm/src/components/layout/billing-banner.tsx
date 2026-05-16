@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { AlertTriangle } from "lucide-react";
 import { useGetBillingFirmStatus, getGetBillingFirmStatusQueryKey } from "@workspace/api-client-react";
+import { useAuth } from "@/contexts/auth-context";
 
 const ACTIVE_STATUSES = new Set(["active", "trialing"]);
 
@@ -28,6 +29,15 @@ const STATUS_COPY: Record<string, { title: string; body: string }> = {
 };
 
 export function BillingBanner() {
+  const { user } = useAuth();
+  // super_admin is the platform owner and is never billed — they see the
+  // CRM across every firm and bypass the subscription gate on the server
+  // too (no Stripe row → subscription-gate.ts short-circuits). Hiding the
+  // banner here matches that contract; without this the owner sees a red
+  // "billing inactive" warning on a fresh deploy even when no firm in the
+  // system has billing configured.
+  if (user?.role === "super_admin") return null;
+
   const q = useGetBillingFirmStatus({
     query: {
       queryKey: getGetBillingFirmStatusQueryKey(),
