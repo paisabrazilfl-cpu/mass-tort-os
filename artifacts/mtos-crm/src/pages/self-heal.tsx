@@ -375,9 +375,6 @@ export default function SelfHealPage() {
               {submitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wand2 className="h-4 w-4 mr-2" />}
               Auto-Fix
             </Button>
-            <span className="text-xs text-muted-foreground">
-              Source: <code>{config?.default_source ?? "—"}</code> · branch <code>{branch || "main"}</code>
-            </span>
           </div>
         </CardContent>
       </Card>
