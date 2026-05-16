@@ -6,6 +6,24 @@ This project is a full-stack Mass Tort Operating System (MTOS), a distributed ca
 
 I prefer clear and direct communication. I value a development process that emphasizes iterative development and early feedback. Please ask for my approval before implementing any major architectural changes or significant feature additions. I appreciate detailed explanations for complex technical decisions.
 
+# Owner Account
+
+The platform owner and operator is **paisabrazilfl@gmail.com**, role `super_admin`.
+
+**What super_admin means in this system:**
+- `super_admin` is the highest role in the RBAC hierarchy — level 200, above `admin` (100), `attorney` (60), `paralegal` (40), `viewer` (10).
+- It has every permission in `ROLE_PERMISSIONS` (mirrors admin's full set) plus `canBypassOwnership`, meaning it can read and act on any firm's data regardless of tenancy.
+- It is defined in `artifacts/api-server/src/lib/rbac.ts` as a member of `UserRole`, `ROLE_HIERARCHY`, `ROLE_PERMISSIONS`, and `canBypassOwnership`.
+- In practice: the super_admin account can access all 217 protected routes, all admin panels, all firms, all audit logs, and all system configuration — there is no gate in the application that blocks it.
+- The account lockout fields (`locked_until`, `failed_login_attempts`) must be cleared in `mtos_users` if the account gets rate-locked. Run: `UPDATE mtos_users SET locked_until = NULL, failed_login_attempts = 0 WHERE email = 'paisabrazilfl@gmail.com';`
+
+# Deployment
+
+The application is deployed on **Railway** (not Render or Replit autoscale).
+- Production domain: **masstortvelocity.com**
+- When debugging production issues, check Railway logs — not Replit deployment logs.
+- The `RENDER_API_KEY` secret is a legacy credential and is no longer the active deployment target.
+
 # System Architecture
 
 The project is structured as a pnpm monorepo using TypeScript, targeting Node.js 24. The backend is an Express 5 API, integrated with a PostgreSQL database using Drizzle ORM. API codegen is handled by Orval from an OpenAPI specification. The UI/UX is built with React and Vite.
