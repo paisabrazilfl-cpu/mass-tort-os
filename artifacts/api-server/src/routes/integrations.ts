@@ -198,35 +198,82 @@ router.post("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, 
 
   const firmId = requireFirmId(req);
 
-  // Two-step insert: we need the row id before we can encrypt creds with id-scoped AAD.
-  const [created] = await db.insert(integrationsTable).values({
-    name,
-    type,
-    provider,
-    firm_id: firmId,
-    status: "active",
-    api_url: api_url || null,
-    api_key_hash: apiKeyRef,
-    webhook_url: webhook_url || null,
-    config: { ...(config && typeof config === "object" ? { userConfig: config } : {}), credentials: {} },
-    sync_direction: sync_direction || "bidirectional",
-    field_mapping: field_mapping || null,
-  }).returning();
+  // Upsert by (firm_id, provider). The Integrations Hub previously created
+  // a new row every time the operator clicked Save, accumulating duplicates
+  // ("OpenRouter x21" in the visible bug report). Match-by-provider so a
+  // repeat Save updates the existing row instead. The DB also enforces this
+  // via UNIQUE INDEX integrations_firm_provider_unique (set by
+  // runSchemaRepair) so even races collide cleanly.
+  const [existing] = await db
+    .select()
+    .from(integrationsTable)
+    .where(and(eq(integrationsTable.firm_id, firmId), eq(integrationsTable.provider, provider)))
+    .limit(1);
 
-  const credentials = buildEncryptedCredentials(created.id, req.body);
+  let targetId: number;
+  let createdNew = false;
+
+  if (existing) {
+    targetId = existing.id;
+  } else {
+    // Two-step insert: we need the row id before we can encrypt creds with id-scoped AAD.
+    const [created] = await db.insert(integrationsTable).values({
+      name,
+      type,
+      provider,
+      firm_id: firmId,
+      status: "active",
+      api_url: api_url || null,
+      api_key_hash: apiKeyRef,
+      webhook_url: webhook_url || null,
+      config: { ...(config && typeof config === "object" ? { userConfig: config } : {}), credentials: {} },
+      sync_direction: sync_direction || "bidirectional",
+      field_mapping: field_mapping || null,
+    }).returning();
+    targetId = created.id;
+    createdNew = true;
+  }
+
+  // Re-encrypt credentials against the resolved id (whether brand-new or
+  // pre-existing). Merge over any existing credentials so a re-save that
+  // only changes one secret doesn't blank the others.
+  const newCreds = buildEncryptedCredentials(targetId, req.body);
+  const existingConfig = (existing?.config as any) || {};
+  const existingCreds = existingConfig.credentials || {};
   const finalConfig = {
-    ...(config && typeof config === "object" ? { userConfig: config } : {}),
-    credentials,
+    ...(config && typeof config === "object"
+      ? { userConfig: config }
+      : (existingConfig.userConfig ? { userConfig: existingConfig.userConfig } : {})),
+    credentials: { ...existingCreds, ...newCreds },
   };
+
+  const updates: Record<string, any> = {
+    config: finalConfig,
+    updated_at: new Date(),
+  };
+  // Only overwrite the visible fields on a re-save when the caller supplied a
+  // value; an empty string still wins, which is how the operator clears it.
+  if (name !== undefined) updates.name = name;
+  if (type !== undefined) updates.type = type;
+  if (api_url !== undefined) updates.api_url = api_url || null;
+  if (webhook_url !== undefined) updates.webhook_url = webhook_url || null;
+  if (apiKeyRef !== null) updates.api_key_hash = apiKeyRef;
+  if (sync_direction !== undefined) updates.sync_direction = sync_direction || "bidirectional";
+  if (field_mapping !== undefined) updates.field_mapping = field_mapping || null;
+  if (createdNew) updates.status = "active";
+
   const [row] = await db.update(integrationsTable)
-    .set({ config: finalConfig })
-    .where(and(eq(integrationsTable.id, created.id), eq(integrationsTable.firm_id, firmId)))
+    .set(updates)
+    .where(and(eq(integrationsTable.id, targetId), eq(integrationsTable.firm_id, firmId)))
     .returning();
 
-  await auditLog("integration", String(req.user?.id || 0), "integration_created", {
-    provider, name, type, firm_id: firmId, credential_keys: Object.keys(credentials),
-  });
-  res.status(201).json(maskRow(row));
+  await auditLog(
+    "integration",
+    String(req.user?.id || 0),
+    createdNew ? "integration_created" : "integration_updated",
+    { provider, name, type, firm_id: firmId, id: targetId, credential_keys: Object.keys(newCreds) },
+  );
+  res.status(createdNew ? 201 : 200).json(maskRow(row));
 });
 
 router.patch("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {

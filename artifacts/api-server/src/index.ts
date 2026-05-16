@@ -197,6 +197,21 @@ async function runSchemaRepair(): Promise<void> {
     `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS completed_at timestamp`,
     `ALTER TABLE api_keys DROP COLUMN IF EXISTS revoked`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS revoked_at timestamp`,
+    // integrations dedupe: keep the most recent row per (firm_id, provider)
+    // pair, drop the rest. The POST /api/integrations route used to allow
+    // multiple rows for the same provider in the same firm, which compounded
+    // every time an operator clicked Save — producing rows like "OpenRouter
+    // x21" in the Integrations Hub. Idempotent: after the first run there's
+    // nothing to delete on subsequent boots.
+    `DELETE FROM integrations a USING integrations b
+       WHERE a.firm_id IS NOT DISTINCT FROM b.firm_id
+         AND a.provider = b.provider
+         AND a.id < b.id`,
+    // Enforce the post-dedupe invariant at the DB level so future double-saves
+    // collide with a CONFLICT we can detect and turn into an upsert.
+    `CREATE UNIQUE INDEX IF NOT EXISTS integrations_firm_provider_unique
+       ON integrations(firm_id, provider)
+       WHERE firm_id IS NOT NULL`,
   ];
 
   for (const stmt of [...creates, ...alters]) {
