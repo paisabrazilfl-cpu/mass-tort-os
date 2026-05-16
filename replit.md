@@ -11,11 +11,18 @@ I prefer clear and direct communication. I value a development process that emph
 The platform owner and operator is **paisabrazilfl@gmail.com**, role `super_admin`.
 
 **What super_admin means in this system:**
-- `super_admin` is the highest role in the RBAC hierarchy — level 200, above `admin` (100), `attorney` (60), `paralegal` (40), `viewer` (10).
-- It has every permission in `ROLE_PERMISSIONS` (mirrors admin's full set) plus `canBypassOwnership`, meaning it can read and act on any firm's data regardless of tenancy.
-- It is defined in `artifacts/api-server/src/lib/rbac.ts` as a member of `UserRole`, `ROLE_HIERARCHY`, `ROLE_PERMISSIONS`, and `canBypassOwnership`.
-- In practice: the super_admin account can access all 217 protected routes, all admin panels, all firms, all audit logs, and all system configuration — there is no gate in the application that blocks it.
-- The account lockout fields (`locked_until`, `failed_login_attempts`) must be cleared in `mtos_users` if the account gets rate-locked. Run: `UPDATE mtos_users SET locked_until = NULL, failed_login_attempts = 0 WHERE email = 'paisabrazilfl@gmail.com';`
+
+The super_admin login is the owner-level account. It sits above every other role in the system. When this account logs in, it sees the entire platform — every firm, every lead, every case, every audit log, every admin panel, and every system configuration screen. No other role can see this much. A regular admin only sees their own firm. A super_admin sees everything across all firms simultaneously.
+
+The hierarchy from top to bottom is: super_admin → admin → attorney → paralegal → viewer. The super_admin can do anything any lower role can do, plus things no other role can access at all.
+
+**Boss Omega Dark Room:**
+
+The Boss Omega Dark Room is a hidden section of the CRM that only appears when logged in as the super_admin account (paisabrazilfl@gmail.com). It is not visible to any other role — not admin, not attorney, not anyone else. It does not appear in the navigation for any other login. It is the owner's private control panel, locked exclusively behind the super_admin credential.
+
+**Account lockout note:**
+
+If the super_admin account ever gets locked out from too many failed login attempts, the lockout must be cleared directly in the database. This is a known recovery step, not a bug.
 
 # Deployment
 
