@@ -1,17 +1,25 @@
 import { Router } from "express";
-import { db, leadsTable, faxResultsTable, documentsTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { db, leadsTable, documentsTable } from "@workspace/db";
+import { eq, and } from "drizzle-orm";
 import { decryptLeadFields } from "../lib/encryption";
 import { Permission, requirePermission } from "../lib/rbac";
+import { requireFirmId } from "../lib/firm-scope";
+import { logger } from "../lib/logger";
+import { badRequest, notFound, serverError } from "../lib/http-errors";
 
 const router = Router();
 
 router.get("/lead/:id", requirePermission(Permission.TIMELINE_VIEW), async (req, res) => {
   const leadId = parseInt(String(req.params.id), 10);
-  if (isNaN(leadId)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
+  if (isNaN(leadId)) { badRequest(res, "Invalid lead ID"); return; }
 
-  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
-  if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+  try {
+    const firmId = requireFirmId(req);
+    const [lead] = await db
+      .select()
+      .from(leadsTable)
+      .where(and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId)));
+    if (!lead) { notFound(res, "Lead not found"); return; }
 
   // Task #8: bind AAD to lead.id so a swapped ciphertext from another row
   // fails AES-GCM auth verification instead of silently decrypting.
@@ -46,8 +54,11 @@ router.get("/lead/:id", requirePermission(Permission.TIMELINE_VIEW), async (req,
     events.push({ date: decrypted.trustedform_timestamp ? new Date(decrypted.trustedform_timestamp).toISOString().split("T")[0] : new Date(decrypted.created_at).toISOString().split("T")[0], event: "TCPA Consent Obtained", category: "compliance", source: "form" });
   }
 
-  const documents = await db.select().from(documentsTable).where(eq(documentsTable.lead_id, leadId));
-  for (const doc of documents) {
+    // documents.lead_id → leads.firm_id (we already verified the lead is in
+    // this firm, so a plain lead_id filter is safe; we still join via the
+    // verified lead's id rather than the raw param to make the chain explicit).
+    const documents = await db.select().from(documentsTable).where(eq(documentsTable.lead_id, lead.id));
+    for (const doc of documents) {
     events.push({
       date: new Date(doc.created_at).toISOString().split("T")[0],
       event: `Document: ${doc.file_name}`,
@@ -74,17 +85,21 @@ router.get("/lead/:id", requirePermission(Permission.TIMELINE_VIEW), async (req,
     return da - db2;
   });
 
-  res.json({
-    lead_id: leadId,
-    lead_name: decrypted.name,
-    tort_type: decrypted.tort_type,
-    events,
-    summary: {
-      total_events: events.length,
-      categories: [...new Set(events.map(e => e.category))],
-      date_range: events.length > 0 ? { start: events[0]?.date, end: events[events.length - 1]?.date } : null,
-    },
-  });
+    res.json({
+      lead_id: leadId,
+      lead_name: decrypted.name,
+      tort_type: decrypted.tort_type,
+      events,
+      summary: {
+        total_events: events.length,
+        categories: [...new Set(events.map(e => e.category))],
+        date_range: events.length > 0 ? { start: events[0]?.date, end: events[events.length - 1]?.date } : null,
+      },
+    });
+  } catch (err: any) {
+    logger.error({ err: err?.message, leadId }, "timeline /lead/:id failed");
+    serverError(res, "Failed to build timeline");
+  }
 });
 
 export default router;

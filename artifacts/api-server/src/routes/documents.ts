@@ -1,7 +1,9 @@
 import { Router } from "express";
-import { db, documentsTable } from "@workspace/db";
-import { eq, and, sql } from "drizzle-orm";
+import { db, documentsTable, leadsTable } from "@workspace/db";
+import { eq, and, sql, desc } from "drizzle-orm";
 import { badRequest, notFound, serverError, errorEnvelope } from "../lib/http-errors";
+import { requireFirmId } from "../lib/firm-scope";
+import { logger } from "../lib/logger";
 import {
   ListDocumentsQueryParams,
   CreateDocumentBody,
@@ -94,7 +96,23 @@ router.get("/:id/view", requirePermission(Permission.DOCUMENTS_VIEW), async (req
     return;
   }
 
-  const [doc] = await db.select().from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
+  // documents.lead_id → leads.firm_id; scope through the parent lead so
+  // a caller from firm A can't view firm B's documents by guessing the id.
+  let doc: typeof documentsTable.$inferSelect | undefined;
+  try {
+    const firmId = requireFirmId(req);
+    const rows = await db
+      .select({ d: documentsTable })
+      .from(documentsTable)
+      .innerJoin(leadsTable, eq(leadsTable.id, documentsTable.lead_id))
+      .where(and(eq(documentsTable.id, id), eq(leadsTable.firm_id, firmId)))
+      .limit(1);
+    doc = rows[0]?.d;
+  } catch (err: any) {
+    logger.error({ err: err?.message, id }, "documents GET /:id/view failed");
+    serverError(res, "Failed to load document");
+    return;
+  }
   if (!doc) {
     notFound(res, "Document not found");
     return;
@@ -139,11 +157,28 @@ router.get("/", requirePermission(Permission.DOCUMENTS_VIEW), async (req, res) =
   const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 50, 1), 500);
   const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
 
-  const docs = lead_id
-    ? await db.select().from(documentsTable).where(eq(documentsTable.lead_id, lead_id)).orderBy(sql`${documentsTable.created_at} DESC`).limit(limit).offset(offset)
-    : await db.select().from(documentsTable).orderBy(sql`${documentsTable.created_at} DESC`).limit(limit).offset(offset);
-
-  res.json(docs);
+  // Scope every list query through leads.firm_id. Without the firm filter
+  // the no-lead_id branch was returning every document in the database, and
+  // the lead_id branch wasn't verifying the caller could see that lead. An
+  // INNER JOIN through leads gives us both safeguards in one predicate, and
+  // the leads_firm_id_idx makes the firm filter cheap.
+  try {
+    const firmId = requireFirmId(req);
+    const baseConds = [eq(leadsTable.firm_id, firmId)];
+    if (lead_id) baseConds.push(eq(documentsTable.lead_id, lead_id));
+    const rows = await db
+      .select({ d: documentsTable })
+      .from(documentsTable)
+      .innerJoin(leadsTable, eq(leadsTable.id, documentsTable.lead_id))
+      .where(and(...baseConds))
+      .orderBy(desc(documentsTable.created_at))
+      .limit(limit)
+      .offset(offset);
+    res.json(rows.map((r) => r.d));
+  } catch (err: any) {
+    logger.error({ err: err?.message, lead_id }, "documents GET / failed");
+    serverError(res, "Failed to list documents");
+  }
 });
 
 router.post("/", requirePermission(Permission.DOCUMENTS_CREATE), auditAction("create_document"), async (req, res) => {
@@ -154,20 +189,36 @@ router.post("/", requirePermission(Permission.DOCUMENTS_CREATE), auditAction("cr
   }
 
   const data = parsed.data;
-  const [doc] = await db
-    .insert(documentsTable)
-    .values({
-      lead_id: data.lead_id,
-      document_type: data.document_type,
-      file_name: data.file_name,
-      file_url: data.file_url ?? null,
-      signed: data.signed,
-      signed_at: data.signed_at ? new Date(data.signed_at) : null,
-      notes: data.notes ?? null,
-    })
-    .returning();
+  try {
+    const firmId = requireFirmId(req);
+    // Verify the parent lead belongs to the caller's firm BEFORE inserting,
+    // otherwise an operator from firm A could attach a document row to firm B's
+    // lead and later read/edit it via the (now firm-scoped) list/view routes.
+    const [lead] = await db
+      .select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(and(eq(leadsTable.id, data.lead_id), eq(leadsTable.firm_id, firmId)))
+      .limit(1);
+    if (!lead) { notFound(res, "Lead not found"); return; }
 
-  res.status(201).json(doc);
+    const [doc] = await db
+      .insert(documentsTable)
+      .values({
+        lead_id: data.lead_id,
+        document_type: data.document_type,
+        file_name: data.file_name,
+        file_url: data.file_url ?? null,
+        signed: data.signed,
+        signed_at: data.signed_at ? new Date(data.signed_at) : null,
+        notes: data.notes ?? null,
+      })
+      .returning();
+
+    res.status(201).json(doc);
+  } catch (err: any) {
+    logger.error({ err: err?.message, lead_id: data.lead_id }, "documents POST / failed");
+    serverError(res, "Failed to create document");
+  }
 });
 
 router.patch("/:id", requirePermission(Permission.DOCUMENTS_UPDATE), auditAction("update_document"), async (req, res) => {
@@ -193,18 +244,29 @@ router.patch("/:id", requirePermission(Permission.DOCUMENTS_UPDATE), auditAction
   if (body.signed_at !== undefined) updateData.signed_at = body.signed_at ? new Date(body.signed_at) : null;
   if (body.notes !== undefined) updateData.notes = body.notes;
 
-  const [doc] = await db
-    .update(documentsTable)
-    .set(updateData)
-    .where(eq(documentsTable.id, paramsParsed.data.id))
-    .returning();
+  try {
+    const firmId = requireFirmId(req);
+    // Scope the UPDATE via a subquery on leads.firm_id. Without this any
+    // operator could PATCH any document in the system by id.
+    const scopedLeadIds = db
+      .select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(eq(leadsTable.firm_id, firmId));
+    const [doc] = await db
+      .update(documentsTable)
+      .set(updateData)
+      .where(and(
+        eq(documentsTable.id, paramsParsed.data.id),
+        sql`${documentsTable.lead_id} IN ${scopedLeadIds}`,
+      ))
+      .returning();
 
-  if (!doc) {
-    notFound(res, "Document not found");
-    return;
+    if (!doc) { notFound(res, "Document not found"); return; }
+    res.json(doc);
+  } catch (err: any) {
+    logger.error({ err: err?.message, id: paramsParsed.data.id }, "documents PATCH /:id failed");
+    serverError(res, "Failed to update document");
   }
-
-  res.json(doc);
 });
 
 router.delete("/:id", requirePermission(Permission.DOCUMENTS_DELETE), auditAction("delete_document"), async (req, res) => {
@@ -214,8 +276,25 @@ router.delete("/:id", requirePermission(Permission.DOCUMENTS_DELETE), auditActio
     return;
   }
 
-  await db.delete(documentsTable).where(eq(documentsTable.id, parsed.data.id));
-  res.status(204).send();
+  try {
+    const firmId = requireFirmId(req);
+    const scopedLeadIds = db
+      .select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(eq(leadsTable.firm_id, firmId));
+    const deleted = await db
+      .delete(documentsTable)
+      .where(and(
+        eq(documentsTable.id, parsed.data.id),
+        sql`${documentsTable.lead_id} IN ${scopedLeadIds}`,
+      ))
+      .returning({ id: documentsTable.id });
+    if (deleted.length === 0) { notFound(res, "Document not found"); return; }
+    res.status(204).send();
+  } catch (err: any) {
+    logger.error({ err: err?.message, id: parsed.data.id }, "documents DELETE /:id failed");
+    serverError(res, "Failed to delete document");
+  }
 });
 
 router.post("/redact", requirePermission(Permission.DOCUMENTS_REDACT), auditAction("redact_document"), async (req, res) => {

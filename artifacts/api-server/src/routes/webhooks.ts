@@ -1373,7 +1373,9 @@ export function dispatchDocumentSigned(payload: {
     input: payload,
     firmId: payload.firm_id ?? null,
     source: "webhooks.document_signed",
-  }).catch(() => {});
+  }).catch((err) => {
+    logger.error({ err, lead_id: payload.lead_id, envelope_id: payload.envelope_id }, "dispatchTrigger document_signed failed");
+  });
 }
 
 export function dispatchInboundCall(payload: {
@@ -1387,7 +1389,9 @@ export function dispatchInboundCall(payload: {
     input: payload,
     firmId: payload.firm_id ?? null,
     source: "webhooks.inbound_call",
-  }).catch(() => {});
+  }).catch((err) => {
+    logger.error({ err, call_id: payload.call_id }, "dispatchTrigger inbound_call failed");
+  });
 }
 
 export function dispatchInboundSms(payload: {
@@ -1401,7 +1405,9 @@ export function dispatchInboundSms(payload: {
     input: payload,
     firmId: payload.firm_id ?? null,
     source: "webhooks.inbound_sms",
-  }).catch(() => {});
+  }).catch((err) => {
+    logger.error({ err, message_id: payload.message_id }, "dispatchTrigger inbound_sms failed");
+  });
 }
 
 
@@ -1448,7 +1454,9 @@ router.post("/automation-trigger/:slugOrId", async (req, res) => {
       input: { body: req.body, slug: slugOrId },
       firmId: null,
       source: "webhooks.automation-trigger",
-    }).catch(() => {});
+    }).catch((err) => {
+      logger.error({ err, slug: slugOrId, workflow_id: wf!.id }, "dispatchTrigger automation-trigger failed");
+    });
   } catch { /* non-fatal */ }
 });
 

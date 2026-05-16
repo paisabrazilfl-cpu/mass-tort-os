@@ -1,11 +1,12 @@
 import { Router } from "express";
 import crypto from "crypto";
-import { db, imageObjectsTable } from "@workspace/db";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { db, imageObjectsTable, leadsTable, casesTable } from "@workspace/db";
+import { eq, desc, and, or, sql } from "drizzle-orm";
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { badRequest, serverError } from "../lib/http-errors";
+import { badRequest, notFound, serverError } from "../lib/http-errors";
+import { requireFirmId } from "../lib/firm-scope";
 
 const router = Router();
 
@@ -34,11 +35,25 @@ function parseIdParam(res: any, raw: unknown, label = "id"): number | null {
   return n;
 }
 
+// Firm-scope predicate for image_objects. The table itself has no firm_id —
+// scope is inherited from the parent lead_id or case_id. An image is visible
+// to a caller iff at least one of:
+//   • its lead_id points at a lead in the caller's firm, OR
+//   • its case_id points at a case in the caller's firm.
+// Images attached to neither are intentionally invisible to listing (they
+// are typically transient OCR scratch files and have no tenant owner).
+function firmScopedImagePredicate(firmId: number) {
+  const leadScoped = sql`${imageObjectsTable.lead_id} IN (SELECT id FROM ${leadsTable} WHERE ${leadsTable.firm_id} = ${firmId})`;
+  const caseScoped = sql`${imageObjectsTable.case_id} IN (SELECT id FROM ${casesTable} WHERE ${casesTable.firm_id} = ${firmId})`;
+  return or(leadScoped, caseScoped)!;
+}
+
 router.get("/", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, res) => {
   try {
+    const firmId = requireFirmId(req);
     const { source_type, lead_id, case_id, limit = "50", offset = "0" } = req.query;
 
-    const conditions: any[] = [];
+    const conditions: any[] = [firmScopedImagePredicate(firmId)];
     if (source_type) conditions.push(eq(imageObjectsTable.source_type, String(source_type)));
     if (lead_id !== undefined && lead_id !== "") {
       const parsed = parsePositiveIntOrInvalid(lead_id);
@@ -53,7 +68,7 @@ router.get("/", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, re
     const results = await db
       .select()
       .from(imageObjectsTable)
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .where(and(...conditions))
       .orderBy(desc(imageObjectsTable.created_at))
       .limit(limitNum)
       .offset(offsetNum);
@@ -65,13 +80,40 @@ router.get("/", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, re
   }
 });
 
-router.get("/stats", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (_req, res) => {
+router.get("/stats", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req, res) => {
   try {
-    const totalResult = await db.execute(sql`SELECT count(*)::int as total FROM image_objects`);
-    const bySource = await db.execute(sql`SELECT source_type, count(*)::int as count FROM image_objects GROUP BY source_type`);
-    const byOcr = await db.execute(sql`SELECT ocr_status, count(*)::int as count FROM image_objects GROUP BY ocr_status`);
-    const totalSize = await db.execute(sql`SELECT coalesce(sum(file_size), 0)::bigint as total FROM image_objects`);
-    const sensitiveCount = await db.execute(sql`SELECT count(*)::int as count FROM image_objects WHERE is_sensitive = true`);
+    const firmId = requireFirmId(req);
+    // All aggregates must restrict to images attached to this firm's leads
+    // or cases. Without the EXISTS gate /stats returned global counts and
+    // total bytes, leaking the platform's overall scale across tenants.
+    const totalResult = await db.execute(sql`
+      SELECT count(*)::int AS total FROM image_objects io
+      WHERE io.lead_id IN (SELECT id FROM leads WHERE firm_id = ${firmId})
+         OR io.case_id IN (SELECT id FROM cases WHERE firm_id = ${firmId})
+    `);
+    const bySource = await db.execute(sql`
+      SELECT source_type, count(*)::int AS count FROM image_objects io
+      WHERE io.lead_id IN (SELECT id FROM leads WHERE firm_id = ${firmId})
+         OR io.case_id IN (SELECT id FROM cases WHERE firm_id = ${firmId})
+      GROUP BY source_type
+    `);
+    const byOcr = await db.execute(sql`
+      SELECT ocr_status, count(*)::int AS count FROM image_objects io
+      WHERE io.lead_id IN (SELECT id FROM leads WHERE firm_id = ${firmId})
+         OR io.case_id IN (SELECT id FROM cases WHERE firm_id = ${firmId})
+      GROUP BY ocr_status
+    `);
+    const totalSize = await db.execute(sql`
+      SELECT coalesce(sum(file_size), 0)::bigint AS total FROM image_objects io
+      WHERE io.lead_id IN (SELECT id FROM leads WHERE firm_id = ${firmId})
+         OR io.case_id IN (SELECT id FROM cases WHERE firm_id = ${firmId})
+    `);
+    const sensitiveCount = await db.execute(sql`
+      SELECT count(*)::int AS count FROM image_objects io
+      WHERE io.is_sensitive = true
+        AND (io.lead_id IN (SELECT id FROM leads WHERE firm_id = ${firmId})
+          OR io.case_id IN (SELECT id FROM cases WHERE firm_id = ${firmId}))
+    `);
 
     res.json({
       total: Number(totalResult.rows[0]?.total || 0),
@@ -90,12 +132,13 @@ router.get("/:id", requirePermission(Permission.IMAGE_OBJECTS_VIEW), async (req,
   try {
     const id = parseIdParam(res, req.params.id);
     if (id === null) return;
+    const firmId = requireFirmId(req);
     const [image] = await db
       .select()
       .from(imageObjectsTable)
-      .where(eq(imageObjectsTable.id, id));
+      .where(and(eq(imageObjectsTable.id, id), firmScopedImagePredicate(firmId)));
 
-    if (!image) { res.status(404).json({ error: "Image object not found" }); return; }
+    if (!image) { notFound(res, "Image object not found"); return; }
     res.json(sanitizeForClient(image));
   } catch (err) {
     logger.error({ err }, "Failed to get image object");
@@ -121,6 +164,30 @@ router.post("/", requirePermission(Permission.IMAGE_OBJECTS_MANAGE), async (req,
 
     if (!file_data || !original_filename || !mime_type) {
       res.status(400).json({ error: "file_data, original_filename, and mime_type are required" }); return;
+    }
+
+    // Validate that any parent lead/case provided belongs to the caller's
+    // firm BEFORE writing the row. Otherwise an operator could create an
+    // image_objects row pointing at another firm's lead_id/case_id and
+    // resurface it later. We require at least ONE attachment so list/get
+    // never silently hides the row; pure-anon uploads (lead_id=null AND
+    // case_id=null) would be invisible to the firm-scoped list endpoint.
+    const firmId = requireFirmId(req);
+    if (lead_id != null) {
+      const lid = Number(lead_id);
+      if (!Number.isInteger(lid) || lid <= 0) { badRequest(res, "lead_id must be a positive integer"); return; }
+      const [lead] = await db.select({ id: leadsTable.id }).from(leadsTable)
+        .where(and(eq(leadsTable.id, lid), eq(leadsTable.firm_id, firmId))).limit(1);
+      if (!lead) { notFound(res, "Lead not found in your firm"); return; }
+    }
+    if (case_id != null) {
+      const [cse] = await db.select({ id: casesTable.id }).from(casesTable)
+        .where(and(eq(casesTable.id, String(case_id)), eq(casesTable.firm_id, firmId))).limit(1);
+      if (!cse) { notFound(res, "Case not found in your firm"); return; }
+    }
+    if (lead_id == null && case_id == null) {
+      badRequest(res, "image must be attached to a lead_id or case_id in your firm");
+      return;
     }
 
     const allowedMimes = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/tiff", "application/pdf"];
@@ -225,13 +292,14 @@ router.patch("/:id", requirePermission(Permission.IMAGE_OBJECTS_MANAGE), async (
       }
     }
 
+    const firmId = requireFirmId(req);
     const [updated] = await db
       .update(imageObjectsTable)
       .set(updates)
-      .where(eq(imageObjectsTable.id, id))
+      .where(and(eq(imageObjectsTable.id, id), firmScopedImagePredicate(firmId)))
       .returning();
 
-    if (!updated) { res.status(404).json({ error: "Image object not found" }); return; }
+    if (!updated) { notFound(res, "Image object not found"); return; }
 
     await auditLog("image_object", String(updated.id), "image_object_updated", {
       fields_updated: Object.keys(updates).filter(k => k !== "updated_at"),
@@ -249,12 +317,13 @@ router.delete("/:id", requirePermission(Permission.IMAGE_OBJECTS_DELETE), async 
   try {
     const id = parseIdParam(res, req.params.id);
     if (id === null) return;
+    const firmId = requireFirmId(req);
     const [image] = await db
       .select()
       .from(imageObjectsTable)
-      .where(eq(imageObjectsTable.id, id));
+      .where(and(eq(imageObjectsTable.id, id), firmScopedImagePredicate(firmId)));
 
-    if (!image) { res.status(404).json({ error: "Image object not found" }); return; }
+    if (!image) { notFound(res, "Image object not found"); return; }
 
     try {
       const fs = await import("fs");

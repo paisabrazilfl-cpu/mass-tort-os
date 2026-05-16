@@ -362,11 +362,15 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       status: extraData.status ?? "open",
     } as any).returning();
     if (leadId) {
-      // Link case to lead via audit trail
+      // Link case to lead via audit trail. Audit-trail inserts are non-fatal
+      // to the workflow but must be visible in logs — a silently-failing audit
+      // sink hides every workflow's tracking trail.
       await db.insert(auditLogTable).values({
         entity_type: "case", entity_id: id,
         action: "case.created", details: { lead_id: leadId, source: "automation" },
-      } as any).catch(() => {});
+      } as any).catch((err: unknown) => {
+        logger.warn({ err, case_id: id, lead_id: leadId }, "audit_log insert failed for case.created");
+      });
     }
     return { case: row, case_id: id };
   },
@@ -388,7 +392,12 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     await pool.query(
       "INSERT INTO audit_log (action, entity_type, entity_id, details, created_at) VALUES ($1, $2, $3, $4, now()) ON CONFLICT DO NOTHING",
       [action, entityType, String(entityId ?? ""), JSON.stringify(details)]
-    ).catch(() => {}); // audit is non-fatal
+    ).catch((err: unknown) => {
+      // Audit is non-fatal to the workflow step (we still return ok:true) but
+      // a failing sink must be visible to operators — otherwise the audit log
+      // silently develops gaps that look like "nothing happened."
+      logger.warn({ err, action, entityType, entityId }, "crm.audit_log insert failed");
+    });
     return { ok: true };
   },
 
