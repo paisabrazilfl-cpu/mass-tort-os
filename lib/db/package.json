@@ -11,6 +11,7 @@
     "build": "tsc -b",
     "push": "drizzle-kit push --config ./drizzle.config.ts",
     "push-force": "drizzle-kit push --force --config ./drizzle.config.ts",
+    "bootstrap": "tsx ./scripts/bootstrap.ts",
     "drift": "tsx ./scripts/check-drift.ts"
   },
   "dependencies": {
