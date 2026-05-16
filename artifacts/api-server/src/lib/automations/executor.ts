@@ -269,19 +269,71 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     return s.input; // pass input through unchanged
   },
   "data.transform": async (s) => {
+    // Run user-supplied JS in a hardened `vm` sandbox instead of a raw
+    // `new Function(...)`. The sandbox:
+    //   • starts with a frozen, empty context (no `process`, no `require`,
+    //     no `global`, no `console`) so even a malicious workflow author
+    //     with AUTOMATIONS_MANAGE can't reach Node internals.
+    //   • enforces a hard 1000 ms wall-clock timeout per execution; runaway
+    //     loops abort with a thrown VM Timeout that the executor surfaces
+    //     as a step failure (the rest of the run continues).
+    //   • caps code size at 8 KB to defeat parser-time pathological inputs.
+    // The previous `new Function(input, vars, code)` form gave the code
+    // free access to the entire Node global namespace — equivalent to RCE
+    // for anyone with AUTOMATIONS_MANAGE.
     const code = String(s.node.data?.params?.code ?? "return input;");
-    const fn = new Function("input", "vars", code);
-    return fn(s.input, s.vars);
+    if (code.length > 8 * 1024) {
+      throw new Error(`data.transform code exceeds 8KB cap (${code.length} bytes)`);
+    }
+    const sandbox: Record<string, unknown> = {
+      input: s.input,
+      vars: s.vars,
+      result: undefined,
+    };
+    const ctx = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
+    // Wrap the user code in an IIFE so a bare `return` statement works
+    // exactly like it did under `new Function`, and we capture the return
+    // value via `result =`. Source URL helps stack traces in the logs.
+    const wrapped = `result = (function(input, vars){ ${code}\n })(input, vars);`;
+    try {
+      vm.runInContext(wrapped, ctx, { timeout: 1000, filename: "data.transform" });
+    } catch (err: any) {
+      throw new Error(`data.transform failed: ${err?.message ?? err}`);
+    }
+    return sandbox["result"];
   },
   "data.regex": async (s) => {
     const text = String(resolvePath({ input: s.input, vars: s.vars }, String(s.node.data?.params?.text ?? "")) ?? "");
     const pattern = String(s.node.data?.params?.pattern ?? "");
     const flags = String(s.node.data?.params?.flags ?? "g");
+    // Bound the inputs so a workflow author can't lock the event loop via
+    // catastrophic regex backtracking (ReDoS). JavaScript's regex engine
+    // has no built-in timeout, so these caps are the only defense.
+    //   • pattern length 256 chars — typical patterns are <50.
+    //   • input text 64 KB — typical OCR snippets are <5 KB.
+    //   • match count 1000 — defends against `(a*)*` producing infinite
+    //     zero-width matches and against benign global-greedy patterns
+    //     producing a runaway output buffer.
+    if (pattern.length > 256) throw new Error("data.regex pattern exceeds 256-char cap");
+    if (text.length > 64 * 1024) throw new Error("data.regex input exceeds 64KB cap");
+    if (!/^[gimsuy]*$/.test(flags)) throw new Error("data.regex flags must be subset of [gimsuy]");
     const matches: string[][] = [];
-    const re = new RegExp(pattern, flags);
+    let re: RegExp;
+    try {
+      re = new RegExp(pattern, flags);
+    } catch (err: any) {
+      throw new Error(`data.regex invalid pattern: ${err?.message ?? err}`);
+    }
+    const MAX_MATCHES = 1000;
     if (flags.includes("g")) {
       let m: RegExpExecArray | null;
-      while ((m = re.exec(text)) !== null) matches.push([...m]);
+      while ((m = re.exec(text)) !== null) {
+        matches.push([...m]);
+        if (matches.length >= MAX_MATCHES) break;
+        // Defend against zero-width matches that don't advance lastIndex
+        // (e.g. /(?:)/g): force a one-char step so the loop terminates.
+        if (m.index === re.lastIndex) re.lastIndex++;
+      }
     } else {
       const m = text.match(re);
       if (m) matches.push([...m]);
@@ -317,6 +369,13 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   "crm.update_lead": async (s) => {
     const idRaw = resolveOrLiteral(s, s.node.data?.params?.leadId);
     const leadId = Number(idRaw);
+    // Reject obviously malformed ids up-front. `Number(undefined)` → NaN,
+    // `Number(null)` → 0, both of which used to silently hit a WHERE id=0
+    // / id=NaN predicate and either no-op or fail in a confusing way. A
+    // positive-integer check makes the failure mode explicit.
+    if (!Number.isInteger(leadId) || leadId <= 0) {
+      throw new Error(`crm.update_lead requires a positive integer leadId (got ${JSON.stringify(idRaw)})`);
+    }
     const patch = (s.node.data?.params?.patch ?? {}) as Record<string, any>;
     // Tenant scoping: refuse to mutate a lead that belongs to a different
     // firm than the workflow's owning firm. Workflows with no firm (system

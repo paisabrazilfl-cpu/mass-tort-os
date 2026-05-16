@@ -89,11 +89,24 @@ export function __resetObserverState(): void {
 function redactPii(s: string): string {
   if (!s) return "";
   return s
-    .replace(/\b\d{3}-?\d{2}-?\d{4}\b/g, "[SSN]")
+    // Full SSN: 9 digits, optional separators (-, ., space).
+    .replace(/\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b/g, "[SSN]")
+    // Credit card: 13–19 digits, optional separators after every 4. Run BEFORE
+    // the phone pattern so a 16-digit card doesn't get partial-matched as a
+    // phone number first.
+    .replace(/\b(?:\d[ -]?){12,18}\d\b/g, "[CARD]")
+    // Phone: 10 digits with common separators (or none).
     .replace(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/g, "[PHONE]")
+    // Email.
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[EMAIL]")
-    .replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, "[DATE]")
+    // Date forms commonly seen on lead rows:
+    //   mm/dd/yyyy, m/d/yy, mm-dd-yyyy, m.d.yyyy, yyyy-mm-dd.
+    .replace(/\b\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}\b/g, "[DATE]")
     .replace(/\b\d{4}-\d{2}-\d{2}\b/g, "[DATE]")
+    // Last-4-SSN as a bare 4-digit token preceded by an SSN/last-4 keyword.
+    // Catches things like "last_4_ssn: 1234" without nuking every 4-digit
+    // number (case ids, ports, years) elsewhere in the string.
+    .replace(/\b(?:ssn|last[_\s-]?4|last4)\b[^a-z0-9]{0,5}\d{4}\b/gi, "[SSN_LAST4]")
     .slice(0, 200);
 }
 
