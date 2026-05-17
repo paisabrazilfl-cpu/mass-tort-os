@@ -48,7 +48,7 @@ function rowsOf<T extends Record<string, unknown>>(result: unknown): T[] {
 const ACCESS_TOKEN_EXPIRY = "15m";
 const REFRESH_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
-export type UserRole = "super_admin" | "admin" | "attorney" | "paralegal" | "viewer";
+export type UserRole = "super_admin" | "admin" | "user_manager" | "attorney" | "paralegal" | "agent" | "viewer";
 
 export interface AuthUser {
   id: number;
@@ -80,12 +80,21 @@ declare global {
 }
 
 // Higher number = more privilege.
+// super_admin  — platform owner only (paisabrazilfl@gmail.com). Sees all firms, all data.
+// admin        — firm managing partner. Full control within their firm.
+// user_manager — office/team manager. Manages users, invites, roles. Read-only on cases/leads.
+// attorney     — full legal case authority.
+// paralegal    — manages leads, cases, and documents.
+// agent        — intake agent / call-center rep. Creates leads and works intake only.
+// viewer       — read-only. Default for self-serve signups.
 const ROLE_HIERARCHY: Record<UserRole, number> = {
-  super_admin: 200,
-  admin: 100,
-  attorney: 75,
-  paralegal: 50,
-  viewer: 25,
+  super_admin:  200,
+  admin:        100,
+  user_manager:  80,
+  attorney:      75,
+  paralegal:     50,
+  agent:         35,
+  viewer:        25,
 };
 
 // =============================================================================
@@ -244,6 +253,47 @@ export type Permission = (typeof Permission)[keyof typeof Permission];
 export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
   super_admin: new Set<Permission>(Object.values(Permission)),
   admin: new Set<Permission>(Object.values(Permission)),
+
+  // ── user_manager ────────────────────────────────────────────────────────────
+  // Team / office manager. Core job: invite users, assign roles, manage access.
+  // Has read-only visibility into leads, cases, analytics, and compliance for
+  // oversight — but cannot create, modify, or delete case-related records.
+  user_manager: new Set<Permission>([
+    // User administration — primary function
+    Permission.USERS_LIST,
+    Permission.USERS_MANAGE,
+    Permission.INVITES_MANAGE,
+    // Read-only lead/case oversight
+    Permission.LEAD_VIEW_ANY,
+    Permission.CASE_VIEW_OWN,
+    // Paralegal roster (to assign leads)
+    Permission.PARALEGAL_VIEW,
+    // Forms oversight
+    Permission.FORMS_CONFIG_VIEW_PUBLIC,
+    Permission.FORMS_CONFIG_VIEW,
+    // Decision engine visibility
+    Permission.DECISION_ENGINE_VIEW,
+    // Reference data (read-only)
+    Permission.BUYERS_VIEW,
+    Permission.VENDORS_VIEW,
+    Permission.LEAD_SOURCES_VIEW,
+    Permission.TEMPLATES_VIEW,
+    Permission.WORKFLOW_SETTINGS_VIEW,
+    // Documents (read-only)
+    Permission.DOCUMENTS_VIEW,
+    // Compliance / audit trail oversight
+    Permission.COMPLIANCE_VIEW,
+    // Analytics and reporting
+    Permission.DASHBOARD_VIEW,
+    Permission.ANALYTICS_VIEW,
+    // News / timeline / review queue visibility
+    Permission.NEWS_VIEW,
+    Permission.TIMELINE_VIEW,
+    Permission.REVIEW_QUEUE_VIEW,
+    // Call monitoring (listen only)
+    Permission.CALLS_VIEW,
+  ]),
+
   attorney: new Set<Permission>([
     // Leads / lead-import
     Permission.LEAD_VIEW_ANY,
@@ -366,6 +416,38 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     Permission.MEDICAL_RECORDS_VIEW,
     Permission.MEDICAL_RECORDS_MANAGE,
   ]),
+  // ── agent ───────────────────────────────────────────────────────────────────
+  // Intake agent / call-center rep. Creates and works their own leads.
+  // Cannot see other agents' leads, cannot access cases beyond their own,
+  // cannot manage users or access admin functions.
+  agent: new Set<Permission>([
+    // Lead intake — primary function
+    Permission.LEAD_CREATE,
+    Permission.LEAD_VIEW_OWN,
+    Permission.LEAD_UPDATE,
+    // Forms / intake pipeline
+    Permission.FORMS_CONFIG_VIEW_PUBLIC,
+    Permission.FORMS_SUBMIT,
+    Permission.FORMS_BACKGROUND_CHECK,
+    Permission.FORMS_NPI_VERIFY,
+    Permission.FORMS_FRAUD_CHECK,
+    // Reference lookups
+    Permission.NPI_LOOKUP,
+    Permission.BUYERS_VIEW,
+    Permission.LEAD_SOURCES_VIEW,
+    // Own case visibility
+    Permission.CASE_VIEW_OWN,
+    // Documents on their own leads
+    Permission.DOCUMENTS_VIEW,
+    // Communication with leads
+    Permission.CALLS_VIEW,
+    Permission.SMS_SEND,
+    // Dashboard / news / timeline (own records)
+    Permission.DASHBOARD_VIEW,
+    Permission.NEWS_VIEW,
+    Permission.TIMELINE_VIEW,
+  ]),
+
   viewer: new Set<Permission>([
     Permission.LEAD_VIEW_OWN,
     Permission.CASE_VIEW_OWN,

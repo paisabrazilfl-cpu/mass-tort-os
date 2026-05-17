@@ -14,19 +14,20 @@ import { logger } from "../lib/logger";
 
 const router = Router();
 
-const ROLE_VALUES: readonly UserRole[] = ["admin", "attorney", "paralegal", "viewer"] as const;
+const ROLE_VALUES: readonly UserRole[] = [
+  "admin", "user_manager", "attorney", "paralegal", "agent", "viewer",
+] as const;
 
 const UpdateUserRoleParams = z.object({
   id: z.coerce.number().int().positive(),
 });
-// Admin role is intentionally NOT assignable through this endpoint.
-// Promoting a user to admin is a higher-trust operation handled out-of-band
-// (DB or a dedicated, separately-audited tool). Allowing it here would let a
-// compromised admin token silently mint additional admins, defeating the
-// "sole-admin self-edit guard" below. Keep the enum tight to the three
-// roles this page is meant to manage.
+// super_admin is intentionally NOT assignable through this endpoint — it is
+// a singleton owner role set directly in the DB. admin promotion is also
+// handled out-of-band so a compromised admin token cannot mint more admins.
+// Everything else (user_manager, attorney, paralegal, agent, viewer) is
+// assignable by any user holding USERS_MANAGE.
 const UpdateUserRoleBody = z.object({
-  role: z.enum(["attorney", "paralegal", "viewer"]),
+  role: z.enum(["user_manager", "attorney", "paralegal", "agent", "viewer"]),
 });
 
 router.get(

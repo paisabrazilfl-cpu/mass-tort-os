@@ -106,7 +106,7 @@ before(async () => {
 
   // One ephemeral user per role. Password hash is a placeholder — we mint
   // JWTs directly, the login path doesn't run.
-  for (const role of ["admin", "attorney", "paralegal", "viewer"] as const) {
+  for (const role of ["admin", "user_manager", "attorney", "paralegal", "agent", "viewer"] as const) {
     const email = `rbac-matrix-${role}-${TS}@mtos.test`;
     const inserted = await db.execute(sql`
       INSERT INTO mtos_users (email, name, role, password_hash, token_version, firm_id)
@@ -461,39 +461,42 @@ const MATRIX: MatrixRow[] = [
   {
     method: "GET",
     path: "/api/forms/config",
-    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
+    // user_manager has FORMS_CONFIG_VIEW (oversight); agent only has PUBLIC variant → deny
+    expect: { super_admin: "allow", admin: "allow", user_manager: "allow", attorney: "allow", paralegal: "deny", agent: "deny", viewer: "deny" },
   },
   {
     method: "GET",
     path: "/api/forms/config/test-tort",
-    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
     // 404 is a fine "allow" outcome (the test tort doesn't exist) — what we
     // care about is that the gate didn't 403.
+    expect: { super_admin: "allow", admin: "allow", user_manager: "allow", attorney: "allow", paralegal: "deny", agent: "deny", viewer: "deny" },
     allowStatuses: [200, 404],
   },
   {
     method: "GET",
     path: "/api/decision-engine/portfolio",
-    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
+    // user_manager has DECISION_ENGINE_VIEW; agent does not
+    expect: { super_admin: "allow", admin: "allow", user_manager: "allow", attorney: "allow", paralegal: "deny", agent: "deny", viewer: "deny" },
   },
   {
     method: "PUT",
     path: "/api/decision-engine/settings",
     body: {},
-    expect: { super_admin: "allow", admin: "allow", attorney: "deny", paralegal: "deny", viewer: "deny" },
+    // Only super_admin/admin have DECISION_ENGINE_MANAGE
+    expect: { super_admin: "allow", admin: "allow", user_manager: "deny", attorney: "deny", paralegal: "deny", agent: "deny", viewer: "deny" },
     // PUT with empty body may 400; that still proves the role gate let admin in.
     allowStatuses: [200, 400, 422],
   },
   {
     method: "GET",
     path: "/api/auth/me",
-    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "allow", viewer: "allow" },
+    expect: { super_admin: "allow", admin: "allow", user_manager: "allow", attorney: "allow", paralegal: "allow", agent: "allow", viewer: "allow" },
   },
 ];
 
 describe("role × route allow/deny matrix", () => {
   for (const row of MATRIX) {
-    for (const role of ["admin", "attorney", "paralegal", "viewer"] as const) {
+    for (const role of ["admin", "user_manager", "attorney", "paralegal", "agent", "viewer"] as const) {
       const expected = row.expect[role];
       test(`${role.padEnd(9)} ${row.method} ${row.path} ⇒ ${expected}`, async () => {
         const r = await probe(row.method, row.path, { token: tokenFor(role), body: row.body });
