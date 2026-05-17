@@ -618,10 +618,10 @@ Boot-time count: **259 checked / 42 public / 217 protected / 0 unprotected.**
 | admin-competitive-intel | DELETE | `/api/admin-competitive-intel/watchlist/:id` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
 | admin-competitive-intel | GET | `/api/admin-competitive-intel/watchlist` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
 | admin-competitive-intel | POST | `/api/admin-competitive-intel/watchlist` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
-| admin-dark-room | DELETE | `/api/admin-dark-room/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
-| admin-dark-room | PATCH | `/api/admin-dark-room/:id` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
-| admin-dark-room | GET | `/api/admin-dark-room/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
-| admin-dark-room | POST | `/api/admin-dark-room/` | ✓ | ✓ |  |  |  | `admin` | — | ✓ |
+| admin-dark-room | DELETE | `/api/admin-dark-room/:id` | ✓ | ✓ |  |  |  | `super_admin` | — | ✓ |
+| admin-dark-room | PATCH | `/api/admin-dark-room/:id` | ✓ | ✓ |  |  |  | `super_admin` | — | ✓ |
+| admin-dark-room | GET | `/api/admin-dark-room/` | ✓ | ✓ |  |  |  | `super_admin` | — | ✓ |
+| admin-dark-room | POST | `/api/admin-dark-room/` | ✓ | ✓ |  |  |  | `super_admin` | — | ✓ |
 | admin-event-catalog | GET | `/api/admin-event-catalog/` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-event-catalog | GET | `/api/admin-event-catalog/openapi.yaml` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-self-heal | POST | `/api/admin-self-heal/:id/approve` | ✓ | ✓ |  |  |  | — | `self_heal:manage` | ✓ |
