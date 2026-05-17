@@ -64,14 +64,26 @@ export function classifyError(err: unknown): ErrorClass {
   // Explicit provider-down signal.
   if (err instanceof ProviderUnavailableError) return "DEFER_EXTERNAL";
 
-  // Type-error / programmer-error class — retrying same input changes
-  // nothing.
-  if (err instanceof TypeError) return "NON_RETRYABLE";
-
   // Abort signal — caller's timeout fired. Caller decides whether to
   // retry; we report it as retryable so the budget-aware retry harness
   // can decide.
   if (err instanceof Error && err.name === "AbortError") return "RETRYABLE";
+
+  // Network signals (checked BEFORE the TypeError branch). Node 18+ wraps
+  // fetch network failures as `TypeError: fetch failed` with the real
+  // cause attached as `err.cause` (UND_ERR_*, ENOTFOUND, ECONNREFUSED).
+  // Treating that as NON_RETRYABLE based on the TypeError class alone
+  // would refuse to retry transient DNS / TCP failures. Inspect the
+  // message + cause chain first.
+  const msg = readMessage(err).toLowerCase();
+  const causeMsg = readCauseMessage(err).toLowerCase();
+  if (/econnreset|enotfound|etimedout|econnrefused|socket hang up|fetch failed|network|und_err/.test(msg + " " + causeMsg)) {
+    return "RETRYABLE";
+  }
+
+  // Real programmer error (after the network filter above eliminated the
+  // fetch-failed false positive). Retrying same input changes nothing.
+  if (err instanceof TypeError) return "NON_RETRYABLE";
 
   // Inspect status codes embedded in the error. LLM SDKs (Anthropic,
   // OpenAI, Google) all surface HTTP status either as `err.status`,
@@ -82,15 +94,12 @@ export function classifyError(err: unknown): ErrorClass {
     if (status === 400 || status === 422) return "NON_RETRYABLE"; // bad request
     if (status === 404) return "NON_RETRYABLE";
     if (status === 413) return "NON_RETRYABLE"; // payload too large
+    if (status === 408) return "RETRYABLE"; // Request Timeout — backoff helps
+    if (status === 425) return "RETRYABLE"; // Too Early — backoff helps
     if (status === 429) return "RETRYABLE"; // rate-limited — backoff helps
     if (status >= 500 && status < 600) return "RETRYABLE"; // server-side transient
   }
 
-  // Network-level signals embedded in the error message.
-  const msg = readMessage(err).toLowerCase();
-  if (/econnreset|enotfound|etimedout|econnrefused|socket hang up/.test(msg)) {
-    return "RETRYABLE";
-  }
   if (/auth|unauthor|forbidden|api key|invalid_api_key/.test(msg)) {
     return "NON_RETRYABLE";
   }
@@ -101,6 +110,13 @@ export function classifyError(err: unknown): ErrorClass {
   // Default: assume transient. Cheaper to retry once than to surface
   // a permanent failure on a recoverable case.
   return "RETRYABLE";
+}
+
+function readCauseMessage(err: unknown): string {
+  if (err && typeof err === "object" && "cause" in err) {
+    return readMessage((err as { cause?: unknown }).cause);
+  }
+  return "";
 }
 
 function readStatusCode(err: unknown): number | null {

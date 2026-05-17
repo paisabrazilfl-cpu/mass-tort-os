@@ -72,6 +72,13 @@ export class CircuitBreaker {
   private failures = 0;
   private state: BreakerState = "CLOSED";
   private openedAt: number | null = null;
+  // Set true the moment HALF_OPEN admits its single probe. Cleared by
+  // recordSuccess() or recordFailure(). Prevents N concurrent callers
+  // from all slipping through at the half-open moment — the contract
+  // was always "one probe" but the previous implementation returned
+  // true unconditionally so a burst of in-flight requests at the
+  // cooldown boundary would all be admitted.
+  private probeInFlight = false;
 
   constructor(key: string, opts: CircuitBreakerOptions = {}) {
     this.key = key;
@@ -82,7 +89,7 @@ export class CircuitBreaker {
   /**
    * Returns true if the caller is allowed to make the call. In OPEN
    * state, transitions to HALF_OPEN automatically once the cooldown
-   * has elapsed and grants one probe request.
+   * has elapsed and grants exactly ONE probe request.
    */
   allowRequest(now: number = Date.now()): boolean {
     if (this.state === "CLOSED") return true;
@@ -91,13 +98,17 @@ export class CircuitBreaker {
       if (this.openedAt !== null && now - this.openedAt >= this.cooldownMs) {
         // Cooldown elapsed — promote to HALF_OPEN and admit one probe.
         this.state = "HALF_OPEN";
+        this.probeInFlight = true;
         return true;
       }
       return false;
     }
 
-    // HALF_OPEN — admit the probe (caller will record success or failure
-    // and we'll decide whether to fully close or re-open).
+    // HALF_OPEN — admit ONLY if a probe isn't already in flight. The
+    // probe's eventual recordSuccess/recordFailure resets this flag
+    // (success → closes the breaker; failure → re-opens it).
+    if (this.probeInFlight) return false;
+    this.probeInFlight = true;
     return true;
   }
 
@@ -106,6 +117,7 @@ export class CircuitBreaker {
     this.failures = 0;
     this.state = "CLOSED";
     this.openedAt = null;
+    this.probeInFlight = false;
   }
 
   /**
@@ -118,6 +130,7 @@ export class CircuitBreaker {
     if (this.state === "HALF_OPEN") {
       this.openedAt = now;
       this.state = "OPEN";
+      this.probeInFlight = false;
       return;
     }
 

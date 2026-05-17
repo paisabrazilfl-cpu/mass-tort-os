@@ -59,6 +59,16 @@ export interface AttemptContext {
   totalAttempts: number;
   /** The previous attempt's failure, or null on the first attempt. */
   previousError: { code: string; message: string; details?: unknown } | null;
+  /**
+   * Optional AbortSignal that fires when the per-attempt budget elapses.
+   * Plain `recursiveRetry` never sets this; only the v2 wrapper
+   * (`lib/ai/resilient-retry.ts`) attaches a real signal. Attempt impls
+   * SHOULD forward it into `fetch({ signal })` so an outer timeout
+   * actually cancels in-flight work — without propagation a setTimeout-
+   * based race rejects the promise but leaves the underlying socket /
+   * SDK call running, costing tokens and pinning workers.
+   */
+  abortSignal?: AbortSignal;
 }
 
 /** Audit row recorded for every attempt (success or failure). */

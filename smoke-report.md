@@ -91,7 +91,7 @@
 
 ### §7.1
 - ✅ GET /api/leads route is mounted under leadsRouter — routes/index.ts mounts leads at /api/leads; GET / handler present
-- ✅ Lead routes are firm-scoped (post-7baf80e) — leads.ts uses leadFirmScope(req) at 14 call sites
+- ✅ Lead routes are firm-scoped (post-7baf80e) — leads.ts uses leadFirmScope(req) at 15 call sites
 - ✅ GET /api/leads/export hard cap = 50_000 — leads.ts EXPORT_HARD_CAP = 50_000
 
 ### §7.2

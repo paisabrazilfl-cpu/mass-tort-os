@@ -1,6 +1,6 @@
 import { Router } from "express";
 import crypto from "crypto";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { errorEnvelope, unauthorized } from "../lib/http-errors";
 import {
   generateToken,
@@ -114,8 +114,33 @@ const authRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many authentication attempts. Please try again later." },
-  keyGenerator: (req) => (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown",
+  // Trust the platform's reverse proxy (set via `app.set("trust proxy", 1)`)
+  // so req.ip is the first-hop client IP rather than the immediate Railway
+  // edge. Use express-rate-limit's IPv6-aware key helper instead of slicing
+  // X-Forwarded-For ourselves — the raw header is operator-controllable and
+  // a spoofed XFF previously let an attacker rotate keys and bypass the
+  // 20/15m auth limit entirely.
+  keyGenerator: (req) => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
 });
+
+// Fixed scrypt parameters mirroring `hashPassword`/`verifyPassword` so the
+// dummy-verify path costs the same wall-clock as a real one. Used by the
+// timing-oracle padding below when the email is unknown.
+const TIMING_DUMMY_SALT = "00000000000000000000000000000000";
+const TIMING_DUMMY_HASH = Buffer.alloc(64);
+async function timingPadVerify(password: string): Promise<void> {
+  // Run scrypt to consume ~the same CPU as a real verify, then discard the
+  // result. We don't care about the output, only that the response-time
+  // oracle ("missing email returns instantly") goes away.
+  await new Promise<void>((resolve) => {
+    crypto.scrypt(password, TIMING_DUMMY_SALT, 64, (err, derivedKey) => {
+      try {
+        if (!err) crypto.timingSafeEqual(TIMING_DUMMY_HASH, derivedKey);
+      } catch { /* ignore — we only need the CPU work */ }
+      resolve();
+    });
+  });
+}
 
 const PASSWORD_RULES = {
   minLength: 12,
@@ -188,13 +213,21 @@ router.post("/login", authRateLimit, async (req, res) => {
 
   const user = await getUserByEmail(email);
   if (!user) {
+    // User-enumeration timing oracle defence. If the email is unknown we
+    // would otherwise return immediately while a known-email path spends
+    // 60–120 ms in scrypt; an attacker can sit on /login and measure that
+    // gap to enumerate registered accounts. Burn the same CPU before
+    // responding so both branches take the same wall-clock.
+    await timingPadVerify(password);
     unauthorized(res, "Invalid credentials");
     return;
   }
 
   if (await isAccountLocked(user)) {
     const minutesLeft = Math.ceil((new Date(user.locked_until!).getTime() - Date.now()) / 60000);
-    await dispatchCriticalAlert("high", "Login attempt on locked account", `Locked account login attempt: ${email}`, undefined);
+    // Fire-and-forget — a slow/down alert backend must not block login.
+    dispatchCriticalAlert("high", "Login attempt on locked account", `Locked account login attempt: ${email}`, undefined)
+      .catch((err) => req.log.warn({ err, email }, "lockout alert dispatch failed"));
     errorEnvelope(res, 423, "account_locked", `Account is locked. Try again in ${minutesLeft} minute(s).`);
     return;
   }
@@ -202,7 +235,8 @@ router.post("/login", authRateLimit, async (req, res) => {
   if (!(await verifyPassword(password, user.password_hash))) {
     const result = await incrementFailedAttempts(email);
     if (result.locked) {
-      await dispatchCriticalAlert("high", "Account locked after failed attempts", `Account locked: ${email} after ${result.attempts} failed attempts`);
+      dispatchCriticalAlert("high", "Account locked after failed attempts", `Account locked: ${email} after ${result.attempts} failed attempts`)
+        .catch((err) => req.log.warn({ err, email }, "lockout alert dispatch failed"));
       await auditLog("security", String(user.id), "account_locked", { email, attempts: result.attempts });
     }
     unauthorized(res, "Invalid credentials");
@@ -214,14 +248,20 @@ router.post("/login", authRateLimit, async (req, res) => {
       res.status(200).json({ mfa_required: true, message: "Please provide your TOTP code" });
       return;
     }
-    const decryptedSecret = decrypt(user.totp_secret);
+    // Per-row AAD: bind the TOTP ciphertext to (field="totp_secret",
+    // entityId=user.id). Without this, a row-swap from user A → user B
+    // silently decrypts via encryption.ts's no-AAD fallback chain and a
+    // stolen DB image could let an attacker authenticate as B with A's TOTP.
+    const decryptedSecret = decrypt(user.totp_secret, "totp_secret", String(user.id));
     if (!verifyTOTP(decryptedSecret, totp_code)) {
       const result = await incrementFailedAttempts(email);
       if (result.locked) {
-        await dispatchCriticalAlert("high", "Account locked after failed MFA", `Account locked: ${email} after ${result.attempts} failed attempts (MFA)`);
+        dispatchCriticalAlert("high", "Account locked after failed MFA", `Account locked: ${email} after ${result.attempts} failed attempts (MFA)`)
+          .catch((err) => req.log.warn({ err, email }, "mfa lockout alert dispatch failed"));
         await auditLog("security", String(user.id), "account_locked_mfa", { email, attempts: result.attempts });
       }
-      await dispatchCriticalAlert("medium", "Failed MFA attempt", `Failed TOTP verification for: ${email}`);
+      dispatchCriticalAlert("medium", "Failed MFA attempt", `Failed TOTP verification for: ${email}`)
+        .catch((err) => req.log.warn({ err, email }, "mfa fail alert dispatch failed"));
       unauthorized(res, "Invalid TOTP code");
       return;
     }
@@ -264,7 +304,7 @@ router.post("/login", authRateLimit, async (req, res) => {
   const refreshToken = await generateRefreshToken(user.id);
 
   await auditLog("user", String(user.id), "login", { email: user.email }, {
-    ip_address: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
+    ip_address: req.ip ?? req.socket.remoteAddress,
     user_agent: req.headers["user-agent"],
   });
 
@@ -700,7 +740,11 @@ router.post("/mfa/setup", authMiddleware, async (req, res) => {
   if (dbUser.mfa_enabled) { res.status(409).json({ error: "MFA is already enabled" }); return; }
 
   const secret = generateSecret();
-  const encryptedSecret = encrypt(secret);
+  // Per-row AAD: bind ciphertext to (field="totp_secret", entityId=user.id).
+  // Without this the encryption.ts no-AAD fallback would accept a row-swap
+  // and let an attacker who can write rows authenticate as user B with user
+  // A's TOTP secret. MFA login + disable paths decrypt with the same AAD.
+  const encryptedSecret = encrypt(secret, "totp_secret", String(user.id));
   const otpauthUrl = generateOTPAuthURL(secret, user.email);
 
   await db.execute(sql`
@@ -724,7 +768,7 @@ router.post("/mfa/verify", authMiddleware, async (req, res) => {
   const dbUser = await getUserByEmail(user.email);
   if (!dbUser || !dbUser.totp_secret) { res.status(400).json({ error: "MFA setup not initiated" }); return; }
 
-  const decryptedSecret = decrypt(dbUser.totp_secret);
+  const decryptedSecret = decrypt(dbUser.totp_secret, "totp_secret", String(user.id));
   if (!verifyTOTP(decryptedSecret, totp_code)) {
     unauthorized(res, "Invalid TOTP code. Please try again.");
     return;
@@ -756,7 +800,7 @@ router.post("/mfa/disable", authMiddleware, async (req, res) => {
   }
 
   if (!dbUser.totp_secret) { res.status(400).json({ error: "MFA setup incomplete" }); return; }
-  const decryptedSecret = decrypt(dbUser.totp_secret);
+  const decryptedSecret = decrypt(dbUser.totp_secret, "totp_secret", String(user.id));
   if (!verifyTOTP(decryptedSecret, totp_code)) {
     unauthorized(res, "Invalid TOTP code");
     return;

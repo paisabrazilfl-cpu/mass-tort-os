@@ -436,6 +436,8 @@ export async function generateRefreshToken(userId: number): Promise<string> {
 export async function rotateRefreshToken(oldToken: string, userId: number): Promise<{ accessToken: string; refreshToken: string } | null> {
   const oldHash = crypto.createHash("sha256").update(oldToken).digest("hex");
 
+  // First, look up the row to detect expiry and to know whether to treat a
+  // miss as "token was never valid" vs "token already revoked (reuse)".
   const [existing] = await db.select().from(refreshTokensTable)
     .where(and(
       eq(refreshTokensTable.token_hash, oldHash),
@@ -446,27 +448,52 @@ export async function rotateRefreshToken(oldToken: string, userId: number): Prom
     return null;
   }
 
-  if (existing.revoked) {
+  // Mint the new token BEFORE the atomic rotate so we can do the revoke and
+  // the replaced_by stamp in a single UPDATE. The replaced_by field gives
+  // a future forensic chain in case we ever need to trace which token
+  // replaced which.
+  const newToken = crypto.randomBytes(48).toString("hex");
+  const newHash = crypto.createHash("sha256").update(newToken).digest("hex");
+
+  // Atomic compare-and-swap. The WHERE-clause asserts `revoked = false` so
+  // only ONE concurrent rotate of the same token wins. RETURNING tells us
+  // which side we were on:
+  //   • 1 row returned → we won, proceed to insert the replacement.
+  //   • 0 rows returned → either someone else already rotated it (legitimate
+  //     race we lost) OR the token was already revoked (reuse → theft).
+  // The previous SELECT→check→UPDATE pattern had a TOCTOU window where two
+  // concurrent valid rotations both passed the `if (existing.revoked)`
+  // check and both issued new tokens — reuse never detected.
+  const rotated = await db
+    .update(refreshTokensTable)
+    .set({ revoked: true, replaced_by: newHash })
+    .where(and(
+      eq(refreshTokensTable.id, existing.id),
+      eq(refreshTokensTable.revoked, false),
+    ))
+    .returning({ id: refreshTokensTable.id });
+
+  if (rotated.length === 0) {
+    // We lost the CAS. Two scenarios are indistinguishable from a single
+    // SELECT, so we fail closed and treat it as theft: revoke every token
+    // for this user and bump token_version (invalidating all access tokens
+    // on next verify) so a stolen pair can't keep ratcheting. False
+    // positive on a legitimate "user double-clicked refresh" loses the
+    // session — recoverable by re-login. False negative would persist a
+    // compromised session indefinitely.
     await db.update(refreshTokensTable)
       .set({ revoked: true })
       .where(eq(refreshTokensTable.user_id, userId));
     await db.execute(sql`
       UPDATE mtos_users SET token_version = token_version + 1 WHERE id = ${userId}
     `);
-    logger.warn({ userId }, "Refresh token reuse detected — revoking ALL tokens for user");
+    logger.warn({ userId, tokenId: existing.id }, "Refresh token rotate CAS lost — treating as reuse, revoking all sessions");
     const { dispatchCriticalAlert } = await import("./security-alerts");
     dispatchCriticalAlert("critical", "Refresh token reuse detected", `User ${userId}: possible token theft — all sessions revoked`).catch((err) => {
       logger.error({ err, userId }, "Failed to dispatch token-theft alert");
     });
     return null;
   }
-
-  const newToken = crypto.randomBytes(48).toString("hex");
-  const newHash = crypto.createHash("sha256").update(newToken).digest("hex");
-
-  await db.update(refreshTokensTable)
-    .set({ revoked: true, replaced_by: newHash })
-    .where(eq(refreshTokensTable.id, existing.id));
 
   await db.insert(refreshTokensTable).values({
     user_id: userId,

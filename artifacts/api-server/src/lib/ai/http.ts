@@ -52,10 +52,23 @@ export async function openAiCompatChat(
 
   const url = `${opts.baseUrl.replace(/\/+$/, "")}/chat/completions`;
 
+  // 60 s cap per attempt. Every LLM call in this codebase has historically
+  // run without a timeout; a hung provider pinned an Express worker until
+  // the kernel-level TCP timeout (often minutes). 60 s comfortably exceeds
+  // p99 LLM latency while preventing indefinite hangs. The internal retry
+  // loop runs at most twice so worst-case wall-clock is bounded at ~2 min
+  // before the outer resilient-retry budget takes over.
+  const PER_REQUEST_TIMEOUT_MS = 60_000;
+
   for (let attempt = 0; attempt < 2; attempt++) {
     let resp: Response;
     try {
-      resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+      resp = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(PER_REQUEST_TIMEOUT_MS),
+      });
     } catch (err) {
       if (attempt === 0) {
         await sleep(500);

@@ -81,6 +81,22 @@ app.use("/api/web-forms", cors({
   allowedHeaders: ["Content-Type"],
   maxAge: 86400,
 }));
+// Stricter per-IP rate limit on the public PII intake surface. The global
+// limiter at line 41 sits at 500/15m which is appropriate for the CRM admin
+// app behind auth but far too generous for an unauthenticated form that
+// accepts SSN/DOB/address. 30 submissions per IP per 15 minutes — well
+// above any legitimate operator-testing rate, but cuts the scrape envelope
+// from ~33 RPS down to ~0.03 RPS per IP. OPTIONS preflight is exempted so
+// CORS still works.
+app.use("/api/web-forms", rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method === "OPTIONS" || req.method === "GET",
+  keyGenerator: (req) => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
+  message: { status: "error", code: "rate_limited", message: "Too many submissions from this address. Please try again later." },
+}));
 // Strict CORS for the CRM admin app and all other authenticated routes.
 //
 // Production callers come from the SPA host(s), which differ per environment

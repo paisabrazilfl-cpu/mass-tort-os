@@ -735,6 +735,31 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
   // another row would fail AES-GCM auth verification on read.
   const encryptedUpdate = encryptLeadFields(updateData, String(paramsParsed.data.id));
 
+  // Recompute lookup_hash when any of its plaintext inputs (tort, email,
+  // phone) change. Without this, dedup matches against the OLD identity
+  // tuple forever — a lead that updates their phone number can be
+  // re-imported as a "new" lead, defeating Task #15. Read existing
+  // plaintext values for fields the PATCH didn't include so partial
+  // updates produce a correct hash.
+  const phoneInBody = body.phone_primary ?? body.phone;
+  if (body.tort_type !== undefined || body.email !== undefined || phoneInBody !== undefined) {
+    const [hashInputs] = await db
+      .select({
+        tort_type: leadsTable.tort_type,
+        email: leadsTable.email,
+        phone_primary: leadsTable.phone_primary,
+        phone: leadsTable.phone,
+      })
+      .from(leadsTable)
+      .where(and(eq(leadsTable.id, paramsParsed.data.id), leadFirmScope(req)));
+    if (hashInputs) {
+      const nextTort = body.tort_type ?? hashInputs.tort_type ?? null;
+      const nextEmail = body.email ?? hashInputs.email ?? null;
+      const nextPhone = phoneInBody ?? hashInputs.phone_primary ?? hashInputs.phone ?? null;
+      (encryptedUpdate as Record<string, unknown>).lookup_hash = leadLookupHash(nextTort, nextEmail, nextPhone);
+    }
+  }
+
   // Capture old status BEFORE update so we can detect a transition to "approved".
   const [priorLead] = await db
     .select({ status: leadsTable.status })

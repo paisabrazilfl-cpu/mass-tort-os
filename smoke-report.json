@@ -69,7 +69,7 @@
     "section": "§7.1",
     "capability": "Lead routes are firm-scoped (post-7baf80e)",
     "outcome": "PASS",
-    "evidence": "leads.ts uses leadFirmScope(req) at 14 call sites"
+    "evidence": "leads.ts uses leadFirmScope(req) at 15 call sites"
   },
   {
     "section": "§7.2",

@@ -115,20 +115,34 @@ export async function resilientRetry<T>(
       notes: `breaker=${breaker.getState()}`,
     });
 
-    // ── 2. Per-attempt timeout via AbortSignal.race ──────────────────
+    // ── 2. Per-attempt timeout via AbortSignal + Promise.race ──────────
+    // The signal is propagated into the attempt via `ctx.abortSignal` so
+    // the inner `fetch({ signal })` actually cancels in-flight work when
+    // the budget elapses. The Promise.race is the safety net for attempts
+    // that ignore the signal: the race rejects so the outer flow still
+    // moves on even if the inner work pretends nothing happened. Previous
+    // behavior was race-only — the inner fetch kept running indefinitely
+    // after the race rejected, holding sockets and racking provider
+    // tokens with no UI signal.
     let timeoutFired = false;
     let outcome: AttemptOutcome<T>;
+    const ac = new AbortController();
+    const ctxWithSignal: AttemptContext = { ...ctx, abortSignal: ac.signal };
+    const timer = setTimeout(() => {
+      timeoutFired = true;
+      ac.abort(new DOMException("attempt timed out", "AbortError"));
+    }, attemptTimeoutMs);
+    if (typeof timer.unref === "function") timer.unref();
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        const t = setTimeout(() => {
-          timeoutFired = true;
-          reject(new DOMException("attempt timed out", "AbortError"));
-        }, attemptTimeoutMs);
-        // Unref so the test process doesn't hang on a stray timer.
-        if (typeof t.unref === "function") t.unref();
+        ac.signal.addEventListener("abort", () => {
+          reject(ac.signal.reason ?? new DOMException("attempt timed out", "AbortError"));
+        }, { once: true });
       });
-      outcome = await Promise.race([opts.attempt(ctx), timeoutPromise]);
+      outcome = await Promise.race([opts.attempt(ctxWithSignal), timeoutPromise]);
+      clearTimeout(timer);
     } catch (err) {
+      clearTimeout(timer);
       // The attempt itself or the timeout race rejected. Classify and
       // decide whether the recursiveRetry loop should keep retrying.
       const klass: ErrorClass = classifyError(err);
