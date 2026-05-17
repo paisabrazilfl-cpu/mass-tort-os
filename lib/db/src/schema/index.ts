@@ -38,6 +38,7 @@ export * from "./fax_events";
 export * from "./fasten_connections";
 export * from "./api_keys";
 export * from "./self_heal_sessions";
+export * from "./system_snapshots";
 export * from "./competitive_intel";
 export * from "./processed_webhook_events";
 export { refreshTokensTable } from "./users";

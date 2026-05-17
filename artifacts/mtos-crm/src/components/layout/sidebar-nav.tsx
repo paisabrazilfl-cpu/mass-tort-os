@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, UserCog, FileText, PlusCircle, Briefcase, Inbox, GitBranch, UserCheck,
   BarChart3, Shield, Stethoscope, ShieldAlert, AppWindow, Building2, ShieldCheck, FileSearch,
   Clock, Sparkles, Brain, Plug, Newspaper, TrendingUp, FileUp, Scale, Building, FileSignature,
-  Grid3x3, Settings, Activity, CreditCard, Phone, Skull, Workflow, Eye, BookOpen, Library,
+  Grid3x3, Settings, Activity, CreditCard, Phone, Skull, Workflow, Eye, BookOpen, Library, Camera,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -97,6 +97,7 @@ export const navigation: NavSection[] = [
     section: "BOS-OMEGA",
     items: [
       { name: "Dark Room", href: "/dark-room", icon: Skull, adminOnly: true },
+      { name: "Restore / Snapshots", href: "/admin/snapshots", icon: Camera, adminOnly: true },
     ],
   },
 ];

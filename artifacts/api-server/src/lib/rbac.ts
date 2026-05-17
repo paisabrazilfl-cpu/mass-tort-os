@@ -230,6 +230,13 @@ export const Permission = {
   // become coding-agent input that opens PRs against the repo.
   SELF_HEAL_MANAGE: "self_heal:manage",
 
+  // System Snapshots / Restore. Admin-only — snapshots are firm-scoped
+  // JSON dumps of operational config (workflow settings, integrations
+  // metadata, automation graphs, document templates). Restoring overwrites
+  // existing rows by natural key. Encrypted credentials NEVER leave the
+  // vault — snapshots store only references / hashes / userConfig.
+  SNAPSHOT_MANAGE: "snapshot:manage",
+
   // Competitive Intelligence (Google Ads Transparency Center via SerpAPI).
   // Admin-only — surfaces what other plaintiff firms are advertising for.
   COMPETITIVE_INTEL_MANAGE: "competitive_intel:manage",

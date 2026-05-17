@@ -59,7 +59,7 @@
 - ✅ Automation node catalog ↔ handler parity — 74 catalog nodes ↔ 74 handlers; perfect parity
 
 ### §13.7
-- ✅ 42 schema modules in lib/db/src/schema/ — lib/db/src/schema has 42 .ts modules (matches §13.7 claim)
+- ✅ 43 schema modules in lib/db/src/schema/ — lib/db/src/schema has 43 .ts modules
 - ✅ processed_webhook_events schema exists — schema/processed_webhook_events.ts has the documented idempotency table
 
 ### §13.9

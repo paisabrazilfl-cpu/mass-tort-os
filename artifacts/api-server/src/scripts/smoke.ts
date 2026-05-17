@@ -566,11 +566,14 @@ probe("§13.3", "Automation node catalog ↔ handler parity", () => {
   return `${catalogTypes.length} catalog nodes ↔ ${handlerTypes.length} handlers; perfect parity`;
 });
 
-probe("§13.7", "42 schema modules in lib/db/src/schema/", () => {
+probe("§13.7", "43 schema modules in lib/db/src/schema/", () => {
+  // Bumped to 43 with the addition of system_snapshots (config-snapshot
+  // table for the Restore/Snapshots admin page). Increment this constant
+  // alongside any future schema add.
   const dir = join(ROOT, "lib/db/src/schema");
   const files = readdirSync(dir).filter((f) => f.endsWith(".ts") && f !== "index.ts");
-  if (files.length !== 42) throw new Error(`expected 42 schema files, found ${files.length}`);
-  return `lib/db/src/schema has 42 .ts modules (matches §13.7 claim)`;
+  if (files.length !== 43) throw new Error(`expected 43 schema files, found ${files.length}`);
+  return `lib/db/src/schema has 43 .ts modules`;
 });
 
 probe("§13.7", "processed_webhook_events schema exists", () => {

@@ -62,6 +62,7 @@ import AutomationEditorPage from "@/pages/automation-editor";
 import N8nSetupPage from "@/pages/n8n-setup";
 import FormsApiPage from "@/pages/forms-api";
 import SelfHealPage from "@/pages/self-heal";
+import AdminSnapshotsPage from "@/pages/admin-snapshots";
 import CompetitiveIntelPage from "@/pages/competitive-intel";
 import UserManualPage from "@/pages/user-manual";
 import AdsLibrariesPage from "@/pages/ads-libraries";
@@ -145,6 +146,7 @@ function AuthedRoutes() {
           <Route path="/n8n-setup" component={N8nSetupPage} />
           <Route path="/forms-api" component={FormsApiPage} />
           <Route path="/self-heal" component={SelfHealPage} />
+          <Route path="/admin/snapshots" component={AdminSnapshotsPage} />
           <Route path="/competitive-intel" component={CompetitiveIntelPage} />
           <Route path="/user-manual" component={UserManualPage} />
           <Route path="/ads-libraries" component={AdsLibrariesPage} />

@@ -271,9 +271,9 @@
   },
   {
     "section": "§13.7",
-    "capability": "42 schema modules in lib/db/src/schema/",
+    "capability": "43 schema modules in lib/db/src/schema/",
     "outcome": "PASS",
-    "evidence": "lib/db/src/schema has 42 .ts modules (matches §13.7 claim)"
+    "evidence": "lib/db/src/schema has 43 .ts modules"
   },
   {
     "section": "§13.7",
