@@ -171,6 +171,22 @@ export async function approvePlan(sessionId: string): Promise<void> {
 }
 
 /**
+ * Best-effort cancel of an in-flight Jules session. Jules' public API
+ * exposes a `:cancel` action that stops the agent and prevents any
+ * pending PR write. Idempotent — calling on an already-terminal session
+ * returns 200 (Jules treats it as a no-op). The route layer should still
+ * mark the local row as `cancelled` regardless of what Jules returns,
+ * since we can't always trust the upstream signal to land before the
+ * operator clicks again.
+ */
+export async function cancelSession(sessionId: string): Promise<void> {
+  await julesFetch(`/sessions/${encodeURIComponent(sessionId)}:cancel`, {
+    method: "POST",
+    body: {},
+  });
+}
+
+/**
  * Best-effort detection of `sources/github/owner/repo` from the local
  * git remote. Returns null if no github remote is configured. Used as a
  * default for new self-heal sessions; operators can always override.
