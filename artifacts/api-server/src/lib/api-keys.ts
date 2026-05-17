@@ -23,7 +23,7 @@ export interface ApiKeyAuthResult {
   scopes: readonly string[];
   user_id: number;
   user_email: string;
-  user_role: "admin" | "attorney" | "paralegal" | "viewer";
+  user_role: "super_admin" | "admin" | "attorney" | "paralegal" | "viewer";
   firm_id: number;
 }
 

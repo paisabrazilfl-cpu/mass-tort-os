@@ -1,13 +1,15 @@
 import { Router } from "express";
 import { db, adminDarkRoomLinksTable } from "@workspace/db";
 import { and, asc, eq } from "drizzle-orm";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { authMiddleware, requireRole } from "../lib/rbac";
 import { badRequest, notFound } from "../lib/http-errors";
 
 const router = Router();
 router.use(authMiddleware);
-router.use(requireRole("admin"));
+// Boss Omega Dark Room is EXCLUSIVELY for the platform super_admin owner.
+// requireRole("admin") would admit any firm admin — this must be "super_admin".
+router.use(requireRole("super_admin"));
 
 const urlSchema = z
   .string()

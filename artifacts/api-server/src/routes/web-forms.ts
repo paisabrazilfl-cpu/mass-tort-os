@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { db, formConfigurationsTable, leadsTable, workflowSettingsTable } from "@workspace/db";
 import type { WebFormConfig, WebFormField, EligibilityRule } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
@@ -29,10 +29,11 @@ const webFormsRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests" },
-  keyGenerator: (req) =>
-    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-    req.socket.remoteAddress ||
-    "unknown",
+  // Use ipKeyGenerator (honours trust proxy / req.ip) instead of reading
+  // X-Forwarded-For directly. A spoofed XFF header previously let an attacker
+  // rotate fake IPs and bypass this limit entirely — the same fix applied to
+  // auth.ts (and documented there) must be consistent here.
+  keyGenerator: (req) => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
 });
 
 router.use(webFormsRateLimit);

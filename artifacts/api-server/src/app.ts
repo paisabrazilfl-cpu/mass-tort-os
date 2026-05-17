@@ -106,18 +106,38 @@ app.use(cors({
 // number formatting / drops insignificant whitespace and silently breaks
 // signature checks on legitimate webhooks. We only attach `rawBody` for
 // `/api/webhooks/*` to avoid a memory hit on every request.
+// Webhook routes need 55 MB to handle large provider payloads and raw-body
+// HMAC verification. All other routes get a 1 MB cap — a 55 MB global limit
+// let attackers POST huge bodies to every unauthenticated endpoint (e.g.
+// /api/auth/login, /api/web-forms/*) to cause OOM pressure on the API process.
 app.use(express.json({
   limit: "55mb",
   verify: (req, _res, buf) => {
+    const url = req.url ?? "";
     if (
-      (req.url?.startsWith("/api/webhooks/") || req.url?.startsWith("/api/automations/webhook/"))
-      && buf && buf.length > 0
+      buf && buf.length > 0 &&
+      (url.startsWith("/api/webhooks/") || url.startsWith("/api/automations/webhook/"))
     ) {
       (req as unknown as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
     }
+    // Enforce 1 MB limit on all non-webhook routes. The express.json limit
+    // above is set high so webhooks can pass; we do a secondary check here
+    // against everything else. Throwing causes Express to surface a 413.
+    if (
+      !url.startsWith("/api/webhooks/") &&
+      !url.startsWith("/api/automations/webhook/") &&
+      buf && buf.length > 1 * 1024 * 1024
+    ) {
+      // Cast to `any` so we can attach the HTTP status code that Express's
+      // global error handler reads. `ErrnoException` doesn't carry `status`.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const err: any = new Error("Request body too large");
+      err.status = 413;
+      throw err;
+    }
   },
 }));
-app.use(express.urlencoded({ extended: true, limit: "55mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 app.use(idsMiddleware());
 

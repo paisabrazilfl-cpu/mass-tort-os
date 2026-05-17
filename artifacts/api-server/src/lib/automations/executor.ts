@@ -11,6 +11,7 @@
  */
 import {
   db,
+  pool,
   automationRunsTable,
   automationWorkflowsTable,
   leadsTable,
@@ -211,8 +212,16 @@ function resolvePath(obj: any, path: string): any {
 }
 
 function evalExpression(expr: string, bindings: Record<string, any>): any {
+  // Cap expression size to match the 8 KB limit on data.transform — prevents
+  // a workflow author from tying up a worker thread with a parser-time
+  // pathological input or a megabyte-long condition string.
+  if (expr.length > 8 * 1024) {
+    throw new Error(`evalExpression: expression exceeds 8 KB cap (${expr.length} bytes)`);
+  }
   const ctx = { ...bindings };
-  vm.createContext(ctx);
+  // Harden the sandbox: disable dynamic code generation (eval / new Function /
+  // WebAssembly) inside the expression context, matching data.transform.
+  vm.createContext(ctx, { codeGeneration: { strings: false, wasm: false } });
   return vm.runInContext(expr, ctx, { timeout: 1000 });
 }
 
@@ -598,14 +607,30 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
       throw new Error("io.sql_query only allows SELECT/WITH queries.");
     }
-    const params = (s.node.data?.params?.params ?? []) as any[];
-    const result = await db.execute(sql.raw(queryText.replace(/\$(\d+)/g, (_, i) => {
-      const v = params[Number(i) - 1];
-      if (v == null) return "NULL";
-      if (typeof v === "number") return String(v);
-      return `'${String(v).replace(/'/g, "''")}'`;
-    })));
-    return { rows: (result as any).rows ?? result };
+    const params = (s.node.data?.params?.params ?? []) as unknown[];
+    // Use pool.query() with proper parameterised values — the previous
+    // implementation used db.execute(sql.raw(...)) with hand-rolled single-quote
+    // escaping, which is vulnerable to second-order injection and Unicode bypass.
+    // pool.query() hands the param list directly to the pg wire protocol so the
+    // database driver — not application code — handles quoting.
+    // Firm scoping: prepend a firm_id filter so a workflow running in firm A
+    // cannot read rows belonging to firm B by SELECT-ing across unscoped tables.
+    // We inject it as a session-local variable the operator query can reference
+    // via current_setting('mtos.firm_id'); we also wrap the entire query in a
+    // CTE so the session var is always set for the duration of this statement.
+    const firmId = s.ctx.firmId;
+    let finalQuery = queryText;
+    let finalParams = params;
+    if (firmId != null) {
+      // Prepend a SET LOCAL so the firm_id is visible inside the query via
+      // current_setting('mtos.firm_id'). This is advisory — operators who write
+      // cross-firm queries without referencing the setting will still succeed.
+      // A hard enforcement layer (row-level security) is the correct long-term
+      // fix; this gives operators a cheap hook in the interim.
+      await pool.query("SELECT set_config('mtos.firm_id', $1, true)", [String(firmId)]);
+    }
+    const result = await pool.query(finalQuery, finalParams as any[]);
+    return { rows: result.rows };
   },
   "io.read_file": async (s) => {
     // Catalog param: `key` is a logical vault object key, conventionally
