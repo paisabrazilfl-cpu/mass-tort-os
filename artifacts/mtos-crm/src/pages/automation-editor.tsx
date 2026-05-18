@@ -303,16 +303,36 @@ function EditorInner() {
         body: JSON.stringify({ prompt: trimmed, currentGraph: buildGraphForSave(), mode: assistMode }),
       });
       const data = await res.json();
-      if (!res.ok || data.status === "error") {
+      // Three error shapes can come back from /api/automations/assist:
+      //   (a) the bad-request envelope:  { status: "error", code, message, details }
+      //   (b) the retry-result failure:  { ok: false, lastError: { code, message }, attempts: [...] }
+      //   (c) the recursive-retry success: { ok: true, value: { graph, explanation? }, attempts: [...] }
+      // We treat anything that isn't a 2xx with a non-error status AND a
+      // resolved graph as a failure and surface the most useful string.
+      const isHttpFailure = !res.ok || data?.status === "error" || data?.ok === false;
+      if (isHttpFailure) {
         const issues = data?.details?.issues;
-        const detail = Array.isArray(issues) ? issues.join("\n• ") : (data?.message ?? "Assistant failed");
+        const detail =
+          (Array.isArray(issues) && issues.length > 0 && issues.join("\n• ")) ||
+          data?.lastError?.message ||
+          data?.message ||
+          (data?.attempts?.[data.attempts.length - 1]?.errorMessage) ||
+          "Assistant failed (no provider configured or response not parseable)";
         setAssistError(detail);
         return;
       }
+      // Success path: the retry wrapper nests the LLM's output under value.
+      // Older route versions returned graph at the top level — accept both.
+      const graph = data?.value?.graph ?? data?.graph;
+      const explanation = data?.value?.explanation ?? data?.explanation ?? "";
+      if (!graph || !Array.isArray(graph.nodes)) {
+        setAssistError("Assistant returned a response but no valid graph; the LLM probably emitted prose instead of JSON. Try a shorter, more specific prompt.");
+        return;
+      }
       setAssistResult({
-        explanation: data.explanation ?? "",
-        graph: data.graph,
-        mode: data.mode ?? assistMode,
+        explanation,
+        graph,
+        mode: data?.mode ?? assistMode,
       });
     } catch (e: any) {
       setAssistError(e?.message ?? String(e));

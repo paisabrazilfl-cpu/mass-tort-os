@@ -59,6 +59,38 @@ async function resolveLlmForModule(
   if (isResolved(resolved)) {
     return { providerName: resolved.provider, creds: resolved.credentials };
   }
+
+  // Final fallback before assuming "openai" (which then crashes with
+  // "no auth method" when neither env nor vault has a key). Look for
+  // ANY active integration with type=ai whose api_key decrypts cleanly
+  // and use it. This is the path that gets the Assistant working when
+  // the operator pasted a key into Integrations Hub but didn't link it
+  // via Workflow Settings → llm_default_provider_integration_id.
+  try {
+    const { db, integrationsTable } = await import("@workspace/db");
+    const { eq, and, desc } = await import("drizzle-orm");
+    const rows = await db
+      .select()
+      .from(integrationsTable)
+      .where(and(eq(integrationsTable.type, "ai"), eq(integrationsTable.status, "active")))
+      .orderBy(desc(integrationsTable.created_at));
+    if (rows.length > 0) {
+      const { getIntegrationCredentialsById } = await import("../routes/integrations");
+      for (const row of rows) {
+        const creds = await getIntegrationCredentialsById(row.id);
+        if (creds?.api_key) {
+          logger.info(
+            { module, picked_provider: row.provider, integration_id: row.id },
+            "LLM auto-resolve: found unconfigured active AI integration with valid api_key",
+          );
+          return { providerName: row.provider, creds };
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, "LLM auto-resolve scan failed; falling through to openai default");
+  }
+
   return { providerName: "openai", creds: null };
 }
 
@@ -93,8 +125,26 @@ export async function callLLM({
     );
     const fb = await fallbackAdapter.complete(null, { prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model });
     if (fb.ok) return (fb as LlmCompletionResult).text;
+    // If BOTH legs failed with auth-shaped errors, the deploy genuinely has
+    // no working LLM provider — surface a single actionable message instead
+    // of the cryptic SDK string. This is what the UI ends up showing in the
+    // Assistant toast.
+    const authShaped =
+      /no.?auth|api[_ ]?key|authToken|unauthor|forbidden|api.key/i.test(`${out.message} ${fb.message}`);
+    if (authShaped) {
+      throw new Error(
+        "No LLM provider is configured. Open the Integrations Hub → AI / LLM → Connect any of Anthropic, OpenAI, OpenRouter, Google Gemini, Groq, DeepSeek, etc. — paste an API key, click Connect. The Assistant works the moment one provider has a valid key.",
+      );
+    }
     throw new Error(`LLM ${adapter.provider} failed (${out.code}) and anthropic fallback also failed: ${fb.message}`);
   }
 
+  // Single-leg failure (adapter IS the fallback already — env Anthropic).
+  // Same auth-shape check so the operator gets the actionable message.
+  if (/no.?auth|api[_ ]?key|authToken|unauthor|forbidden|api.key/i.test(out.message)) {
+    throw new Error(
+      "No LLM provider is configured. Open the Integrations Hub → AI / LLM → Connect any of Anthropic, OpenAI, OpenRouter, Google Gemini, Groq, DeepSeek, etc. — paste an API key, click Connect. The Assistant works the moment one provider has a valid key.",
+    );
+  }
   throw new Error(`LLM ${adapter.provider} failed: ${out.code} ${out.message}`);
 }
