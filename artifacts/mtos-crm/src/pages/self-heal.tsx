@@ -325,8 +325,8 @@ export default function SelfHealPage() {
             <div className="text-sm">
               <div className="font-medium text-amber-900">JULES_API_KEY is not set.</div>
               <div className="text-amber-800 mt-1">
-                Add it in Replit Secrets to enable dispatch. Get a key at{" "}
-                <a className="underline" href="https://jules.google.com/settings#api" target="_blank" rel="noreferrer">
+                Add it as an env var on the api-server (Railway → api-server → Variables → JULES_API_KEY). Get a key at{" "}
+                <a className="underline" href="https://jules.google.com/settings#api" target="_blank" rel="noopener noreferrer">
                   jules.google.com/settings#api
                 </a>{" "}and install the Jules GitHub App on your repo.
               </div>

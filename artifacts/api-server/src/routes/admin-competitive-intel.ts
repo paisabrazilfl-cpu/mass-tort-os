@@ -56,22 +56,23 @@ function notConfigured(res: import("express").Response) {
   return res.status(503).json({
     status: "error",
     code: "serpapi_not_configured",
-    message: "SERPAPI_API_KEY is not set. Add it in Secrets to enable Competitive Intelligence.",
+    message: "SerpAPI is not configured. Add it in the Integrations Hub (sidebar → Integrations → Web Search → SerpAPI → Connect). Or set SERPAPI_API_KEY as an env-var fallback.",
   });
 }
 
-router.get("/config", requirePermission(Permission.COMPETITIVE_INTEL_MANAGE), (_req, res) => {
-  res.json({ configured: isSerpapiConfigured() });
+router.get("/config", requirePermission(Permission.COMPETITIVE_INTEL_MANAGE), async (req, res) => {
+  res.json({ configured: await isSerpapiConfigured(req.user!.firm_id) });
 });
 
 router.post("/lookup", requirePermission(Permission.COMPETITIVE_INTEL_MANAGE), async (req, res) => {
   const parsed = LookupBody.safeParse(req.body);
   if (!parsed.success) return badRequest(res, "Invalid input", parsed.error.flatten());
-  if (!isSerpapiConfigured()) return notConfigured(res);
+  const firmId = req.user!.firm_id;
+  if (!(await isSerpapiConfigured(firmId))) return notConfigured(res);
 
   try {
     if (parsed.data.advertiser_id) {
-      const result = await serpapiAdvertiserAds(parsed.data.advertiser_id);
+      const result = await serpapiAdvertiserAds(parsed.data.advertiser_id, firmId);
       await auditLog("competitive_intel", parsed.data.advertiser_id, "lookup_advertiser", {
         firm_id: req.user!.firm_id,
         user_id: req.user!.id,
@@ -80,7 +81,7 @@ router.post("/lookup", requirePermission(Permission.COMPETITIVE_INTEL_MANAGE), a
       });
       return res.json({ kind: "advertiser_ads", ...result });
     }
-    const result = await serpapiSearchAdvertisers(parsed.data.query!);
+    const result = await serpapiSearchAdvertisers(parsed.data.query!, firmId);
     await auditLog("competitive_intel", parsed.data.query!, "lookup_search", {
       firm_id: req.user!.firm_id,
       user_id: req.user!.id,
@@ -110,7 +111,8 @@ router.get("/watchlist", requirePermission(Permission.COMPETITIVE_INTEL_MANAGE),
 router.post("/watchlist", requirePermission(Permission.COMPETITIVE_INTEL_MANAGE), async (req, res) => {
   const parsed = WatchlistAddBody.safeParse(req.body);
   if (!parsed.success) return badRequest(res, "Invalid input", parsed.error.flatten());
-  if (!isSerpapiConfigured()) return notConfigured(res);
+  const firmId = req.user!.firm_id;
+  if (!(await isSerpapiConfigured(firmId))) return notConfigured(res);
 
   // Insert first; on duplicate (firm_id, advertiser_id) → 409.
   let row;
@@ -141,7 +143,7 @@ router.post("/watchlist", requirePermission(Permission.COMPETITIVE_INTEL_MANAGE)
   let snapshot_error: string | null = null;
   let ad_count = 0;
   try {
-    const result = await serpapiAdvertiserAds(parsed.data.advertiser_id);
+    const result = await serpapiAdvertiserAds(parsed.data.advertiser_id, firmId);
     ad_count = result.ad_creatives?.length ?? 0;
     await db.insert(competitiveIntelSnapshotsTable).values({
       advertiser_id_fk: row.id,
@@ -197,12 +199,13 @@ router.delete("/watchlist/:id", requirePermission(Permission.COMPETITIVE_INTEL_M
 router.post("/watchlist/:id/refresh", requirePermission(Permission.COMPETITIVE_INTEL_MANAGE), async (req, res) => {
   const parsed = IdParam.safeParse(req.params);
   if (!parsed.success) return badRequest(res, "Invalid id");
-  if (!isSerpapiConfigured()) return notConfigured(res);
+  const firmId = req.user!.firm_id;
+  if (!(await isSerpapiConfigured(firmId))) return notConfigured(res);
   const row = await loadOwnedRow(req, parsed.data.id);
   if (!row) return notFound(res, "Advertiser not on watchlist");
 
   try {
-    const result = await serpapiAdvertiserAds(row.advertiser_id);
+    const result = await serpapiAdvertiserAds(row.advertiser_id, firmId);
     const ad_count = result.ad_creatives?.length ?? 0;
     await db.insert(competitiveIntelSnapshotsTable).values({
       advertiser_id_fk: row.id,

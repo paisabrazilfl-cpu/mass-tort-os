@@ -287,10 +287,11 @@ export default function CompetitiveIntelPage() {
           <CardContent className="pt-6 flex items-start gap-3">
             <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
             <div className="text-sm">
-              <div className="font-medium text-amber-900">SERPAPI_API_KEY is not set.</div>
+              <div className="font-medium text-amber-900">SerpAPI is not configured.</div>
               <div className="text-amber-800 mt-1">
-                Add it in Replit Secrets to enable lookups. Get a key at{" "}
-                <a className="underline" href="https://serpapi.com/manage-api-key" target="_blank" rel="noreferrer">
+                Add it in the <a className="underline" href="/integrations">Integrations Hub</a> → Web Search → SerpAPI → Connect.
+                Get a key at{" "}
+                <a className="underline" href="https://serpapi.com/manage-api-key" target="_blank" rel="noopener noreferrer">
                   serpapi.com/manage-api-key
                 </a>.
               </div>

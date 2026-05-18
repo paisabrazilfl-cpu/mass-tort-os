@@ -59,28 +59,52 @@ export interface SerpapiAdvertiserSearchResponse {
   error?: string;
 }
 
-function getApiKey(): string {
-  const key = process.env["SERPAPI_API_KEY"];
-  if (!key) {
-    throw new SerpapiError(
-      "SERPAPI_API_KEY is not configured. Add it in Secrets to enable Competitive Intelligence.",
+/**
+ * Resolve the SerpAPI key. Vault-first (per-firm integration row),
+ * env-fallback. Returns null if neither path has a key — caller turns
+ * that into a 503 via `isSerpapiConfigured()`.
+ *
+ * Firm scope: when `firmId` is provided we only consider the vault row
+ * stamped with that firm_id. The route layer in admin-competitive-intel.ts
+ * passes `requireFirmId(req)` so cross-tenant key leakage is impossible.
+ * When `firmId` is omitted (e.g. a system-level caller before firm
+ * context exists) we skip the vault and use env only.
+ */
+async function resolveApiKey(firmId?: number): Promise<string | null> {
+  if (firmId !== undefined) {
+    // Lazy import to avoid a circular dependency between serpapi-client
+    // and routes/integrations (integrations route imports the client
+    // indirectly via provider-router).
+    const { getIntegrationCredentials } = await import("../routes/integrations");
+    const creds = await getIntegrationCredentials("serpapi", firmId);
+    if (creds?.api_key) return creds.api_key;
+  }
+  return process.env["SERPAPI_API_KEY"] ?? null;
+}
+
+class _SerpapiNotConfigured extends SerpapiError {
+  constructor() {
+    super(
+      "SerpAPI is not configured. Add it in the Integrations Hub (or set the SERPAPI_API_KEY env var as a fallback).",
       503,
     );
   }
-  return key;
 }
 
-export function isSerpapiConfigured(): boolean {
-  return !!process.env["SERPAPI_API_KEY"];
+export async function isSerpapiConfigured(firmId?: number): Promise<boolean> {
+  return (await resolveApiKey(firmId)) !== null;
 }
 
-async function serpapiFetch<T>(params: Record<string, string>, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+async function serpapiFetch<T>(params: Record<string, string>, opts?: { firmId?: number; timeoutMs?: number }): Promise<T> {
+  const key = await resolveApiKey(opts?.firmId);
+  if (!key) throw new _SerpapiNotConfigured();
+
   const url = new URL(SERPAPI_BASE);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  url.searchParams.set("api_key", getApiKey());
+  url.searchParams.set("api_key", key);
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
     const res = await fetch(url.toString(), { signal: ctrl.signal });
     const text = await res.text();
@@ -105,7 +129,7 @@ async function serpapiFetch<T>(params: Record<string, string>, timeoutMs = DEFAU
   } catch (err) {
     if (err instanceof SerpapiError) throw err;
     if ((err as { name?: string }).name === "AbortError") {
-      throw new SerpapiError(`SerpAPI timeout after ${timeoutMs}ms`, 504);
+      throw new SerpapiError(`SerpAPI timeout after ${opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms`, 504);
     }
     throw new SerpapiError(`SerpAPI network error: ${(err as Error).message}`, 502);
   } finally {
@@ -117,25 +141,25 @@ async function serpapiFetch<T>(params: Record<string, string>, timeoutMs = DEFAU
  * Look up the active ad creatives for a Google Ads Transparency
  * advertiser id. Advertiser ids look like `AR12345...`.
  */
-export async function serpapiAdvertiserAds(advertiserId: string): Promise<SerpapiAdvertiserAdsResponse> {
+export async function serpapiAdvertiserAds(advertiserId: string, firmId?: number): Promise<SerpapiAdvertiserAdsResponse> {
   const id = String(advertiserId || "").trim();
   if (!id) throw new SerpapiError("advertiserId is required", 400);
   return serpapiFetch<SerpapiAdvertiserAdsResponse>({
     engine: "google_ads_transparency_center",
     advertiser_id: id,
-  });
+  }, { firmId });
 }
 
 /**
  * Search the Transparency Center for advertisers by name.
  * Returns a small list the operator can pick from to add to their
- * watchlist by id.
+ * watchlist by id. firm_id resolves the SerpAPI key from the vault.
  */
-export async function serpapiSearchAdvertisers(query: string): Promise<SerpapiAdvertiserSearchResponse> {
+export async function serpapiSearchAdvertisers(query: string, firmId?: number): Promise<SerpapiAdvertiserSearchResponse> {
   const q = String(query || "").trim();
   if (!q) throw new SerpapiError("query is required", 400);
   return serpapiFetch<SerpapiAdvertiserSearchResponse>({
     engine: "google_ads_transparency_center",
     text: q,
-  });
+  }, { firmId });
 }
