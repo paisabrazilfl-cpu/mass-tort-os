@@ -120,7 +120,10 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   fasten_connect: ["api_key", "client_id", "client_secret"],
   fasten_onprem: ["api_key"],
 
-  // AI / LLM (vault-consuming providers — anthropic/openai are env-managed)
+  // AI / LLM (every supported provider consumes a vault api_key on Railway;
+  // the "live_no_vault" Replit-SDK path is gone)
+  anthropic: ["api_key"],
+  openai: ["api_key"],
   google_gemini: ["api_key"],
   openrouter: ["api_key"],
   groq: ["api_key"],
@@ -277,15 +280,21 @@ const REGISTRY: Record<string, WiringInfo> = {
     note: "Receives lead.created webhook events. Set api_key to enable HMAC-SHA256 signing.",
   },
 
-  // AI / LLM — env-managed via Replit AI Integrations SDK (auth from env, not vault).
-  // Vault credentials are accepted as overrides but the env client is used by default.
+  // AI / LLM — Railway-era: every provider REQUIRES a vault api_key. The
+  // Replit AI Integrations SDK env-managed path is gone. Mark both as
+  // `live` (full vault-consuming) so:
+  //   • the Connect modal makes api_key visibly required
+  //   • the integration Ping correctly reports "no_credentials_stored"
+  //     when the row is empty, instead of falsely declaring success
+  //   • the LLM resolver's vault-fallback picks them up the moment the
+  //     operator pastes a real key
   anthropic: {
-    status: "live_no_vault",
-    note: "Hard fallback LLM. Uses the Replit AI Integrations SDK by default (env auth); a vault api_key is accepted as an override but is optional.",
+    status: "live",
+    note: "Hard fallback LLM. Requires a vault api_key — get one at https://console.anthropic.com/settings/keys.",
   },
   openai: {
-    status: "live_no_vault",
-    note: "Default LLM. Uses the Replit AI Integrations SDK by default (env auth); a vault api_key is accepted as an override but is optional.",
+    status: "live",
+    note: "Default LLM. Requires a vault api_key — get one at https://platform.openai.com/api-keys.",
   },
 };
 

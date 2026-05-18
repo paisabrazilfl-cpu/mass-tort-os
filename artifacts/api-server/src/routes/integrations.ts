@@ -210,6 +210,33 @@ router.post("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, 
     .where(and(eq(integrationsTable.firm_id, firmId), eq(integrationsTable.provider, provider)))
     .limit(1);
 
+  // Reject saves that leave the row in a "looks active, no credentials"
+  // state. If the preset declares api_key (or another secret) as a
+  // required field AND no value is in the body AND no existing
+  // encryption is in the row, the operator probably clicked Connect
+  // without pasting — return 400 so they see the modal validation error
+  // instead of a green "Active" badge on a broken integration.
+  const preset = PRESET_INTEGRATIONS.find((p) => p.provider === provider);
+  if (preset?.fields?.length) {
+    const required = preset.fields.filter((f): f is SecretField => (SECRET_FIELDS as readonly string[]).includes(f));
+    const existingCreds = ((existing?.config as Record<string, unknown> | null)?.credentials as Record<string, string> | null) ?? {};
+    const missing = required.filter((f) => {
+      const incoming = req.body?.[f];
+      if (typeof incoming === "string" && incoming.trim().length > 0) return false;
+      if (existingCreds[f]) return false;
+      return true;
+    });
+    if (missing.length > 0) {
+      res.status(400).json({
+        status: "error",
+        code: "missing_required_secret",
+        message: `Provider "${provider}" requires ${missing.join(", ")}. Paste the value(s) before clicking Connect.`,
+        missing_fields: missing,
+      });
+      return;
+    }
+  }
+
   let targetId: number;
   let createdNew = false;
 
