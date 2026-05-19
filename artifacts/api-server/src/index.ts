@@ -301,7 +301,9 @@ app.listen(port, async (err) => {
           input: { fired_at: now.toISOString(), minute: now.getMinutes(), hour: now.getHours() },
           firmId: "any" as any,
           source: "schedule_poller",
-        }).catch(() => {});
+        }).catch((err) => {
+          logger.error({ err }, "schedule_poller trigger failed");
+        });
       }, 60_000);
       logger.info("Schedule poller started (60s interval)");
 

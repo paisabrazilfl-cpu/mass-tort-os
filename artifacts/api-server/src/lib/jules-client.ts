@@ -176,7 +176,7 @@ export async function approvePlan(sessionId: string): Promise<void> {
  * default for new self-heal sessions; operators can always override.
  */
 let cachedSource: string | null | undefined;
-export function getDefaultSourceName(): string | null {
+export async function getDefaultSourceName(): Promise<string | null> {
   if (cachedSource !== undefined) return cachedSource;
   const fromEnv = process.env["JULES_DEFAULT_SOURCE"];
   if (fromEnv) {

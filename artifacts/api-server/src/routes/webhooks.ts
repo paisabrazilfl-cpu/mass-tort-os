@@ -16,6 +16,7 @@ import { Router } from "express";
 import { dispatchTrigger } from "../lib/automations/dispatch";
 import {
   db,
+  pool,
   documentEnvelopesTable,
   integrationsTable,
   firmsTable,
@@ -1234,7 +1235,9 @@ export function dispatchDocumentSigned(payload: {
     input: payload,
     firmId: payload.firm_id ?? null,
     source: "webhooks.document_signed",
-  }).catch(() => {});
+  }).catch((err) => {
+    logger.error({ err, envelopeId: payload.envelope_id }, "dispatchDocumentSigned trigger failed");
+  });
 }
 
 export function dispatchInboundCall(payload: {
@@ -1248,7 +1251,9 @@ export function dispatchInboundCall(payload: {
     input: payload,
     firmId: payload.firm_id ?? null,
     source: "webhooks.inbound_call",
-  }).catch(() => {});
+  }).catch((err) => {
+    logger.error({ err, callId: payload.call_id }, "dispatchInboundCall trigger failed");
+  });
 }
 
 export function dispatchInboundSms(payload: {
@@ -1262,7 +1267,9 @@ export function dispatchInboundSms(payload: {
     input: payload,
     firmId: payload.firm_id ?? null,
     source: "webhooks.inbound_sms",
-  }).catch(() => {});
+  }).catch((err) => {
+    logger.error({ err, messageId: payload.message_id }, "dispatchInboundSms trigger failed");
+  });
 }
 
 
@@ -1284,7 +1291,11 @@ router.post("/automation-trigger/:slugOrId", async (req, res) => {
       [slugOrId]
     );
     wf = raw.rows[0];
-  } catch { res.json({ ok: true }); return; }
+  } catch (err) {
+    logger.error({ err, slugOrId }, "automation-trigger: db lookup failed");
+    res.json({ ok: true });
+    return;
+  }
 
   if (!wf) { res.json({ ok: true }); return; } // no enumeration
 
@@ -1294,9 +1305,12 @@ router.post("/automation-trigger/:slugOrId", async (req, res) => {
   if (secret) {
     if (!providedSig) { res.status(401).json({ error: "x-mtos-signature required" }); return; }
     const { createHmac, timingSafeEqual } = await import("node:crypto");
-    const expected = "sha256=" + createHmac("sha256", secret).update(JSON.stringify(req.body)).digest("hex");
+    const rawBody = (req as any).rawBody || Buffer.from(JSON.stringify(req.body));
+    const expected = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
     try {
-      if (!timingSafeEqual(Buffer.from(providedSig), Buffer.from(expected))) {
+      const a = Buffer.from(providedSig);
+      const b = Buffer.from(expected);
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
         res.status(401).json({ error: "Invalid signature" }); return;
       }
     } catch { res.status(401).json({ error: "Invalid signature" }); return; }
@@ -1306,11 +1320,15 @@ router.post("/automation-trigger/:slugOrId", async (req, res) => {
   try {
     const { dispatchTrigger } = await import("../lib/automations/dispatch");
     dispatchTrigger("trigger.webhook", {
-      input: { body: req.body, slug: slugOrId },
+      input: { body: req.body, headers: req.headers, slug: slugOrId },
       firmId: null,
       source: "webhooks.automation-trigger",
-    }).catch(() => {});
-  } catch { /* non-fatal */ }
+    }).catch((err) => {
+      logger.error({ err, workflow_id: wf?.id }, "automation-trigger: dispatch failed");
+    });
+  } catch (err) {
+    logger.error({ err, workflow_id: wf.id }, "automation-trigger: dispatch setup failed");
+  }
 });
 
 export default router;

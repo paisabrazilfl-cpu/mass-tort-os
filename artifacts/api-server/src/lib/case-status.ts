@@ -23,6 +23,8 @@ export interface UpdateCaseStatusOptions {
   new_status: string;
   /** Who initiated this transition. "worker" for background jobs, user.id for HTTP routes. */
   changed_by: "worker" | number;
+  /** Firm ID for tenancy scoping and audit logging. */
+  firm_id?: number | null;
   /** Free-form context bag included in the event envelope + audit row. */
   context?: Record<string, unknown>;
   /** Source string passed through to the dispatcher for logging/tracing. */
@@ -40,7 +42,7 @@ export interface UpdateCaseStatusResult {
 export async function updateCaseStatus(
   opts: UpdateCaseStatusOptions,
 ): Promise<UpdateCaseStatusResult> {
-  const { case_id, new_status, changed_by, context, source } = opts;
+  const { case_id, new_status, changed_by, firm_id, context, source } = opts;
 
   // Capture prior status before the write so the event payload reports
   // the actual transition, not new === new.
@@ -71,6 +73,8 @@ export async function updateCaseStatus(
     new_status,
     changed_by,
     ...(context ?? {}),
+  }, {
+    firm_id: firm_id ?? null,
   }).catch((err) => {
     logger.warn({ err, case_id }, "case status_changed audit insert failed");
   });

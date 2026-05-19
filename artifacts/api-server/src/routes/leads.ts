@@ -25,7 +25,7 @@ import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
 import { dispatchEvent } from "../lib/event-dispatcher";
 import { dispatchTrigger } from "../lib/automations/dispatch";
 import { sendSmsViaRouter } from "../lib/sms/send";
-import { getFirmIdForUser } from "../lib/subscription-gate";
+import { requireFirmId } from "../lib/firm-scope";
 
 // Thrown by buildLeadFilters when a date query param parses to Invalid Date.
 // Caught at each route call site and converted to a 400 with a structured
@@ -118,6 +118,7 @@ router.get("/export", requirePermission(Permission.LEAD_EXPORT), auditAction("ex
   // and OOM the API container. 50k is generous for a CRM export; clients that
   // need more should paginate.
   const EXPORT_HARD_CAP = 50_000;
+  const firmId = requireFirmId(req);
   let conditions;
   try {
     conditions = buildLeadFilters(parsed.data);
@@ -133,10 +134,15 @@ router.get("/export", requirePermission(Permission.LEAD_EXPORT), auditAction("ex
     }
     throw err;
   }
-  const leads =
-    conditions.length > 0
-      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(desc(leadsTable.created_at)).limit(EXPORT_HARD_CAP)
-      : await db.select().from(leadsTable).orderBy(desc(leadsTable.created_at)).limit(EXPORT_HARD_CAP);
+
+  conditions.push(eq(leadsTable.firm_id, firmId));
+
+  const leads = await db
+    .select()
+    .from(leadsTable)
+    .where(and(...conditions))
+    .orderBy(desc(leadsTable.created_at))
+    .limit(EXPORT_HARD_CAP);
 
   if (leads.length === 0) {
     res.status(200).type("text/csv").send("No leads found");
@@ -197,6 +203,7 @@ router.get("/", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW
   const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 50, 1), 500);
   const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
 
+  const firmId = requireFirmId(req);
   let conditions;
   try {
     conditions = buildLeadFilters(parsed.data);
@@ -213,6 +220,9 @@ router.get("/", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW
     throw err;
   }
   const user = req.user!;
+
+  conditions.push(eq(leadsTable.firm_id, firmId));
+
   // Ownership filter: only admin/attorney can see every row. Everyone else
   // (paralegal/viewer) sees leads they created or are assigned to. The check
   // is expressed via canBypassOwnership() so a future role addition only
@@ -226,10 +236,13 @@ router.get("/", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW
     );
   }
 
-  const leads =
-    conditions.length > 0
-      ? await db.select().from(leadsTable).where(and(...conditions)).orderBy(desc(leadsTable.created_at)).limit(limit).offset(offset)
-      : await db.select().from(leadsTable).orderBy(desc(leadsTable.created_at)).limit(limit).offset(offset);
+  const leads = await db
+    .select()
+    .from(leadsTable)
+    .where(and(...conditions))
+    .orderBy(desc(leadsTable.created_at))
+    .limit(limit)
+    .offset(offset);
 
   res.json(decryptLeadArray(leads));
 });
@@ -242,6 +255,7 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
   }
 
   const data = parsed.data;
+  const firmId = requireFirmId(req);
 
   // Normalize hospital_fax to E.164 via shared validator. A 4xx is returned
   // for malformed numbers so a typo never lands as plain text on the lead
@@ -369,6 +383,7 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
             ad_spend: data.ad_spend ? String(data.ad_spend) : null,
             source: data.source ?? null,
           }) as any),
+          firm_id: firmId,
           // Task #15: canonical (tort|email|phone10) hash from PLAINTEXT inputs.
           lookup_hash: leadLookupHash(
             data.tort_type ?? null,
@@ -404,7 +419,9 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
       }
 
       // Decision Engine — score even review-required leads (banner + portfolio rollup).
-      computeAndPersistLeadScore(lead.id).catch(() => {});
+      computeAndPersistLeadScore(lead.id).catch((err) => {
+        logger.error({ err, leadId: lead.id }, "Post-conflict lead score failed");
+      });
 
       // Outbound webhook to active automation integrations (n8n / Zapier / Make).
       // Fire-and-forget; never blocks the response.
@@ -457,6 +474,7 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
         source: data.source ?? null,
         created_by_user_id: req.user?.id ?? null,
       }) as any),
+      firm_id: firmId,
       // Task #15: canonical (tort|email|phone10) hash from PLAINTEXT inputs.
       lookup_hash: leadLookupHash(
         data.tort_type ?? null,
@@ -473,7 +491,9 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
   await auditLog("lead", String(lead.id), "created", { output_state: "ACCEPT", status });
 
   // Decision Engine — score asynchronously; never block lead creation on errors.
-  computeAndPersistLeadScore(lead.id).catch(() => {});
+  computeAndPersistLeadScore(lead.id).catch((err) => {
+    logger.error({ err, leadId: lead.id }, "Post-create lead score failed");
+  });
 
   // Outbound webhook to active automation integrations (n8n / Zapier / Make).
   // Fire-and-forget; never blocks the response.
@@ -502,11 +522,12 @@ router.get("/:id", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_V
     badRequest(res, parsed.error);
     return;
   }
+  const firmId = requireFirmId(req);
 
   const [lead] = await db
     .select()
     .from(leadsTable)
-    .where(eq(leadsTable.id, parsed.data.id));
+    .where(and(eq(leadsTable.id, parsed.data.id), eq(leadsTable.firm_id, firmId)));
 
   if (!lead) {
     notFound(res);
@@ -532,11 +553,12 @@ router.get("/:id", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_V
  * Ownership/role check shared by lead-scoped automation endpoints.
  * Returns true if request is allowed; false (and writes 403/404) otherwise.
  */
-async function ensureLeadAccess(req: Express.Request, res: import("express").Response, leadId: number): Promise<boolean> {
+async function ensureLeadAccess(req: import("express").Request, res: import("express").Response, leadId: number): Promise<boolean> {
   if (!Number.isFinite(leadId)) {
     httpBadRequest(res, "Invalid lead id");
     return false;
   }
+  const firmId = requireFirmId(req);
   const [check] = await db
     .select({
       id: leadsTable.id,
@@ -544,7 +566,7 @@ async function ensureLeadAccess(req: Express.Request, res: import("express").Res
       assigned_to: leadsTable.assigned_to,
     })
     .from(leadsTable)
-    .where(eq(leadsTable.id, leadId));
+    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId)));
   if (!check) {
     notFound(res);
     return false;
@@ -606,10 +628,14 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
     badRequest(res, paramsParsed.error);
     return;
   }
+  const firmId = requireFirmId(req);
 
   const user = req.user!;
   if (!canBypassOwnership(user)) {
-    const [check] = await db.select({ created_by_user_id: leadsTable.created_by_user_id, assigned_to: leadsTable.assigned_to }).from(leadsTable).where(eq(leadsTable.id, paramsParsed.data.id));
+    const [check] = await db
+      .select({ created_by_user_id: leadsTable.created_by_user_id, assigned_to: leadsTable.assigned_to })
+      .from(leadsTable)
+      .where(and(eq(leadsTable.id, paramsParsed.data.id), eq(leadsTable.firm_id, firmId)));
     if (check && check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
       denyForbidden(req, res, "lead_ownership_denied", "Insufficient permissions", {
         lead_id: paramsParsed.data.id,
@@ -703,13 +729,13 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
   const [priorLead] = await db
     .select({ status: leadsTable.status })
     .from(leadsTable)
-    .where(eq(leadsTable.id, paramsParsed.data.id));
+    .where(and(eq(leadsTable.id, paramsParsed.data.id), eq(leadsTable.firm_id, firmId)));
   const priorStatus = priorLead?.status ?? null;
 
   const [lead] = await db
     .update(leadsTable)
     .set(encryptedUpdate)
-    .where(eq(leadsTable.id, paramsParsed.data.id))
+    .where(and(eq(leadsTable.id, paramsParsed.data.id), eq(leadsTable.firm_id, firmId)))
     .returning();
 
   if (!lead) {
@@ -751,7 +777,9 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
   // Decision Engine — recompute when relevant fields change.
   const convexityFields = ["tort_type", "diagnosis", "diagnosis_date", "diagnosis_confirmed", "exposure_start", "exposure_end", "date_of_birth", "state", "phone", "email", "source", "rejection_reason", "ad_spend", "status"];
   if (convexityFields.some(f => (body as Record<string, unknown>)[f] !== undefined)) {
-    computeAndPersistLeadScore(lead.id).catch(() => {});
+    computeAndPersistLeadScore(lead.id).catch((err) => {
+      logger.error({ err, leadId: lead.id }, "Post-update lead score failed");
+    });
   }
 
   // Task #52 — outbound lead.updated event for n8n / Zapier / Make.
@@ -793,7 +821,9 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
       },
       firmId: lead.firm_id ?? null,
       source: "leads.patch",
-    }).catch(() => {});
+    }).catch((err) => {
+      logger.error({ err, leadId: lead.id }, "case_status_changed trigger failed");
+    });
   }
 });
 
@@ -803,8 +833,9 @@ router.delete("/:id", requirePermission(Permission.LEAD_DELETE), auditAction("de
     badRequest(res, parsed.error);
     return;
   }
+  const firmId = requireFirmId(req);
 
-  await db.delete(leadsTable).where(eq(leadsTable.id, parsed.data.id));
+  await db.delete(leadsTable).where(and(eq(leadsTable.id, parsed.data.id), eq(leadsTable.firm_id, firmId)));
   res.status(204).send();
 });
 
@@ -814,11 +845,12 @@ router.post("/:id/qualify", requirePermission(Permission.LEAD_QUALIFY), auditAct
     badRequest(res, parsed.error);
     return;
   }
+  const firmId = requireFirmId(req);
 
   const [lead] = await db
     .select()
     .from(leadsTable)
-    .where(eq(leadsTable.id, parsed.data.id));
+    .where(and(eq(leadsTable.id, parsed.data.id), eq(leadsTable.firm_id, firmId)));
 
   if (!lead) {
     notFound(res);
@@ -886,7 +918,7 @@ router.post("/:id/qualify", requirePermission(Permission.LEAD_QUALIFY), auditAct
       rejection_reason: qualified ? null : reason,
       updated_at: new Date(),
     })
-    .where(eq(leadsTable.id, lead.id));
+    .where(and(eq(leadsTable.id, lead.id), eq(leadsTable.firm_id, firmId)));
 
   // Workflow hook: just transitioned into "qualified" — dispatch document packets.
   if (qualified && lead.status !== "qualified") {
@@ -915,8 +947,9 @@ router.post("/:id/intelligence", requirePermission(Permission.LEAD_QUALIFY), aud
       httpBadRequest(res, "Invalid lead identifier");
       return;
     }
+    const firmId = requireFirmId(req);
 
-    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    const [lead] = await db.select().from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId)));
     if (!lead) {
       notFound(res, "Lead record not found");
       return;
@@ -950,10 +983,14 @@ router.patch("/:id/notes", requirePermission(Permission.LEAD_UPDATE), auditActio
       httpBadRequest(res, "Invalid lead identifier");
       return;
     }
+    const firmId = requireFirmId(req);
 
     const user = req.user!;
     if (!canBypassOwnership(user)) {
-      const [check] = await db.select({ created_by_user_id: leadsTable.created_by_user_id, assigned_to: leadsTable.assigned_to }).from(leadsTable).where(eq(leadsTable.id, leadId));
+      const [check] = await db
+        .select({ created_by_user_id: leadsTable.created_by_user_id, assigned_to: leadsTable.assigned_to })
+        .from(leadsTable)
+        .where(and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId)));
       if (check && check.created_by_user_id !== user.id && check.assigned_to !== user.id) {
         denyForbidden(req, res, "lead_ownership_denied", "Insufficient permissions", {
           lead_id: leadId,
@@ -975,7 +1012,7 @@ router.patch("/:id/notes", requirePermission(Permission.LEAD_UPDATE), auditActio
     const [lead] = await db
       .update(leadsTable)
       .set(encryptedUpdate)
-      .where(eq(leadsTable.id, leadId))
+      .where(and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId)))
       .returning();
 
     if (!lead) {
@@ -1020,10 +1057,11 @@ router.post(
     const ok = await ensureLeadAccess(req, res, leadId);
     if (!ok) return;
 
+    const firmId = requireFirmId(req);
     const [leadRow] = await db
       .select()
       .from(leadsTable)
-      .where(eq(leadsTable.id, leadId));
+      .where(and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId)));
     if (!leadRow) {
       notFound(res);
       return;
@@ -1036,7 +1074,6 @@ router.post(
     }
 
     const user = req.user!;
-    const firmId = await getFirmIdForUser(user.id);
 
     const result = await sendSmsViaRouter({
       to: phone,
