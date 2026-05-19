@@ -206,11 +206,15 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
           },
         });
       logger.warn({ ip, type: threat.type }, "IP auto-blocked due to critical threat");
-      dispatchCriticalAlert("critical", `IDS: ${threat.type} attack detected`, `Source: ${ip} | Path: ${req.originalUrl} | ${threat.details}`).catch(() => {});
+      dispatchCriticalAlert("critical", `IDS: ${threat.type} attack detected`, `Source: ${ip} | Path: ${req.originalUrl} | ${threat.details}`).catch((err) => {
+        logger.error({ err, ip, type: threat.type }, "Failed to dispatch critical alert for IDS attack");
+      });
     }
 
     if (threat.severity === "high") {
-      dispatchCriticalAlert("high", `IDS: ${threat.type} attempt`, `Source: ${ip} | Path: ${req.originalUrl} | ${threat.details}`).catch(() => {});
+      dispatchCriticalAlert("high", `IDS: ${threat.type} attempt`, `Source: ${ip} | Path: ${req.originalUrl} | ${threat.details}`).catch((err) => {
+        logger.error({ err, ip, type: threat.type }, "Failed to dispatch high alert for IDS attempt");
+      });
     }
   } catch (err) {
     logger.error({ err }, "Failed to record security alert");

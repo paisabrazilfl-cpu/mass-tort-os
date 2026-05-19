@@ -1,6 +1,7 @@
 import { Router } from "express";
-import { db, documentsTable } from "@workspace/db";
+import { db, documentsTable, leadsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
+import { requireFirmId } from "../lib/firm-scope";
 import { badRequest, notFound, serverError, errorEnvelope } from "../lib/http-errors";
 import {
   ListDocumentsQueryParams,
@@ -94,11 +95,21 @@ router.get("/:id/view", requirePermission(Permission.DOCUMENTS_VIEW), async (req
     return;
   }
 
-  const [doc] = await db.select().from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
-  if (!doc) {
+  const firmId = requireFirmId(req);
+
+  const [row] = await db
+    .select({ doc: documentsTable })
+    .from(documentsTable)
+    .innerJoin(leadsTable, eq(documentsTable.lead_id, leadsTable.id))
+    .where(and(eq(documentsTable.id, id), eq(leadsTable.firm_id, firmId)))
+    .limit(1);
+
+  if (!row) {
     notFound(res, "Document not found");
     return;
   }
+
+  const { doc } = row;
 
   const url = doc.file_url?.trim();
   if (url && /^https?:\/\//i.test(url)) {
@@ -130,6 +141,7 @@ router.get("/", requirePermission(Permission.DOCUMENTS_VIEW), async (req, res) =
     return;
   }
 
+  const firmId = requireFirmId(req);
   const { lead_id } = parsed.data;
 
   // Pagination cap — defaults 50/page, hard ceiling 500. Without this the
@@ -139,10 +151,31 @@ router.get("/", requirePermission(Permission.DOCUMENTS_VIEW), async (req, res) =
   const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 50, 1), 500);
   const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
 
-  const docs = lead_id
-    ? await db.select().from(documentsTable).where(eq(documentsTable.lead_id, lead_id)).orderBy(sql`${documentsTable.created_at} DESC`).limit(limit).offset(offset)
-    : await db.select().from(documentsTable).orderBy(sql`${documentsTable.created_at} DESC`).limit(limit).offset(offset);
+  const query = db
+    .select({
+      id: documentsTable.id,
+      lead_id: documentsTable.lead_id,
+      document_type: documentsTable.document_type,
+      file_name: documentsTable.file_name,
+      file_url: documentsTable.file_url,
+      signed: documentsTable.signed,
+      signed_at: documentsTable.signed_at,
+      notes: documentsTable.notes,
+      created_at: documentsTable.created_at,
+    })
+    .from(documentsTable)
+    .innerJoin(leadsTable, eq(documentsTable.lead_id, leadsTable.id))
+    .where(
+      and(
+        eq(leadsTable.firm_id, firmId),
+        lead_id ? eq(documentsTable.lead_id, lead_id) : undefined,
+      ),
+    )
+    .orderBy(sql`${documentsTable.created_at} DESC`)
+    .limit(limit)
+    .offset(offset);
 
+  const docs = await query;
   res.json(docs);
 });
 
@@ -153,7 +186,21 @@ router.post("/", requirePermission(Permission.DOCUMENTS_CREATE), auditAction("cr
     return;
   }
 
+  const firmId = requireFirmId(req);
   const data = parsed.data;
+
+  // Verify lead ownership
+  const [leadCheck] = await db
+    .select({ id: leadsTable.id })
+    .from(leadsTable)
+    .where(and(eq(leadsTable.id, data.lead_id), eq(leadsTable.firm_id, firmId)))
+    .limit(1);
+
+  if (!leadCheck) {
+    badRequest(res, "Lead not found or does not belong to your firm");
+    return;
+  }
+
   const [doc] = await db
     .insert(documentsTable)
     .values({
@@ -183,6 +230,7 @@ router.patch("/:id", requirePermission(Permission.DOCUMENTS_UPDATE), auditAction
     return;
   }
 
+  const firmId = requireFirmId(req);
   const body = bodyParsed.data;
   const updateData: Record<string, unknown> = {};
 
@@ -193,10 +241,16 @@ router.patch("/:id", requirePermission(Permission.DOCUMENTS_UPDATE), auditAction
   if (body.signed_at !== undefined) updateData.signed_at = body.signed_at ? new Date(body.signed_at) : null;
   if (body.notes !== undefined) updateData.notes = body.notes;
 
+  // Update with join-subquery pattern to enforce tenancy
   const [doc] = await db
     .update(documentsTable)
     .set(updateData)
-    .where(eq(documentsTable.id, paramsParsed.data.id))
+    .where(
+      and(
+        eq(documentsTable.id, paramsParsed.data.id),
+        sql`${documentsTable.lead_id} IN (SELECT id FROM ${leadsTable} WHERE firm_id = ${firmId})`,
+      ),
+    )
     .returning();
 
   if (!doc) {
@@ -214,7 +268,15 @@ router.delete("/:id", requirePermission(Permission.DOCUMENTS_DELETE), auditActio
     return;
   }
 
-  await db.delete(documentsTable).where(eq(documentsTable.id, parsed.data.id));
+  const firmId = requireFirmId(req);
+  await db
+    .delete(documentsTable)
+    .where(
+      and(
+        eq(documentsTable.id, parsed.data.id),
+        sql`${documentsTable.lead_id} IN (SELECT id FROM ${leadsTable} WHERE firm_id = ${firmId})`,
+      ),
+    );
   res.status(204).send();
 });
 

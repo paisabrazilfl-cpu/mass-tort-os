@@ -3,12 +3,13 @@ import { db, pool, automationWorkflowsTable, automationRunsTable } from "@worksp
 import { eq, desc, and, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
+import { requireFirmId } from "../lib/firm-scope";
 import { badRequest, notFound } from "../lib/http-errors";
 import { NODE_CATALOG } from "../lib/automations/node-catalog";
 import { runWorkflow } from "../lib/automations/executor";
 import { callLLM } from "../lib/ai-provider";
 import { getAiConstitutionPreamble } from "../lib/ai-constitution";
-import { recursiveRetry, perspectiveCue } from "../lib/automations/recursive-retry";
+import { recursiveRetry, perspectiveCue, type AttemptOutcome } from "../lib/automations/recursive-retry";
 import { logger } from "../lib/logger";
 
 // BUILD_VERSION: v20260511-clean
@@ -79,18 +80,69 @@ const upsertSchema = z.object({
 
 const runBodySchema = z.object({ input: z.record(z.string(), z.any()).optional() });
 
+const assistGraphSchema = graphSchema;
+
+function buildCatalogSummary(): string {
+  const cats = Array.from(new Set(NODE_CATALOG.map(n => n.category))).sort();
+  return cats.map(cat => {
+    const nodes = NODE_CATALOG.filter(n => n.category === cat);
+    return `[${cat}]\n` + nodes.map(n => {
+      const out = Array.isArray(n.outputs) ? ` [${n.outputs.join('|')}]` : "";
+      return `  - ${n.type}${out}: ${n.description}`;
+    }).join("\n");
+  }).join("\n\n");
+}
+
+function validateAssistGraph(graph: z.infer<typeof assistGraphSchema>): { issues: string[]; warnings: string[] } {
+  const issues: string[] = [];
+  const warnings: string[] = [];
+  const nodeIds = new Set(graph.nodes.map(n => n.id));
+
+  for (const node of graph.nodes) {
+    const def = NODE_CATALOG.find(n => n.type === node.type);
+    if (!def) {
+      issues.push(`Unknown node type: ${node.type}`);
+      continue;
+    }
+  }
+
+  for (const edge of graph.edges) {
+    if (!nodeIds.has(edge.source)) issues.push(`Edge source not found: ${edge.source}`);
+    if (!nodeIds.has(edge.target)) issues.push(`Edge target not found: ${edge.target}`);
+
+    const sourceNode = graph.nodes.find(n => n.id === edge.source);
+    if (sourceNode) {
+      const def = NODE_CATALOG.find(n => n.type === sourceNode.type);
+      if (def && Array.isArray(def.outputs) && edge.sourceHandle && !def.outputs.includes(edge.sourceHandle)) {
+        issues.push(`Invalid output handle "${edge.sourceHandle}" for node type ${sourceNode.type}`);
+      }
+    }
+  }
+
+  return { issues, warnings };
+}
+
+export const __assistInternals = {
+  validateAssistGraph,
+  buildCatalogSummary,
+  assistGraphSchema
+};
+
 // ── Node catalog ─────────────────────────────────────────────────────────────
 router.get("/node-catalog", requirePermission(Permission.AUTOMATIONS_VIEW), (_req, res) => {
   res.json({ nodes: NODE_CATALOG });
 });
 
 // ── Debug / one-shot migration ───────────────────────────────────────────────
-router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), async (_req, res) => {
+router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
   try {
     await repairSchema();
     const [wf, ar, ci, sh] = await Promise.all([
       pool.query("SELECT COUNT(*) FROM automation_workflows"),
-      pool.query("SELECT COUNT(*) FROM automation_runs").catch(() => ({ rows: [{ count: "error" }] })),
+      pool.query("SELECT COUNT(*) FROM automation_runs").catch((err) => {
+        logger.error({ err }, "debug/tables: failed to query automation_runs");
+        return { rows: [{ count: "error" }] };
+      }),
       pool.query("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='competitive_intel_advertisers') AS e"),
       pool.query("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='self_heal_sessions') AS e"),
     ]);
@@ -108,64 +160,14 @@ router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), as
 
 // ── List workflows ────────────────────────────────────────────────────────────
 
-router.post("/webhook/:slugOrId", async (req, res) => {
-  const slugOrId = req.params.slugOrId;
-  const providedSig = req.headers["x-mtos-signature"] as string | undefined;
-
-  // Look up the workflow by id or external slug in trigger_config
-  let wf: { id: number; trigger_config: unknown } | undefined;
-  try {
-    const raw = await pool.query(
-      `SELECT id, trigger_config FROM automation_workflows
-       WHERE enabled = true
-         AND trigger_type = 'trigger.webhook'
-         AND (id::text = $1 OR trigger_config->>'slug' = $1)
-       LIMIT 1`,
-      [slugOrId]
-    );
-    wf = raw.rows[0];
-  } catch { /* db error */ }
-
-  if (!wf) {
-    // Return 200 to avoid leaking workflow existence (prevents enumeration)
-    res.json({ ok: true });
-    return;
-  }
-
-  // Verify HMAC-SHA256 signature if secret is configured
-  const config = (wf.trigger_config ?? {}) as Record<string, unknown>;
-  const secret = config["secret"] as string | undefined;
-  if (secret) {
-    if (!providedSig) {
-      res.status(401).json({ error: "Missing x-mtos-signature header" });
-      return;
-    }
-    // Compute expected HMAC-SHA256 over raw body
-    const { createHmac } = await import("node:crypto");
-    const rawBody = JSON.stringify(req.body);
-    const expected = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
-    if (providedSig !== expected) {
-      res.status(401).json({ error: "Invalid signature" });
-      return;
-    }
-  }
-
-  // Dispatch fire-and-forget — respond 200 immediately (provider timeout safe)
-  res.json({ ok: true, workflow_id: wf.id });
-  const { dispatchTrigger } = await import("../lib/automations/dispatch");
-  dispatchTrigger("trigger.webhook", {
-    input: { body: req.body, headers: req.headers, slug: slugOrId },
-    firmId: null,
-    source: "webhook.public",
-  }).catch(() => {});
-});
 
 router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   await repairSchema();
-  const firmId = (req as any).firmId as number | undefined;
+  const firmId = requireFirmId(req);
   try {
     const raw = await pool.query(
-      "SELECT id, name, COALESCE(description,'') AS description, enabled, COALESCE(trigger_type,'manual') AS trigger_type, COALESCE(tags,'[]'::jsonb) AS tags, updated_at, created_at FROM automation_workflows WHERE " + fWhere(firmId) + " ORDER BY updated_at DESC"
+      "SELECT id, name, COALESCE(description,'') AS description, enabled, COALESCE(trigger_type,'manual') AS trigger_type, COALESCE(tags,'[]'::jsonb) AS tags, updated_at, created_at FROM automation_workflows WHERE firm_id = $1 OR firm_id IS NULL ORDER BY updated_at DESC",
+      [firmId]
     );
     res.json(raw.rows ?? []);
   } catch (err: any) {
@@ -178,9 +180,12 @@ router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res)
 router.get("/:id", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
-  const firmId = (req as any).firmId as number | undefined;
+  const firmId = requireFirmId(req);
   try {
-    const raw = await pool.query("SELECT * FROM automation_workflows WHERE id=" + id + " AND (" + fWhere(firmId) + ") LIMIT 1");
+    const raw = await pool.query(
+      "SELECT * FROM automation_workflows WHERE id = $1 AND (firm_id = $2 OR firm_id IS NULL) LIMIT 1",
+      [id, firmId]
+    );
     if (!raw.rows[0]) { notFound(res, "Workflow not found"); return; }
     res.json(raw.rows[0]);
   } catch (err: any) {
@@ -193,8 +198,8 @@ router.post("/", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, r
   const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
   await repairSchema();
-  const userId = (req as any).user?.id as number | undefined;
-  const firmId = (req as any).firmId as number | undefined;
+  const userId = req.user?.id;
+  const firmId = requireFirmId(req);
   const [row] = await db.insert(automationWorkflowsTable).values({
     name: parsed.data.name,
     description: parsed.data.description ?? null,
@@ -215,10 +220,10 @@ router.put("/:id", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req,
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   const parsed = upsertSchema.partial().safeParse(req.body);
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
-  const firmId = (req as any).firmId as number | undefined;
+  const firmId = requireFirmId(req);
   const [row] = await db.update(automationWorkflowsTable)
     .set({ ...parsed.data, updated_at: new Date() } as any)
-    .where(and(eq(automationWorkflowsTable.id, id), or(eq(automationWorkflowsTable.firm_id, firmId!), isNull(automationWorkflowsTable.firm_id))!)!)
+    .where(and(eq(automationWorkflowsTable.id, id), or(eq(automationWorkflowsTable.firm_id, firmId), isNull(automationWorkflowsTable.firm_id))!)!)
     .returning();
   if (!row) { notFound(res, "Workflow not found"); return; }
   res.json(row);
@@ -228,8 +233,15 @@ router.put("/:id", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req,
 router.delete("/:id", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
-  const r = await pool.query("DELETE FROM automation_workflows WHERE id=" + id).catch(() => ({ rowCount: 0 }));
-  res.json({ deleted: (r as any).rowCount ?? 1 });
+  const firmId = requireFirmId(req);
+  const r = await pool.query(
+    "DELETE FROM automation_workflows WHERE id = $1 AND (firm_id = $2 OR firm_id IS NULL)",
+    [id, firmId]
+  ).catch((err) => {
+    logger.error({ err, id }, "DELETE /:id: failed to delete workflow");
+    return { rowCount: 0 };
+  });
+  res.json({ deleted: (r as any).rowCount ?? 0 });
 });
 
 // ── Run workflow ──────────────────────────────────────────────────────────────
@@ -238,14 +250,20 @@ router.post("/:id/run", requirePermission(Permission.AUTOMATIONS_EXECUTE), async
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   const parsed = runBodySchema.safeParse(req.body ?? {});
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
-  const userId = (req as any).user?.id as number | undefined;
-  const firmId = (req as any).firmId as number | undefined;
-  const check = await pool.query("SELECT id, firm_id FROM automation_workflows WHERE id=" + id + " LIMIT 1").catch(() => ({ rows: [] }));
+  const userId = req.user?.id;
+  const firmId = requireFirmId(req);
+  const check = await pool.query(
+    "SELECT id, firm_id FROM automation_workflows WHERE id = $1 AND (firm_id = $2 OR firm_id IS NULL) LIMIT 1",
+    [id, firmId]
+  ).catch((err) => {
+    logger.error({ err, id }, "run: failed to check workflow");
+    return { rows: [] };
+  });
   if (!check.rows[0]) { notFound(res, "Workflow not found"); return; }
   try {
     const result = await runWorkflow({
       workflowId: id,
-      firmId: firmId ?? null,
+      firmId: firmId,
       input: (parsed.data.input ?? {}) as Record<string, unknown>,
       triggerSource: "manual",
       startedByUserId: userId ?? null,
@@ -260,9 +278,11 @@ router.post("/:id/run", requirePermission(Permission.AUTOMATIONS_EXECUTE), async
 router.get("/:id/runs", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
+  const firmId = requireFirmId(req);
   try {
     const raw = await pool.query(
-      "SELECT id, workflow_id, status, COALESCE(trigger_source,'manual') AS trigger_source, started_at, completed_at, error FROM automation_runs WHERE workflow_id=" + id + " ORDER BY started_at DESC LIMIT 50"
+      "SELECT id, workflow_id, status, COALESCE(trigger_source,'manual') AS trigger_source, started_at, completed_at, error FROM automation_runs WHERE workflow_id = $1 AND firm_id = $2 ORDER BY started_at DESC LIMIT 50",
+      [id, firmId]
     );
     res.json(raw.rows ?? []);
   } catch (err: any) {
@@ -275,8 +295,9 @@ router.get("/:id/runs", requirePermission(Permission.AUTOMATIONS_VIEW), async (r
 router.get("/runs/:runId", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   const runId = Number(req.params.runId);
   if (!Number.isInteger(runId)) { badRequest(res, "runId must be integer"); return; }
+  const firmId = requireFirmId(req);
   try {
-    const raw = await pool.query("SELECT * FROM automation_runs WHERE id=" + runId + " LIMIT 1");
+    const raw = await pool.query("SELECT * FROM automation_runs WHERE id = $1 AND firm_id = $2 LIMIT 1", [runId, firmId]);
     const row = raw.rows[0];
     if (!row) { notFound(res, "Run not found"); return; }
     const sl = row.step_log ?? [];
@@ -304,25 +325,30 @@ router.post("/assist", requirePermission(Permission.AUTOMATIONS_MANAGE), async (
     "Available node types: " + JSON.stringify(NODE_CATALOG.map((n: any) => n.type)),
   ].join("\n");
 
-  const attempt = async (perspectiveIndex: number, previousError?: string): Promise<AttemptOutcome> => {
-    const cue = perspectiveCue(perspectiveIndex);
+  const attempt = async (ctx: any): Promise<AttemptOutcome<{ graph: z.infer<typeof graphSchema> }>> => {
+    const cue = perspectiveCue(ctx.perspectiveIndex);
     const userMsg = [
       parsed.data.prompt,
-      previousError ? "Previous attempt failed: " + previousError + ". " + cue : "",
+      ctx.previousError ? "Previous attempt failed: " + ctx.previousError.errorMessage + ". " + cue : "",
     ].filter(Boolean).join("\n");
     try {
-      const text = await callLLM([{ role: "user", content: userMsg }], { system: systemPrompt, maxTokens: 4096 });
+      const text = await callLLM({
+        module: "lead-intelligence",
+        prompt: userMsg,
+        systemPrompt: systemPrompt,
+        maxTokens: 4096
+      });
       const clean = text.replace(/```json|```/g, "").trim();
       const obj = JSON.parse(clean);
       const g = graphSchema.safeParse(obj.graph ?? obj);
-      if (!g.success) return { success: false, error: "bad_shape: " + JSON.stringify(g.error.flatten()).slice(0, 200) };
-      return { success: true, value: { graph: g.data } };
+      if (!g.success) return { ok: false, errorCode: "assist_bad_shape", errorMessage: "bad_shape: " + JSON.stringify(g.error.flatten()).slice(0, 200) };
+      return { ok: true, value: { graph: g.data } };
     } catch (err: any) {
-      return { success: false, error: String(err?.message ?? err).slice(0, 200) };
+      return { ok: false, errorCode: "llm_unavailable", errorMessage: String(err?.message ?? err).slice(0, 200) };
     }
   };
 
-  const result = await recursiveRetry(attempt, { maxAttempts: 3, maxTotalMs: 30000 });
+  const result = await recursiveRetry({ attempt, maxAttempts: 3, maxTotalMs: 30000 });
   res.json({ ...result });
 });
 

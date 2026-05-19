@@ -449,12 +449,12 @@ const MATRIX: MatrixRow[] = [
   {
     method: "GET",
     path: "/api/forms/config",
-    expect: { admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
+    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
   },
   {
     method: "GET",
     path: "/api/forms/config/test-tort",
-    expect: { admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
+    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
     // 404 is a fine "allow" outcome (the test tort doesn't exist) — what we
     // care about is that the gate didn't 403.
     allowStatuses: [200, 404],
@@ -462,26 +462,26 @@ const MATRIX: MatrixRow[] = [
   {
     method: "GET",
     path: "/api/decision-engine/portfolio",
-    expect: { admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
+    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
   },
   {
     method: "PUT",
     path: "/api/decision-engine/settings",
     body: {},
-    expect: { admin: "allow", attorney: "deny", paralegal: "deny", viewer: "deny" },
+    expect: { super_admin: "allow", admin: "allow", attorney: "deny", paralegal: "deny", viewer: "deny" },
     // PUT with empty body may 400; that still proves the role gate let admin in.
     allowStatuses: [200, 400, 422],
   },
   {
     method: "GET",
     path: "/api/auth/me",
-    expect: { admin: "allow", attorney: "allow", paralegal: "allow", viewer: "allow" },
+    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "allow", viewer: "allow" },
   },
 ];
 
 describe("role × route allow/deny matrix", () => {
   for (const row of MATRIX) {
-    for (const role of ["admin", "attorney", "paralegal", "viewer"] as const) {
+    for (const role of ["super_admin", "admin", "attorney", "paralegal", "viewer"] as const) {
       const expected = row.expect[role];
       test(`${role.padEnd(9)} ${row.method} ${row.path} ⇒ ${expected}`, async () => {
         const r = await probe(row.method, row.path, { token: tokenFor(role), body: row.body });

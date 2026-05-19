@@ -934,7 +934,9 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
     // Decision Engine — score every lead created via form submission.
     {
       const { computeAndPersistLeadScore } = await import("../lib/decision-engine-service");
-      computeAndPersistLeadScore(lead.id).catch(() => {});
+      computeAndPersistLeadScore(lead.id).catch((err) => {
+        logger.error({ err, leadId: lead.id }, "Post-submission lead score failed");
+      });
     }
 
     if (status === "review_required") {

@@ -30,6 +30,7 @@ export const casesTable = pgTable("cases", {
   // backfill.
   created_by_user_id: integer("created_by_user_id").notNull(),
   assigned_to: integer("assigned_to"),
+  firm_id: integer("firm_id"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({
@@ -40,6 +41,7 @@ export const casesTable = pgTable("cases", {
   // `leads_assigned_to_idx`).
   createdByIdx: index("cases_created_by_user_id_idx").on(t.created_by_user_id),
   assignedIdx: index("cases_assigned_to_idx").on(t.assigned_to),
+  firmIdx: index("cases_firm_id_idx").on(t.firm_id),
 }));
 
 export const insertCaseSchema = createInsertSchema(casesTable).omit({

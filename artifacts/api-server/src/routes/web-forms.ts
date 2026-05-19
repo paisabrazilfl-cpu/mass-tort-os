@@ -510,7 +510,9 @@ async function runWebFormPipeline(
       // a multi-tenant risk in code review.)
       firmId: null,
       source: `web_form_${tortId}`,
-    }).catch(() => {});
+    }).catch((err) => {
+      logger.error({ err, leadId, tortId }, "web_form_submitted trigger failed");
+    });
   }
 
   // STEP 6: Optional confirmation email.

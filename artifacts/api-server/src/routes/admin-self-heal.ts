@@ -63,10 +63,10 @@ function deriveTitle(prompt: string): string {
   return firstLine.length > 80 ? firstLine.slice(0, 77) + "..." : firstLine || "Self-Heal session";
 }
 
-router.get("/config", requirePermission(Permission.SELF_HEAL_MANAGE), (_req, res) => {
+router.get("/config", requirePermission(Permission.SELF_HEAL_MANAGE), async (_req, res) => {
   res.json({
     configured: isJulesConfigured(),
-    default_source: getDefaultSourceName(),
+    default_source: await getDefaultSourceName(),
   });
 });
 
@@ -94,7 +94,7 @@ router.post("/", requirePermission(Permission.SELF_HEAL_MANAGE), async (req, res
     });
   }
 
-  const sourceName = parsed.data.source_name || getDefaultSourceName();
+  const sourceName = parsed.data.source_name || await getDefaultSourceName();
   if (!sourceName) {
     return badRequest(res, "No Jules source configured. Set JULES_DEFAULT_SOURCE or pass source_name.");
   }

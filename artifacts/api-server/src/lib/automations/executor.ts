@@ -11,6 +11,7 @@
  */
 import {
   db,
+  pool,
   automationRunsTable,
   automationWorkflowsTable,
   leadsTable,
@@ -44,6 +45,7 @@ import { runBackgroundCheckHub } from "../bg-hub/hub";
 import { lookupNpiAndMatch } from "../taxonomy-engine";
 import { serpapiAdvertiserAds, isSerpapiConfigured, SerpapiError } from "../serpapi-client";
 import { computeAndPersistLeadScore } from "../decision-engine-service";
+import { encryptLeadFields, rebindLeadEncryptionAad } from "../encryption";
 import { analyzeDocumentText } from "../ai-fields";
 import { getFormConfigByIdOrLabel, getFormConfig } from "../form-config-service";
 import { findExistingLeadForIntake } from "../lead-dedup";
@@ -309,8 +311,12 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   // ───────── CRM
   "crm.create_lead": async (s) => {
     const data = (s.node.data?.params?.data ?? {}) as Record<string, any>;
-    const insertData: any = { ...data, firm_id: data.firm_id ?? s.ctx.firmId ?? 1 };
+    const firmId = data.firm_id ?? s.ctx.firmId ?? 1;
+    const insertData: any = { ...encryptLeadFields(data), firm_id: firmId };
     const [row] = await db.insert(leadsTable).values(insertData).returning();
+    if (row) {
+      await rebindLeadEncryptionAad(db, leadsTable, row, eq);
+    }
     return { lead: row };
   },
   "crm.update_lead": async (s) => {
@@ -323,7 +329,8 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const where = s.ctx.firmId == null
       ? eq(leadsTable.id, leadId)
       : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId));
-    const [row] = await db.update(leadsTable).set({ ...patch, updated_at: new Date() }).where(where).returning();
+    const encryptedPatch = encryptLeadFields(patch, String(leadId));
+    const [row] = await db.update(leadsTable).set({ ...encryptedPatch, updated_at: new Date() }).where(where).returning();
     if (!row) throw new Error(`crm.update_lead: lead ${leadId} not found in firm ${s.ctx.firmId}.`);
     return { lead: row };
   },
@@ -359,7 +366,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       await db.insert(auditLogTable).values({
         entity_type: "case", entity_id: id,
         action: "case.created", details: { lead_id: leadId, source: "automation" },
-      } as any).catch(() => {});
+      } as any).catch((err) => {
+        logger.error({ err, caseId: id, leadId }, "crm.create_case: failed to log audit");
+      });
     }
     return { case: row, case_id: id };
   },
@@ -381,7 +390,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     await pool.query(
       "INSERT INTO audit_log (action, entity_type, entity_id, details, created_at) VALUES ($1, $2, $3, $4, now()) ON CONFLICT DO NOTHING",
       [action, entityType, String(entityId ?? ""), JSON.stringify(details)]
-    ).catch(() => {}); // audit is non-fatal
+    ).catch((err) => {
+      logger.error({ err, action, entityType, entityId }, "crm.audit_log: failed to insert");
+    }); // audit is non-fatal
     return { ok: true };
   },
 
@@ -615,7 +626,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     // Use pool.query() with parameterized values — safe against SQL injection
     // io.sql_query only allows SELECT/WITH so no write risk
     const result = await pool.query(queryText, params);
-    return { rows: result.rows }; };
+    return { rows: result.rows };
   },
   "io.read_file": async (s) => {
     // Catalog param: `key` is a logical vault object key, conventionally
@@ -1181,8 +1192,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     }
 
     const language = String(p.language ?? "en");
-    const buf = await readFile(documentId);
-    const text = buf.toString("utf-8");
+    const text = await readFile(documentId);
     return { document_id: documentId, text, raw_text: text, language };
   },
   "documents.medical_extract": async (s) => {

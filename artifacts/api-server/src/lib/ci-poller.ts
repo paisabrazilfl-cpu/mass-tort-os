@@ -142,8 +142,12 @@ async function auditCiRun(state: CiState): Promise<void> {
           state: state.state,
         }),
       ]
-    ).catch(() => {}); // non-fatal
-  } catch { /* audit is non-fatal */ }
+    ).catch((err) => {
+      logger.error({ err }, "auditCiRun: query failed");
+    }); // non-fatal
+  } catch (err) {
+    logger.error({ err }, "auditCiRun: failed");
+  }
 }
 
 // ── Main poller loop ──────────────────────────────────────────────────────────
