@@ -615,7 +615,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     // Use pool.query() with parameterized values — safe against SQL injection
     // io.sql_query only allows SELECT/WITH so no write risk
     const result = await pool.query(queryText, params);
-    return { rows: result.rows }; };
+    return { rows: result.rows };
   },
   "io.read_file": async (s) => {
     // Catalog param: `key` is a logical vault object key, conventionally
