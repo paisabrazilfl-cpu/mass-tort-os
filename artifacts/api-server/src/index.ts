@@ -1,7 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
-import { seedDefaultFirm, seedSuperAdmin, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
+import { seedDefaultFirm, seedSuperAdmin, seedMasterApiKey, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
 import { workerLoop } from "./worker";
 import { db, pool } from "@workspace/db";
 
@@ -277,6 +277,20 @@ app.listen(port, async (err) => {
     }
   } catch (e) {
     logger.error({ err: e }, "Super-admin seed failed on boot");
+  }
+
+  // Master API key bootstrap — no-op unless MTOS_MASTER_API_KEY is set.
+  // Runs AFTER seedSuperAdmin so the owning super-admin user exists. When
+  // set, registers the value as a wildcard-scope ("*") API key so that
+  // `Authorization: Bearer <MTOS_MASTER_API_KEY>` has full programmatic
+  // access to every API route.
+  try {
+    const masterResult = await seedMasterApiKey();
+    if (!masterResult.skipped) {
+      logger.info(masterResult, "Master API key seed complete");
+    }
+  } catch (e) {
+    logger.error({ err: e }, "Master API key seed failed on boot");
   }
 
   // Email-verification backfill (Task #56). Marks legacy user rows as

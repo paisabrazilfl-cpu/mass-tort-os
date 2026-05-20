@@ -23,7 +23,10 @@ export interface ApiKeyAuthResult {
   scopes: readonly string[];
   user_id: number;
   user_email: string;
-  user_role: "admin" | "attorney" | "paralegal" | "viewer";
+  // Mirrors UserRole in lib/rbac.ts. `super_admin` is included so a key
+  // created by the platform owner resolves to the full permission set —
+  // a wildcard-scope ("*") key created by a super_admin is the master key.
+  user_role: "super_admin" | "admin" | "attorney" | "paralegal" | "viewer";
   firm_id: number;
 }
 

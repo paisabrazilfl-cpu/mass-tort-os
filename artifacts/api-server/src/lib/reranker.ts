@@ -16,7 +16,7 @@
  *   behavior.
  *
  * AUTH — vault-first, env-fallback (same pattern as serpapi-client.ts):
- *   1. integrations row provider="bitdeer_reranker" (firm-scoped api_key)
+ *   1. integrations row provider="bitdeer" (firm-scoped api_key)
  *   2. BITDEER_API_KEY env var
  *   Returns a structured "not configured" error if neither is present.
  */
@@ -57,7 +57,7 @@ async function resolveApiKey(firmId?: number): Promise<string | null> {
   if (firmId !== undefined) {
     try {
       const { getIntegrationCredentials } = await import("../routes/integrations");
-      const creds = await getIntegrationCredentials("bitdeer_reranker", firmId);
+      const creds = await getIntegrationCredentials("bitdeer", firmId);
       if (creds?.api_key) return creds.api_key;
     } catch (err) {
       logger.warn({ err }, "reranker: vault key lookup failed; falling back to env");
@@ -106,7 +106,7 @@ export async function rerank(
   const key = await resolveApiKey(opts.firmId);
   if (!key) {
     throw new RerankerError(
-      "Reranker is not configured. Add the Bitdeer integration in the Integrations Hub (AI / LLM → BAAI Reranker), or set BITDEER_API_KEY.",
+      "Reranker is not configured. Connect Bitdeer AI Cloud in the Integrations Hub (AI / LLM → Bitdeer AI Cloud), or set BITDEER_API_KEY.",
       503,
     );
   }

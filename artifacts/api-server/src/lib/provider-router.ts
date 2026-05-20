@@ -56,8 +56,8 @@ const DEFAULT_PROVIDER_BY_CATEGORY: Record<ProviderCategory, string | null> = {
   email: "sendgrid",
   sms: "telnyx",
   voice: "vapi",
-  llm_default: null,   // ai-provider.ts handles env fallback to anthropic
-  llm_drafting: null,
+  llm_default: "bitdeer",   // single AI engine — ai-provider.ts falls back to BITDEER_API_KEY env
+  llm_drafting: "bitdeer",
 };
 
 async function findActiveIntegrationByProvider(provider: string): Promise<number | null> {

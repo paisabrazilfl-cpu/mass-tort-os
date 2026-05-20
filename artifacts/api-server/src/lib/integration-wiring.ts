@@ -34,7 +34,7 @@
  *   - lib/fax/index.ts ADAPTERS      → srfax
  *   - lib/lead-webhook-dispatcher.ts → n8n, zapier, make (type=automation)
  *   - lib/ai-{extract,fields,ocr}.ts,
- *     lib/drafting-ai.ts             → anthropic (live_no_vault — SDK auth)
+ *     lib/drafting-ai.ts             → bitdeer (single AI engine, vault api_key)
  *
  * Local-only validators (address-validator, email-validator,
  * background-check via CourtListener) are NOT integration providers in
@@ -120,19 +120,9 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   fasten_connect: ["api_key", "client_id", "client_secret"],
   fasten_onprem: ["api_key"],
 
-  // AI / LLM (every supported provider consumes a vault api_key on Railway;
-  // the "live_no_vault" Replit-SDK path is gone)
-  anthropic: ["api_key"],
-  openai: ["api_key"],
-  google_gemini: ["api_key"],
-  openrouter: ["api_key"],
-  groq: ["api_key"],
-  deepseek: ["api_key"],
-  perplexity: ["api_key"],
-  mistral: ["api_key"],
-  cohere: ["api_key"],
-  xai_grok: ["api_key"],
-  fireworks_ai: ["api_key"],
+  // AI / LLM — single consolidated engine. One Bitdeer inference key powers
+  // chat, reasoning, code, vision, embeddings, and reranking.
+  bitdeer: ["api_key"],
 
   // Web Search
   serpapi: ["api_key"],
@@ -239,16 +229,11 @@ const REGISTRY: Record<string, WiringInfo> = {
     note: "Credentials store correctly (OAuth2 client_id/secret + access token + Ad Account URN). No live adapter wired. Real API contract: https://learn.microsoft.com/linkedin/marketing/.",
   },
 
-  // AI / LLM (vault-consuming providers)
-  google_gemini: { status: "live", note: "LLM completions via Gemini v1beta generateContent." },
-  openrouter: { status: "live", note: "LLM completions via OpenRouter unified chat completions API." },
-  groq: { status: "live", note: "LLM completions via Groq /openai/v1/chat/completions." },
-  deepseek: { status: "live", note: "LLM completions via DeepSeek v1 chat completions." },
-  perplexity: { status: "live", note: "LLM completions via Perplexity chat completions." },
-  mistral: { status: "live", note: "LLM completions via Mistral v1 chat completions." },
-  cohere: { status: "live", note: "LLM completions via Cohere v2 chat." },
-  xai_grok: { status: "live", note: "LLM completions via xAI Grok v1 chat completions." },
-  fireworks_ai: { status: "live", note: "LLM completions via Fireworks AI inference v1 chat completions." },
+  // AI / LLM — single consolidated engine (Bitdeer AI Cloud).
+  bitdeer: {
+    status: "live",
+    note: "The MTOS AI engine. One Bitdeer inference key powers callLLM (extraction, fields, OCR, drafting, threat analysis, lead intelligence, automations assistant), POST /api/ai/rerank, and the ai.rerank automation node. Requires a vault api_key — or set BITDEER_API_KEY in the environment.",
+  },
 
   // Medical Records — Fasten Health (patient-initiated FHIR aggregation).
   // Both backends ship as live adapters: lib/fasten/client.ts (hosted Connect API)
@@ -280,22 +265,6 @@ const REGISTRY: Record<string, WiringInfo> = {
     note: "Receives lead.created webhook events. Set api_key to enable HMAC-SHA256 signing.",
   },
 
-  // AI / LLM — Railway-era: every provider REQUIRES a vault api_key. The
-  // Replit AI Integrations SDK env-managed path is gone. Mark both as
-  // `live` (full vault-consuming) so:
-  //   • the Connect modal makes api_key visibly required
-  //   • the integration Ping correctly reports "no_credentials_stored"
-  //     when the row is empty, instead of falsely declaring success
-  //   • the LLM resolver's vault-fallback picks them up the moment the
-  //     operator pastes a real key
-  anthropic: {
-    status: "live",
-    note: "Hard fallback LLM. Requires a vault api_key — get one at https://console.anthropic.com/settings/keys.",
-  },
-  openai: {
-    status: "live",
-    note: "Default LLM. Requires a vault api_key — get one at https://platform.openai.com/api-keys.",
-  },
 };
 
 const DEFAULT_VAULT_ONLY: WiringInfo = {
@@ -378,10 +347,9 @@ export function assertWiringRegistryConsistency(): void {
     },
     {
       klass: "llm",
-      // anthropic and openai are env-managed (live_no_vault) — they ship in
-      // the LLM ADAPTERS map but the REGISTRY entry stays "live_no_vault".
-      adapterProviders: listLlmProviders().filter((p) => p !== "anthropic" && p !== "openai"),
-      expectInRegistry: ["google_gemini", "openrouter", "groq", "deepseek", "perplexity", "mistral", "cohere", "xai_grok", "fireworks_ai"],
+      // Single consolidated AI engine — Bitdeer AI Cloud.
+      adapterProviders: listLlmProviders(),
+      expectInRegistry: ["bitdeer"],
     },
     {
       klass: "search",

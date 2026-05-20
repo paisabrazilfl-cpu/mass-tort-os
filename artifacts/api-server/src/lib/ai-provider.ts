@@ -1,18 +1,27 @@
 /**
- * Module-aware LLM dispatcher.
+ * Module-aware LLM dispatcher — single-provider (Bitdeer AI Cloud).
  *
- * Resolution order (first non-empty wins):
- *   1. Per-module env override         (AI_PROVIDER_<MODULE>)
- *   2. Global env default              (AI_PROVIDER)
- *   3. workflow_settings.llm_drafting_provider_integration_id  (drafting-ai only)
- *   4. workflow_settings.llm_default_provider_integration_id   (everything else)
- *   5. Hard fallback: anthropic via the env-managed Replit AI SDK
+ * Every MTOS AI module maps to a Bitdeer capability role, and each role maps
+ * to a concrete model (see lib/ai/bitdeer.ts → BITDEER_MODELS):
  *
- * On a non-retryable error from the chosen provider we automatically fall
- * back to anthropic so a misconfigured vault doesn't block intake.
+ *   ai-extract        → planner   (Nemotron-3-Super-120B)
+ *   ai-fields         → planner
+ *   ai-ocr            → vision    (Nemotron-3-Nano-Omni-30B)
+ *   drafting-ai       → chat      (Devstral-2-123B)
+ *   threat-analyzer   → planner
+ *   lead-intelligence → planner
+ *   automations-assist→ code      (Devstral-2-123B)
+ *
+ * Any request that carries an image is routed to the vision model regardless
+ * of module. An explicit `model` on the request overrides everything.
+ *
+ * Credentials: vault-first (integrations row provider="bitdeer"), with the
+ * Bitdeer adapter falling back to the BITDEER_API_KEY env var when the vault
+ * has no usable key.
  */
 import { logger } from "./logger";
 import { getLlmAdapter, fallbackAdapter, type LlmCompletionResult, type SupportedMime } from "./ai";
+import { BITDEER_MODELS, type BitdeerRole } from "./ai/bitdeer";
 import { resolveProvider, isResolved, type ProviderCategory } from "./provider-router";
 import type { DecryptedCredentials } from "../routes/integrations";
 
@@ -25,14 +34,15 @@ export type LLMModule =
   | "lead-intelligence"
   | "automations-assist";
 
-const MODULE_ENV_KEY: Record<LLMModule, string> = {
-  "ai-extract": "AI_PROVIDER_AI_EXTRACT",
-  "ai-fields": "AI_PROVIDER_AI_FIELDS",
-  "ai-ocr": "AI_PROVIDER_AI_OCR",
-  "drafting-ai": "AI_PROVIDER_DRAFTING_AI",
-  "threat-analyzer": "AI_PROVIDER_THREAT_ANALYZER",
-  "lead-intelligence": "AI_PROVIDER_LEAD_INTELLIGENCE",
-  "automations-assist": "AI_PROVIDER_AUTOMATIONS_ASSIST",
+/** Module → Bitdeer capability role. */
+const MODULE_ROLE: Record<LLMModule, BitdeerRole> = {
+  "ai-extract": "planner",
+  "ai-fields": "planner",
+  "ai-ocr": "vision",
+  "drafting-ai": "chat",
+  "threat-analyzer": "planner",
+  "lead-intelligence": "planner",
+  "automations-assist": "code",
 };
 
 export interface LLMRequest {
@@ -45,27 +55,20 @@ export interface LLMRequest {
   model?: string;
 }
 
-async function resolveLlmForModule(
-  module: LLMModule,
-): Promise<{ providerName: string; creds: DecryptedCredentials | null }> {
-  const moduleOverride = process.env[MODULE_ENV_KEY[module]]?.toLowerCase();
-  if (moduleOverride) return { providerName: moduleOverride, creds: null };
-
-  const globalDefault = process.env["AI_PROVIDER"]?.toLowerCase();
-  if (globalDefault) return { providerName: globalDefault, creds: null };
-
+/**
+ * Resolve the Bitdeer vault credentials for a module. Returns null when no
+ * vault row is configured — the adapter then falls back to BITDEER_API_KEY.
+ *
+ * Resolution order:
+ *   1. workflow_settings FK (llm_drafting for drafting-ai, llm_default else),
+ *      which also picks up the default "bitdeer" active integration row.
+ *   2. Any active type="ai" integration whose api_key decrypts cleanly.
+ */
+async function resolveBitdeerCreds(module: LLMModule): Promise<DecryptedCredentials | null> {
   const category: ProviderCategory = module === "drafting-ai" ? "llm_drafting" : "llm_default";
   const resolved = await resolveProvider(category);
-  if (isResolved(resolved)) {
-    return { providerName: resolved.provider, creds: resolved.credentials };
-  }
+  if (isResolved(resolved)) return resolved.credentials;
 
-  // Final fallback before assuming "openai" (which then crashes with
-  // "no auth method" when neither env nor vault has a key). Look for
-  // ANY active integration with type=ai whose api_key decrypts cleanly
-  // and use it. This is the path that gets the Assistant working when
-  // the operator pasted a key into Integrations Hub but didn't link it
-  // via Workflow Settings → llm_default_provider_integration_id.
   try {
     const { db, integrationsTable } = await import("@workspace/db");
     const { eq, and, desc } = await import("drizzle-orm");
@@ -74,77 +77,48 @@ async function resolveLlmForModule(
       .from(integrationsTable)
       .where(and(eq(integrationsTable.type, "ai"), eq(integrationsTable.status, "active")))
       .orderBy(desc(integrationsTable.created_at));
-    if (rows.length > 0) {
-      const { getIntegrationCredentialsById } = await import("../routes/integrations");
-      for (const row of rows) {
-        const creds = await getIntegrationCredentialsById(row.id);
-        if (creds?.api_key) {
-          logger.info(
-            { module, picked_provider: row.provider, integration_id: row.id },
-            "LLM auto-resolve: found unconfigured active AI integration with valid api_key",
-          );
-          return { providerName: row.provider, creds };
-        }
-      }
+    const { getIntegrationCredentialsById } = await import("../routes/integrations");
+    for (const row of rows) {
+      const creds = await getIntegrationCredentialsById(row.id);
+      if (creds?.api_key) return creds;
     }
   } catch (err) {
-    logger.warn({ err }, "LLM auto-resolve scan failed; falling through to openai default");
+    logger.warn({ err }, "Bitdeer creds vault scan failed; falling back to BITDEER_API_KEY env");
   }
-
-  return { providerName: "openai", creds: null };
+  return null;
 }
 
+const AUTH_SHAPED = /no.?auth|api[_ ]?key|no_api_key|unauthor|forbidden|http_401|http_403/i;
+
 export async function callLLM({
-  module, prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model,
+  module,
+  prompt,
+  maxTokens,
+  systemPrompt,
+  imageBase64,
+  imageMimeType,
+  model,
 }: LLMRequest): Promise<string> {
-  const { providerName, creds } = await resolveLlmForModule(module);
-  let adapter = getLlmAdapter(providerName);
-  if (!adapter) {
-    logger.warn({ module, providerName }, "Unknown LLM provider — falling back to anthropic");
-    adapter = fallbackAdapter;
+  const creds = await resolveBitdeerCreds(module);
+  const adapter = getLlmAdapter("bitdeer") ?? fallbackAdapter;
+
+  const resolvedModel =
+    model || (imageBase64 ? BITDEER_MODELS.vision : BITDEER_MODELS[MODULE_ROLE[module]]);
+  const reqArgs = { prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model: resolvedModel };
+
+  logger.debug({ module, model: resolvedModel, hasImage: !!imageBase64 }, "callLLM dispatching (bitdeer)");
+
+  let out = await adapter.complete(creds, reqArgs);
+  if (!out.ok && out.retryable) {
+    logger.warn({ module, code: out.code }, "Bitdeer retryable error — single retry");
+    out = await adapter.complete(creds, reqArgs);
   }
-
-  logger.debug({ module, provider: adapter.provider, hasImage: !!imageBase64 }, "callLLM dispatching");
-
-  const out = await adapter.complete(creds, {
-    prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model,
-  });
-
   if (out.ok) return (out as LlmCompletionResult).text;
 
-  if (out.retryable) {
-    logger.warn({ module, provider: adapter.provider, code: out.code }, "LLM retryable error — single retry");
-    const retry = await adapter.complete(creds, { prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model });
-    if (retry.ok) return (retry as LlmCompletionResult).text;
-  }
-
-  if (adapter.provider !== fallbackAdapter.provider) {
-    logger.warn(
-      { module, primary_provider: adapter.provider, code: out.code, message: out.message },
-      "LLM non-retryable error — falling back to anthropic env client",
-    );
-    const fb = await fallbackAdapter.complete(null, { prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model });
-    if (fb.ok) return (fb as LlmCompletionResult).text;
-    // If BOTH legs failed with auth-shaped errors, the deploy genuinely has
-    // no working LLM provider — surface a single actionable message instead
-    // of the cryptic SDK string. This is what the UI ends up showing in the
-    // Assistant toast.
-    const authShaped =
-      /no.?auth|api[_ ]?key|authToken|unauthor|forbidden|api.key/i.test(`${out.message} ${fb.message}`);
-    if (authShaped) {
-      throw new Error(
-        "No LLM provider is configured. Open the Integrations Hub → AI / LLM → Connect any of Anthropic, OpenAI, OpenRouter, Google Gemini, Groq, DeepSeek, etc. — paste an API key, click Connect. The Assistant works the moment one provider has a valid key.",
-      );
-    }
-    throw new Error(`LLM ${adapter.provider} failed (${out.code}) and anthropic fallback also failed: ${fb.message}`);
-  }
-
-  // Single-leg failure (adapter IS the fallback already — env Anthropic).
-  // Same auth-shape check so the operator gets the actionable message.
-  if (/no.?auth|api[_ ]?key|authToken|unauthor|forbidden|api.key/i.test(out.message)) {
+  if (AUTH_SHAPED.test(`${out.code} ${out.message}`)) {
     throw new Error(
-      "No LLM provider is configured. Open the Integrations Hub → AI / LLM → Connect any of Anthropic, OpenAI, OpenRouter, Google Gemini, Groq, DeepSeek, etc. — paste an API key, click Connect. The Assistant works the moment one provider has a valid key.",
+      "Bitdeer AI is not configured. Open Integrations Hub → AI / LLM → Bitdeer AI Cloud, paste your inference API key, click Connect — or set BITDEER_API_KEY. Every AI feature works the moment the key is saved.",
     );
   }
-  throw new Error(`LLM ${adapter.provider} failed: ${out.code} ${out.message}`);
+  throw new Error(`Bitdeer AI call failed (${module}): ${out.code} ${out.message}`);
 }
