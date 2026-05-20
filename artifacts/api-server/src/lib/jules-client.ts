@@ -176,7 +176,7 @@ export async function approvePlan(sessionId: string): Promise<void> {
  * default for new self-heal sessions; operators can always override.
  */
 let cachedSource: string | null | undefined;
-export function getDefaultSourceName(): string | null {
+export async function getDefaultSourceName(): Promise<string | null> {
   if (cachedSource !== undefined) return cachedSource;
   const fromEnv = process.env["JULES_DEFAULT_SOURCE"];
   if (fromEnv) {
@@ -185,7 +185,7 @@ export function getDefaultSourceName(): string | null {
   }
   try {
     // Lazy/sync read of .git/config to keep this dependency-free.
-    const fs = await import("node:fs");
+    const fs = await import("node:fs/promises");
     const path = await import("node:path");
     let dir = process.cwd();
     for (let i = 0; i < 6; i++) {

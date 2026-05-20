@@ -51,24 +51,27 @@ router.get("/stats", requirePermission(Permission.DASHBOARD_VIEW), async (req, r
 });
 
 router.get("/pipeline", requirePermission(Permission.DASHBOARD_VIEW), async (req, res) => {
-  const byStatus = await db
-    .select({
-      status: leadsTable.status,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(leadsTable)
-    .groupBy(leadsTable.status);
+  // Parallelize independent database queries to reduce total latency.
+  const [byStatus, byTortType] = await Promise.all([
+    db
+      .select({
+        status: leadsTable.status,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(leadsTable)
+      .groupBy(leadsTable.status),
 
-  const byTortType = await db
-    .select({
-      tort_type: leadsTable.tort_type,
-      count: sql<number>`count(*)::int`,
-      qualified: sql<number>`count(*) filter (where status = 'qualified')::int`,
-      signed: sql<number>`count(*) filter (where status = 'signed')::int`,
-    })
-    .from(leadsTable)
-    .groupBy(leadsTable.tort_type)
-    .orderBy(sql`count(*) desc`);
+    db
+      .select({
+        tort_type: leadsTable.tort_type,
+        count: sql<number>`count(*)::int`,
+        qualified: sql<number>`count(*) filter (where status = 'qualified')::int`,
+        signed: sql<number>`count(*) filter (where status = 'signed')::int`,
+      })
+      .from(leadsTable)
+      .groupBy(leadsTable.tort_type)
+      .orderBy(sql`count(*) desc`),
+  ]);
 
   res.json({
     by_status: byStatus,

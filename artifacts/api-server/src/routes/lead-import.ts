@@ -5,6 +5,7 @@ import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { encryptLeadFields, decrypt, hashForLookup, rebindLeadEncryptionAad } from "../lib/encryption";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
+import { findExistingLeadForIntake } from "../lib/lead-dedup";
 import { runFullConflictCheck } from "../lib/conflict-engine";
 import { logger } from "../lib/logger";
 import { serverError } from "../lib/http-errors";
@@ -180,67 +181,25 @@ function mapRowToLead(row: Record<string, string>, columnMapping: Record<string,
   return lead;
 }
 
+/**
+ * Optimized dedup check using the shared findExistingLeadForIntake utility.
+ * Leverages the indexed lookup_hash for O(1) matching when possible,
+ * avoiding the expensive O(N) decryption loop.
+ */
 async function checkDuplicate(lead: Record<string, any>): Promise<{ isDuplicate: boolean; matchId?: number; reason?: string }> {
   try {
-    if (lead.email) {
-      const emailMatches = await db
-        .select({ id: leadsTable.id, name: leadsTable.name, email: leadsTable.email })
-        .from(leadsTable)
-        .where(ilike(leadsTable.email, lead.email.trim()))
-        .limit(1);
+    const match = await findExistingLeadForIntake({
+      email: lead.email,
+      phone: lead.phone_primary || lead.phone,
+      tortType: lead.tort_type,
+    });
 
-      if (emailMatches.length > 0) {
-        return { isDuplicate: true, matchId: emailMatches[0].id, reason: `Email match: ${lead.email}` };
-      }
-    }
-
-    const incomingPhones: string[] = [];
-    if (lead.phone_primary) {
-      const digits = lead.phone_primary.replace(/\D/g, "");
-      if (digits.length >= 10) incomingPhones.push(digits);
-    }
-    if (lead.phone) {
-      const digits = lead.phone.replace(/\D/g, "");
-      if (digits.length >= 10) incomingPhones.push(digits);
-    }
-
-    if (incomingPhones.length > 0) {
-      const existingLeads = await db
-        .select({ id: leadsTable.id, name: leadsTable.name, phone: leadsTable.phone, phone_primary: leadsTable.phone_primary })
-        .from(leadsTable)
-        .limit(5000);
-
-      for (const existing of existingLeads) {
-        const storedPhones: string[] = [];
-        if (existing.phone) {
-          try {
-            const decrypted = decrypt(existing.phone);
-            if (decrypted && decrypted !== "[DECRYPTION_ERROR]") {
-              storedPhones.push(decrypted.replace(/\D/g, ""));
-            }
-          } catch {
-            storedPhones.push(existing.phone.replace(/\D/g, ""));
-          }
-        }
-        if (existing.phone_primary) {
-          try {
-            const decrypted = decrypt(existing.phone_primary);
-            if (decrypted && decrypted !== "[DECRYPTION_ERROR]") {
-              storedPhones.push(decrypted.replace(/\D/g, ""));
-            }
-          } catch {
-            storedPhones.push(existing.phone_primary.replace(/\D/g, ""));
-          }
-        }
-
-        for (const incoming of incomingPhones) {
-          for (const stored of storedPhones) {
-            if (stored.length >= 10 && stored === incoming) {
-              return { isDuplicate: true, matchId: existing.id, reason: `Phone match` };
-            }
-          }
-        }
-      }
+    if (match) {
+      return {
+        isDuplicate: true,
+        matchId: match.leadId,
+        reason: `Matched by ${match.matchedBy}`,
+      };
     }
 
     return { isDuplicate: false };
