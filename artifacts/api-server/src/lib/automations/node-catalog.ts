@@ -697,6 +697,16 @@ export const NODE_CATALOG: NodeDefinition[] = [
     ],
   },
   {
+    type: "ai.rerank", label: "AI Rerank", category: "ai",
+    description: "Re-score candidate documents by relevance to a query (BAAI/bge-reranker-v2-m3). Keep the top-N that actually matter.",
+    icon: "ListOrdered", color: "bg-fuchsia-600",
+    params: [
+      { key: "query", label: "Query path/text", type: "string", required: true, placeholder: "input.question" },
+      { key: "documents", label: "Documents path (string array)", type: "string", required: true, placeholder: "input.candidates" },
+      { key: "topN", label: "Keep top-N", type: "number", default: 5 },
+    ],
+  },
+  {
     type: "ai.draft", label: "AI Draft Text", category: "ai",
     description: "Generate text from a prompt template.",
     icon: "Sparkles", color: "bg-fuchsia-600",

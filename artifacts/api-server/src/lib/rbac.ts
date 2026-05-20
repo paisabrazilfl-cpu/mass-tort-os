@@ -166,6 +166,10 @@ export const Permission = {
   OCR_QUEUE_ADMIN: "ocr:queue_admin",
   OCR_AI_FIELDS: "ocr:ai_fields",
 
+  // AI reranker — relevance re-scoring of candidate documents.
+  // Additive capability; no existing flow depends on it.
+  AI_RERANK: "ai:rerank",
+
   // Drafting
   DRAFTING_TEMPLATES_VIEW: "drafting:templates_view",
   DRAFTING_GENERATE: "drafting:generate",

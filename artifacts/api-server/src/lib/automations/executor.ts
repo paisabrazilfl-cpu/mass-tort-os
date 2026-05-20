@@ -1478,6 +1478,27 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const picked = raw.trim();
     return { label: labels.includes(picked) ? picked : labels[0], raw };
   },
+  "ai.rerank": async (s) => {
+    // Relevance re-scoring via lib/reranker.ts (Bitdeer bge-reranker-v2-m3).
+    // `documents` resolves to a string array; non-string members are
+    // coerced. firmId comes from the run context so the vault key is
+    // firm-scoped. Output: { results: [{index, relevance_score,
+    // document}], top: <most relevant document string> }.
+    const p = s.node.data?.params ?? {};
+    const query = String(resolveOrLiteral(s, p.query ?? s.input?.query) ?? "");
+    const rawDocs = resolveOrLiteral(s, p.documents ?? s.input?.documents);
+    const documents = Array.isArray(rawDocs) ? rawDocs.map((d) => String(d ?? "")) : [];
+    if (!query || documents.length === 0) {
+      throw new Error("ai.rerank requires a query and a non-empty documents array.");
+    }
+    const topN = Number(p.topN ?? 5);
+    const { rerank } = await import("../reranker");
+    const results = await rerank(query, documents, {
+      firmId: s.ctx.firmId ?? undefined,
+      topN: Number.isFinite(topN) && topN > 0 ? topN : 5,
+    });
+    return { results, top: results[0]?.document ?? null, count: results.length };
+  },
   "ai.chat_response": async (s) => {
     // Catalog params: `message` (path/literal of inbound message), `persona`,
     // `history` (path to prior conversation array — folded into the prompt).

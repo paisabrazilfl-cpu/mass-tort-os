@@ -267,7 +267,7 @@
     "section": "§13.3",
     "capability": "Automation node catalog ↔ handler parity",
     "outcome": "PASS",
-    "evidence": "74 catalog nodes ↔ 74 handlers; perfect parity"
+    "evidence": "75 catalog nodes ↔ 75 handlers; perfect parity"
   },
   {
     "section": "§13.7",

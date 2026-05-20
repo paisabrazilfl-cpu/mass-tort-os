@@ -56,7 +56,7 @@
 - ✅ Per-firm webhook URL variants wired — webhooks.ts accepts both /provider and /provider/i/:integrationId for email/sms/fax/voice
 
 ### §13.3
-- ✅ Automation node catalog ↔ handler parity — 74 catalog nodes ↔ 74 handlers; perfect parity
+- ✅ Automation node catalog ↔ handler parity — 75 catalog nodes ↔ 75 handlers; perfect parity
 
 ### §13.7
 - ✅ 43 schema modules in lib/db/src/schema/ — lib/db/src/schema has 43 .ts modules
