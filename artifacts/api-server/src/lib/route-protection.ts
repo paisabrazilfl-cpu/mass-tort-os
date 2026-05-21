@@ -88,6 +88,12 @@ const AUTH_ROUTE_EXCEPTIONS = new Set([
   // to render the firm name + email prefill. The token in the query
   // string is the credential; the response carries no token / hash.
   "GET /invite-info",
+  // Magic-link (passwordless email) sign-in. Both routes bootstrap a
+  // session for a user who has none — request mints + emails a token,
+  // verify exchanges it for a JWT pair. The single-use, short-lived,
+  // SHA-256-hashed token is the credential.
+  "POST /magic-link/request",
+  "POST /magic-link/verify",
 ]);
 
 // Authenticated routes that legitimately do not need a role gate (caller's

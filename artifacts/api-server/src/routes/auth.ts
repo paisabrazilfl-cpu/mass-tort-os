@@ -39,7 +39,8 @@ import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { generateSecret, verifyTOTP, generateOTPAuthURL } from "../lib/totp";
 import { encrypt, decrypt } from "../lib/encryption";
-import { db } from "@workspace/db";
+import { generateMagicToken, hashMagicToken, sendMagicLinkEmail } from "../lib/magic-link";
+import { db, pool } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { dispatchCriticalAlert } from "../lib/security-alerts";
@@ -704,6 +705,157 @@ router.get("/verify-email", authRateLimit, async (req, res) => {
       firm_id: refreshed.firm_id,
       mfa_enabled: false,
     },
+  });
+});
+
+// ── Magic-link (passwordless email) sign-in ─────────────────────────────────
+// Both routes are PUBLIC — the user has no session yet, the whole point is to
+// mint one. They are whitelisted in lib/route-protection.ts → AUTH_ROUTE_EXCEPTIONS.
+
+const MagicLinkRequestBody = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+});
+const MagicLinkVerifyBody = z.object({
+  token: z.string().trim().regex(/^[0-9a-f]{64}$/i, "token must be 64 hex characters"),
+  totp_code: z.string().regex(/^\d{6}$/).optional(),
+});
+
+/**
+ * Request a magic sign-in link. ALWAYS responds 200 with the same generic
+ * body — whether or not the email maps to a verified account — so the
+ * endpoint cannot be used to enumerate registered addresses. A link is
+ * minted + emailed only for an existing, email-verified account.
+ */
+router.post("/magic-link/request", authRateLimit, async (req, res) => {
+  const parsed = MagicLinkRequestBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "A valid email address is required"); return; }
+  const { email } = parsed.data;
+
+  const user = await getUserByEmail(email);
+  if (user && user.email_verified_at !== null) {
+    try {
+      const tok = generateMagicToken();
+      await pool.query(
+        `INSERT INTO auth_magic_links (user_id, token_hash, expires_at, created_ip)
+         VALUES ($1, $2, $3, $4)`,
+        [user.id, tok.hash, tok.expiresAt, req.ip ?? req.socket.remoteAddress ?? null],
+      );
+      await sendMagicLinkEmail(user.email, user.name, tok.plaintext);
+      await auditLog("user", String(user.id), "magic_link_requested", { email: user.email }, {
+        ip_address: req.ip ?? req.socket.remoteAddress,
+        user_agent: req.headers["user-agent"],
+      });
+    } catch (err) {
+      // Never leak a failure back to the caller — that would itself be an
+      // enumeration signal. Log for ops and still return the generic body.
+      logger.error({ err, email }, "magic-link request: failed to mint/send token");
+    }
+  }
+
+  res.json({
+    status: "ok",
+    message: "If an account exists for that email, a sign-in link is on its way.",
+  });
+});
+
+/**
+ * Exchange a magic-link token for a session. The token proves control of
+ * the account's email (one factor); an MFA-enabled account must still
+ * present its TOTP code, so this can return { mfa_required: true } without
+ * consuming the token — the link stays valid for the second round-trip
+ * until its 15-minute TTL lapses.
+ */
+router.post("/magic-link/verify", authRateLimit, async (req, res) => {
+  const parsed = MagicLinkVerifyBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "A valid sign-in token is required"); return; }
+  const { token, totp_code } = parsed.data;
+  const tokenHash = hashMagicToken(token);
+
+  // Look up a still-valid, unconsumed token. Not consumed here — an
+  // MFA-enabled account needs a second round-trip with the TOTP code.
+  const linkRes = await pool.query<{ id: number; user_id: number }>(
+    `SELECT id, user_id FROM auth_magic_links
+       WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > NOW()
+       LIMIT 1`,
+    [tokenHash],
+  );
+  const link = linkRes.rows[0];
+  if (!link) {
+    errorEnvelope(res, 400, "invalid_token", "This sign-in link is invalid or has expired. Request a new one.");
+    return;
+  }
+
+  // Pull the full user row directly — getUserById omits mfa/lock columns.
+  const userRes = await pool.query<{
+    id: number; email: string; name: string; role: string;
+    firm_id: number; token_version: number;
+    mfa_enabled: boolean; totp_secret: string | null;
+    locked_until: Date | null; failed_login_attempts: number;
+  }>(
+    `SELECT id, email, name, role, firm_id, token_version,
+            mfa_enabled, totp_secret, locked_until, failed_login_attempts
+       FROM mtos_users WHERE id = $1 LIMIT 1`,
+    [link.user_id],
+  );
+  const user = userRes.rows[0];
+  if (!user) {
+    errorEnvelope(res, 400, "invalid_token", "This sign-in link is invalid or has expired. Request a new one.");
+    return;
+  }
+
+  if (await isAccountLocked(user)) {
+    const minutesLeft = Math.ceil((new Date(user.locked_until!).getTime() - Date.now()) / 60000);
+    errorEnvelope(res, 423, "account_locked", `Account is locked. Try again in ${minutesLeft} minute(s).`);
+    return;
+  }
+
+  // MFA still applies — a magic link is a single factor.
+  if (user.mfa_enabled && user.totp_secret) {
+    if (!totp_code) {
+      res.status(200).json({ mfa_required: true, message: "Enter your authenticator code to finish signing in." });
+      return;
+    }
+    const decryptedSecret = decrypt(user.totp_secret, "totp_secret", String(user.id));
+    if (!verifyTOTP(decryptedSecret, totp_code)) {
+      unauthorized(res, "Invalid authenticator code.");
+      return;
+    }
+  }
+
+  // Atomically consume — single-use, race-proof against a double-click.
+  const consumed = await pool.query(
+    `UPDATE auth_magic_links SET consumed_at = NOW()
+       WHERE id = $1 AND consumed_at IS NULL RETURNING id`,
+    [link.id],
+  );
+  if (consumed.rows.length === 0) {
+    errorEnvelope(res, 400, "invalid_token", "This sign-in link has already been used. Request a new one.");
+    return;
+  }
+
+  await resetFailedAttempts(user.email);
+  await stampLastLogin(user.id);
+
+  const accessToken = generateToken({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role as UserRole,
+    firm_id: user.firm_id,
+    token_version: user.token_version,
+  });
+  const refreshToken = await generateRefreshToken(user.id);
+
+  await auditLog("user", String(user.id), "login_magic_link", { email: user.email }, {
+    ip_address: req.ip ?? req.socket.remoteAddress,
+    user_agent: req.headers["user-agent"],
+  });
+
+  res.json({
+    token: accessToken,
+    refresh_token: refreshToken,
+    expires_in: 900,
+    user: { id: user.id, email: user.email, name: user.name, role: user.role, mfa_enabled: user.mfa_enabled },
   });
 });
 

@@ -179,6 +179,19 @@ async function runSchemaRepair(): Promise<void> {
       created_at timestamp NOT NULL DEFAULT now(),
       updated_at timestamp NOT NULL DEFAULT now()
     )`,
+    // Magic-link (passwordless email) sign-in tokens. Only the SHA-256 hash
+    // of the token is stored; single-use (consumed_at) and short-lived
+    // (expires_at — 15 min). See lib/magic-link.ts + routes/auth.ts.
+    `CREATE TABLE IF NOT EXISTS auth_magic_links (
+      id serial PRIMARY KEY,
+      user_id integer NOT NULL,
+      token_hash text NOT NULL,
+      expires_at timestamp NOT NULL,
+      consumed_at timestamp,
+      created_ip varchar(45),
+      created_at timestamp NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS auth_magic_links_token_hash_idx ON auth_magic_links(token_hash)`,
   ];
 
   // Phase 2: ALTER TABLE to add any columns still missing

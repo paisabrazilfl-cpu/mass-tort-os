@@ -47,6 +47,8 @@ type Ctx = {
   ) => Promise<RegisterOutcome>;
   verifyMfa: (totpCode: string) => Promise<LoginOutcome>;
   verifyEmail: (token: string) => Promise<LoginOutcome>;
+  requestMagicLink: (email: string) => Promise<{ ok: boolean; message: string }>;
+  loginWithMagicLink: (token: string, totpCode?: string) => Promise<LoginOutcome>;
   cancelMfa: () => void;
   logout: () => Promise<void>;
 };
@@ -374,6 +376,133 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [scheduleRefresh],
   );
 
+  // Magic-link (passwordless email) — request a sign-in link. The server
+  // always returns the same generic body to avoid email enumeration, so
+  // `ok` reflects only transport/rate-limit success, not "email exists".
+  const requestMagicLink = useCallback(
+    async (email: string): Promise<{ ok: boolean; message: string }> => {
+      try {
+        const res = await fetch("/api/auth/magic-link/request", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        let body: Record<string, unknown> = {};
+        try {
+          body = (await res.json()) as Record<string, unknown>;
+        } catch {
+          /* tolerate empty body */
+        }
+        if (res.status === 429) {
+          return { ok: false, message: "Too many attempts. Please wait a few minutes and try again." };
+        }
+        if (!res.ok) {
+          return {
+            ok: false,
+            message:
+              (typeof body.message === "string" && body.message) ||
+              "Could not send a sign-in link. Check the email address and retry.",
+          };
+        }
+        return {
+          ok: true,
+          message:
+            (typeof body.message === "string" && body.message) ||
+            "If an account exists for that email, a sign-in link is on its way.",
+        };
+      } catch {
+        return { ok: false, message: "Network error — please check your connection and retry." };
+      }
+    },
+    [],
+  );
+
+  // Consume a magic-link token. Mirrors login()'s token handling. An
+  // MFA-enabled account gets { kind: "mfa_required" } — the /auth/magic
+  // page then collects the TOTP code and re-calls with totpCode set; the
+  // token is not consumed server-side until the full success.
+  const loginWithMagicLink = useCallback(
+    async (token: string, totpCode?: string): Promise<LoginOutcome> => {
+      try {
+        const res = await fetch("/api/auth/magic-link/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, ...(totpCode ? { totp_code: totpCode } : {}) }),
+        });
+        let body: Record<string, unknown> = {};
+        try {
+          body = (await res.json()) as Record<string, unknown>;
+        } catch {
+          /* tolerate empty body */
+        }
+        if (res.status === 423) {
+          return {
+            kind: "error",
+            code: "account_locked",
+            message:
+              (typeof body.message === "string" && body.message) ||
+              "Account is temporarily locked. Try again in a few minutes.",
+          };
+        }
+        if (res.status === 429) {
+          return {
+            kind: "error",
+            code: "rate_limited",
+            message: "Too many attempts. Please wait a few minutes and try again.",
+          };
+        }
+        if (!res.ok) {
+          if (totpCode) {
+            return {
+              kind: "error",
+              code: "invalid_totp",
+              message: "Invalid 6-digit code. Please try again.",
+            };
+          }
+          const code = (typeof body.code === "string" && body.code) || "invalid_token";
+          return {
+            kind: "error",
+            code,
+            message:
+              (typeof body.message === "string" && body.message) ||
+              (typeof body.error === "string" && body.error) ||
+              "This sign-in link is invalid or has expired.",
+          };
+        }
+
+        if (body.mfa_required === true) {
+          return { kind: "mfa_required" };
+        }
+
+        const userPayload = body.user as AuthUser | undefined;
+        const accessToken = typeof body.token === "string" ? body.token : null;
+        const refreshToken = typeof body.refresh_token === "string" ? body.refresh_token : null;
+        const expiresIn = typeof body.expires_in === "number" ? body.expires_in : 900;
+        if (!userPayload || !accessToken || !refreshToken) {
+          return {
+            kind: "error",
+            code: "bad_response",
+            message: "Sign-in response was malformed. Please retry the link.",
+          };
+        }
+
+        setTokens({ access: accessToken, refresh: refreshToken, userId: userPayload.id });
+        setUser(userPayload);
+        setStatus("authed");
+        setPendingMfa(null);
+        scheduleRefresh(expiresIn);
+        return { kind: "ok" };
+      } catch {
+        return {
+          kind: "error",
+          code: "network",
+          message: "Network error — please check your connection and retry.",
+        };
+      }
+    },
+    [scheduleRefresh],
+  );
+
   const verifyMfa = useCallback(
     async (totpCode: string): Promise<LoginOutcome> => {
       if (!pendingMfa) {
@@ -417,6 +546,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         register,
         verifyMfa,
         verifyEmail,
+        requestMagicLink,
+        loginWithMagicLink,
         cancelMfa,
         logout,
       }}

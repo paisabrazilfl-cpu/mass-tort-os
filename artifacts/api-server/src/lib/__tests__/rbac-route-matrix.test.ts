@@ -185,7 +185,7 @@ describe("public allowlist (validateRouteTable policy)", () => {
     assert.ok(publicRouters.size > 0, "expected at least one public router in policy");
   });
 
-  test("auth router exceptions are exactly login / refresh / register / verify-email / invite-info", () => {
+  test("auth router exceptions are exactly login / refresh / register / verify-email / invite-info / magic-link", () => {
     if (!booted) throw new Error("app not booted");
     const exceptions = booted.policy
       .filter((p) => p.status === "auth-exception")
@@ -202,10 +202,17 @@ describe("public allowlist (validateRouteTable policy)", () => {
     // hashed token in the query string is the credential, and the
     // response carries no token / hash material — only firm name and
     // optional email prefill so the /register page can render context.
+    //
+    // POST /magic-link/request + /magic-link/verify are the passwordless
+    // email sign-in pair. Both bootstrap a session for a user who has
+    // none; the single-use, short-lived, SHA-256-hashed token is the
+    // credential (see lib/magic-link.ts).
     assert.deepEqual(exceptions, [
       "GET /invite-info",
       "GET /verify-email",
       "POST /login",
+      "POST /magic-link/request",
+      "POST /magic-link/verify",
       "POST /refresh",
       "POST /register",
     ]);
