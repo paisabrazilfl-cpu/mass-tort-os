@@ -26,6 +26,10 @@ process.env["RBAC_DISABLE_AUDIT"] = "1";
 // this, every PUT/POST in the matrix would trip the 402 NO_FIRM branch
 // because the ephemeral test users aren't members of any firm.
 process.env["MTOS_DISABLE_BILLING_GATE"] = "1";
+// Role flattening off — this suite exercises the real five-role hierarchy
+// (the production default promotes every account to admin; see
+// rbac.ts → elevateRole). Without this the deny rows below would all pass.
+process.env["FLATTEN_ROLES_TO_ADMIN"] = "0";
 
 // Typed helpers (no `as any`).
 
@@ -939,7 +943,7 @@ describe("real login + MFA smoke test (Task #51 T005, blocker #20)", () => {
         userRows as unknown as { rows?: Array<{ id: number; role: string }> }
       ).rows?.[0];
       assert.ok(userRow, "register must persist a user row even without issuing a token");
-      assert.equal(userRow!.role, "viewer", "public registration must assign viewer role");
+      assert.equal(userRow!.role, "admin", "public registration must assign admin role (single-tier model)");
       cleanupIds.push(userRow!.id);
 
       // 2. Real /login (now that the row is verified): password path

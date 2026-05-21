@@ -88,6 +88,31 @@ const ROLE_HIERARCHY: Record<UserRole, number> = {
   viewer: 25,
 };
 
+/**
+ * Capacity flattening. MTOS operates with a single privileged tier: every
+ * authenticated user runs with admin capacity; super_admin is reserved for
+ * the platform owner. elevateRole() normalizes any lower role to `admin` at
+ * request time (applied where authMiddleware builds req.user), so
+ * requireRole / requirePermission / hasPermission and every route-level
+ * role branch see admin uniformly — no viewer / paralegal / attorney tier.
+ *
+ * On by default in production / staging. Override with FLATTEN_ROLES_TO_ADMIN:
+ *   "1" forces it on anywhere; "0" restores the original five-role model
+ *   (the RBAC test suites set "0" so they exercise the real hierarchy).
+ */
+function shouldFlattenRoles(): boolean {
+  const flag = process.env["FLATTEN_ROLES_TO_ADMIN"];
+  if (flag === "0") return false;
+  if (flag === "1") return true;
+  const env = process.env["NODE_ENV"];
+  return env === "production" || env === "staging";
+}
+
+export function elevateRole(role: UserRole): UserRole {
+  if (!shouldFlattenRoles()) return role;
+  return role === "super_admin" ? "super_admin" : "admin";
+}
+
 // =============================================================================
 // Permission catalogue
 // =============================================================================
@@ -608,7 +633,7 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
       id: apiKey.user_id,
       email: apiKey.user_email,
       name: `api-key:${apiKey.name}`,
-      role: apiKey.user_role,
+      role: elevateRole(apiKey.user_role),
       firm_id: apiKey.firm_id,
     };
     // Tag the request so downstream handlers (and the response audit hook
@@ -676,7 +701,7 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
     id: decoded.id,
     email: decoded.email,
     name: decoded.name,
-    role: decoded.role,
+    role: elevateRole(decoded.role),
     firm_id: firmId,
   };
   next();

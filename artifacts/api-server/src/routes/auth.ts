@@ -399,7 +399,10 @@ router.post("/register", authRateLimit, async (req, res) => {
   const passwordError = validatePasswordComplexity(password);
   if (passwordError) { res.status(400).json({ error: passwordError }); return; }
 
-  const assignedRole = "viewer";
+  // MTOS runs a single privileged tier — every account operates with admin
+  // capacity (see rbac.ts → elevateRole). New registrations are created as
+  // admin so the stored role matches the capacity they actually get.
+  const assignedRole = "admin";
 
   // Treat verified and pending rows identically here. Returning a
   // different status for "already pending verification" would let the

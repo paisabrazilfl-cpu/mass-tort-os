@@ -272,6 +272,12 @@ async function runSchemaRepair(): Promise<void> {
     // confirmed. See lib/sms-auth.ts + routes/auth.ts.
     `ALTER TABLE mtos_users ADD COLUMN IF NOT EXISTS phone text`,
     `ALTER TABLE mtos_users ADD COLUMN IF NOT EXISTS phone_verified_at timestamp`,
+    // Capacity flattening: MTOS runs a single privileged tier. Promote every
+    // existing non-admin account to admin so the stored role matches the
+    // capacity it now has (see rbac.ts → elevateRole). super_admin is left
+    // intact. Idempotent — after the first boot nothing matches.
+    `UPDATE mtos_users SET role = 'admin', updated_at = NOW()
+       WHERE role NOT IN ('admin', 'super_admin')`,
   ];
 
   for (const stmt of [...creates, ...alters]) {
