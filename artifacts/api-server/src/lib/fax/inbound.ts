@@ -57,6 +57,11 @@ export interface InboundFaxResult {
   document_id?: number;
 }
 
+/** Escape LIKE metacharacters so an external id can be matched literally. */
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 // ── Claimant correlation ────────────────────────────────────────────────────
 
 /**
@@ -73,23 +78,24 @@ async function correlateLead(
   fromNumber: string,
   firmId: number | null,
 ): Promise<{ id: number; firm_id: number | null } | null> {
+  // A null firmId means the inbound-fax integration is not bound to a firm.
+  // Matching leads.hospital_fax globally would let one firm's inbound fax
+  // land on another firm's claimant — hospital records lines are widely
+  // shared, so collisions are real, not hypothetical — a cross-tenant PHI
+  // leak. Refuse to correlate; the fax stays an unassigned inbox item.
+  if (firmId == null) return null;
+
   const digits = fromNumber.replace(/\D/g, "");
   if (digits.length < 10) return null;
   const last10 = digits.slice(-10);
 
-  const params: unknown[] = [last10];
-  let firmClause = "";
-  if (firmId != null) {
-    params.push(firmId);
-    firmClause = `AND firm_id = $${params.length}`;
-  }
   const candidates = await pool.query<{ id: number; firm_id: number | null }>(
     `SELECT id, firm_id FROM leads
-       WHERE length(regexp_replace(coalesce(hospital_fax,''), '[^0-9]', '', 'g')) >= 10
+       WHERE firm_id = $2
+         AND length(regexp_replace(coalesce(hospital_fax,''), '[^0-9]', '', 'g')) >= 10
          AND right(regexp_replace(coalesce(hospital_fax,''), '[^0-9]', '', 'g'), 10) = $1
-         ${firmClause}
        ORDER BY id DESC`,
-    params,
+    [last10, firmId],
   );
   if (candidates.rows.length === 0) return null;
   if (candidates.rows.length === 1) return candidates.rows[0]!;
@@ -118,6 +124,23 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
   try {
     if (!isInboundReceivedEvent(input.eventType, input.status, input.payload)) {
       return { handled: false, reason: "not_inbound_event" };
+    }
+
+    // Idempotency: fax providers re-deliver inbound webhooks, sometimes with
+    // a different event_type each time, which slips past the route-level
+    // externalId:eventType dedup. If a fax_results row already exists for
+    // this provider fax, stop — re-processing would duplicate the claimant's
+    // medical-record attachment. Both the matched and unmatched source_file
+    // conventions end with `_fax_<externalId>.pdf`.
+    if (input.externalFaxId) {
+      const dupPattern = `%${escapeLike(`_fax_${input.externalFaxId}.pdf`)}`;
+      const dup = await pool.query(
+        `SELECT 1 FROM fax_results WHERE source_file LIKE $1 ESCAPE '\\' LIMIT 1`,
+        [dupPattern],
+      );
+      if (dup.rows.length > 0) {
+        return { handled: false, reason: "already_processed" };
+      }
     }
 
     // 1. Retrieve the received document.
@@ -149,7 +172,11 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
     const stamp = input.externalFaxId || String(Date.now());
     const caseId = leadId ? `lead_${leadId}` : `fax_inbound_${stamp}`;
     const fileName = `inbound_fax_${stamp}.pdf`;
-    const base64 = bytes.toString("base64");
+    // Prefix with a data: URI so worker.ts process_fax → detectMimeType()
+    // routes this down the PDF text-extraction path (a bare base64 string
+    // defaults to image/png). base64ToBuffer strips any data:<mime>;base64,
+    // prefix before decoding.
+    const base64 = `data:application/pdf;base64,${bytes.toString("base64")}`;
     const { path: vaultPath } = await saveFile(caseId, base64, fileName);
 
     const sourceFile = leadId

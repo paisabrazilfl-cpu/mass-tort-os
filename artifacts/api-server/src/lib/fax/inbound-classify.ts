@@ -125,22 +125,67 @@ async function assertSafeUrl(raw: string): Promise<URL> {
   return u;
 }
 
-/** Download a document from a media URL. Returns the raw bytes. */
-async function downloadFromUrl(rawUrl: string): Promise<Buffer> {
-  const safe = await assertSafeUrl(rawUrl);
-  const resp = await fetch(safe.toString(), {
-    redirect: "follow",
-    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-  });
-  if (!resp.ok) throw new Error(`media download HTTP ${resp.status}`);
-  const declared = Number(resp.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_DOCUMENT_BYTES) {
-    throw new Error(`media too large (${declared} bytes)`);
+const MAX_REDIRECTS = 4;
+
+/** Read a response body with a hard byte cap (defends against absent/false content-length). */
+async function readCappedBody(resp: Response): Promise<Buffer> {
+  const reader = resp.body?.getReader();
+  if (!reader) {
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length > MAX_DOCUMENT_BYTES) throw new Error(`media too large (${buf.length} bytes)`);
+    return buf;
   }
-  const buf = Buffer.from(await resp.arrayBuffer());
-  if (buf.length === 0) throw new Error("media download was empty");
-  if (buf.length > MAX_DOCUMENT_BYTES) throw new Error(`media too large (${buf.length} bytes)`);
-  return buf;
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.byteLength;
+      if (total > MAX_DOCUMENT_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`media too large (>${MAX_DOCUMENT_BYTES} bytes)`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Download a document from a media URL. Returns the raw bytes.
+ *
+ * The webhook payload is attacker-controllable (provider signatures on
+ * inbound fax webhooks are `unverified`), so the URL — AND every redirect
+ * hop — is SSRF-validated. `redirect: "manual"` is mandatory: a public URL
+ * that 302s to http://169.254.169.254/ (cloud metadata) would otherwise
+ * sail straight past a one-shot check.
+ */
+async function downloadFromUrl(rawUrl: string): Promise<Buffer> {
+  let current = rawUrl;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const safe = await assertSafeUrl(current);
+    const resp = await fetch(safe.toString(), {
+      redirect: "manual",
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
+    if (resp.status >= 300 && resp.status < 400) {
+      const location = resp.headers.get("location");
+      if (!location) throw new Error(`media redirect ${resp.status} with no Location`);
+      // Resolve relative redirects against the current URL, then re-validate.
+      current = new URL(location, safe).toString();
+      continue;
+    }
+    if (!resp.ok) throw new Error(`media download HTTP ${resp.status}`);
+    const declared = Number(resp.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_DOCUMENT_BYTES) {
+      throw new Error(`media too large (${declared} bytes)`);
+    }
+    const buf = await readCappedBody(resp);
+    if (buf.length === 0) throw new Error("media download was empty");
+    return buf;
+  }
+  throw new Error(`media download exceeded ${MAX_REDIRECTS} redirects`);
 }
 
 /**

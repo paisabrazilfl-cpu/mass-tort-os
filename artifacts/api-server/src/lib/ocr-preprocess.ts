@@ -36,7 +36,10 @@ export async function preprocessFaxBuffer(input: Buffer): Promise<Buffer> {
 }
 
 export function base64ToBuffer(base64: string): Buffer {
-  const withoutHeader = base64.replace(/^data:image\/[a-z]+;base64,/, "");
+  // Strip any `data:<mime>;base64,` URI prefix — not just image/* — so a
+  // `data:application/pdf;base64,` payload (inbound-fax intake) decodes to
+  // the original bytes instead of feeding the prefix chars into the decoder.
+  const withoutHeader = base64.replace(/^data:[^;]+;base64,/, "");
   return Buffer.from(withoutHeader, "base64");
 }
 

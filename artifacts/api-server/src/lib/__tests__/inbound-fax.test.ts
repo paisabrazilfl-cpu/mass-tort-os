@@ -18,6 +18,7 @@ import {
   FROM_KEYS,
   URL_KEYS,
 } from "../fax/inbound-classify";
+import { base64ToBuffer, detectMimeType } from "../ocr-preprocess";
 
 // ── deepFindString ──────────────────────────────────────────────────────────
 
@@ -99,4 +100,30 @@ test("isBlockedIp allows public IPs", () => {
   for (const ip of ["8.8.8.8", "1.1.1.1", "203.0.113.10"]) {
     assert.equal(isBlockedIp(ip), false, `${ip} must be allowed`);
   }
+});
+
+// ── PDF data-URI round-trip — worker.ts process_fax contract ────────────────
+
+test("PDF data-URI: detectMimeType routes to the PDF path", () => {
+  const pdf = Buffer.from("%PDF-1.7\nfake medical record\x00\x01\xffEOF", "latin1");
+  const stored = `data:application/pdf;base64,${pdf.toString("base64")}`;
+  // worker.ts:271 takes the PDF text-extraction branch only when this is
+  // exactly "application/pdf" — a bare base64 string would default to png.
+  assert.equal(detectMimeType(stored), "application/pdf");
+});
+
+test("PDF data-URI: base64ToBuffer strips the data:application/pdf prefix", () => {
+  const pdf = Buffer.from("%PDF-1.7\nfake medical record\x00\x01\xffEOF", "latin1");
+  const stored = `data:application/pdf;base64,${pdf.toString("base64")}`;
+  assert.deepEqual(base64ToBuffer(stored), pdf);
+});
+
+test("base64ToBuffer still decodes a bare base64 string (legacy OCR-upload path)", () => {
+  const bytes = Buffer.from([0x01, 0x02, 0x03, 0xff, 0x00, 0x42]);
+  assert.deepEqual(base64ToBuffer(bytes.toString("base64")), bytes);
+});
+
+test("base64ToBuffer still strips a data:image prefix (unchanged behavior)", () => {
+  const img = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  assert.deepEqual(base64ToBuffer(`data:image/png;base64,${img.toString("base64")}`), img);
 });
