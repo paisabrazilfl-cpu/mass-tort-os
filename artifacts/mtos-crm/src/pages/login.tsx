@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/auth-context";
 import { toast } from "@/hooks/use-toast";
+import { AuthBackground } from "@/components/auth/auth-background";
 
 function getNextPath(): string {
   if (typeof window === "undefined") return "/";
@@ -183,16 +184,18 @@ export default function LoginPage() {
   // about to redirect, render a centered spinner instead of the form.
   if (status === "loading" || (status === "authed" && user)) {
     return (
-      <div className="flex min-h-[100dvh] items-center justify-center bg-muted/30">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden="true" />
+      <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden">
+        <AuthBackground />
+        <Loader2 className="h-6 w-6 animate-spin text-white/70" aria-hidden="true" />
         <span className="sr-only">Signing you in…</span>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-muted/30 px-4 py-10">
-      <div className="w-full max-w-md rounded-xl border bg-card p-8 shadow-lg">
+    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden px-4 py-10">
+      <AuthBackground />
+      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-card p-8 shadow-2xl ring-1 ring-black/5">
         <header className="text-center">
           <h1 className="text-2xl font-bold tracking-tight text-foreground">MTOS CRM</h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -267,23 +270,25 @@ export default function LoginPage() {
         ) : (
           /* ── Password mode (default) ─────────────────────────────────── */
           <>
-            <div className="mt-6">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="mt-6 flex items-center gap-3">
+              <span className="h-px flex-1 bg-border" />
+              <span className="whitespace-nowrap text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Quick sign in with
-              </p>
-              <div className="mt-3 grid grid-cols-4 gap-2">
-                {QUICK_METHODS.map((m) => (
-                  <button
-                    key={m.key}
-                    type="button"
-                    onClick={() => onQuickMethod(m)}
-                    className="flex flex-col items-center gap-1.5 rounded-lg border bg-background px-1 py-3 text-[11px] font-medium text-foreground transition hover:border-primary/50 hover:bg-accent"
-                  >
-                    {m.icon}
-                    <span>{m.label}</span>
-                  </button>
-                ))}
-              </div>
+              </span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            <div className="mt-4 grid grid-cols-4 gap-2">
+              {QUICK_METHODS.map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => onQuickMethod(m)}
+                  className="flex flex-col items-center gap-1.5 rounded-lg border bg-background px-1 py-3 text-[11px] font-medium text-foreground transition hover:border-primary/50 hover:bg-accent"
+                >
+                  {m.icon}
+                  <span>{m.label}</span>
+                </button>
+              ))}
             </div>
 
             <div className="my-6 flex items-center gap-3">
