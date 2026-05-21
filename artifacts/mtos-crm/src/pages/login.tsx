@@ -87,11 +87,12 @@ const QUICK_METHODS: QuickMethod[] = [
   { key: "whatsapp", label: "WhatsApp", icon: <WhatsAppIcon /> },
 ];
 
-type Mode = "password" | "magic";
+type Mode = "password" | "magic" | "sms";
 
 export default function LoginPage() {
   useForceLightSkin();
-  const { login, requestMagicLink, loginWithPasskey, status, user } = useAuth();
+  const { login, requestMagicLink, loginWithPasskey, requestSmsCode, loginWithSmsCode, status, user } =
+    useAuth();
   const [, navigate] = useLocation();
 
   const [mode, setMode] = useState<Mode>("password");
@@ -102,6 +103,11 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [smsEmail, setSmsEmail] = useState("");
+  const [smsStep, setSmsStep] = useState<"email" | "code">("email");
+  const [smsCode, setSmsCode] = useState("");
+  const [smsTotp, setSmsTotp] = useState("");
+  const [smsNeedsTotp, setSmsNeedsTotp] = useState(false);
 
   useEffect(() => {
     document.title = "Sign in · MTOS";
@@ -178,12 +184,77 @@ export default function LoginPage() {
     }
   };
 
+  const onSmsRequest = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    const addr = smsEmail.trim();
+    if (!addr) {
+      setError("Enter your email address to receive a sign-in code.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const result = await requestSmsCode(addr);
+      if (result.ok) {
+        setSmsCode("");
+        setSmsTotp("");
+        setSmsNeedsTotp(false);
+        setSmsStep("code");
+        return;
+      }
+      setError(result.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onSmsVerify = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!/^\d{6}$/.test(smsCode)) {
+      setError("Enter the 6-digit code from the text message.");
+      return;
+    }
+    if (smsNeedsTotp && !/^\d{6}$/.test(smsTotp)) {
+      setError("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const result = await loginWithSmsCode(
+        smsEmail.trim(),
+        smsCode,
+        smsNeedsTotp ? smsTotp : undefined,
+      );
+      if (result.kind === "ok") {
+        navigate(getNextPath(), { replace: true });
+        return;
+      }
+      if (result.kind === "mfa_required") {
+        setSmsNeedsTotp(true);
+        return;
+      }
+      setError(result.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const onQuickMethod = (m: QuickMethod) => {
     setError(null);
     if (m.key === "email-link") {
       setMagicEmail(email.trim());
       setMagicSent(null);
       setMode("magic");
+      return;
+    }
+    if (m.key === "text-code") {
+      setSmsEmail(email.trim());
+      setSmsStep("email");
+      setSmsCode("");
+      setSmsTotp("");
+      setSmsNeedsTotp(false);
+      setMode("sms");
       return;
     }
     if (m.key === "passkey") {
@@ -194,13 +265,15 @@ export default function LoginPage() {
     // it tells the truth the moment it is clicked.
     toast({
       title: `${m.label} sign-in is coming soon`,
-      description: "Use your email, the email link, or a passkey to get in today.",
+      description: "Use your email, an email link, a text code, or a passkey to get in today.",
     });
   };
 
   const backToPassword = () => {
     setMode("password");
     setMagicSent(null);
+    setSmsStep("email");
+    setSmsNeedsTotp(false);
     setError(null);
   };
 
@@ -225,7 +298,9 @@ export default function LoginPage() {
           <p className="mt-1 text-sm text-muted-foreground">
             {mode === "magic"
               ? "Sign in with a one-time email link"
-              : "Sign in to access your command center"}
+              : mode === "sms"
+                ? "Sign in with a one-time text code"
+                : "Sign in to access your command center"}
           </p>
         </header>
 
@@ -288,6 +363,100 @@ export default function LoginPage() {
               >
                 <ArrowLeft className="mr-2 h-4 w-4" aria-hidden="true" />
                 Back to all sign-in options
+              </Button>
+            </form>
+          )
+        ) : mode === "sms" ? (
+          /* ── SMS code mode ─────────────────────────────────────────────── */
+          smsStep === "email" ? (
+            <form onSubmit={onSmsRequest} className="mt-6 space-y-4" noValidate>
+              <div className="space-y-2">
+                <Label htmlFor="sms-email">Email address</Label>
+                <Input
+                  id="sms-email"
+                  type="email"
+                  autoComplete="username"
+                  placeholder="you@firm.com"
+                  required
+                  value={smsEmail}
+                  onChange={(e) => setSmsEmail(e.target.value)}
+                  disabled={submitting}
+                />
+                <p className="text-xs text-muted-foreground">
+                  We'll text a 6-digit code to the phone on your account.
+                </p>
+              </div>
+              <Button type="submit" className="w-full" disabled={submitting}>
+                {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
+                {submitting ? "Sending code…" : "Send text code"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                onClick={backToPassword}
+                disabled={submitting}
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" aria-hidden="true" />
+                Back to all sign-in options
+              </Button>
+            </form>
+          ) : (
+            <form onSubmit={onSmsVerify} className="mt-6 space-y-4" noValidate>
+              <div className="space-y-2">
+                <Label htmlFor="sms-code">6-digit code</Label>
+                <Input
+                  id="sms-code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="123456"
+                  maxLength={6}
+                  required
+                  value={smsCode}
+                  onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, ""))}
+                  disabled={submitting}
+                />
+                <p className="text-xs text-muted-foreground">
+                  If a phone is on file for{" "}
+                  <span className="font-medium text-foreground">{smsEmail}</span>, the code was just
+                  texted to it.
+                </p>
+              </div>
+              {smsNeedsTotp && (
+                <div className="space-y-2">
+                  <Label htmlFor="sms-totp">Authenticator code</Label>
+                  <Input
+                    id="sms-totp"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="123456"
+                    maxLength={6}
+                    value={smsTotp}
+                    onChange={(e) => setSmsTotp(e.target.value.replace(/\D/g, ""))}
+                    disabled={submitting}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Your account uses two-factor — also enter the code from your authenticator app.
+                  </p>
+                </div>
+              )}
+              <Button type="submit" className="w-full" disabled={submitting}>
+                {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
+                {submitting ? "Verifying…" : "Verify & sign in"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                onClick={() => {
+                  setSmsStep("email");
+                  setSmsNeedsTotp(false);
+                  setError(null);
+                }}
+                disabled={submitting}
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" aria-hidden="true" />
+                Use a different email
               </Button>
             </form>
           )

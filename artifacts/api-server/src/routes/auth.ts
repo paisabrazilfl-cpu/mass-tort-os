@@ -58,6 +58,14 @@ import {
   deleteCredential,
   parseTransports,
 } from "../lib/passkey";
+import {
+  normalizePhone,
+  maskPhone,
+  createOtp,
+  verifyOtp,
+  consumeOtpById,
+  sendOtpSms,
+} from "../lib/sms-auth";
 import { db, pool } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -1090,6 +1098,207 @@ router.post("/passkey/login/verify", authRateLimit, async (req, res) => {
     expires_in: 900,
     user: { id: user.id, email: user.email, name: user.name, role: user.role, mfa_enabled: user.mfa_enabled },
   });
+});
+
+// ── SMS one-time-code sign-in ───────────────────────────────────────────────
+// sms/request + sms/verify are PUBLIC (whitelisted in route-protection.ts).
+// phone/* are authed self-service — a user enrolls/manages their own number.
+
+const SmsRequestBody = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+});
+const SmsVerifyBody = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  code: z.string().regex(/^\d{6}$/),
+  totp_code: z.string().regex(/^\d{6}$/).optional(),
+});
+const PhoneRequestBody = z.object({
+  phone: z.string().trim().min(8).max(20),
+});
+const PhoneVerifyBody = z.object({
+  code: z.string().regex(/^\d{6}$/),
+});
+
+/**
+ * Request a sign-in code by SMS. ALWAYS responds 200 with the same generic
+ * body — a code is texted only when the email maps to a verified account
+ * that has a verified phone — so the endpoint leaks neither registered
+ * emails nor which accounts carry a phone.
+ */
+router.post("/sms/request", authRateLimit, async (req, res) => {
+  const parsed = SmsRequestBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "A valid email address is required"); return; }
+  const { email } = parsed.data;
+  try {
+    const r = await pool.query<{
+      id: number; phone: string | null;
+      phone_verified_at: Date | null; email_verified_at: Date | null;
+    }>(
+      `SELECT id, phone, phone_verified_at, email_verified_at
+         FROM mtos_users WHERE email = $1 LIMIT 1`,
+      [email],
+    );
+    const u = r.rows[0];
+    if (u && u.email_verified_at !== null && u.phone && u.phone_verified_at !== null) {
+      const code = await createOtp(u.id, "login", u.phone);
+      const sent = await sendOtpSms(u.phone, code, "login");
+      if (sent.ok) {
+        await auditLog("user", String(u.id), "sms_code_requested", { email }, {
+          ip_address: req.ip ?? req.socket.remoteAddress,
+          user_agent: req.headers["user-agent"],
+        });
+      } else {
+        logger.warn({ email, error: sent.error }, "sms/request: code minted but SMS send failed");
+      }
+    }
+  } catch (err) {
+    logger.error({ err, email }, "sms/request failed");
+  }
+  res.json({
+    status: "ok",
+    message: "If an account with a verified phone exists, a sign-in code is on its way.",
+  });
+});
+
+/**
+ * Exchange an SMS code for a session. The code proves control of the phone
+ * (one factor); an MFA-enabled account must still present its TOTP code, so
+ * this can return { mfa_required: true } without consuming the code.
+ */
+router.post("/sms/verify", authRateLimit, async (req, res) => {
+  const parsed = SmsVerifyBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "Email and a 6-digit code are required"); return; }
+  const { email, code, totp_code } = parsed.data;
+
+  const userRes = await pool.query<{
+    id: number; email: string; name: string; role: string;
+    firm_id: number; token_version: number; mfa_enabled: boolean;
+    totp_secret: string | null; locked_until: Date | null; failed_login_attempts: number;
+  }>(
+    `SELECT id, email, name, role, firm_id, token_version, mfa_enabled,
+            totp_secret, locked_until, failed_login_attempts
+       FROM mtos_users WHERE email = $1 LIMIT 1`,
+    [email],
+  );
+  const user = userRes.rows[0];
+  // One generic failure for unknown email / wrong / expired code.
+  if (!user) {
+    errorEnvelope(res, 400, "invalid_code", "That code is invalid or has expired.");
+    return;
+  }
+  if (await isAccountLocked(user)) {
+    const minutesLeft = Math.ceil((new Date(user.locked_until!).getTime() - Date.now()) / 60000);
+    errorEnvelope(res, 423, "account_locked", `Account is locked. Try again in ${minutesLeft} minute(s).`);
+    return;
+  }
+
+  // Peek the code — do not consume yet; an MFA account needs a second pass.
+  const otp = await verifyOtp(user.id, "login", code, { consume: false });
+  if (!otp.ok) {
+    errorEnvelope(res, 400, "invalid_code", "That code is invalid or has expired.");
+    return;
+  }
+
+  if (user.mfa_enabled && user.totp_secret) {
+    if (!totp_code) {
+      res.status(200).json({ mfa_required: true, message: "Enter your authenticator code to finish signing in." });
+      return;
+    }
+    const decryptedSecret = decrypt(user.totp_secret, "totp_secret", String(user.id));
+    if (!verifyTOTP(decryptedSecret, totp_code)) {
+      unauthorized(res, "Invalid authenticator code.");
+      return;
+    }
+  }
+
+  // Every gate passed — consume the code now (single-use, race-proof).
+  const consumed = await consumeOtpById(otp.id);
+  if (!consumed) {
+    errorEnvelope(res, 400, "invalid_code", "That code was already used. Request a new one.");
+    return;
+  }
+
+  await resetFailedAttempts(user.email);
+  await stampLastLogin(user.id);
+  const accessToken = generateToken({
+    id: user.id, email: user.email, name: user.name,
+    role: user.role as UserRole, firm_id: user.firm_id, token_version: user.token_version,
+  });
+  const refreshToken = await generateRefreshToken(user.id);
+  await auditLog("user", String(user.id), "login_sms_code", { email: user.email }, {
+    ip_address: req.ip ?? req.socket.remoteAddress,
+    user_agent: req.headers["user-agent"],
+  });
+  res.json({
+    token: accessToken,
+    refresh_token: refreshToken,
+    expires_in: 900,
+    user: { id: user.id, email: user.email, name: user.name, role: user.role, mfa_enabled: user.mfa_enabled },
+  });
+});
+
+router.post("/phone/request", authMiddleware, async (req, res) => {
+  const parsed = PhoneRequestBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "A phone number is required"); return; }
+  const phone = normalizePhone(parsed.data.phone);
+  if (!phone) {
+    res.status(400).json({ error: "Enter a valid phone number (e.g. +1 555 123 4567)." });
+    return;
+  }
+  const user = req.user!;
+  const code = await createOtp(user.id, "phone_verify", phone);
+  const sent = await sendOtpSms(phone, code, "phone_verify");
+  if (!sent.ok) {
+    res.status(502).json({
+      error: sent.error || "Couldn't send the verification text. Check the number and try again.",
+    });
+    return;
+  }
+  await auditLog("user", String(user.id), "phone_verify_requested", { phone: maskPhone(phone) });
+  res.json({ ok: true, phone_masked: maskPhone(phone) });
+});
+
+router.post("/phone/verify", authMiddleware, async (req, res) => {
+  const parsed = PhoneVerifyBody.safeParse(req.body);
+  if (!parsed.success) { badRequest(res, parsed.error, "A 6-digit code is required"); return; }
+  const user = req.user!;
+  const otp = await verifyOtp(user.id, "phone_verify", parsed.data.code);
+  if (!otp.ok) {
+    res.status(400).json({
+      error:
+        otp.reason === "too_many"
+          ? "Too many wrong attempts. Request a new code."
+          : "That code is invalid or has expired.",
+    });
+    return;
+  }
+  await pool.query(
+    `UPDATE mtos_users SET phone = $2, phone_verified_at = NOW(), updated_at = NOW() WHERE id = $1`,
+    [user.id, otp.phone],
+  );
+  await auditLog("user", String(user.id), "phone_verified", { phone: maskPhone(otp.phone) });
+  res.json({ ok: true, phone_masked: maskPhone(otp.phone) });
+});
+
+router.get("/phone", authMiddleware, async (req, res) => {
+  const r = await pool.query<{ phone: string | null; phone_verified_at: Date | null }>(
+    `SELECT phone, phone_verified_at FROM mtos_users WHERE id = $1 LIMIT 1`,
+    [req.user!.id],
+  );
+  const u = r.rows[0];
+  res.json({
+    phone: u?.phone ? maskPhone(u.phone) : null,
+    verified: Boolean(u?.phone_verified_at),
+  });
+});
+
+router.delete("/phone", authMiddleware, async (req, res) => {
+  await pool.query(
+    `UPDATE mtos_users SET phone = NULL, phone_verified_at = NULL, updated_at = NOW() WHERE id = $1`,
+    [req.user!.id],
+  );
+  await auditLog("user", String(req.user!.id), "phone_removed", {});
+  res.json({ ok: true });
 });
 
 router.post("/change-password", authMiddleware, async (req, res) => {

@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Shield, ShieldAlert, ShieldOff, ShieldCheck, Ban, Brain, RefreshCw, Trash2, KeyRound, Plus, Loader2 } from "lucide-react";
+import { Shield, ShieldAlert, ShieldOff, ShieldCheck, Ban, Brain, RefreshCw, Trash2, KeyRound, Plus, Loader2, Smartphone } from "lucide-react";
 import { format } from "date-fns";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { startRegistration } from "@simplewebauthn/browser";
@@ -164,6 +164,101 @@ export default function Security() {
   useEffect(() => {
     fetchPasskeys();
   }, [fetchPasskeys]);
+
+  // ── Phone number (SMS-code sign-in) ───────────────────────────────────────
+  const [phoneInfo, setPhoneInfo] = useState<{ phone: string | null; verified: boolean }>({
+    phone: null,
+    verified: false,
+  });
+  const [phoneStep, setPhoneStep] = useState<"idle" | "enter" | "code">("idle");
+  const [phoneInput, setPhoneInput] = useState("");
+  const [phoneCode, setPhoneCode] = useState("");
+  const [phoneBusy, setPhoneBusy] = useState(false);
+
+  const fetchPhone = useCallback(async () => {
+    try {
+      const res = await apiFetchRaw("/api/auth/phone");
+      if (!res.ok) return;
+      const d = (await res.json()) as { phone?: string | null; verified?: boolean };
+      setPhoneInfo({ phone: d.phone ?? null, verified: Boolean(d.verified) });
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
+  const sendPhoneCode = useCallback(async () => {
+    setPhoneBusy(true);
+    try {
+      const res = await apiFetchRaw("/api/auth/phone/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: phoneInput }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        toast({
+          title: "Couldn't send code",
+          description: b.error || "Check the number and try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({ title: "Code sent", description: "Enter the 6-digit code we just texted you." });
+      setPhoneCode("");
+      setPhoneStep("code");
+    } catch {
+      toast({ title: "Couldn't send code", variant: "destructive" });
+    } finally {
+      setPhoneBusy(false);
+    }
+  }, [phoneInput, toast]);
+
+  const verifyPhoneCode = useCallback(async () => {
+    setPhoneBusy(true);
+    try {
+      const res = await apiFetchRaw("/api/auth/phone/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: phoneCode }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        toast({
+          title: "Couldn't verify",
+          description: b.error || "That code is invalid or has expired.",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({ title: "Phone verified", description: "You can now sign in with a text code." });
+      setPhoneStep("idle");
+      setPhoneInput("");
+      setPhoneCode("");
+      fetchPhone();
+    } catch {
+      toast({ title: "Couldn't verify", variant: "destructive" });
+    } finally {
+      setPhoneBusy(false);
+    }
+  }, [phoneCode, toast, fetchPhone]);
+
+  const removePhone = useCallback(async () => {
+    try {
+      const res = await apiFetchRaw("/api/auth/phone", { method: "DELETE" });
+      if (!res.ok) {
+        toast({ title: "Couldn't remove phone", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Phone removed" });
+      fetchPhone();
+    } catch {
+      toast({ title: "Couldn't remove phone", variant: "destructive" });
+    }
+  }, [toast, fetchPhone]);
+
+  useEffect(() => {
+    fetchPhone();
+  }, [fetchPhone]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -354,6 +449,75 @@ export default function Security() {
                 ))}
               </TableBody>
             </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Smartphone className="h-5 w-5" />
+            Phone number
+          </CardTitle>
+          <CardDescription>
+            Verify a mobile number to enable one-time text-code sign-in.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {phoneInfo.verified ? (
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <Badge className="bg-green-600 text-white">VERIFIED</Badge>
+                <span className="font-mono">{phoneInfo.phone}</span>
+              </div>
+              <Button variant="ghost" size="sm" onClick={removePhone}>
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : phoneStep === "idle" ? (
+            <Button
+              onClick={() => {
+                setPhoneInput("");
+                setPhoneStep("enter");
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add a phone number
+            </Button>
+          ) : phoneStep === "enter" ? (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <div className="flex-1 space-y-1">
+                <Label htmlFor="pk-phone">Phone number</Label>
+                <Input
+                  id="pk-phone"
+                  placeholder="+1 555 123 4567"
+                  value={phoneInput}
+                  onChange={(e) => setPhoneInput(e.target.value)}
+                />
+              </div>
+              <Button onClick={sendPhoneCode} disabled={phoneBusy || !phoneInput.trim()}>
+                {phoneBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Send code
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <div className="flex-1 space-y-1">
+                <Label htmlFor="pk-code">6-digit code</Label>
+                <Input
+                  id="pk-code"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="123456"
+                  value={phoneCode}
+                  onChange={(e) => setPhoneCode(e.target.value.replace(/\D/g, ""))}
+                />
+              </div>
+              <Button onClick={verifyPhoneCode} disabled={phoneBusy || phoneCode.length !== 6}>
+                {phoneBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Verify
+              </Button>
+            </div>
           )}
         </CardContent>
       </Card>

@@ -51,6 +51,8 @@ type Ctx = {
   requestMagicLink: (email: string) => Promise<{ ok: boolean; message: string }>;
   loginWithMagicLink: (token: string, totpCode?: string) => Promise<LoginOutcome>;
   loginWithPasskey: () => Promise<LoginOutcome>;
+  requestSmsCode: (email: string) => Promise<{ ok: boolean; message: string }>;
+  loginWithSmsCode: (email: string, code: string, totpCode?: string) => Promise<LoginOutcome>;
   cancelMfa: () => void;
   logout: () => Promise<void>;
 };
@@ -592,6 +594,122 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [scheduleRefresh]);
 
+  // SMS one-time-code — request a code texted to the phone on the account.
+  // Always-generic server response, so `ok` reflects only transport success.
+  const requestSmsCode = useCallback(
+    async (email: string): Promise<{ ok: boolean; message: string }> => {
+      try {
+        const res = await fetch("/api/auth/sms/request", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        let body: Record<string, unknown> = {};
+        try {
+          body = (await res.json()) as Record<string, unknown>;
+        } catch {
+          /* tolerate empty body */
+        }
+        if (res.status === 429) {
+          return { ok: false, message: "Too many attempts. Please wait a few minutes and try again." };
+        }
+        if (!res.ok) {
+          return {
+            ok: false,
+            message:
+              (typeof body.message === "string" && body.message) ||
+              "Couldn't send a code. Check the email address and retry.",
+          };
+        }
+        return {
+          ok: true,
+          message:
+            (typeof body.message === "string" && body.message) ||
+            "If an account with a verified phone exists, a sign-in code is on its way.",
+        };
+      } catch {
+        return { ok: false, message: "Network error — please check your connection and retry." };
+      }
+    },
+    [],
+  );
+
+  // Exchange an SMS code for a session. Mirrors the magic-link MFA dance:
+  // an MFA-enabled account gets { kind: "mfa_required" } and the caller
+  // re-submits with totpCode; the code is not consumed until full success.
+  const loginWithSmsCode = useCallback(
+    async (email: string, code: string, totpCode?: string): Promise<LoginOutcome> => {
+      try {
+        const res = await fetch("/api/auth/sms/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, code, ...(totpCode ? { totp_code: totpCode } : {}) }),
+        });
+        let body: Record<string, unknown> = {};
+        try {
+          body = (await res.json()) as Record<string, unknown>;
+        } catch {
+          /* tolerate empty body */
+        }
+        if (res.status === 423) {
+          return {
+            kind: "error",
+            code: "account_locked",
+            message:
+              (typeof body.message === "string" && body.message) ||
+              "Account is temporarily locked. Try again in a few minutes.",
+          };
+        }
+        if (res.status === 429) {
+          return {
+            kind: "error",
+            code: "rate_limited",
+            message: "Too many attempts. Please wait a few minutes and try again.",
+          };
+        }
+        if (!res.ok) {
+          if (totpCode) {
+            return {
+              kind: "error",
+              code: "invalid_totp",
+              message: "Invalid 6-digit authenticator code. Please try again.",
+            };
+          }
+          return {
+            kind: "error",
+            code: (typeof body.code === "string" && body.code) || "invalid_code",
+            message:
+              (typeof body.message === "string" && body.message) ||
+              "That code is invalid or has expired.",
+          };
+        }
+        if (body.mfa_required === true) {
+          return { kind: "mfa_required" };
+        }
+        const userPayload = body.user as AuthUser | undefined;
+        const accessToken = typeof body.token === "string" ? body.token : null;
+        const refreshToken = typeof body.refresh_token === "string" ? body.refresh_token : null;
+        const expiresIn = typeof body.expires_in === "number" ? body.expires_in : 900;
+        if (!userPayload || !accessToken || !refreshToken) {
+          return { kind: "error", code: "bad_response", message: "Sign-in response was malformed." };
+        }
+        setTokens({ access: accessToken, refresh: refreshToken, userId: userPayload.id });
+        setUser(userPayload);
+        setStatus("authed");
+        setPendingMfa(null);
+        scheduleRefresh(expiresIn);
+        return { kind: "ok" };
+      } catch {
+        return {
+          kind: "error",
+          code: "network",
+          message: "Network error — please check your connection and retry.",
+        };
+      }
+    },
+    [scheduleRefresh],
+  );
+
   const verifyMfa = useCallback(
     async (totpCode: string): Promise<LoginOutcome> => {
       if (!pendingMfa) {
@@ -638,6 +756,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         requestMagicLink,
         loginWithMagicLink,
         loginWithPasskey,
+        requestSmsCode,
+        loginWithSmsCode,
         cancelMfa,
         logout,
       }}

@@ -217,6 +217,8 @@ describe("public allowlist (validateRouteTable policy)", () => {
       "POST /passkey/login/verify",
       "POST /refresh",
       "POST /register",
+      "POST /sms/request",
+      "POST /sms/verify",
     ]);
   });
 
@@ -232,8 +234,10 @@ describe("public allowlist (validateRouteTable policy)", () => {
     const authOnly = booted.policy.filter((p) => p.status === "auth-only").map((p) => `${p.router} ${p.method} ${p.path}`).sort();
     const expectedAuthOnly = [
       "auth DELETE /passkey/credentials/:id",
+      "auth DELETE /phone",
       "auth GET /me",
       "auth GET /passkey/credentials",
+      "auth GET /phone",
       "auth POST /change-password",
       "auth POST /logout",
       "auth POST /mfa/disable",
@@ -241,6 +245,8 @@ describe("public allowlist (validateRouteTable policy)", () => {
       "auth POST /mfa/verify",
       "auth POST /passkey/register/options",
       "auth POST /passkey/register/verify",
+      "auth POST /phone/request",
+      "auth POST /phone/verify",
       "billing GET /firm-status",
       "forms GET /categories",
       "forms POST /validate/address",

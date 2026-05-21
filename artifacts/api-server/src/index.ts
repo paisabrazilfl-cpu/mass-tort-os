@@ -215,6 +215,20 @@ async function runSchemaRepair(): Promise<void> {
       expires_at timestamp NOT NULL,
       created_at timestamp NOT NULL DEFAULT now()
     )`,
+    // SMS one-time-code sign-in: 6-digit codes stored only as a SHA-256
+    // hash, single-use, 10-min TTL, attempt-capped. See lib/sms-auth.ts.
+    `CREATE TABLE IF NOT EXISTS auth_otp_codes (
+      id serial PRIMARY KEY,
+      user_id integer NOT NULL,
+      purpose varchar(20) NOT NULL,
+      code_hash text NOT NULL,
+      phone text NOT NULL,
+      attempts integer NOT NULL DEFAULT 0,
+      expires_at timestamp NOT NULL,
+      consumed_at timestamp,
+      created_at timestamp NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS auth_otp_codes_user_purpose_idx ON auth_otp_codes(user_id, purpose, created_at)`,
   ];
 
   // Phase 2: ALTER TABLE to add any columns still missing
@@ -253,6 +267,11 @@ async function runSchemaRepair(): Promise<void> {
     `CREATE UNIQUE INDEX IF NOT EXISTS integrations_firm_provider_unique
        ON integrations(firm_id, provider)
        WHERE firm_id IS NOT NULL`,
+    // SMS-code sign-in (Stage: passwordless). A user's verified phone lives
+    // on the user row; phone_verified_at NULL until the enrollment code is
+    // confirmed. See lib/sms-auth.ts + routes/auth.ts.
+    `ALTER TABLE mtos_users ADD COLUMN IF NOT EXISTS phone text`,
+    `ALTER TABLE mtos_users ADD COLUMN IF NOT EXISTS phone_verified_at timestamp`,
   ];
 
   for (const stmt of [...creates, ...alters]) {

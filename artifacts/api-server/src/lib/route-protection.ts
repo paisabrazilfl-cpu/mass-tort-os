@@ -100,6 +100,11 @@ const AUTH_ROUTE_EXCEPTIONS = new Set([
   // single-use server challenge, is the credential.
   "POST /passkey/login/options",
   "POST /passkey/login/verify",
+  // SMS one-time-code sign-in. sms/request texts a code, sms/verify
+  // exchanges it for a session — both for a user with no session yet. The
+  // single-use, attempt-capped, short-lived code is the credential.
+  "POST /sms/request",
+  "POST /sms/verify",
 ]);
 
 // Authenticated routes that legitimately do not need a role gate (caller's
@@ -120,6 +125,14 @@ const AUTH_ONLY_ROUTES = new Set([
   "auth POST /passkey/register/verify",
   "auth GET /passkey/credentials",
   "auth DELETE /passkey/credentials/:id",
+  // Phone-number self-management for SMS-code sign-in — a user enrols,
+  // verifies, reads, and removes their OWN number; handlers scope by
+  // req.user.id, so a role gate would add nothing. (sms/* login routes
+  // are public and live in AUTH_ROUTE_EXCEPTIONS above.)
+  "auth POST /phone/request",
+  "auth POST /phone/verify",
+  "auth GET /phone",
+  "auth DELETE /phone",
   // forms router — pure stateless utilities. config GETs are role-gated.
   "forms GET /categories",
   "forms POST /validate/email",
