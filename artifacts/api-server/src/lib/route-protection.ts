@@ -112,6 +112,14 @@ const AUTH_ONLY_ROUTES = new Set([
   "auth POST /mfa/verify",
   "auth POST /mfa/disable",
   "auth GET /me",
+  // Passkey self-management — any signed-in user enrols / lists / removes
+  // their OWN passkeys. The handlers scope every query by req.user.id, so a
+  // role gate would add nothing. (The passkey LOGIN routes are public and
+  // live in AUTH_ROUTE_EXCEPTIONS above.)
+  "auth POST /passkey/register/options",
+  "auth POST /passkey/register/verify",
+  "auth GET /passkey/credentials",
+  "auth DELETE /passkey/credentials/:id",
   // forms router — pure stateless utilities. config GETs are role-gated.
   "forms GET /categories",
   "forms POST /validate/email",
