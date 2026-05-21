@@ -30,7 +30,9 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import dns from "node:dns/promises";
 import net from "node:net";
-import { getNodeDefinition } from "./node-catalog";
+import { getNodeDefinition, NODE_CATALOG } from "./node-catalog";
+import { runAgent, classifyToolAccess, type AgentTool } from "./agent";
+import { BITDEER_MODELS } from "../ai/bitdeer";
 import { getIntegrationCredentials } from "../../routes/integrations";
 import { getEmailAdapter } from "../email/sendgrid";
 import { getFaxAdapter } from "../fax";
@@ -1429,40 +1431,56 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
 
   // ───────── AI (extended)
   "ai.agent": async (s) => {
-    // Catalog params: goal, tools, maxSteps, model. We do NOT run a real
-    // tool-loop agent (it needs a sandboxed tool registry that hasn't been
-    // built yet). Instead we run a single-turn LLM completion bounded by
-    // maxSteps=1; any catalog config asking for >1 steps falls through the
-    // `max_steps` branch so workflow authors can route to a human review
-    // node rather than silently truncating.
+    // Real autonomous tool-loop agent. Catalog params: goal, tools (an
+    // optional allowlist of node types), maxSteps, model (planner|chat|code
+    // role), dryRun. The agent's tool set IS the live node catalog — every
+    // reachable node becomes a tool it can invoke. The plan→act→observe loop
+    // and all guardrails (step cap, time budget, stuck-loop detector, dry-run,
+    // per-step audit) live in lib/automations/agent.ts.
     const p = s.node.data?.params ?? {};
-    const goal = String(resolveOrLiteral(s, p.goal) ?? "");
+    const goal = String(resolveOrLiteral(s, p.goal) ?? "").trim();
     if (!goal) {
       return { __branch: "error", value: { code: "MISSING_GOAL", error: "ai.agent requires `goal`." } };
     }
-    const maxSteps = Number(p.maxSteps ?? 1);
-    if (Number.isFinite(maxSteps) && maxSteps > 1) {
+    // Kill switch — one env var disables every agent node fleet-wide.
+    if (process.env["AGENT_NODE_DISABLED"] === "1") {
       return {
-        __branch: "max_steps",
-        value: {
-          code: "AGENT_LOOP_NOT_IMPLEMENTED",
-          error: `ai.agent multi-step loops aren't implemented yet (requested maxSteps=${maxSteps}). Falling through max_steps branch.`,
-          stepsRun: 1,
-          maxSteps,
-        },
+        __branch: "error",
+        value: { code: "AGENT_DISABLED", error: "The autonomous agent node is disabled (AGENT_NODE_DISABLED=1)." },
       };
     }
-    try {
-      const output = await callLLM({
-        module: "lead-intelligence",
-        systemPrompt: "You are an autonomous assistant. Reply only with the final answer.",
-        prompt: `${goal}\n\nContext:\n${JSON.stringify(s.input ?? {}, null, 2).slice(0, 4000)}`,
-        maxTokens: 1000,
-      });
-      return { __branch: "success", value: { output, stepsRun: 1 } };
-    } catch (err: any) {
-      return { __branch: "error", value: { error: err?.message ?? String(err) } };
+    const rawMax = Number(p.maxSteps ?? 10);
+    const maxSteps = Math.max(1, Math.min(25, Number.isFinite(rawMax) ? Math.floor(rawMax) : 10));
+    const model = AGENT_MODEL_BY_ROLE[String(p.model ?? "planner").trim()] ?? BITDEER_MODELS.planner;
+    const dryRun = p.dryRun === true || p.dryRun === "true";
+    const rawTools = resolveOrLiteral(s, p.tools);
+    const allow = Array.isArray(rawTools) ? rawTools.map((t) => String(t)) : [];
+
+    const tools = buildAgentTools({
+      allow,
+      input: s.input,
+      ctx: { workflowId: s.ctx.workflowId, firmId: s.ctx.firmId, runId: s.ctx.runId },
+    });
+    if (tools.length === 0) {
+      return {
+        __branch: "error",
+        value: { code: "NO_TOOLS", error: "ai.agent: the `tools` allowlist matched no available node types." },
+      };
     }
+
+    const result = await runAgent({
+      goal,
+      tools,
+      maxSteps,
+      model,
+      dryRun,
+      timeBudgetMs: AGENT_TIME_BUDGET_MS,
+      context: (s.input ?? {}) as Record<string, unknown>,
+      runId: s.ctx.runId,
+      workflowId: s.ctx.workflowId,
+      firmId: s.ctx.firmId,
+    });
+    return { __branch: result.status, value: result };
   },
   "ai.classify": async (s) => {
     const p = s.node.data?.params ?? {};
@@ -1625,6 +1643,81 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     return { __branch: "__end__", value: s.node.data?.params?.output ?? s.input };
   },
 };
+
+// ── Autonomous-agent support (ai.agent node) ────────────────────────────────
+
+/** Total wall-clock budget for one ai.agent run. Env-overridable. */
+const AGENT_TIME_BUDGET_MS = (() => {
+  const n = Number(process.env["AGENT_TIME_BUDGET_MS"]);
+  return Number.isFinite(n) && n >= 30_000 ? n : 480_000; // default 8 min
+})();
+
+/** ai.agent `model` param (a capability role) → concrete Bitdeer model. */
+const AGENT_MODEL_BY_ROLE: Record<string, string> = {
+  planner: BITDEER_MODELS.planner,
+  chat: BITDEER_MODELS.chat,
+  code: BITDEER_MODELS.code,
+};
+
+// Node types the agent can never call: graph control-flow has no meaning to an
+// agent that runs its own loop, triggers are inert entry points, End is a
+// sink, and ai.agent itself would recurse without bound.
+const AGENT_FORBIDDEN_PREFIXES = ["trigger.", "logic."];
+const AGENT_FORBIDDEN_TYPES = new Set<string>(["utility.end", "ai.agent"]);
+
+/** Flatten a node handler's result into a plain observation for the agent. */
+function normalizeHandlerResult(res: HandlerResult): unknown {
+  if (res === undefined || res === null) return { ok: true };
+  if (typeof res === "object" && "__branch" in (res as Record<string, unknown>)) {
+    const r = res as { __branch: string; value?: unknown };
+    return { branch: r.__branch, value: r.value };
+  }
+  return res;
+}
+
+/**
+ * Build the agent's tool registry from the live node catalog. Every reachable
+ * node type becomes one AgentTool whose `invoke` runs the real node handler
+ * inside a synthetic StepContext bound to the agent's run/firm scope. An
+ * optional `allow` list narrows the set; empty means "all reachable nodes".
+ */
+function buildAgentTools(args: {
+  allow: string[];
+  input: any;
+  ctx: { workflowId: number; firmId: number | null; runId: number };
+}): AgentTool[] {
+  const allowSet = new Set(args.allow);
+  // The agent gets its own variable scope so data.set calls inside the loop
+  // cannot clobber the surrounding workflow's vars.
+  const agentVars: Record<string, any> = {};
+  const tools: AgentTool[] = [];
+
+  for (const def of NODE_CATALOG) {
+    if (AGENT_FORBIDDEN_PREFIXES.some((pre) => def.type.startsWith(pre))) continue;
+    if (AGENT_FORBIDDEN_TYPES.has(def.type)) continue;
+    const handler = HANDLERS[def.type];
+    if (!handler) continue;
+    if (allowSet.size > 0 && !allowSet.has(def.type)) continue;
+
+    tools.push({
+      type: def.type,
+      label: def.label,
+      description: def.description,
+      params: def.params,
+      access: classifyToolAccess(def.type),
+      invoke: async (params) => {
+        const res = await handler({
+          node: { id: `agent:${def.type}`, type: def.type, data: { params } },
+          input: args.input,
+          vars: agentVars,
+          ctx: args.ctx,
+        });
+        return normalizeHandlerResult(res);
+      },
+    });
+  }
+  return tools;
+}
 
 function resolveOrLiteral(s: StepContext, raw: any): any {
   if (typeof raw !== "string") return raw;
