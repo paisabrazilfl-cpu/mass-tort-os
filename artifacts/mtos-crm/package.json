@@ -75,6 +75,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
     "react-markdown": "^10.1.0",
     "reactflow": "^11.11.4",
     "remark-gfm": "^4.0.1"

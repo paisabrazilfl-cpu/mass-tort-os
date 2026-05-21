@@ -91,7 +91,7 @@ type Mode = "password" | "magic";
 
 export default function LoginPage() {
   useForceLightSkin();
-  const { login, requestMagicLink, status, user } = useAuth();
+  const { login, requestMagicLink, loginWithPasskey, status, user } = useAuth();
   const [, navigate] = useLocation();
 
   const [mode, setMode] = useState<Mode>("password");
@@ -101,6 +101,7 @@ export default function LoginPage() {
   const [magicSent, setMagicSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
 
   useEffect(() => {
     document.title = "Sign in · MTOS";
@@ -158,6 +159,25 @@ export default function LoginPage() {
     }
   };
 
+  const onPasskey = async () => {
+    setError(null);
+    setPasskeyBusy(true);
+    try {
+      const result = await loginWithPasskey();
+      if (result.kind === "ok") {
+        navigate(getNextPath(), { replace: true });
+        return;
+      }
+      // Passkey never yields an MFA challenge — a verified passkey is a
+      // strong factor on its own — so only the error case carries a message.
+      if (result.kind === "error") {
+        setError(result.message);
+      }
+    } finally {
+      setPasskeyBusy(false);
+    }
+  };
+
   const onQuickMethod = (m: QuickMethod) => {
     setError(null);
     if (m.key === "email-link") {
@@ -166,11 +186,15 @@ export default function LoginPage() {
       setMode("magic");
       return;
     }
+    if (m.key === "passkey") {
+      void onPasskey();
+      return;
+    }
     // Honest — these have no backend yet. The tile is not a fake success:
     // it tells the truth the moment it is clicked.
     toast({
       title: `${m.label} sign-in is coming soon`,
-      description: "Use your email and password, or the email sign-in link, to get in today.",
+      description: "Use your email, the email link, or a passkey to get in today.",
     });
   };
 
@@ -283,10 +307,15 @@ export default function LoginPage() {
                   key={m.key}
                   type="button"
                   onClick={() => onQuickMethod(m)}
-                  className="flex flex-col items-center gap-1.5 rounded-lg border bg-background px-1 py-3 text-[11px] font-medium text-foreground transition hover:border-primary/50 hover:bg-accent"
+                  disabled={passkeyBusy}
+                  className="flex flex-col items-center gap-1.5 rounded-lg border bg-background px-1 py-3 text-[11px] font-medium text-foreground transition hover:border-primary/50 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {m.icon}
-                  <span>{m.label}</span>
+                  {m.key === "passkey" && passkeyBusy ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-emerald-600" aria-hidden="true" />
+                  ) : (
+                    m.icon
+                  )}
+                  <span>{m.key === "passkey" && passkeyBusy ? "Waiting…" : m.label}</span>
                 </button>
               ))}
             </div>

@@ -213,6 +213,8 @@ describe("public allowlist (validateRouteTable policy)", () => {
       "POST /login",
       "POST /magic-link/request",
       "POST /magic-link/verify",
+      "POST /passkey/login/options",
+      "POST /passkey/login/verify",
       "POST /refresh",
       "POST /register",
     ]);
@@ -229,12 +231,16 @@ describe("public allowlist (validateRouteTable policy)", () => {
     // Cross-check the auth-only allowlist against the policy report.
     const authOnly = booted.policy.filter((p) => p.status === "auth-only").map((p) => `${p.router} ${p.method} ${p.path}`).sort();
     const expectedAuthOnly = [
+      "auth DELETE /passkey/credentials/:id",
       "auth GET /me",
+      "auth GET /passkey/credentials",
       "auth POST /change-password",
       "auth POST /logout",
       "auth POST /mfa/disable",
       "auth POST /mfa/setup",
       "auth POST /mfa/verify",
+      "auth POST /passkey/register/options",
+      "auth POST /passkey/register/verify",
       "billing GET /firm-status",
       "forms GET /categories",
       "forms POST /validate/address",

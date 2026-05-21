@@ -192,6 +192,29 @@ async function runSchemaRepair(): Promise<void> {
       created_at timestamp NOT NULL DEFAULT now()
     )`,
     `CREATE INDEX IF NOT EXISTS auth_magic_links_token_hash_idx ON auth_magic_links(token_hash)`,
+    // Passkey (WebAuthn) sign-in: one row per enrolled credential (public
+    // key + signature counter — the private key never leaves the device),
+    // plus a short-lived single-use challenge store. See lib/passkey.ts.
+    `CREATE TABLE IF NOT EXISTS webauthn_credentials (
+      id serial PRIMARY KEY,
+      user_id integer NOT NULL,
+      credential_id text NOT NULL UNIQUE,
+      public_key text NOT NULL,
+      counter bigint NOT NULL DEFAULT 0,
+      transports text,
+      device_name text,
+      created_at timestamp NOT NULL DEFAULT now(),
+      last_used_at timestamp
+    )`,
+    `CREATE INDEX IF NOT EXISTS webauthn_credentials_user_idx ON webauthn_credentials(user_id)`,
+    `CREATE TABLE IF NOT EXISTS webauthn_challenges (
+      id text PRIMARY KEY,
+      challenge text NOT NULL,
+      purpose varchar(20) NOT NULL,
+      user_id integer,
+      expires_at timestamp NOT NULL,
+      created_at timestamp NOT NULL DEFAULT now()
+    )`,
   ];
 
   // Phase 2: ALTER TABLE to add any columns still missing

@@ -94,6 +94,12 @@ const AUTH_ROUTE_EXCEPTIONS = new Set([
   // SHA-256-hashed token is the credential.
   "POST /magic-link/request",
   "POST /magic-link/verify",
+  // Passkey (WebAuthn) sign-in. login/options issues a challenge and
+  // login/verify exchanges a signed assertion for a session — both for a
+  // user who has no session yet. The signed WebAuthn assertion, bound to a
+  // single-use server challenge, is the credential.
+  "POST /passkey/login/options",
+  "POST /passkey/login/verify",
 ]);
 
 // Authenticated routes that legitimately do not need a role gate (caller's

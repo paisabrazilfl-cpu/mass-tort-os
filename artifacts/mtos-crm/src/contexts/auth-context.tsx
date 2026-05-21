@@ -14,6 +14,7 @@ import {
   setTokens,
 } from "@/lib/auth-store";
 import { apiFetch, refreshAccessToken, setOnAuthFailure } from "@/lib/api-fetch";
+import { startAuthentication } from "@simplewebauthn/browser";
 
 export type AuthUser = {
   id: number;
@@ -49,6 +50,7 @@ type Ctx = {
   verifyEmail: (token: string) => Promise<LoginOutcome>;
   requestMagicLink: (email: string) => Promise<{ ok: boolean; message: string }>;
   loginWithMagicLink: (token: string, totpCode?: string) => Promise<LoginOutcome>;
+  loginWithPasskey: () => Promise<LoginOutcome>;
   cancelMfa: () => void;
   logout: () => Promise<void>;
 };
@@ -503,6 +505,93 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [scheduleRefresh],
   );
 
+  // Passkey (WebAuthn) sign-in — a discoverable-credential ceremony: the
+  // browser offers any passkey bound to this site, no username typed. A
+  // verified passkey is a phishing-resistant strong factor, so it stands
+  // on its own (no separate MFA step).
+  const loginWithPasskey = useCallback(async (): Promise<LoginOutcome> => {
+    try {
+      const optRes = await fetch("/api/auth/passkey/login/options", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (!optRes.ok) {
+        return {
+          kind: "error",
+          code: "passkey_unavailable",
+          message: "Couldn't start passkey sign-in. Use another method.",
+        };
+      }
+      const optBody = (await optRes.json()) as { challengeId?: string; options?: unknown };
+      if (!optBody.challengeId || !optBody.options) {
+        return { kind: "error", code: "bad_response", message: "Passkey setup response was malformed." };
+      }
+
+      let assertion;
+      try {
+        assertion = await startAuthentication({ optionsJSON: optBody.options as never });
+      } catch {
+        // User dismissed the prompt, or no passkey exists on this device.
+        return {
+          kind: "error",
+          code: "passkey_cancelled",
+          message: "Passkey sign-in was cancelled, or no passkey is set up on this device.",
+        };
+      }
+
+      const verRes = await fetch("/api/auth/passkey/login/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeId: optBody.challengeId, response: assertion }),
+      });
+      let body: Record<string, unknown> = {};
+      try {
+        body = (await verRes.json()) as Record<string, unknown>;
+      } catch {
+        /* tolerate empty body */
+      }
+      if (verRes.status === 423) {
+        return {
+          kind: "error",
+          code: "account_locked",
+          message:
+            (typeof body.message === "string" && body.message) ||
+            "Account is temporarily locked. Try again in a few minutes.",
+        };
+      }
+      if (!verRes.ok) {
+        return {
+          kind: "error",
+          code: (typeof body.code === "string" && body.code) || "passkey_failed",
+          message:
+            (typeof body.message === "string" && body.message) ||
+            (typeof body.error === "string" && body.error) ||
+            "That passkey was not accepted.",
+        };
+      }
+      const userPayload = body.user as AuthUser | undefined;
+      const accessToken = typeof body.token === "string" ? body.token : null;
+      const refreshToken = typeof body.refresh_token === "string" ? body.refresh_token : null;
+      const expiresIn = typeof body.expires_in === "number" ? body.expires_in : 900;
+      if (!userPayload || !accessToken || !refreshToken) {
+        return { kind: "error", code: "bad_response", message: "Sign-in response was malformed." };
+      }
+      setTokens({ access: accessToken, refresh: refreshToken, userId: userPayload.id });
+      setUser(userPayload);
+      setStatus("authed");
+      setPendingMfa(null);
+      scheduleRefresh(expiresIn);
+      return { kind: "ok" };
+    } catch {
+      return {
+        kind: "error",
+        code: "network",
+        message: "Network error — please check your connection and retry.",
+      };
+    }
+  }, [scheduleRefresh]);
+
   const verifyMfa = useCallback(
     async (totpCode: string): Promise<LoginOutcome> => {
       if (!pendingMfa) {
@@ -548,6 +637,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         verifyEmail,
         requestMagicLink,
         loginWithMagicLink,
+        loginWithPasskey,
         cancelMfa,
         logout,
       }}

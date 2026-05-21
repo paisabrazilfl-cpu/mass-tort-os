@@ -8,9 +8,10 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Shield, ShieldAlert, ShieldOff, ShieldCheck, Ban, Brain, RefreshCw, Trash2 } from "lucide-react";
+import { Shield, ShieldAlert, ShieldOff, ShieldCheck, Ban, Brain, RefreshCw, Trash2, KeyRound, Plus, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import { apiFetchRaw } from "@/lib/api-fetch";
+import { startRegistration } from "@simplewebauthn/browser";
 
 interface SecurityAlert {
   id: number;
@@ -48,6 +49,13 @@ interface SecurityStats {
   by_type: { type: string; count: number }[];
 }
 
+interface Passkey {
+  id: number;
+  device_name: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
 const severityColor: Record<string, string> = {
   critical: "bg-red-600 text-white",
   high: "bg-orange-500 text-white",
@@ -75,6 +83,87 @@ export default function Security() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [analysisDialogOpen, setAnalysisDialogOpen] = useState(false);
+  const [passkeys, setPasskeys] = useState<Passkey[]>([]);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+
+  const fetchPasskeys = useCallback(async () => {
+    try {
+      const res = await apiFetchRaw("/api/auth/passkey/credentials");
+      if (!res.ok) return;
+      const data = (await res.json()) as { passkeys?: Passkey[] };
+      setPasskeys(Array.isArray(data.passkeys) ? data.passkeys : []);
+    } catch {
+      /* non-fatal — the card just shows empty */
+    }
+  }, []);
+
+  const addPasskey = useCallback(async () => {
+    setPasskeyBusy(true);
+    try {
+      const optRes = await apiFetchRaw("/api/auth/passkey/register/options", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (!optRes.ok) {
+        toast({ title: "Couldn't start passkey setup", variant: "destructive" });
+        return;
+      }
+      const { challengeId, options } = (await optRes.json()) as {
+        challengeId: string;
+        options: unknown;
+      };
+      let attestation;
+      try {
+        attestation = await startRegistration({ optionsJSON: options as never });
+      } catch {
+        toast({ title: "Passkey setup cancelled" });
+        return;
+      }
+      const deviceName = `Passkey · ${format(new Date(), "MMM d, yyyy")}`;
+      const verRes = await apiFetchRaw("/api/auth/passkey/register/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeId, response: attestation, deviceName }),
+      });
+      if (!verRes.ok) {
+        const b = (await verRes.json().catch(() => ({}))) as { error?: string };
+        toast({
+          title: "Couldn't add passkey",
+          description: b.error || "Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({ title: "Passkey added", description: "You can now sign in with this device." });
+      fetchPasskeys();
+    } catch {
+      toast({ title: "Couldn't add passkey", variant: "destructive" });
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }, [toast, fetchPasskeys]);
+
+  const removePasskey = useCallback(
+    async (id: number) => {
+      try {
+        const res = await apiFetchRaw(`/api/auth/passkey/credentials/${id}`, { method: "DELETE" });
+        if (!res.ok) {
+          toast({ title: "Couldn't remove passkey", variant: "destructive" });
+          return;
+        }
+        toast({ title: "Passkey removed" });
+        fetchPasskeys();
+      } catch {
+        toast({ title: "Couldn't remove passkey", variant: "destructive" });
+      }
+    },
+    [toast, fetchPasskeys],
+  );
+
+  useEffect(() => {
+    fetchPasskeys();
+  }, [fetchPasskeys]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -204,6 +293,68 @@ export default function Security() {
               </div>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <KeyRound className="h-5 w-5" />
+                Passkeys
+              </CardTitle>
+              <CardDescription>
+                Sign in with Face ID, Touch ID, Windows Hello, or a security key — no password.
+              </CardDescription>
+            </div>
+            <Button onClick={addPasskey} disabled={passkeyBusy}>
+              {passkeyBusy ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="mr-2 h-4 w-4" />
+              )}
+              {passkeyBusy ? "Setting up…" : "Add passkey"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {passkeys.length === 0 ? (
+            <div className="py-6 text-center text-muted-foreground">
+              <KeyRound className="mx-auto mb-2 h-10 w-10 opacity-40" />
+              <div className="font-medium">No passkeys yet</div>
+              <div className="text-sm">Add one to sign in without a password.</div>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Device</TableHead>
+                  <TableHead>Added</TableHead>
+                  <TableHead>Last used</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {passkeys.map((pk) => (
+                  <TableRow key={pk.id}>
+                    <TableCell className="font-medium">{pk.device_name || "Passkey"}</TableCell>
+                    <TableCell className="text-sm">
+                      {format(new Date(pk.created_at), "yyyy-MM-dd")}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {pk.last_used_at ? format(new Date(pk.last_used_at), "yyyy-MM-dd HH:mm") : "Never"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button variant="ghost" size="sm" onClick={() => removePasskey(pk.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
 

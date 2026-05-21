@@ -40,6 +40,24 @@ import { logger } from "../lib/logger";
 import { generateSecret, verifyTOTP, generateOTPAuthURL } from "../lib/totp";
 import { encrypt, decrypt } from "../lib/encryption";
 import { generateMagicToken, hashMagicToken, sendMagicLinkEmail } from "../lib/magic-link";
+import {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse,
+} from "@simplewebauthn/server";
+import type { RegistrationResponseJSON, AuthenticationResponseJSON } from "@simplewebauthn/server";
+import {
+  RP,
+  saveChallenge,
+  consumeChallenge,
+  listCredentials,
+  getCredentialById,
+  insertCredential,
+  updateCounter,
+  deleteCredential,
+  parseTransports,
+} from "../lib/passkey";
 import { db, pool } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -851,6 +869,221 @@ router.post("/magic-link/verify", authRateLimit, async (req, res) => {
     user_agent: req.headers["user-agent"],
   });
 
+  res.json({
+    token: accessToken,
+    refresh_token: refreshToken,
+    expires_in: 900,
+    user: { id: user.id, email: user.email, name: user.name, role: user.role, mfa_enabled: user.mfa_enabled },
+  });
+});
+
+// ── Passkey (WebAuthn) sign-in ──────────────────────────────────────────────
+// login/options + login/verify are PUBLIC (whitelisted in route-protection.ts
+// → AUTH_ROUTE_EXCEPTIONS). register/* + credentials require a session — any
+// signed-in user manages their own passkeys, no role gate.
+
+router.post("/passkey/register/options", authMiddleware, async (req, res) => {
+  const user = req.user!;
+  const existing = await listCredentials(user.id);
+  const options = await generateRegistrationOptions({
+    rpName: RP.rpName,
+    rpID: RP.rpID,
+    userName: user.email,
+    userID: new TextEncoder().encode(String(user.id)),
+    userDisplayName: user.name,
+    attestationType: "none",
+    excludeCredentials: existing.map((c) => ({
+      id: c.credential_id,
+      transports: parseTransports(c.transports),
+    })),
+    authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
+  });
+  const challengeId = await saveChallenge("register", user.id, options.challenge);
+  res.json({ challengeId, options });
+});
+
+router.post("/passkey/register/verify", authMiddleware, async (req, res) => {
+  const user = req.user!;
+  const { challengeId, response, deviceName } = (req.body ?? {}) as {
+    challengeId?: unknown;
+    response?: unknown;
+    deviceName?: unknown;
+  };
+  if (typeof challengeId !== "string" || !response || typeof response !== "object") {
+    res.status(400).json({ error: "challengeId and response are required" });
+    return;
+  }
+  const ch = await consumeChallenge(challengeId, "register");
+  if (!ch || ch.user_id !== user.id) {
+    res.status(400).json({ error: "Passkey setup expired — please start again." });
+    return;
+  }
+  let verification;
+  try {
+    verification = await verifyRegistrationResponse({
+      response: response as RegistrationResponseJSON,
+      expectedChallenge: ch.challenge,
+      expectedOrigin: RP.origin,
+      expectedRPID: RP.rpID,
+      requireUserVerification: false,
+    });
+  } catch (err) {
+    res.status(400).json({ error: `Passkey registration failed: ${(err as Error).message}` });
+    return;
+  }
+  if (!verification.verified || !verification.registrationInfo) {
+    res.status(400).json({ error: "Passkey could not be verified." });
+    return;
+  }
+  const cred = verification.registrationInfo.credential;
+  const name =
+    typeof deviceName === "string" && deviceName.trim()
+      ? deviceName.trim().slice(0, 80)
+      : "Passkey";
+  await insertCredential({
+    userId: user.id,
+    credentialId: cred.id,
+    publicKey: Buffer.from(cred.publicKey).toString("base64url"),
+    counter: cred.counter,
+    transports: cred.transports ?? [],
+    deviceName: name,
+  });
+  await auditLog("user", String(user.id), "passkey_registered", { email: user.email });
+  res.json({ ok: true });
+});
+
+router.get("/passkey/credentials", authMiddleware, async (req, res) => {
+  const creds = await listCredentials(req.user!.id);
+  res.json({
+    passkeys: creds.map((c) => ({
+      id: c.id,
+      device_name: c.device_name,
+      created_at: c.created_at,
+      last_used_at: c.last_used_at,
+    })),
+  });
+});
+
+router.delete("/passkey/credentials/:id", authMiddleware, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid passkey id" });
+    return;
+  }
+  const removed = await deleteCredential(req.user!.id, id);
+  if (!removed) {
+    res.status(404).json({ error: "Passkey not found" });
+    return;
+  }
+  await auditLog("user", String(req.user!.id), "passkey_removed", { passkey_id: id });
+  res.json({ ok: true });
+});
+
+router.post("/passkey/login/options", authRateLimit, async (_req, res) => {
+  // Discoverable-credential ceremony — no allowCredentials, so the browser
+  // offers any passkey bound to this site and the user types no username.
+  const options = await generateAuthenticationOptions({
+    rpID: RP.rpID,
+    userVerification: "preferred",
+  });
+  const challengeId = await saveChallenge("authenticate", null, options.challenge);
+  res.json({ challengeId, options });
+});
+
+router.post("/passkey/login/verify", authRateLimit, async (req, res) => {
+  const { challengeId, response } = (req.body ?? {}) as {
+    challengeId?: unknown;
+    response?: unknown;
+  };
+  if (
+    typeof challengeId !== "string" ||
+    !response ||
+    typeof response !== "object" ||
+    typeof (response as { id?: unknown }).id !== "string"
+  ) {
+    res.status(400).json({ error: "challengeId and response are required" });
+    return;
+  }
+  const ch = await consumeChallenge(challengeId, "authenticate");
+  if (!ch) {
+    errorEnvelope(res, 400, "invalid_token", "This sign-in attempt expired. Please try again.");
+    return;
+  }
+  const stored = await getCredentialById((response as { id: string }).id);
+  if (!stored) {
+    unauthorized(res, "This passkey is not recognized.");
+    return;
+  }
+  let verification;
+  try {
+    verification = await verifyAuthenticationResponse({
+      response: response as AuthenticationResponseJSON,
+      expectedChallenge: ch.challenge,
+      expectedOrigin: RP.origin,
+      expectedRPID: RP.rpID,
+      credential: {
+        id: stored.credential_id,
+        publicKey: Buffer.from(stored.public_key, "base64url"),
+        counter: Number(stored.counter),
+        transports: parseTransports(stored.transports),
+      },
+      requireUserVerification: false,
+    });
+  } catch (err) {
+    unauthorized(res, `Passkey verification failed: ${(err as Error).message}`);
+    return;
+  }
+  if (!verification.verified) {
+    unauthorized(res, "Passkey verification failed.");
+    return;
+  }
+  await updateCounter(stored.credential_id, verification.authenticationInfo.newCounter);
+
+  const userRes = await pool.query<{
+    id: number;
+    email: string;
+    name: string;
+    role: string;
+    firm_id: number;
+    token_version: number;
+    mfa_enabled: boolean;
+    locked_until: Date | null;
+    failed_login_attempts: number;
+  }>(
+    `SELECT id, email, name, role, firm_id, token_version, mfa_enabled,
+            locked_until, failed_login_attempts
+       FROM mtos_users WHERE id = $1 LIMIT 1`,
+    [stored.user_id],
+  );
+  const user = userRes.rows[0];
+  if (!user) {
+    unauthorized(res, "This passkey is not recognized.");
+    return;
+  }
+  if (await isAccountLocked(user)) {
+    const minutesLeft = Math.ceil((new Date(user.locked_until!).getTime() - Date.now()) / 60000);
+    errorEnvelope(res, 423, "account_locked", `Account is locked. Try again in ${minutesLeft} minute(s).`);
+    return;
+  }
+
+  // A passkey ceremony is possession + on-device user verification — a
+  // phishing-resistant strong factor — so it stands on its own; no separate
+  // TOTP step even for an MFA-enabled account.
+  await resetFailedAttempts(user.email);
+  await stampLastLogin(user.id);
+  const accessToken = generateToken({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role as UserRole,
+    firm_id: user.firm_id,
+    token_version: user.token_version,
+  });
+  const refreshToken = await generateRefreshToken(user.id);
+  await auditLog("user", String(user.id), "login_passkey", { email: user.email }, {
+    ip_address: req.ip ?? req.socket.remoteAddress,
+    user_agent: req.headers["user-agent"],
+  });
   res.json({
     token: accessToken,
     refresh_token: refreshToken,
