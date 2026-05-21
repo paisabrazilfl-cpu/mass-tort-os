@@ -197,6 +197,11 @@ async function runSchemaRepair(): Promise<void> {
     `ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS completed_at timestamp`,
     `ALTER TABLE api_keys DROP COLUMN IF EXISTS revoked`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS revoked_at timestamp`,
+    // Inbound-fax intake (Stage 4): provider-namespaced external fax id +
+    // a unique index so a re-delivered inbound webhook can never duplicate
+    // a claimant's medical-record row, even under concurrent retries.
+    `ALTER TABLE fax_results ADD COLUMN IF NOT EXISTS external_fax_id text`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS fax_results_external_fax_id_unique ON fax_results(external_fax_id)`,
     // integrations dedupe: keep the most recent row per (firm_id, provider)
     // pair, drop the rest. The POST /api/integrations route used to allow
     // multiple rows for the same provider in the same firm, which compounded

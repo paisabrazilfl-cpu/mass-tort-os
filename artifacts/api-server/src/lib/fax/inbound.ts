@@ -57,11 +57,6 @@ export interface InboundFaxResult {
   document_id?: number;
 }
 
-/** Escape LIKE metacharacters so an external id can be matched literally. */
-function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
-}
-
 // ── Claimant correlation ────────────────────────────────────────────────────
 
 /**
@@ -126,19 +121,24 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
       return { handled: false, reason: "not_inbound_event" };
     }
 
-    // Idempotency: fax providers re-deliver inbound webhooks, sometimes with
-    // a different event_type each time, which slips past the route-level
-    // externalId:eventType dedup. If a fax_results row already exists for
-    // this provider fax, stop — re-processing would duplicate the claimant's
-    // medical-record attachment. Both the matched and unmatched source_file
-    // conventions end with `_fax_<externalId>.pdf`.
-    if (input.externalFaxId) {
-      const dupPattern = `%${escapeLike(`_fax_${input.externalFaxId}.pdf`)}`;
-      const dup = await pool.query(
-        `SELECT 1 FROM fax_results WHERE source_file LIKE $1 ESCAPE '\\' LIMIT 1`,
-        [dupPattern],
+    // Provider-namespaced external id — the idempotency key. Namespacing by
+    // provider avoids a cross-provider id collision.
+    const externalKey = input.externalFaxId
+      ? `${input.provider}:${input.externalFaxId}`
+      : null;
+
+    // Idempotency fast-path: fax providers re-deliver inbound webhooks
+    // (sometimes with a different event_type each time, which slips past
+    // the route-level externalId:eventType dedup). A cheap exact-match
+    // lookup avoids re-downloading a fax we already stored. This is only
+    // an optimization — the race-proof guarantee is the UNIQUE index on
+    // fax_results.external_fax_id, enforced at INSERT time below.
+    if (externalKey) {
+      const seen = await pool.query(
+        `SELECT 1 FROM fax_results WHERE external_fax_id = $1 LIMIT 1`,
+        [externalKey],
       );
-      if (dup.rows.length > 0) {
+      if (seen.rows.length > 0) {
         return { handled: false, reason: "already_processed" };
       }
     }
@@ -183,22 +183,37 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
       ? `inbound_med_records_lead_${leadId}_fax_${stamp}.pdf`
       : fileName;
 
-    const [faxRow] = await db
+    // INSERT ... ON CONFLICT DO NOTHING on the unique external_fax_id index
+    // is the race-proof idempotency guarantee: if a concurrent re-delivery
+    // already inserted this fax, the conflict yields zero returned rows and
+    // we stop before duplicating the job + documents rows.
+    const inserted = await db
       .insert(faxResultsTable)
       .values({
         source_file: sourceFile,
         vault_path: vaultPath,
         lead_id: leadId,
         status: "received",
+        external_fax_id: externalKey,
       })
+      .onConflictDoNothing({ target: faxResultsTable.external_fax_id })
       .returning({ id: faxResultsTable.id });
+
+    const faxRow = inserted[0];
+    if (!faxRow) {
+      logger.info(
+        { provider: input.provider, externalFaxId: input.externalFaxId },
+        "inbound fax: concurrent re-delivery lost the unique-index race — already processed",
+      );
+      return { handled: false, reason: "already_processed" };
+    }
 
     const [job] = await db
       .insert(jobQueueTable)
       .values({
         job_type: "process_fax",
         payload: {
-          fax_result_id: faxRow!.id,
+          fax_result_id: faxRow.id,
           vault_path: vaultPath,
           source_file: sourceFile,
           mime_type: "application/pdf",
@@ -209,7 +224,7 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
     await db
       .update(faxResultsTable)
       .set({ job_id: job!.id })
-      .where(eq(faxResultsTable.id, faxRow!.id));
+      .where(eq(faxResultsTable.id, faxRow.id));
 
     // 4. Attach to the claimant's profile (documents.lead_id is NOT NULL +
     //    FK, so only when a claimant actually matched).
@@ -228,7 +243,7 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
       documentId = doc?.id;
     }
 
-    await auditLog("fax", String(faxRow!.id), "inbound_received", {
+    await auditLog("fax", String(faxRow.id), "inbound_received", {
       provider: input.provider,
       external_fax_id: input.externalFaxId,
       from: fromNumber || null,
@@ -246,7 +261,7 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
       dispatchTrigger("trigger.inbound_fax", {
         input: {
           lead_id: leadId,
-          fax_result_id: faxRow!.id,
+          fax_result_id: faxRow.id,
           documentId: vaultPath,
           document_id: documentId ?? null,
           vault_path: vaultPath,
@@ -269,7 +284,7 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
     return {
       handled: true,
       lead_id: leadId,
-      fax_result_id: faxRow!.id,
+      fax_result_id: faxRow.id,
       vault_path: vaultPath,
       document_id: documentId,
     };
