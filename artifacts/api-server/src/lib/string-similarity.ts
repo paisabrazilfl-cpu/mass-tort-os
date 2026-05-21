@@ -58,27 +58,68 @@ export function similarityName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
-  const raw = similarity(a, b);
-  const stripped = similarity(normalizeName(a), normalizeName(b));
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (na === "" && nb === "") return 1;
+
+  const raw = similarityNormalized(na, nb);
+  const stripped = similarityNormalized(normalizeNameNormalized(na), normalizeNameNormalized(nb));
   return Math.max(raw, stripped);
 }
 
+/**
+ * Strip title and credential tokens from an ALREADY-normalized string.
+ */
+function normalizeNameNormalized(na: string): string {
+  const tokens = na.split(" ").filter(Boolean);
+  return tokens
+    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
+    .join(" ");
+}
+
+/**
+ * Standard Levenshtein distance (edit distance).
+ * Optimized implementation:
+ *  - Uses Int32Array to reduce GC pressure.
+ *  - Swaps strings so the shorter string is used for the array dimension.
+ *  - Single-vector implementation to minimize memory overhead.
+ *  - Inline min calls for performance.
+ */
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  let prev = new Array<number>(b.length + 1);
-  let curr = new Array<number>(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
-    }
-    [prev, curr] = [curr, prev];
+  if (a.length < b.length) {
+    const tmp = a;
+    a = b;
+    b = tmp;
   }
-  return prev[b.length];
+  const n = a.length;
+  const m = b.length;
+  if (m === 0) return n;
+
+  const v = new Int32Array(m + 1);
+  for (let j = 0; j <= m; j++) v[j] = j;
+
+  for (let i = 1; i <= n; i++) {
+    let prev = v[0];
+    v[0] = i;
+    const charA = a.charCodeAt(i - 1);
+    for (let j = 1; j <= m; j++) {
+      const temp = v[j];
+      if (charA === b.charCodeAt(j - 1)) {
+        v[j] = prev;
+      } else {
+        // v[j-1] is (i, j-1) - insertion
+        // v[j] is (i-1, j) - deletion
+        // prev is (i-1, j-1) - substitution
+        let min = v[j - 1];
+        if (v[j] < min) min = v[j];
+        if (prev < min) min = prev;
+        v[j] = min + 1;
+      }
+      prev = temp;
+    }
+  }
+  return v[m];
 }
 
 // 0..1 similarity ratio after normalization. 1.0 = identical, 0.0 = totally different.
@@ -86,8 +127,14 @@ export function levenshtein(a: string, b: string): number {
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
 export function similarity(a: string | null | undefined, b: string | null | undefined): number {
-  const na = normalize(a);
-  const nb = normalize(b);
+  return similarityNormalized(normalize(a), normalize(b));
+}
+
+/**
+ * Similarity ratio for strings that are already normalized.
+ * Internal helper to avoid redundant normalization in similarityName.
+ */
+function similarityNormalized(na: string, nb: string): number {
   if (na === "" && nb === "") return 1;
   if (na === "" || nb === "") return 0;
   const maxLen = Math.max(na.length, nb.length);
