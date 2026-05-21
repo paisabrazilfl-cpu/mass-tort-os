@@ -14,6 +14,7 @@
  */
 import { Router } from "express";
 import { dispatchTrigger } from "../lib/automations/dispatch";
+import { processInboundFax } from "../lib/fax/inbound";
 import {
   db,
   pool,
@@ -1007,25 +1008,58 @@ router.post(["/fax/:provider", "/fax/:provider/i/:integrationId"], async (req, r
     return;
   }
 
+  let faxEventId: number | null = null;
   try {
-    await db.insert(faxEventsTable).values({
-      integration_id: integrationId,
-      // firmId resolved from the matched integration. Outbound fax_messages
-      // correlation will tighten this once the outbound table ships.
-      firm_id: firmId,
-      lead_id: null,
-      provider,
-      external_fax_id: externalId,
-      event_type: eventType.slice(0, 64),
-      status: status?.slice(0, 64),
-      pages,
-      signature_status: signatureStatus,
-      raw_payload: evt,
-    });
+    const [evtRow] = await db
+      .insert(faxEventsTable)
+      .values({
+        integration_id: integrationId,
+        firm_id: firmId,
+        // lead_id is backfilled below if the inbound-fax intake correlates
+        // this fax to a claimant.
+        lead_id: null,
+        provider,
+        external_fax_id: externalId,
+        event_type: eventType.slice(0, 64),
+        status: status?.slice(0, 64),
+        pages,
+        signature_status: signatureStatus,
+        raw_payload: evt,
+      })
+      .returning({ id: faxEventsTable.id });
+    faxEventId = evtRow?.id ?? null;
   } catch (err) {
     logger.warn({ err, provider }, "fax_events insert failed");
   }
-  res.json({ ok: true, signature_status: signatureStatus });
+
+  // Inbound-fax intake (Stage 4): for a *received* fax, download the
+  // document, correlate it to a claimant by sender number, store it on the
+  // profile, and fire trigger.inbound_fax. Outbound delivery-status
+  // callbacks are skipped. Never throws.
+  const inbound = await processInboundFax({
+    provider,
+    firmId,
+    integrationId,
+    externalFaxId: externalId ?? null,
+    eventType,
+    status: status ?? null,
+    payload: evt as Record<string, unknown>,
+  });
+  if (inbound.handled && inbound.lead_id != null && faxEventId != null) {
+    await db
+      .update(faxEventsTable)
+      .set({ lead_id: inbound.lead_id })
+      .where(eq(faxEventsTable.id, faxEventId))
+      .catch((err) => logger.warn({ err }, "fax_events lead_id backfill failed"));
+  }
+
+  res.json({
+    ok: true,
+    signature_status: signatureStatus,
+    inbound: inbound.handled
+      ? { lead_id: inbound.lead_id, fax_result_id: inbound.fax_result_id }
+      : { handled: false, reason: inbound.reason },
+  });
 });
 
 router.post(["/sms/:provider", "/sms/:provider/i/:integrationId"], async (req, res) => {
