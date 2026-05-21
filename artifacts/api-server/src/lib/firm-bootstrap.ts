@@ -247,6 +247,44 @@ export async function seedMasterApiKey(): Promise<{ skipped: boolean; created: b
   const body = masterKey.slice(API_KEY_PREFIX.length);
   const keyPrefix = `${API_KEY_PREFIX}${body.slice(0, 8)}…`;
 
+  // api_keys.key_hash is globally UNIQUE. If MTOS_MASTER_API_KEY was already
+  // minted as an ordinary key (any name, any firm), the INSERT below would
+  // collide with that UNIQUE index and throw — the boot seed would then fail
+  // silently even though the key works. Resolve by hash first: the hash IS
+  // the key's identity; the row's name is cosmetic. If the key already
+  // exists, just guarantee it carries wildcard scope and is not revoked.
+  const [byHash] = await db
+    .select({
+      id: apiKeysTable.id,
+      name: apiKeysTable.name,
+      scopes: apiKeysTable.scopes,
+      revoked_at: apiKeysTable.revoked_at,
+    })
+    .from(apiKeysTable)
+    .where(eq(apiKeysTable.key_hash, keyHash))
+    .limit(1);
+
+  if (byHash) {
+    const hasWildcard = (byHash.scopes ?? []).includes("*");
+    const isRevoked = byHash.revoked_at != null;
+    if (!hasWildcard || isRevoked) {
+      await db
+        .update(apiKeysTable)
+        .set({ scopes: ["*"], revoked_at: null })
+        .where(eq(apiKeysTable.id, byHash.id));
+      logger.info(
+        { api_key_id: byHash.id, name: byHash.name },
+        "seedMasterApiKey: existing key matched MTOS_MASTER_API_KEY — restored wildcard scope",
+      );
+      return { skipped: false, created: false, updated: true };
+    }
+    logger.info(
+      { api_key_id: byHash.id, name: byHash.name },
+      "seedMasterApiKey: MTOS_MASTER_API_KEY already registered with wildcard scope — no change",
+    );
+    return { skipped: false, created: false, updated: false };
+  }
+
   const [existing] = await db
     .select({ id: apiKeysTable.id })
     .from(apiKeysTable)
