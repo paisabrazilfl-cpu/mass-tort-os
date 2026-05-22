@@ -76,6 +76,7 @@ export const navigation: NavSection[] = [
   {
     section: "Configuration",
     items: [
+      { name: "Your Company Teams", href: "/company-teams", icon: Users },
       { name: "Vendors", href: "/vendors", icon: Building2 },
       { name: "Firm Settings", href: "/firm-settings", icon: Building },
       { name: "Users", href: "/users", icon: UserCog },

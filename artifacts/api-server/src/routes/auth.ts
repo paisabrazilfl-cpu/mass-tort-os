@@ -34,6 +34,8 @@ import {
   listInvitesForFirm,
   lockInviteByToken,
   attachInviteUser,
+  sendFirmInviteEmail,
+  revokeInvite,
 } from "../lib/firm-invites";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
@@ -436,6 +438,23 @@ router.post("/register", authRateLimit, async (req, res) => {
   let firmId: number;
   let lockedInviteId: number | null = null;
   if (invite_token) {
+    // The invitation address IS the account's sign-in email. Reject a
+    // mismatched signup BEFORE consuming the token (a non-destructive
+    // preview lookup) so a typo doesn't burn the invite.
+    const preview = await getInvitePreviewByToken(invite_token);
+    if (
+      preview &&
+      preview.email_prefill &&
+      preview.email_prefill.toLowerCase() !== email
+    ) {
+      res.status(400).json({
+        status: "error",
+        code: "invite_email_mismatch",
+        message:
+          "This invitation was sent to a different email address. Sign up with the exact address that received the invite.",
+      });
+      return;
+    }
     const locked = await lockInviteByToken(invite_token);
     if (!locked) {
       res.status(400).json({
@@ -631,9 +650,28 @@ router.post(
       createdByUserId: req.user!.id,
       emailPrefill,
     });
+
+    // Email the invite when an address was given — the Teams tab always
+    // provides one. The invite is created regardless; a send failure is
+    // logged, not fatal (the token is still returned for manual handoff).
+    let emailSent = false;
+    if (emailPrefill) {
+      try {
+        const fr = await pool.query<{ name: string }>(
+          `SELECT name FROM firms WHERE id = $1 LIMIT 1`,
+          [firmId],
+        );
+        await sendFirmInviteEmail(emailPrefill, fr.rows[0]?.name ?? "your team", created.plaintext);
+        emailSent = true;
+      } catch (err) {
+        logger.error({ err, firmId }, "firm-invite: email send failed (invite still created)");
+      }
+    }
+
     await auditLog("firm_invite", String(created.id), "created", {
       firm_id: firmId,
       email_prefill: emailPrefill,
+      email_sent: emailSent,
       created_by: req.user!.id,
     });
     res.status(201).json({
@@ -641,7 +679,39 @@ router.post(
       token: created.plaintext,
       expires_at: created.expiresAt.toISOString(),
       email_prefill: emailPrefill,
+      email_sent: emailSent,
     });
+  },
+);
+
+/**
+ * Revoke an outstanding (unclaimed) firm invite. Admin-only, firm-scoped.
+ */
+router.delete(
+  "/firm-invites/:id",
+  authMiddleware,
+  requirePermission(Permission.INVITES_MANAGE),
+  async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid invite id" });
+      return;
+    }
+    const firmId = req.user!.firm_id;
+    if (firmId == null) {
+      res.status(400).json({ error: "User is not bound to a firm" });
+      return;
+    }
+    const removed = await revokeInvite(id, firmId);
+    if (!removed) {
+      res.status(404).json({ error: "Invite not found, already used, or not in your firm" });
+      return;
+    }
+    await auditLog("firm_invite", String(id), "revoked", {
+      firm_id: firmId,
+      revoked_by: req.user!.id,
+    });
+    res.json({ ok: true });
   },
 );
 
