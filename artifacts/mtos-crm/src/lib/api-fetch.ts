@@ -12,6 +12,7 @@ import {
   getStoredUserId,
   setTokens,
 } from "./auth-store";
+import { getAdminUnlockToken } from "./admin-unlock-store";
 
 export type RefreshResult = { token: string; expiresIn: number } | null;
 
@@ -151,6 +152,12 @@ export async function apiFetchRaw(
   if (token && !initialHeaders.has("authorization")) {
     initialHeaders.set("authorization", `Bearer ${token}`);
   }
+  // Auto-attach the admin-unlock "sudo mode" token so every authed API
+  // call to a PIN-gated admin route succeeds while the unlock is fresh.
+  const adminUnlock = getAdminUnlockToken();
+  if (adminUnlock && !initialHeaders.has("x-admin-unlock")) {
+    initialHeaders.set("x-admin-unlock", adminUnlock);
+  }
 
   let res = await fetch(input, { ...init, headers: initialHeaders });
 
@@ -160,6 +167,7 @@ export async function apiFetchRaw(
   if (result) {
     const retryHeaders = new Headers(init.headers);
     retryHeaders.set("authorization", `Bearer ${result.token}`);
+    if (adminUnlock) retryHeaders.set("x-admin-unlock", adminUnlock);
     res = await fetch(input, { ...init, headers: retryHeaders });
     if (res.status !== 401) return res;
   }

@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { apiFetchRaw } from "@/lib/api-fetch";
+import { useAuth } from "@/contexts/auth-context";
 
 interface Member {
   id: number;
@@ -79,6 +80,7 @@ function mailtoHref(li: LastInvite): string {
 
 export default function CompanyTeams() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [members, setMembers] = useState<Member[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,6 +88,7 @@ export default function CompanyTeams() {
   const [inviting, setInviting] = useState(false);
   const [lastInvite, setLastInvite] = useState<LastInvite | null>(null);
   const [resendingId, setResendingId] = useState<number | null>(null);
+  const [roleChangingId, setRoleChangingId] = useState<number | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -186,6 +189,54 @@ export default function CompanyTeams() {
       toast({ title: "Couldn't refresh the invite", variant: "destructive" });
     } finally {
       setResendingId(null);
+    }
+  };
+
+  const promoteToSuperAdmin = async (id: number) => {
+    setRoleChangingId(id);
+    try {
+      const res = await apiFetchRaw(`/api/auth/super-admin/promote/${id}`, { method: "POST" });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+        toast({
+          title: "Couldn't promote",
+          description: b.message || b.error || "Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({
+        title: "Promoted to super admin",
+        description:
+          "Their PIN starts at the stock 1234 — they'll be forced to set a new one on first unlock.",
+      });
+      fetchAll();
+    } catch {
+      toast({ title: "Couldn't promote", variant: "destructive" });
+    } finally {
+      setRoleChangingId(null);
+    }
+  };
+
+  const demoteSuperAdmin = async (id: number) => {
+    setRoleChangingId(id);
+    try {
+      const res = await apiFetchRaw(`/api/auth/super-admin/demote/${id}`, { method: "POST" });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+        toast({
+          title: "Couldn't demote",
+          description: b.message || b.error || "Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({ title: "Demoted to admin", description: "Their admin PIN was cleared." });
+      fetchAll();
+    } catch {
+      toast({ title: "Couldn't demote", variant: "destructive" });
+    } finally {
+      setRoleChangingId(null);
     }
   };
 
@@ -354,6 +405,7 @@ export default function CompanyTeams() {
                   <TableHead>Role</TableHead>
                   <TableHead>Last sign-in</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -375,6 +427,35 @@ export default function CompanyTeams() {
                       <Badge variant={m.email_verified_at ? "default" : "outline"}>
                         {m.email_verified_at ? "Active" : "Pending"}
                       </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {m.id === user?.id ? (
+                        <span className="text-xs text-muted-foreground">(you)</span>
+                      ) : m.role === "super_admin" ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => demoteSuperAdmin(m.id)}
+                          disabled={roleChangingId === m.id}
+                        >
+                          {roleChangingId === m.id ? (
+                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          ) : null}
+                          Demote
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => promoteToSuperAdmin(m.id)}
+                          disabled={roleChangingId === m.id}
+                        >
+                          {roleChangingId === m.id ? (
+                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          ) : null}
+                          Make super admin
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

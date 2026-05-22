@@ -16,12 +16,21 @@ import {
   authMiddleware,
   Permission,
   requirePermission,
+  requireRole,
+  updateUserRoleAndBumpVersion,
   incrementFailedAttempts,
   resetFailedAttempts,
   isAccountLocked,
   stampLastLogin,
   type UserRole,
 } from "../lib/rbac";
+import {
+  STOCK_PIN,
+  hashPin,
+  verifyPin,
+  mintAdminUnlockToken,
+  requireAdminUnlock,
+} from "../lib/admin-pin";
 import {
   generateVerificationToken,
   hashVerificationToken,
@@ -588,6 +597,7 @@ const CreateInviteBody = z.object({
 router.get(
   "/firm-invites",
   authMiddleware,
+  requireAdminUnlock,
   requirePermission(Permission.INVITES_MANAGE),
   async (req, res) => {
     const firmId = req.user!.firm_id;
@@ -630,6 +640,7 @@ router.get(
 router.post(
   "/firm-invites",
   authMiddleware,
+  requireAdminUnlock,
   requirePermission(Permission.INVITES_MANAGE),
   async (req, res) => {
     const parsed = CreateInviteBody.safeParse(req.body ?? {});
@@ -690,6 +701,7 @@ router.post(
 router.delete(
   "/firm-invites/:id",
   authMiddleware,
+  requireAdminUnlock,
   requirePermission(Permission.INVITES_MANAGE),
   async (req, res) => {
     const id = Number(req.params.id);
@@ -1374,6 +1386,261 @@ router.delete("/phone", authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Admin PIN gate (super_admin sudo mode) ──────────────────────────────────
+// admin-pin/status, /unlock, /change are role-gated to super_admin. promote
+// and demote additionally require requireAdminUnlock — you must be unlocked
+// to change another user's super_admin status. See lib/admin-pin.ts.
+
+const AdminPinUnlockBody = z.object({ pin: z.string().regex(/^\d{4,8}$/) });
+const AdminPinChangeBody = z.object({
+  current_pin: z.string().regex(/^\d{4,8}$/),
+  new_pin: z.string().regex(/^\d{4,8}$/),
+});
+const SuperAdminTargetParams = z.object({ id: z.coerce.number().int().positive() });
+
+/**
+ * Caller-state query: am I a super_admin and is my PIN still the stock
+ * 1234? The frontend uses this to decide whether to show the unlock
+ * screen or the "set your PIN" forced-change flow.
+ */
+router.get(
+  "/admin-pin/status",
+  authMiddleware,
+  requireRole("super_admin"),
+  async (req, res) => {
+    const r = await pool.query<{ admin_pin_hash: string | null; admin_pin_changed_at: Date | null }>(
+      `SELECT admin_pin_hash, admin_pin_changed_at FROM mtos_users WHERE id = $1`,
+      [req.user!.id],
+    );
+    const row = r.rows[0];
+    res.json({
+      is_super_admin: true,
+      pin_set: Boolean(row?.admin_pin_hash),
+      on_stock_pin: !row?.admin_pin_hash,
+      changed_at: row?.admin_pin_changed_at?.toISOString() ?? null,
+    });
+  },
+);
+
+/**
+ * Verify the PIN. When the account is still on the stock value, do NOT
+ * mint an unlock token — return must_change so the caller is forced to
+ * pick a real PIN via /admin-pin/change before any admin function unlocks.
+ */
+router.post(
+  "/admin-pin/unlock",
+  authRateLimit,
+  authMiddleware,
+  requireRole("super_admin"),
+  async (req, res) => {
+    const parsed = AdminPinUnlockBody.safeParse(req.body);
+    if (!parsed.success) { badRequest(res, parsed.error, "PIN must be 4–8 digits"); return; }
+    const user = req.user!;
+    const r = await pool.query<{ admin_pin_hash: string | null }>(
+      `SELECT admin_pin_hash FROM mtos_users WHERE id = $1`,
+      [user.id],
+    );
+    const stored = r.rows[0]?.admin_pin_hash ?? null;
+    const ok = await verifyPin(parsed.data.pin, stored);
+    if (!ok) {
+      unauthorized(res, "Invalid PIN.");
+      return;
+    }
+    if (!stored) {
+      // Stock-pin path. The unlock is acknowledged but no token is minted;
+      // the caller must change the PIN first.
+      await auditLog("user", String(user.id), "admin_pin_unlock_stock", { firm_id: user.firm_id });
+      res.status(200).json({
+        ok: true,
+        must_change: true,
+        message: "You're using the stock PIN. Set a new PIN to unlock admin functions.",
+      });
+      return;
+    }
+    const { token, expiresInSec } = mintAdminUnlockToken(user.id);
+    await auditLog("user", String(user.id), "admin_pin_unlocked", { firm_id: user.firm_id }, {
+      ip_address: req.ip ?? req.socket.remoteAddress,
+      user_agent: req.headers["user-agent"],
+    });
+    res.json({ ok: true, unlock_token: token, expires_in: expiresInSec });
+  },
+);
+
+/**
+ * Change the PIN. Used for both the forced first-change (from stock 1234)
+ * and routine rotations. On success the caller is effectively unlocked —
+ * a fresh unlock token is issued in the same response.
+ */
+router.post(
+  "/admin-pin/change",
+  authRateLimit,
+  authMiddleware,
+  requireRole("super_admin"),
+  async (req, res) => {
+    const parsed = AdminPinChangeBody.safeParse(req.body);
+    if (!parsed.success) {
+      badRequest(res, parsed.error, "current_pin and new_pin (4–8 digits) are required");
+      return;
+    }
+    const { current_pin, new_pin } = parsed.data;
+    if (new_pin === STOCK_PIN) {
+      res.status(400).json({
+        status: "error",
+        code: "new_pin_is_stock",
+        message: `Choose a PIN other than ${STOCK_PIN}.`,
+      });
+      return;
+    }
+    if (new_pin === current_pin) {
+      res.status(400).json({ status: "error", code: "new_pin_unchanged", message: "Pick a different new PIN." });
+      return;
+    }
+    const user = req.user!;
+    const r = await pool.query<{ admin_pin_hash: string | null }>(
+      `SELECT admin_pin_hash FROM mtos_users WHERE id = $1`,
+      [user.id],
+    );
+    const stored = r.rows[0]?.admin_pin_hash ?? null;
+    const ok = await verifyPin(current_pin, stored);
+    if (!ok) {
+      unauthorized(res, "Current PIN is incorrect.");
+      return;
+    }
+    const newHash = await hashPin(new_pin);
+    await pool.query(
+      `UPDATE mtos_users SET admin_pin_hash = $2, admin_pin_changed_at = NOW(), updated_at = NOW()
+         WHERE id = $1`,
+      [user.id, newHash],
+    );
+    const { token, expiresInSec } = mintAdminUnlockToken(user.id);
+    await auditLog("user", String(user.id), "admin_pin_changed", { firm_id: user.firm_id }, {
+      ip_address: req.ip ?? req.socket.remoteAddress,
+      user_agent: req.headers["user-agent"],
+    });
+    res.json({ ok: true, unlock_token: token, expires_in: expiresInSec });
+  },
+);
+
+/**
+ * Promote a team member to super_admin. The new super_admin's PIN is
+ * reset to stock (1234) — they must change it on first unlock.
+ */
+router.post(
+  "/super-admin/promote/:id",
+  authMiddleware,
+  requireRole("super_admin"),
+  requireAdminUnlock,
+  async (req, res) => {
+    const parsed = SuperAdminTargetParams.safeParse(req.params);
+    if (!parsed.success) { badRequest(res, parsed.error, "Invalid user id"); return; }
+    const targetId = parsed.data.id;
+    const actor = req.user!;
+    if (targetId === actor.id) {
+      res.status(403).json({
+        status: "error",
+        code: "cannot_promote_self",
+        message: "You're already a super admin.",
+      });
+      return;
+    }
+    const updated = await updateUserRoleAndBumpVersion(targetId, actor.firm_id, "super_admin");
+    if (!updated) { res.status(404).json({ error: "User not found" }); return; }
+    // Reset their PIN to stock so they're forced to set their own on first unlock.
+    await pool.query(
+      `UPDATE mtos_users SET admin_pin_hash = NULL, admin_pin_changed_at = NULL, updated_at = NOW()
+         WHERE id = $1 AND firm_id = $2`,
+      [targetId, actor.firm_id],
+    );
+    await auditLog(
+      "user",
+      String(targetId),
+      "promoted_super_admin",
+      {
+        actor_user_id: actor.id,
+        firm_id: actor.firm_id,
+        before: { role: updated.previous_role },
+        after: { role: "super_admin" },
+      },
+      { ip_address: req.ip ?? req.socket.remoteAddress, user_agent: req.headers["user-agent"] },
+    );
+    res.json({
+      ok: true,
+      user: { id: updated.id, email: updated.email, name: updated.name, role: "super_admin" },
+    });
+  },
+);
+
+/**
+ * Demote a super_admin back to admin. Refuses to demote the LAST super_admin
+ * in the firm — otherwise the firm could lock itself out of every gated action.
+ */
+router.post(
+  "/super-admin/demote/:id",
+  authMiddleware,
+  requireRole("super_admin"),
+  requireAdminUnlock,
+  async (req, res) => {
+    const parsed = SuperAdminTargetParams.safeParse(req.params);
+    if (!parsed.success) { badRequest(res, parsed.error, "Invalid user id"); return; }
+    const targetId = parsed.data.id;
+    const actor = req.user!;
+    if (targetId === actor.id) {
+      res.status(403).json({
+        status: "error",
+        code: "cannot_demote_self",
+        message: "You cannot demote yourself. Ask another super admin to do it.",
+      });
+      return;
+    }
+    // Never strip a firm of its only super admin.
+    const cnt = await pool.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM mtos_users WHERE firm_id = $1 AND role = 'super_admin'`,
+      [actor.firm_id],
+    );
+    if (Number(cnt.rows[0]?.c ?? 0) <= 1) {
+      res.status(409).json({
+        status: "error",
+        code: "last_super_admin",
+        message: "Promote another super admin first — you can't leave the firm without one.",
+      });
+      return;
+    }
+    const updated = await updateUserRoleAndBumpVersion(targetId, actor.firm_id, "admin");
+    if (!updated) { res.status(404).json({ error: "User not found" }); return; }
+    if (updated.previous_role !== "super_admin") {
+      // Wasn't a super_admin — undo to avoid a silent role flip.
+      await updateUserRoleAndBumpVersion(targetId, actor.firm_id, updated.previous_role as UserRole);
+      res.status(400).json({
+        status: "error",
+        code: "not_super_admin",
+        message: "That user isn't a super admin.",
+      });
+      return;
+    }
+    await pool.query(
+      `UPDATE mtos_users SET admin_pin_hash = NULL, admin_pin_changed_at = NULL, updated_at = NOW()
+         WHERE id = $1 AND firm_id = $2`,
+      [targetId, actor.firm_id],
+    );
+    await auditLog(
+      "user",
+      String(targetId),
+      "demoted_super_admin",
+      {
+        actor_user_id: actor.id,
+        firm_id: actor.firm_id,
+        before: { role: "super_admin" },
+        after: { role: "admin" },
+      },
+      { ip_address: req.ip ?? req.socket.remoteAddress, user_agent: req.headers["user-agent"] },
+    );
+    res.json({
+      ok: true,
+      user: { id: updated.id, email: updated.email, name: updated.name, role: "admin" },
+    });
+  },
+);
+
 router.post("/change-password", authMiddleware, async (req, res) => {
   const parsed = ChangePasswordBody.safeParse(req.body);
   if (!parsed.success) { badRequest(res, parsed.error, "current_password and new_password required"); return; }
@@ -1500,7 +1767,7 @@ router.get("/me", authMiddleware, async (req, res) => {
 // under USERS_LIST, a cross-tenant enumeration leak in a multi-firm
 // world. Now the response is restricted to the caller's own firm via
 // the same listUsersByFirm helper used by /api/users.
-router.get("/users", authMiddleware, requirePermission(Permission.USERS_LIST), async (req, res) => {
+router.get("/users", authMiddleware, requireAdminUnlock, requirePermission(Permission.USERS_LIST), async (req, res) => {
   const firmId = req.user!.firm_id;
   const users = await listUsersByFirm(firmId);
   res.json(users);

@@ -8,6 +8,7 @@ import NotFound from "@/pages/not-found";
 import { Layout } from "@/components/layout/layout";
 import { RouteErrorBoundary } from "@/components/layout/route-error-boundary";
 import { RequireAuth } from "@/components/auth/require-auth";
+import { AdminGate } from "@/components/auth/admin-gate";
 import { AuthProvider } from "@/contexts/auth-context";
 import { ThemeProvider } from "@/contexts/theme-context";
 import { toast } from "@/hooks/use-toast";
@@ -121,15 +122,31 @@ function AuthedRoutes() {
           <Route path="/compliance" component={Compliance} />
           <Route path="/form-engine" component={FormEngine} />
           <Route path="/vendors" component={Vendors} />
-          <Route path="/security" component={Security} />
+          <Route path="/security">
+            <AdminGate>
+              <Security />
+            </AdminGate>
+          </Route>
           <Route path="/firm-settings" component={FirmSettings} />
-          <Route path="/users" component={Users} />
-          <Route path="/company-teams" component={CompanyTeams} />
+          <Route path="/users">
+            <AdminGate>
+              <Users />
+            </AdminGate>
+          </Route>
+          <Route path="/company-teams">
+            <AdminGate>
+              <CompanyTeams />
+            </AdminGate>
+          </Route>
           <Route path="/doc-review" component={DocReview} />
           <Route path="/timeline" component={Timeline} />
           <Route path="/drafting" component={Drafting} />
           <Route path="/predictive" component={Predictive} />
-          <Route path="/integrations" component={IntegrationsPage} />
+          <Route path="/integrations">
+            <AdminGate>
+              <IntegrationsPage />
+            </AdminGate>
+          </Route>
           <Route path="/billing" component={BillingPage} />
           <Route path="/calls" component={CallsPage} />
           <Route path="/news" component={News} />
@@ -143,14 +160,30 @@ function AuthedRoutes() {
           <Route path="/workflow-settings" component={WorkflowSettingsPage} />
           <Route path="/web-forms" component={WebFormsPage} />
           <Route path="/job-queue" component={JobQueue} />
-          <Route path="/dark-room" component={DarkRoomPage} />
+          <Route path="/dark-room">
+            <AdminGate>
+              <DarkRoomPage />
+            </AdminGate>
+          </Route>
           <Route path="/automations" component={AutomationsPage} />
           <Route path="/automation-docs" component={AutomationDocsPage} />
           <Route path="/n8n-setup" component={N8nSetupPage} />
           <Route path="/forms-api" component={FormsApiPage} />
-          <Route path="/self-heal" component={SelfHealPage} />
-          <Route path="/admin/snapshots" component={AdminSnapshotsPage} />
-          <Route path="/competitive-intel" component={CompetitiveIntelPage} />
+          <Route path="/self-heal">
+            <AdminGate>
+              <SelfHealPage />
+            </AdminGate>
+          </Route>
+          <Route path="/admin/snapshots">
+            <AdminGate>
+              <AdminSnapshotsPage />
+            </AdminGate>
+          </Route>
+          <Route path="/competitive-intel">
+            <AdminGate>
+              <CompetitiveIntelPage />
+            </AdminGate>
+          </Route>
           <Route path="/user-manual" component={UserManualPage} />
           <Route path="/ads-libraries" component={AdsLibrariesPage} />
           <Route path="/automations/:id" component={AutomationEditorPage} />

@@ -278,6 +278,11 @@ async function runSchemaRepair(): Promise<void> {
     // intact. Idempotent — after the first boot nothing matches.
     `UPDATE mtos_users SET role = 'admin', updated_at = NOW()
        WHERE role NOT IN ('admin', 'super_admin')`,
+    // Admin PIN gate (super_admin sudo-mode). admin_pin_hash NULL means
+    // the account is still on the stock PIN 1234 — unlock then forces a
+    // change. admin_pin_changed_at records when the stock value was rotated.
+    `ALTER TABLE mtos_users ADD COLUMN IF NOT EXISTS admin_pin_hash text`,
+    `ALTER TABLE mtos_users ADD COLUMN IF NOT EXISTS admin_pin_changed_at timestamp`,
   ];
 
   for (const stmt of [...creates, ...alters]) {

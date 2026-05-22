@@ -48,6 +48,7 @@ import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
 import { subscriptionGateMiddleware } from "../lib/subscription-gate";
+import { requireAdminUnlock } from "../lib/admin-pin";
 
 // =============================================================================
 // Router registry — keep this list in declaration order so the boot validator
@@ -167,10 +168,10 @@ router.use("/npi", npiRouter);
 router.use("/review-queue", reviewQueueRouter);
 router.use("/forms", formsRouter);
 router.use("/vendors", vendorsRouter);
-router.use("/security", securityRouter);
+router.use("/security", requireAdminUnlock, securityRouter);
 router.use("/timeline", timelineRouter);
 router.use("/drafting", draftingRouter);
-router.use("/integrations", integrationsRouter);
+router.use("/integrations", requireAdminUnlock, integrationsRouter);
 router.use("/fasten", fastenRouter);
 router.use("/news", newsRouter);
 router.use("/image-objects", imageObjectsRouter);
@@ -180,16 +181,17 @@ router.use("/lead-sources", leadSourcesRouter);
 router.use("/buyers", buyersRouter);
 router.use("/document-templates", documentTemplatesRouter);
 router.use("/workflow-settings", workflowSettingsRouter);
-router.use("/users", usersRouter);
-router.use("/admin/dark-room", adminDarkRoomRouter);
-router.use("/admin/ai-constitution", adminAiConstitutionRouter);
-router.use("/admin/api-keys", adminApiKeysRouter);
-router.use("/admin/self-heal", adminSelfHealRouter);
-router.use("/admin/snapshots", adminSnapshotsRouter);
+router.use("/users", requireAdminUnlock, usersRouter);
+// /admin/* — every administrative tool is behind the PIN gate.
+router.use("/admin/dark-room", requireAdminUnlock, adminDarkRoomRouter);
+router.use("/admin/ai-constitution", requireAdminUnlock, adminAiConstitutionRouter);
+router.use("/admin/api-keys", requireAdminUnlock, adminApiKeysRouter);
+router.use("/admin/self-heal", requireAdminUnlock, adminSelfHealRouter);
+router.use("/admin/snapshots", requireAdminUnlock, adminSnapshotsRouter);
 router.use("/ai", aiRerankRouter);
-router.use("/admin/competitive-intel", adminCompetitiveIntelRouter);
-router.use("/admin/event-catalog", adminEventCatalogRouter);
-router.use("/admin/forms-api-directory", formsApiDirectoryRouter);
+router.use("/admin/competitive-intel", requireAdminUnlock, adminCompetitiveIntelRouter);
+router.use("/admin/event-catalog", requireAdminUnlock, adminEventCatalogRouter);
+router.use("/admin/forms-api-directory", requireAdminUnlock, formsApiDirectoryRouter);
 router.use("/automations", automationsRouter);
 
 export default router;

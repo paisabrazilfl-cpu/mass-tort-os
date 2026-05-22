@@ -13,7 +13,8 @@ import {
   getRefreshToken,
   setTokens,
 } from "@/lib/auth-store";
-import { apiFetch, refreshAccessToken, setOnAuthFailure } from "@/lib/api-fetch";
+import { apiFetch, apiFetchRaw, refreshAccessToken, setOnAuthFailure } from "@/lib/api-fetch";
+import { setAdminUnlockToken } from "@/lib/admin-unlock-store";
 import { startAuthentication } from "@simplewebauthn/browser";
 
 export type AuthUser = {
@@ -53,6 +54,14 @@ type Ctx = {
   loginWithPasskey: () => Promise<LoginOutcome>;
   requestSmsCode: (email: string) => Promise<{ ok: boolean; message: string }>;
   loginWithSmsCode: (email: string, code: string, totpCode?: string) => Promise<LoginOutcome>;
+  unlockAdmin: (
+    pin: string,
+  ) => Promise<{ kind: "ok" } | { kind: "must_change" } | { kind: "error"; message: string }>;
+  changeAdminPin: (
+    currentPin: string,
+    newPin: string,
+  ) => Promise<{ kind: "ok" } | { kind: "error"; message: string }>;
+  lockAdmin: () => void;
   cancelMfa: () => void;
   logout: () => Promise<void>;
 };
@@ -116,6 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setStatus("guest");
       setPendingMfa(null);
+      setAdminUnlockToken(null);
     });
     return () => setOnAuthFailure(null);
   }, []);
@@ -710,6 +720,92 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [scheduleRefresh],
   );
 
+  // Admin PIN ("sudo mode") — super_admin-only step-up auth for the admin
+  // area. The unlock token is stored client-side and auto-attached to API
+  // calls by apiFetchRaw.
+  const unlockAdmin = useCallback(
+    async (
+      pin: string,
+    ): Promise<{ kind: "ok" } | { kind: "must_change" } | { kind: "error"; message: string }> => {
+      try {
+        const res = await apiFetchRaw("/api/auth/admin-pin/unlock", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pin }),
+        });
+        let body: Record<string, unknown> = {};
+        try {
+          body = (await res.json()) as Record<string, unknown>;
+        } catch {
+          /* tolerate empty body */
+        }
+        if (res.status === 429) {
+          return { kind: "error", message: "Too many attempts. Wait a few minutes and try again." };
+        }
+        if (!res.ok) {
+          return {
+            kind: "error",
+            message:
+              (typeof body.message === "string" && body.message) ||
+              (typeof body.error === "string" && body.error) ||
+              "Invalid PIN.",
+          };
+        }
+        if (body.must_change === true) return { kind: "must_change" };
+        if (typeof body.unlock_token === "string") {
+          setAdminUnlockToken(body.unlock_token);
+          return { kind: "ok" };
+        }
+        return { kind: "error", message: "Unexpected response — please retry." };
+      } catch {
+        return { kind: "error", message: "Network error — please retry." };
+      }
+    },
+    [],
+  );
+
+  const changeAdminPin = useCallback(
+    async (
+      currentPin: string,
+      newPin: string,
+    ): Promise<{ kind: "ok" } | { kind: "error"; message: string }> => {
+      try {
+        const res = await apiFetchRaw("/api/auth/admin-pin/change", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ current_pin: currentPin, new_pin: newPin }),
+        });
+        let body: Record<string, unknown> = {};
+        try {
+          body = (await res.json()) as Record<string, unknown>;
+        } catch {
+          /* tolerate empty body */
+        }
+        if (!res.ok) {
+          return {
+            kind: "error",
+            message:
+              (typeof body.message === "string" && body.message) ||
+              (typeof body.error === "string" && body.error) ||
+              "Could not change the PIN.",
+          };
+        }
+        if (typeof body.unlock_token === "string") {
+          setAdminUnlockToken(body.unlock_token);
+          return { kind: "ok" };
+        }
+        return { kind: "error", message: "Unexpected response — please retry." };
+      } catch {
+        return { kind: "error", message: "Network error — please retry." };
+      }
+    },
+    [],
+  );
+
+  const lockAdmin = useCallback(() => {
+    setAdminUnlockToken(null);
+  }, []);
+
   const verifyMfa = useCallback(
     async (totpCode: string): Promise<LoginOutcome> => {
       if (!pendingMfa) {
@@ -738,6 +834,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     clearRefreshTimer();
     clearTokens();
+    setAdminUnlockToken(null);
     setUser(null);
     setStatus("guest");
     setPendingMfa(null);
@@ -758,6 +855,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loginWithPasskey,
         requestSmsCode,
         loginWithSmsCode,
+        unlockAdmin,
+        changeAdminPin,
+        lockAdmin,
         cancelMfa,
         logout,
       }}
