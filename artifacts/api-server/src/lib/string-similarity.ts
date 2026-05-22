@@ -45,40 +45,59 @@ const CREDENTIAL_TOKENS = new Set([
 // name similarity reflects the actual person name. Returns "" when the
 // input collapses to only stripped tokens.
 export function normalizeName(s: string | null | undefined): string {
-  const tokens = normalize(s).split(" ").filter(Boolean);
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  const normalized = normalize(s);
+  return _normalizeNameFromNormalized(normalized);
 }
 
-// Convenience: similarity that also tries the title-stripped variant and
-// returns whichever is HIGHER. Strictly additive — can never lower a
-// previously-passing score; existing thresholds keep their meaning.
-export function similarityName(
-  a: string | null | undefined,
-  b: string | null | undefined,
-): number {
-  const raw = similarity(a, b);
-  const stripped = similarity(normalizeName(a), normalizeName(b));
-  return Math.max(raw, stripped);
+/** Internal helper to avoid re-normalizing the same string twice. */
+function _normalizeNameFromNormalized(normalized: string): string {
+  if (!normalized) return "";
+  const tokens = normalized.split(" ");
+  let result = "";
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t && !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t)) {
+      result += (result ? " " : "") + t;
+    }
+  }
+  return result;
 }
 
+/**
+ * Optimized Levenshtein distance using a single Int32Array to minimize
+ * GC pressure and memory allocations. Also swaps strings so 'b' is the
+ * shorter one, further reducing the vector size.
+ */
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  let prev = new Array<number>(b.length + 1);
-  let curr = new Array<number>(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
-    }
-    [prev, curr] = [curr, prev];
+  if (a.length < b.length) {
+    [a, b] = [b, a];
   }
-  return prev[b.length];
+  const aLen = a.length;
+  const bLen = b.length;
+  if (bLen === 0) return aLen;
+
+  // We only need one row of the matrix to calculate the distance.
+  const v0 = new Int32Array(bLen + 1);
+  for (let j = 0; j <= bLen; j++) {
+    v0[j] = j;
+  }
+
+  for (let i = 0; i < aLen; i++) {
+    let prevLeft = i + 1;
+    let prevDiagonal = i;
+    const aChar = a.charCodeAt(i);
+
+    for (let j = 0; j < bLen; j++) {
+      const cost = aChar === b.charCodeAt(j) ? 0 : 1;
+      const current = Math.min(prevLeft + 1, v0[j + 1] + 1, prevDiagonal + cost);
+      prevDiagonal = v0[j + 1];
+      v0[j + 1] = current;
+      prevLeft = current;
+    }
+  }
+
+  return v0[bLen];
 }
 
 // 0..1 similarity ratio after normalization. 1.0 = identical, 0.0 = totally different.
@@ -88,9 +107,36 @@ export function levenshtein(a: string, b: string): number {
 export function similarity(a: string | null | undefined, b: string | null | undefined): number {
   const na = normalize(a);
   const nb = normalize(b);
+  return _similarityFromNormalized(na, nb);
+}
+
+/** Internal helper to avoid re-normalizing when the caller already has them. */
+function _similarityFromNormalized(na: string, nb: string): number {
   if (na === "" && nb === "") return 1;
   if (na === "" || nb === "") return 0;
+  if (na === nb) return 1;
   const maxLen = Math.max(na.length, nb.length);
-  if (maxLen === 0) return 1;
   return 1 - levenshtein(na, nb) / maxLen;
+}
+
+// Convenience: similarity that also tries the title-stripped variant and
+// returns whichever is HIGHER. Strictly additive — can never lower a
+// previously-passing score; existing thresholds keep their meaning.
+export function similarityName(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  const na = normalize(a);
+  const nb = normalize(b);
+  const raw = _similarityFromNormalized(na, nb);
+  if (raw === 1) return 1;
+
+  const strippedA = _normalizeNameFromNormalized(na);
+  const strippedB = _normalizeNameFromNormalized(nb);
+
+  // If stripping didn't change anything, the result is already in 'raw'
+  if (strippedA === na && strippedB === nb) return raw;
+
+  const stripped = _similarityFromNormalized(strippedA, strippedB);
+  return Math.max(raw, stripped);
 }
