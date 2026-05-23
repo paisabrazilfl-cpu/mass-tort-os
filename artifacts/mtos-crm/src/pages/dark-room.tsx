@@ -70,7 +70,7 @@ export default function DarkRoomPage() {
   const [newUrl, setNewUrl] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const isAdmin = user?.role === "admin";
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
   const load = useCallback(async () => {
     try {

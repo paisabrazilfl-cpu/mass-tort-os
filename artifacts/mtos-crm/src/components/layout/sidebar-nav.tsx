@@ -111,7 +111,9 @@ interface SidebarNavProps {
 export function SidebarNav({ onNavigate }: SidebarNavProps) {
   const [location] = useLocation();
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  // super_admin is strictly above admin; treat it as admin for visibility
+  // checks so adminOnly items don't accidentally disappear for the highest tier.
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
   const visibleGroups = navigation
     .map((group) => ({

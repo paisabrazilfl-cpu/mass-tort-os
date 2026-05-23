@@ -42,7 +42,7 @@ import { useAuth } from "@/contexts/auth-context";
 // Kept narrow on purpose — the server already excludes secrets, but we
 // also avoid carrying anything we don't render so the UI is impossible
 // to use as an exfil vector for fields added later.
-type Role = "admin" | "attorney" | "paralegal" | "viewer";
+type Role = "super_admin" | "admin" | "attorney" | "paralegal" | "viewer";
 type UserRow = {
   id: number;
   email: string;
@@ -68,6 +68,7 @@ const ROLE_OPTIONS: { value: Exclude<Role, "admin">; label: string; description:
 ];
 
 const ROLE_BADGE: Record<Role, string> = {
+  super_admin: "bg-violet-100 text-violet-800",
   admin: "bg-red-100 text-red-800",
   attorney: "bg-purple-100 text-purple-800",
   paralegal: "bg-blue-100 text-blue-800",
@@ -86,7 +87,8 @@ function formatTs(value: string | null): string {
 export default function Users() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const isAdmin = user?.role === "admin";
+  // super_admin is strictly above admin — treat both as admin for this page.
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
   const [rows, setRows] = useState<UserRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -294,12 +296,14 @@ export default function Users() {
                           <Button
                             variant="outline"
                             size="sm"
-                            disabled={isSelf || row.role === "admin"}
+                            disabled={
+                              isSelf || row.role === "admin" || row.role === "super_admin"
+                            }
                             title={
                               isSelf
                                 ? "You can't change your own role."
-                                : row.role === "admin"
-                                  ? "Admin role can't be changed from this page."
+                                : row.role === "admin" || row.role === "super_admin"
+                                  ? "Admin / super-admin roles can't be changed from this page."
                                   : "Change role"
                             }
                             onClick={() => openEdit(row)}

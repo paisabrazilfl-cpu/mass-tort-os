@@ -75,7 +75,7 @@ export default function FirmSettings() {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  const isAdmin = user?.role === "admin";
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
   const [invites, setInvites] = useState<InviteRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
