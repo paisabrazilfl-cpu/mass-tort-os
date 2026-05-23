@@ -13,7 +13,7 @@ import {
   FormConfig,
   CustomField
 } from "@workspace/api-client-react";
-import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw } from "lucide-react";
+import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw, ExternalLink, Scale } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -93,6 +93,117 @@ function getSeverityBadge(severity: string | undefined) {
     default:
       return <Badge variant="outline">{severity || "Unknown"}</Badge>;
   }
+}
+
+// ── PACER Federal Courts result block ──────────────────────────────────────
+// Rendered inside the Manual Background Check card result block. Handles all
+// four PCL outcomes: not configured, auth failed, source unreachable, and
+// successful (0 or more cases).
+
+interface PacerCase {
+  caseNumberFull?: string | null;
+  caseTitle?: string | null;
+  caseYear?: number | null;
+  courtId?: string | null;
+  dateFiled?: string | null;
+  jurisdictionType?: string | null;
+  natureOfSuit?: string | null;
+  docketUrl?: string | null;
+}
+
+interface PacerOutcome {
+  ok: boolean;
+  reason?: string | null;
+  message?: string | null;
+  cases?: PacerCase[];
+  truncated?: boolean;
+}
+
+function PacerResultSection({ pacer }: { pacer?: PacerOutcome | null }) {
+  if (pacer == null) return null;
+
+  const headerClass = "flex items-center gap-2 px-4 py-2.5 border-t bg-slate-50 text-sm font-medium";
+
+  if (!pacer.ok) {
+    if (pacer.reason === "NOT_CONFIGURED") {
+      return (
+        <div className={`${headerClass} text-muted-foreground`}>
+          <Scale className="h-4 w-4 shrink-0" />
+          <span>
+            PACER Federal Courts —{" "}
+            <span className="font-normal">
+              Not configured. Add PACER credentials in{" "}
+              <span className="font-medium">Settings → Integrations</span> to enable
+              federal court searches (per-page billing applies).
+            </span>
+          </span>
+        </div>
+      );
+    }
+    const label = pacer.reason === "AUTH_FAILED" ? "Credentials rejected" : "Service unreachable";
+    return (
+      <div className={`${headerClass} text-amber-700 bg-amber-50`}>
+        <AlertTriangle className="h-4 w-4 shrink-0" />
+        <span>PACER Federal Courts — {label}{pacer.message ? `: ${pacer.message}` : ""}. Lane was not searched.</span>
+      </div>
+    );
+  }
+
+  const cases = pacer.cases ?? [];
+
+  if (cases.length === 0) {
+    return (
+      <div className={`${headerClass} text-emerald-700 bg-emerald-50`}>
+        <Scale className="h-4 w-4 shrink-0" />
+        <span>PACER Federal Courts — No cases found for this name.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t">
+      <div className={`${headerClass} text-amber-800 bg-amber-50`}>
+        <Scale className="h-4 w-4 shrink-0" />
+        <span>
+          PACER Federal Courts —{" "}
+          <span className="font-semibold">{cases.length}{pacer.truncated ? "+" : ""} case{cases.length !== 1 ? "s" : ""} found</span>.{" "}
+          Operator must confirm identity before treating as a match.
+        </span>
+      </div>
+      <div className="divide-y">
+        {cases.map((c, i) => (
+          <div key={i} className="px-4 py-2.5 bg-white text-xs flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="font-medium truncate text-amber-900" title={c.caseTitle ?? ""}>
+                {c.caseTitle || "(untitled case)"}
+              </div>
+              <div className="font-mono text-muted-foreground mt-0.5">
+                {c.caseNumberFull ?? "—"}
+              </div>
+              <div className="text-muted-foreground mt-0.5">
+                {[
+                  c.courtId ? `Court: ${c.courtId}` : null,
+                  c.jurisdictionType ?? null,
+                  c.dateFiled ? `Filed: ${c.dateFiled}` : null,
+                  c.natureOfSuit ? `Nature: ${c.natureOfSuit}` : null,
+                ].filter(Boolean).join(" · ")}
+              </div>
+            </div>
+            {c.docketUrl && (
+              <a
+                href={c.docketUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 inline-flex items-center gap-1 text-blue-700 hover:underline font-medium"
+              >
+                Docket <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function FormEngine() {
@@ -529,6 +640,9 @@ export default function FormEngine() {
                         </TableBody>
                       </Table>
                     )}
+
+                    {/* ── PACER Federal Courts section ── */}
+                    <PacerResultSection pacer={bgCheckResult.pacer} />
                   </div>
                 )}
               </CardContent>

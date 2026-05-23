@@ -8,6 +8,7 @@ import { encryptLeadFields, decryptLeadFields, rebindLeadEncryptionAad } from ".
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
 import { runBackgroundCheck } from "../lib/background-check";
+import { searchPcl } from "../lib/pacer/pcl-client";
 import { runFullConflictCheck } from "../lib/conflict-engine";
 import { TORT_REGISTRY, validateTortClaim, getTortCategories } from "../lib/tort-engine";
 import { lookupNpiAndMatch } from "../lib/taxonomy-engine";
@@ -1039,8 +1040,23 @@ router.post("/background-check", requirePermission(Permission.FORMS_BACKGROUND_C
   }
 
   try {
-    const result = await runBackgroundCheck({ first_name, last_name, state, date_of_birth });
-    res.json(result);
+    // Run CourtListener + OFAC and PACER PCL in parallel. PACER is opt-in
+    // (vault credentials required) and returns NOT_CONFIGURED when not set up,
+    // so it never blocks or fails the overall check. searchPcl() never throws.
+    const [courtResult, pacerOutcome] = await Promise.all([
+      runBackgroundCheck({ first_name, last_name, state, date_of_birth }),
+      searchPcl({ firstName: first_name, lastName: last_name, dateOfBirth: date_of_birth ?? null }),
+    ]);
+
+    // Translate the PCL discriminated union into the shape the OpenAPI spec
+    // declares for BackgroundCheckResult.pacer. Callers get null when PACER
+    // wasn't searched (no vault creds, auth failure, or network error) so the
+    // UI can distinguish "not configured" from "searched but 0 results".
+    const pacer = pacerOutcome.ok
+      ? { ok: true, cases: pacerOutcome.cases, truncated: pacerOutcome.truncated }
+      : { ok: false, reason: pacerOutcome.reason, message: "message" in pacerOutcome ? pacerOutcome.message : undefined };
+
+    res.json({ ...courtResult, pacer });
   } catch (err) {
     logger.error({ err }, "Background check failed");
     serverError(res, "Background check failed");

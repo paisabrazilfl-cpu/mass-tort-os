@@ -3736,6 +3736,61 @@ components:
           items:
             type: string
           description: Operator-facing notes about source health, fallbacks, or limitations.
+        pacer:
+          nullable: true
+          description: |
+            PACER Case Locator (PCL) search result. Included only when the
+            "pacer" integration is configured in the vault. `null` means PACER
+            was not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).
+            When `ok` is true, `cases` contains up to 25 party-search hits and
+            `truncated` indicates more results exist beyond the first page.
+            Hits require manual operator review — PCL results never auto-fail
+            a lead because they do not include identity-confirming metadata.
+          type: object
+          properties:
+            ok:
+              type: boolean
+            reason:
+              type: string
+              nullable: true
+              enum: [NOT_CONFIGURED, AUTH_FAILED, SOURCE_UNREACHABLE]
+              description: Failure reason when `ok` is false.
+            message:
+              type: string
+              nullable: true
+              description: Human-readable detail for the failure reason.
+            cases:
+              type: array
+              items:
+                type: object
+                properties:
+                  caseNumberFull:
+                    type: string
+                    nullable: true
+                  caseTitle:
+                    type: string
+                    nullable: true
+                  caseYear:
+                    type: integer
+                    nullable: true
+                  courtId:
+                    type: string
+                    nullable: true
+                  dateFiled:
+                    type: string
+                    nullable: true
+                  jurisdictionType:
+                    type: string
+                    nullable: true
+                  natureOfSuit:
+                    type: string
+                    nullable: true
+                  docketUrl:
+                    type: string
+                    nullable: true
+            truncated:
+              type: boolean
+              description: True when PACER returned more results than the 25-case limit.
       required:
         - status
         - source

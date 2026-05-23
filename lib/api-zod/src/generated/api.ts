@@ -1453,6 +1453,42 @@ export const RunBackgroundCheckResponse = zod.object({
     .describe(
       "Operator-facing notes about source health, fallbacks, or limitations.",
     ),
+  pacer: zod
+    .object({
+      ok: zod.boolean().optional(),
+      reason: zod
+        .enum(["NOT_CONFIGURED", "AUTH_FAILED", "SOURCE_UNREACHABLE"])
+        .nullish()
+        .describe("Failure reason when `ok` is false."),
+      message: zod
+        .string()
+        .nullish()
+        .describe("Human-readable detail for the failure reason."),
+      cases: zod
+        .array(
+          zod.object({
+            caseNumberFull: zod.string().nullish(),
+            caseTitle: zod.string().nullish(),
+            caseYear: zod.number().nullish(),
+            courtId: zod.string().nullish(),
+            dateFiled: zod.string().nullish(),
+            jurisdictionType: zod.string().nullish(),
+            natureOfSuit: zod.string().nullish(),
+            docketUrl: zod.string().nullish(),
+          }),
+        )
+        .optional(),
+      truncated: zod
+        .boolean()
+        .optional()
+        .describe(
+          "True when PACER returned more results than the 25-case limit.",
+        ),
+    })
+    .nullish()
+    .describe(
+      'PACER Case Locator (PCL) search result. Included only when the\n\"pacer\" integration is configured in the vault. `null` means PACER\nwas not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).\nWhen `ok` is true, `cases` contains up to 25 party-search hits and\n`truncated` indicates more results exist beyond the first page.\nHits require manual operator review — PCL results never auto-fail\na lead because they do not include identity-confirming metadata.\n',
+    ),
 });
 
 /**
@@ -1497,6 +1533,42 @@ export const RunLeadBackgroundCheckResponse = zod.object({
     .array(zod.string())
     .describe(
       "Operator-facing notes about source health, fallbacks, or limitations.",
+    ),
+  pacer: zod
+    .object({
+      ok: zod.boolean().optional(),
+      reason: zod
+        .enum(["NOT_CONFIGURED", "AUTH_FAILED", "SOURCE_UNREACHABLE"])
+        .nullish()
+        .describe("Failure reason when `ok` is false."),
+      message: zod
+        .string()
+        .nullish()
+        .describe("Human-readable detail for the failure reason."),
+      cases: zod
+        .array(
+          zod.object({
+            caseNumberFull: zod.string().nullish(),
+            caseTitle: zod.string().nullish(),
+            caseYear: zod.number().nullish(),
+            courtId: zod.string().nullish(),
+            dateFiled: zod.string().nullish(),
+            jurisdictionType: zod.string().nullish(),
+            natureOfSuit: zod.string().nullish(),
+            docketUrl: zod.string().nullish(),
+          }),
+        )
+        .optional(),
+      truncated: zod
+        .boolean()
+        .optional()
+        .describe(
+          "True when PACER returned more results than the 25-case limit.",
+        ),
+    })
+    .nullish()
+    .describe(
+      'PACER Case Locator (PCL) search result. Included only when the\n\"pacer\" integration is configured in the vault. `null` means PACER\nwas not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).\nWhen `ok` is true, `cases` contains up to 25 party-search hits and\n`truncated` indicates more results exist beyond the first page.\nHits require manual operator review — PCL results never auto-fail\na lead because they do not include identity-confirming metadata.\n',
     ),
 });
 

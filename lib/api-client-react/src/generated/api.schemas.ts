@@ -1059,6 +1059,51 @@ export const BackgroundCheckResultSearchScope = {
   "national-fallback": "national-fallback",
 } as const;
 
+/**
+ * Failure reason when `ok` is false.
+ */
+export type BackgroundCheckResultPacerReason =
+  | (typeof BackgroundCheckResultPacerReason)[keyof typeof BackgroundCheckResultPacerReason]
+  | null;
+
+export const BackgroundCheckResultPacerReason = {
+  NOT_CONFIGURED: "NOT_CONFIGURED",
+  AUTH_FAILED: "AUTH_FAILED",
+  SOURCE_UNREACHABLE: "SOURCE_UNREACHABLE",
+} as const;
+
+export type BackgroundCheckResultPacerCasesItem = {
+  caseNumberFull?: string | null;
+  caseTitle?: string | null;
+  caseYear?: number | null;
+  courtId?: string | null;
+  dateFiled?: string | null;
+  jurisdictionType?: string | null;
+  natureOfSuit?: string | null;
+  docketUrl?: string | null;
+};
+
+/**
+ * PACER Case Locator (PCL) search result. Included only when the
+"pacer" integration is configured in the vault. `null` means PACER
+was not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).
+When `ok` is true, `cases` contains up to 25 party-search hits and
+`truncated` indicates more results exist beyond the first page.
+Hits require manual operator review — PCL results never auto-fail
+a lead because they do not include identity-confirming metadata.
+
+ */
+export type BackgroundCheckResultPacer = {
+  ok?: boolean;
+  /** Failure reason when `ok` is false. */
+  reason?: BackgroundCheckResultPacerReason;
+  /** Human-readable detail for the failure reason. */
+  message?: string | null;
+  cases?: BackgroundCheckResultPacerCasesItem[];
+  /** True when PACER returned more results than the 25-case limit. */
+  truncated?: boolean;
+} | null;
+
 export interface BackgroundCheckResult {
   status: BackgroundCheckResultStatus;
   source: string;
@@ -1079,6 +1124,15 @@ export interface BackgroundCheckResult {
   searched_courts: string[];
   /** Operator-facing notes about source health, fallbacks, or limitations. */
   notes: string[];
+  /** PACER Case Locator (PCL) search result. Included only when the
+"pacer" integration is configured in the vault. `null` means PACER
+was not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).
+When `ok` is true, `cases` contains up to 25 party-search hits and
+`truncated` indicates more results exist beyond the first page.
+Hits require manual operator review — PCL results never auto-fail
+a lead because they do not include identity-confirming metadata.
+ */
+  pacer?: BackgroundCheckResultPacer;
 }
 
 export type BackgroundHubSourceSourceType =
