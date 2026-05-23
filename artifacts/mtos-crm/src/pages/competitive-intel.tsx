@@ -29,6 +29,7 @@ import {
   Eye, AlertTriangle, RefreshCw, Search, Plus, Trash2, ExternalLink, Loader2, ImageIcon,
 } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
+import { useAuth } from "@/contexts/auth-context";
 import { useToast } from "@/hooks/use-toast";
 
 interface AdCreative {
@@ -119,6 +120,7 @@ function AdCard({ ad }: { ad: AdCreative }) {
 
 export default function CompetitiveIntelPage() {
   const { toast } = useToast();
+  const { status } = useAuth();
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [forbidden, setForbidden] = useState(false);
 
@@ -144,6 +146,8 @@ export default function CompetitiveIntelPage() {
       const j = await res.json();
       setConfigured(!!j.configured);
     }
+    // 401 means auth context hasn't finished booting yet; the useEffect
+    // below re-runs once status flips to "authed" so no action needed here.
   }
 
   async function loadWatchlist() {
@@ -160,7 +164,17 @@ export default function CompetitiveIntelPage() {
     }
   }
 
-  useEffect(() => { void loadConfig(); void loadWatchlist(); }, []);
+  // Wait for the auth context to finish its boot-time token refresh before
+  // making any API calls. Firing before auth is ready sends an unauthenticated
+  // request that returns 401, and the server's refresh-token rotation means a
+  // concurrent refresh attempt from apiFetchRaw's 401-retry path can trigger
+  // the double-use detection and revoke the session entirely.
+  useEffect(() => {
+    if (status !== "authed") return;
+    void loadConfig();
+    void loadWatchlist();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   async function runLookup(mode: "id" | "search") {
     const body = mode === "id"
@@ -241,6 +255,14 @@ export default function CompetitiveIntelPage() {
     const res = await apiFetchRaw(`/api/admin/competitive-intel/watchlist/${id}`, { method: "DELETE" });
     if (res.ok) { toast({ title: "Removed" }); void loadWatchlist(); }
     else toast({ title: "Remove failed", variant: "destructive" });
+  }
+
+  if (status === "loading" || (status === "authed" && configured === null && !forbidden)) {
+    return (
+      <div className="p-6 max-w-3xl flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading Competitive Intelligence…
+      </div>
+    );
   }
 
   if (forbidden) {

@@ -97,9 +97,22 @@ async function serpapiFetch<T>(params: Record<string, string>, timeoutMs = DEFAU
         `SerpAPI ${res.status}`;
       throw new SerpapiError(msg as string, res.status, body);
     }
-    // SerpAPI returns 200 with `error` field on logical errors (bad advertiser id, etc).
-    if (typeof body === "object" && body && "error" in body && (body as { error?: string }).error) {
-      throw new SerpapiError((body as { error: string }).error, 422, body);
+    // SerpAPI returns 200 with `error` field for two distinct cases:
+    //   a) "No results" — the advertiser exists but has no active ads, or the
+    //      name search matched nothing. Treat as empty payload, not an error.
+    //   b) Real logical errors (invalid advertiser id format, bad params, etc.)
+    //      — throw so the caller surfaces a useful message.
+    if (typeof body === "object" && body && "error" in body) {
+      const msg = (body as { error?: string }).error ?? "";
+      const isNoResults =
+        /hasn't returned any results/i.test(msg) ||
+        /no results/i.test(msg) ||
+        /no ads/i.test(msg);
+      if (!isNoResults) {
+        throw new SerpapiError(msg, 422, body);
+      }
+      // "No results" — return body as-is so callers get empty ad_creatives /
+      // advertisers arrays rather than an exception.
     }
     return body as T;
   } catch (err) {
