@@ -4,7 +4,7 @@
 
 **Version 2026.05.16** • Built directly from source: `artifacts/api-server/src`, `artifacts/mtos-crm/src`, `lib/db/src/schema`.
 
-> **Owner-level account.** `paisabrazilfl@gmail.com` is the platform owner. As `super_admin` they see EVERY firm, lead, case, audit log, integration, and admin panel across the system — including the hidden **Boss-Omega Dark Room** (§13.2), which is invisible to every other role. The role hierarchy is `super_admin > admin > attorney > paralegal > viewer` (§2.1). The billing banner and subscription gate are bypassed for `super_admin` and for any deploy where Stripe is unconfigured.
+> **Owner-level account.** The platform owner is the seeded `super_admin` — the account whose email is set via the `SEED_ADMIN_EMAIL` deploy secret. As `super_admin` they see EVERY firm, lead, case, audit log, integration, and admin panel across the system — including the hidden **Boss-Omega Dark Room** (§13.2), which is invisible to every other role. The role hierarchy is `super_admin > admin > attorney > paralegal > viewer` (§2.1). The billing banner and subscription gate are bypassed for `super_admin` and for any deploy where Stripe is unconfigured.
 
 ---
 
