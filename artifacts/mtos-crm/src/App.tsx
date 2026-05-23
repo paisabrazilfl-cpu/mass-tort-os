@@ -66,6 +66,7 @@ import N8nSetupPage from "@/pages/n8n-setup";
 import FormsApiPage from "@/pages/forms-api";
 import SelfHealPage from "@/pages/self-heal";
 import AdminSnapshotsPage from "@/pages/admin-snapshots";
+import AdminPlatform from "@/pages/admin-platform";
 import CompetitiveIntelPage from "@/pages/competitive-intel";
 import UserManualPage from "@/pages/user-manual";
 import AdsLibrariesPage from "@/pages/ads-libraries";
@@ -177,6 +178,11 @@ function AuthedRoutes() {
           <Route path="/admin/snapshots">
             <AdminGate>
               <AdminSnapshotsPage />
+            </AdminGate>
+          </Route>
+          <Route path="/admin/platform">
+            <AdminGate>
+              <AdminPlatform />
             </AdminGate>
           </Route>
           <Route path="/competitive-intel">

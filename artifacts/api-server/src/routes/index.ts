@@ -44,6 +44,7 @@ import adminCompetitiveIntelRouter from "./admin-competitive-intel";
 import adminEventCatalogRouter from "./admin-event-catalog";
 import formsApiDirectoryRouter from "./forms-api-directory";
 import automationsWebhookRouter from "./automations-webhook";
+import adminPlatformRouter from "./admin-platform";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -117,6 +118,7 @@ labelRouter(aiRerankRouter, "ai-rerank");
 labelRouter(adminCompetitiveIntelRouter, "admin-competitive-intel");
 labelRouter(adminEventCatalogRouter, "admin-event-catalog");
 labelRouter(formsApiDirectoryRouter, "forms-api-directory");
+labelRouter(adminPlatformRouter, "admin-platform");
 
 const router: IRouter = Router();
 
@@ -192,6 +194,9 @@ router.use("/ai", aiRerankRouter);
 router.use("/admin/competitive-intel", requireAdminUnlock, adminCompetitiveIntelRouter);
 router.use("/admin/event-catalog", requireAdminUnlock, adminEventCatalogRouter);
 router.use("/admin/forms-api-directory", requireAdminUnlock, formsApiDirectoryRouter);
+// Platform admin — cross-firm view of users + firms. Vendor-firm-only check
+// is enforced per-route inside the router.
+router.use("/admin/platform", requireAdminUnlock, adminPlatformRouter);
 router.use("/automations", automationsRouter);
 
 export default router;

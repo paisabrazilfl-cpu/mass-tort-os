@@ -97,6 +97,7 @@ export const navigation: NavSection[] = [
   {
     section: "BOS-OMEGA",
     items: [
+      { name: "Platform Admin", href: "/admin/platform", icon: Building2, adminOnly: true },
       { name: "Dark Room", href: "/dark-room", icon: Skull, adminOnly: true },
       { name: "Restore / Snapshots", href: "/admin/snapshots", icon: Camera, adminOnly: true },
     ],
