@@ -5,7 +5,7 @@ import {
   Building2, ShieldCheck, FileSearch, Clock, Wand2, Brain, Plug, Newspaper,
   TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings,
   Activity, CreditCard, Phone, Workflow, Eye, BookOpen, Library,
-  Webhook, Wrench, Search, ListChecks,
+  Webhook, Wrench, Search, ListChecks, Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -79,7 +79,16 @@ export const navigation: NavSection[] = [
     ],
   },
 
-  // ── 6. AI & CLINICAL ──────────────────────────────────────────────────────
+  // ── 6. AI AGENTS ──────────────────────────────────────────────────────────
+  // Autonomous agents that work cases, intake leads, and run tasks.
+  {
+    section: "AI Agents",
+    items: [
+      { name: "AI Agents", href: "/ai-agents", icon: Bot },
+    ],
+  },
+
+  // ── 7. AI & CLINICAL ──────────────────────────────────────────────────────
   // Smart tools: provider lookup, case qualification, predictive scoring.
   {
     section: "AI & Clinical",
