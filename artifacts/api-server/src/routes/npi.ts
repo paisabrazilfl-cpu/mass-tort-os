@@ -41,7 +41,14 @@ function parseNpiResponse(data: any): NpiResult[] {
     const practiceAddr = addresses.find((a: any) => a.address_purpose === "LOCATION") || addresses[0] || {};
 
     const taxonomies = r.taxonomies || [];
-    const primaryTax = taxonomies.find((t: any) => t.primary) || taxonomies[0] || {};
+    // Prefer the primary taxonomy that has a description; if the primary entry
+    // has desc=null (happens for multi-specialty groups), fall back to the
+    // first taxonomy with any desc, then to the raw first entry.
+    const primaryTax =
+      taxonomies.find((t: any) => t.primary && t.desc) ||
+      taxonomies.find((t: any) => t.desc) ||
+      taxonomies[0] ||
+      {};
 
     return {
       npi: String(r.number || ""),
