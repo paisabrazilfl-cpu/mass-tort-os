@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { AlertTriangle } from "lucide-react";
 import { useGetBillingFirmStatus, getGetBillingFirmStatusQueryKey } from "@workspace/api-client-react";
+import { useAuth } from "@/contexts/auth-context";
 
 const ACTIVE_STATUSES = new Set(["active", "trialing"]);
 
@@ -28,6 +29,7 @@ const STATUS_COPY: Record<string, { title: string; body: string }> = {
 };
 
 export function BillingBanner() {
+  const { user } = useAuth();
   const q = useGetBillingFirmStatus({
     query: {
       queryKey: getGetBillingFirmStatusQueryKey(),
@@ -36,6 +38,9 @@ export function BillingBanner() {
       staleTime: 60_000,
     },
   });
+
+  // super_admin is the platform owner — never show billing nags to them
+  if (user?.role === "super_admin") return null;
 
   const data = q.data?.data;
   if (!data || !data.has_firm) return null;
