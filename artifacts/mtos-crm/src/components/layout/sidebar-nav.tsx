@@ -5,81 +5,92 @@ import {
   Building2, ShieldCheck, FileSearch, Clock, Wand2, Brain, Plug, Newspaper,
   TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings,
   Activity, CreditCard, Phone, Skull, Workflow, Eye, BookOpen, Library,
-  Webhook, Wrench, Search,
+  Webhook, Wrench, Search, ListChecks,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
 
 type NavItem = { name: string; href: string; icon: typeof LayoutDashboard; adminOnly?: boolean };
-type NavSection = { section: string; emoji?: string; items: NavItem[] };
+type NavSection = { section: string; items: NavItem[] };
 
 export const navigation: NavSection[] = [
   // ── 1. HOME ────────────────────────────────────────────────────────────────
-  // The first thing anyone opens. High-level views only.
+  // High-level overview — the first thing anyone opens.
   {
     section: "Home",
     items: [
-      { name: "Dashboard",   href: "/",             icon: LayoutDashboard },
-      { name: "Pipeline",    href: "/pipeline",     icon: GitBranch       },
-      { name: "Analytics",   href: "/analytics",    icon: BarChart3       },
-      { name: "User Manual", href: "/user-manual",  icon: BookOpen        },
+      { name: "Dashboard",   href: "/",            icon: LayoutDashboard },
+      { name: "Pipeline",    href: "/pipeline",    icon: GitBranch       },
+      { name: "Analytics",   href: "/analytics",   icon: BarChart3       },
+      { name: "User Manual", href: "/user-manual", icon: BookOpen        },
     ],
   },
 
   // ── 2. LEADS & CASES ───────────────────────────────────────────────────────
-  // Everything that touches a claimant — from first contact to case status.
+  // Everything that touches a claimant — intake, case status, calls.
   {
     section: "Leads & Cases",
     items: [
-      { name: "All Leads",     href: "/leads",        icon: Users      },
-      { name: "New Lead",      href: "/leads/new",    icon: PlusCircle },
-      { name: "Import Leads",  href: "/lead-import",  icon: FileUp     },
-      { name: "Cases",         href: "/cases",        icon: Briefcase  },
-      { name: "Calls",         href: "/calls",        icon: Phone      },
-      { name: "Paralegals",    href: "/paralegals",   icon: UserCheck  },
-      { name: "Job Queue",     href: "/job-queue",    icon: Activity   },
-      { name: "Review Queue",  href: "/review-queue", icon: ShieldAlert },
+      { name: "All Leads",    href: "/leads",       icon: Users      },
+      { name: "New Lead",     href: "/leads/new",   icon: PlusCircle },
+      { name: "Import Leads", href: "/lead-import", icon: FileUp     },
+      { name: "Cases",        href: "/cases",       icon: Briefcase  },
+      { name: "Calls",        href: "/calls",       icon: Phone      },
     ],
   },
 
   // ── 3. DOCUMENTS ──────────────────────────────────────────────────────────
-  // All document handling from raw scan → AI draft → signed template.
-  // (Previously split into "Documents" + "Document Workflow" — merged here.)
+  // From raw scan → AI draft → signed template.
   {
     section: "Documents",
     items: [
-      { name: "All Documents", href: "/documents",          icon: FileText     },
-      { name: "OCR Inbox",     href: "/ocr-inbox",          icon: Inbox        },
-      { name: "Doc Review",    href: "/doc-review",         icon: FileSearch   },
-      { name: "AI Drafting",   href: "/drafting",           icon: Wand2        },
+      { name: "All Documents", href: "/documents",          icon: FileText      },
+      { name: "OCR Inbox",     href: "/ocr-inbox",          icon: Inbox         },
+      { name: "Doc Review",    href: "/doc-review",         icon: FileSearch    },
+      { name: "AI Drafting",   href: "/drafting",           icon: Wand2         },
       { name: "Templates",     href: "/document-templates", icon: FileSignature },
     ],
   },
 
-  // ── 4. FORMS & MARKETING ──────────────────────────────────────────────────
-  // Lead-gen forms, ad intelligence, and marketing research in one place.
+  // ── 4. OPERATIONS ─────────────────────────────────────────────────────────
+  // Day-to-day workflow — who's working on what, what needs attention.
   {
-    section: "Forms & Marketing",
+    section: "Operations",
+    items: [
+      { name: "Review Queue", href: "/review-queue", icon: ShieldAlert },
+      { name: "Job Queue",    href: "/job-queue",    icon: Activity    },
+      { name: "Paralegals",   href: "/paralegals",   icon: UserCheck   },
+      { name: "Timeline",     href: "/timeline",     icon: Clock       },
+    ],
+  },
+
+  // ── 5. LEAD GEN & RESEARCH ────────────────────────────────────────────────
+  // Building intake forms, studying competitors, and staying current on news.
+  {
+    section: "Lead Gen & Research",
     items: [
       { name: "Form Engine",       href: "/form-engine",       icon: AppWindow  },
-      { name: "Web Forms",         href: "/web-forms",         icon: Grid3x3    },
+      { name: "Web Forms",         href: "/web-forms",         icon: ListChecks },
       { name: "Form API",          href: "/forms-api",         icon: Library    },
       { name: "Competitive Intel", href: "/competitive-intel", icon: Eye        },
       { name: "Ads Libraries",     href: "/ads-libraries",     icon: Search     },
+      { name: "Tort News",         href: "/news",              icon: Newspaper  },
+      { name: "Financial News",    href: "/financial-news",    icon: TrendingUp },
     ],
   },
 
-  // ── 5. RESEARCH & NEWS ────────────────────────────────────────────────────
-  // Staying current on tort litigation and financial news.
+  // ── 6. AI & CLINICAL ──────────────────────────────────────────────────────
+  // Smart tools: provider lookup, case qualification, predictive scoring.
   {
-    section: "Research & News",
+    section: "AI & Clinical",
     items: [
-      { name: "Tort News",      href: "/news",           icon: Newspaper  },
-      { name: "Financial News", href: "/financial-news", icon: TrendingUp },
+      { name: "NPI Lookup",      href: "/npi-lookup",      icon: Stethoscope },
+      { name: "Decision Engine", href: "/decision-engine", icon: Scale       },
+      { name: "Praxis AI",       href: "/predictive",      icon: Brain       },
     ],
   },
 
-  // ── 6. AUTOMATION ─────────────────────────────────────────────────────────
+  // ── 7. AUTOMATION ─────────────────────────────────────────────────────────
   // Workflows that run without a human pressing a button.
   {
     section: "Automation",
@@ -91,32 +102,20 @@ export const navigation: NavSection[] = [
     ],
   },
 
-  // ── 7. TOOLS ──────────────────────────────────────────────────────────────
-  // One-off lookups and specialist engines used on demand.
-  {
-    section: "Tools",
-    items: [
-      { name: "NPI Lookup",      href: "/npi-lookup",      icon: Stethoscope },
-      { name: "Decision Engine", href: "/decision-engine", icon: Scale       },
-      { name: "Praxis AI",       href: "/predictive",      icon: Brain       },
-      { name: "Timeline",        href: "/timeline",        icon: Clock       },
-    ],
-  },
-
   // ── 8. SETTINGS ───────────────────────────────────────────────────────────
-  // Configuration and admin — things you set once and rarely touch.
+  // Configuration you set once and rarely touch.
   {
     section: "Settings",
     items: [
-      { name: "Firm Settings",     href: "/firm-settings",        icon: Building   },
-      { name: "Team Members",      href: "/users",                icon: UserCog    },
-      { name: "Vendors",           href: "/vendors",              icon: Building2  },
-      { name: "Buyers",            href: "/buyers",               icon: Building   },
-      { name: "Assignment Matrix", href: "/template-assignments", icon: Grid3x3    },
-      { name: "Workflow Settings", href: "/workflow-settings",    icon: Settings   },
-      { name: "Integrations",      href: "/integrations",         icon: Plug       },
-      { name: "Billing",           href: "/billing",              icon: CreditCard },
-      { name: "Compliance",        href: "/compliance",           icon: Shield     },
+      { name: "Firm Settings",     href: "/firm-settings",        icon: Building    },
+      { name: "Team Members",      href: "/users",                icon: UserCog     },
+      { name: "Vendors",           href: "/vendors",              icon: Building2   },
+      { name: "Buyers",            href: "/buyers",               icon: Building    },
+      { name: "Assignment Matrix", href: "/template-assignments", icon: Grid3x3     },
+      { name: "Workflow Settings", href: "/workflow-settings",    icon: Settings    },
+      { name: "Integrations",      href: "/integrations",         icon: Plug        },
+      { name: "Billing",           href: "/billing",              icon: CreditCard  },
+      { name: "Compliance",        href: "/compliance",           icon: Shield      },
       { name: "Security",          href: "/security",             icon: ShieldCheck },
     ],
   },
