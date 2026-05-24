@@ -5,13 +5,13 @@ import {
   Building2, ShieldCheck, FileSearch, Clock, Wand2, Brain, Plug, Newspaper,
   TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings,
   Activity, CreditCard, Phone, Workflow, Eye, BookOpen, Library,
-  Webhook, Wrench, Search, ListChecks, Bot,
+  Webhook, Wrench, Search, ListChecks, Bot, Skull,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
 
-type NavItem = { name: string; href: string; icon: typeof LayoutDashboard };
-type NavSection = { section: string; items: NavItem[] };
+type NavItem = { name: string; href: string; icon: typeof LayoutDashboard; superAdminOnly?: boolean };
+type NavSection = { section: string; items: NavItem[]; superAdminOnly?: boolean };
 
 export const navigation: NavSection[] = [
   // ── 1. HOME ────────────────────────────────────────────────────────────────
@@ -79,20 +79,12 @@ export const navigation: NavSection[] = [
     ],
   },
 
-  // ── 6. AI AGENTS ──────────────────────────────────────────────────────────
-  // Autonomous agents that work cases, intake leads, and run tasks.
-  {
-    section: "AI Agents",
-    items: [
-      { name: "AI Agents", href: "/ai-agents", icon: Bot },
-    ],
-  },
-
-  // ── 7. AI & CLINICAL ──────────────────────────────────────────────────────
-  // Smart tools: provider lookup, case qualification, predictive scoring.
+  // ── 6. AI AGENTS & CLINICAL ───────────────────────────────────────────────
+  // Autonomous agents, provider lookup, case qualification, predictive scoring.
   {
     section: "AI & Clinical",
     items: [
+      { name: "AI Agents",       href: "/ai-agents",       icon: Bot         },
       { name: "NPI Lookup",      href: "/npi-lookup",      icon: Stethoscope },
       { name: "Decision Engine", href: "/decision-engine", icon: Scale       },
       { name: "Praxis AI",       href: "/predictive",      icon: Brain       },
@@ -129,6 +121,16 @@ export const navigation: NavSection[] = [
     ],
   },
 
+  // ── 9. BOS-OMEGA ──────────────────────────────────────────────────────────
+  // Owner-only control panel. Never visible to any role below super_admin.
+  {
+    section: "BOS-OMEGA",
+    superAdminOnly: true,
+    items: [
+      { name: "Dark Room", href: "/dark-room", icon: Skull, superAdminOnly: true },
+    ],
+  },
+
 ];
 
 interface SidebarNavProps {
@@ -137,10 +139,19 @@ interface SidebarNavProps {
 
 export function SidebarNav({ onNavigate }: SidebarNavProps) {
   const [location] = useLocation();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
+
+  const visibleNav = navigation
+    .filter((g) => !g.superAdminOnly || isSuperAdmin)
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((i) => !i.superAdminOnly || isSuperAdmin),
+    }));
 
   return (
     <nav className="flex-1 overflow-y-auto px-2 py-2" aria-label="Primary">
-      {navigation.map((group) => (
+      {visibleNav.map((group) => (
           <div key={group.section} className="mb-1">
             <div
               className="px-2 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40"
