@@ -78,3 +78,9 @@ id = "hQJUwPhud5obdPTEspR6k"
 uri = "file://MassTortVelocity_WhitePaper.pdf"
 type = "pdf"
 title = "Mass Tort Velocity — Sales White Paper"
+
+[[outputs]]
+id = "sbE-NSMcCoWDCyI5YZOlH"
+uri = "file://mtos-crm.tar.gz"
+type = "unspecified"
+title = "Mass Tort OS — Full Source (tar.gz)"
