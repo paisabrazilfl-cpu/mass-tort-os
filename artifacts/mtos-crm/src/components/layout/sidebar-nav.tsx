@@ -56,61 +56,68 @@ export const navigation: NavSection[] = [
     ],
   },
 
-  // ── 4. RESEARCH & NEWS ────────────────────────────────────────────────────
-  // Watching what competitors advertise + staying current on tort news.
-  // (Competitive Intel + Ads Libraries moved here from different sections.)
+  // ── 4. FORMS & MARKETING ──────────────────────────────────────────────────
+  // Lead-gen forms, ad intelligence, and marketing research in one place.
   {
-    section: "Research & News",
+    section: "Forms & Marketing",
     items: [
-      { name: "Competitive Intel", href: "/competitive-intel",  icon: Eye       },
-      { name: "Ads Libraries",     href: "/ads-libraries",      icon: Search    },
-      { name: "Tort News",         href: "/news",               icon: Newspaper },
-      { name: "Financial News",    href: "/financial-news",     icon: TrendingUp },
+      { name: "Form Engine",       href: "/form-engine",       icon: AppWindow  },
+      { name: "Web Forms",         href: "/web-forms",         icon: Grid3x3    },
+      { name: "Form API",          href: "/forms-api",         icon: Library    },
+      { name: "Competitive Intel", href: "/competitive-intel", icon: Eye        },
+      { name: "Ads Libraries",     href: "/ads-libraries",     icon: Search     },
     ],
   },
 
-  // ── 5. AUTOMATION ─────────────────────────────────────────────────────────
+  // ── 5. RESEARCH & NEWS ────────────────────────────────────────────────────
+  // Staying current on tort litigation and financial news.
+  {
+    section: "Research & News",
+    items: [
+      { name: "Tort News",      href: "/news",           icon: Newspaper  },
+      { name: "Financial News", href: "/financial-news", icon: TrendingUp },
+    ],
+  },
+
+  // ── 6. AUTOMATION ─────────────────────────────────────────────────────────
   // Workflows that run without a human pressing a button.
   {
     section: "Automation",
     items: [
-      { name: "Automations",   href: "/automations",          icon: Workflow },
-      { name: "Self-Heal",     href: "/self-heal",            icon: Wrench   },
-      { name: "Webhook Log",   href: "/automation-deliveries", icon: Webhook  },
-      { name: "API Setup",     href: "/n8n-setup",            icon: Plug     },
+      { name: "Automations",  href: "/automations",           icon: Workflow },
+      { name: "Self-Heal",    href: "/self-heal",             icon: Wrench   },
+      { name: "Webhook Log",  href: "/automation-deliveries", icon: Webhook  },
+      { name: "API Setup",    href: "/n8n-setup",             icon: Plug     },
     ],
   },
 
-  // ── 6. TOOLS ──────────────────────────────────────────────────────────────
+  // ── 7. TOOLS ──────────────────────────────────────────────────────────────
   // One-off lookups and specialist engines used on demand.
   {
     section: "Tools",
     items: [
-      { name: "NPI Lookup",       href: "/npi-lookup",     icon: Stethoscope },
-      { name: "Form Engine",      href: "/form-engine",    icon: AppWindow   },
-      { name: "Decision Engine",  href: "/decision-engine", icon: Scale      },
-      { name: "Praxis AI",        href: "/predictive",     icon: Brain       },
-      { name: "Timeline",         href: "/timeline",       icon: Clock       },
+      { name: "NPI Lookup",      href: "/npi-lookup",      icon: Stethoscope },
+      { name: "Decision Engine", href: "/decision-engine", icon: Scale       },
+      { name: "Praxis AI",       href: "/predictive",      icon: Brain       },
+      { name: "Timeline",        href: "/timeline",        icon: Clock       },
     ],
   },
 
-  // ── 7. SETTINGS ───────────────────────────────────────────────────────────
+  // ── 8. SETTINGS ───────────────────────────────────────────────────────────
   // Configuration and admin — things you set once and rarely touch.
   {
     section: "Settings",
     items: [
-      { name: "Firm Settings",      href: "/firm-settings",        icon: Building   },
-      { name: "Team Members",       href: "/users",                icon: UserCog    },
-      { name: "Vendors",            href: "/vendors",              icon: Building2  },
-      { name: "Buyers",             href: "/buyers",               icon: Building   },
-      { name: "Web Forms",          href: "/web-forms",            icon: AppWindow  },
-      { name: "Assignment Matrix",  href: "/template-assignments", icon: Grid3x3    },
-      { name: "Workflow Settings",  href: "/workflow-settings",    icon: Settings   },
-      { name: "Form API",           href: "/forms-api",            icon: Library    },
-      { name: "Integrations",       href: "/integrations",         icon: Plug       },
-      { name: "Billing",            href: "/billing",              icon: CreditCard },
-      { name: "Compliance",         href: "/compliance",           icon: Shield     },
-      { name: "Security",           href: "/security",             icon: ShieldCheck },
+      { name: "Firm Settings",     href: "/firm-settings",        icon: Building   },
+      { name: "Team Members",      href: "/users",                icon: UserCog    },
+      { name: "Vendors",           href: "/vendors",              icon: Building2  },
+      { name: "Buyers",            href: "/buyers",               icon: Building   },
+      { name: "Assignment Matrix", href: "/template-assignments", icon: Grid3x3    },
+      { name: "Workflow Settings", href: "/workflow-settings",    icon: Settings   },
+      { name: "Integrations",      href: "/integrations",         icon: Plug       },
+      { name: "Billing",           href: "/billing",              icon: CreditCard },
+      { name: "Compliance",        href: "/compliance",           icon: Shield     },
+      { name: "Security",          href: "/security",             icon: ShieldCheck },
     ],
   },
 
