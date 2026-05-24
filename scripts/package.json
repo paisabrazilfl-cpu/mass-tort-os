@@ -6,12 +6,15 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "backfill-fax-results-lead-id": "tsx ./src/backfill-fax-results-lead-id.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "monitor:setup": "playwright install chromium",
+    "monitor": "tsx ./src/monitor.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "@types/pdfkit": "catalog:",
     "@types/pg": "^8.18.0",
+    "playwright": "^1.52.0",
     "tsx": "catalog:"
   },
   "dependencies": {

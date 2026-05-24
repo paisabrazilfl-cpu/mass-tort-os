@@ -43,6 +43,7 @@ import adminEventCatalogRouter from "./admin-event-catalog";
 import adminWebhookDeliveriesRouter from "./admin-webhook-deliveries";
 import formsApiDirectoryRouter from "./forms-api-directory";
 import automationWebhookRouter from "./automation-webhook";
+import aiObserverRouter from "./ai-observer";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -185,5 +186,6 @@ router.use("/admin/event-catalog", adminEventCatalogRouter);
 router.use("/admin/webhook-deliveries", adminWebhookDeliveriesRouter);
 router.use("/admin/forms-api-directory", formsApiDirectoryRouter);
 router.use("/automations", automationsRouter);
+router.use("/ai-observer", aiObserverRouter);
 
 export default router;
