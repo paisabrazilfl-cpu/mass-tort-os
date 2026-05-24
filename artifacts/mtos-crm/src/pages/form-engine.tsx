@@ -13,7 +13,7 @@ import {
   FormConfig,
   CustomField
 } from "@workspace/api-client-react";
-import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw, ExternalLink, Scale, Lock, ShieldCheck, FileCheck2, UserCheck2 } from "lucide-react";
+import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw, ExternalLink, Scale, Lock, ShieldCheck, FileCheck2, UserCheck2, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -236,6 +236,112 @@ export default function FormEngine() {
   const [leadBgCheckResult, setLeadBgCheckResult] = useState<any>(null);
 
   // Handlers
+  const handleDownloadEmbedKit = () => {
+    const origin = window.location.origin;
+    const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+
+    const sections = configs.map((config: FormConfig) => {
+      const embedCode = `<script src="${origin}/api/forms-public/embed/${config.id}"></script>\n<div id="mtos-form"></div>`;
+      const standaloneHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${config.label} — Intake Form</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem 1rem; }
+    .wrapper { width: 100%; max-width: 620px; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    ${embedCode}
+  </div>
+</body>
+</html>`;
+
+      return { config, embedCode, standaloneHtml };
+    });
+
+    const indexHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MTOS Intake Form Embed Kit</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #1e293b; padding: 2rem; max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: .25rem; }
+    .meta { color: #64748b; font-size: .875rem; margin-bottom: 2rem; }
+    .badge-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 2.5rem; }
+    .badge { display: inline-flex; align-items: center; gap: .375rem; border-radius: 9999px; border: 1px solid; padding: .25rem .75rem; font-size: .75rem; font-weight: 500; }
+    .badge-green { border-color: #86efac; background: #f0fdf4; color: #15803d; }
+    .badge-blue  { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
+    .badge-purple{ border-color: #c4b5fd; background: #f5f3ff; color: #6d28d9; }
+    .badge-amber { border-color: #fcd34d; background: #fffbeb; color: #92400e; }
+    .form-section { background: #fff; border: 1px solid #e2e8f0; border-radius: .75rem; padding: 1.5rem; margin-bottom: 1.5rem; }
+    .form-title { font-size: 1.125rem; font-weight: 600; margin-bottom: .25rem; }
+    .form-id { font-family: monospace; font-size: .75rem; color: #94a3b8; margin-bottom: 1rem; }
+    .label { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #64748b; margin-bottom: .5rem; }
+    pre { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: .5rem; padding: 1rem; font-size: .8rem; white-space: pre-wrap; word-break: break-all; margin-bottom: 1rem; }
+    details { margin-top: .75rem; }
+    summary { cursor: pointer; font-size: .8rem; color: #3b82f6; font-weight: 500; }
+    .instructions { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: .5rem; padding: 1rem; font-size: .8rem; color: #1d4ed8; margin-top: .5rem; line-height: 1.6; }
+    h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>MTOS Intake Form Embed Kit</h1>
+  <p class="meta">Generated ${date} · ${origin} · ${sections.length} form${sections.length !== 1 ? "s" : ""}</p>
+
+  <div class="badge-row">
+    <span class="badge badge-green">✓ HIPAA Safe</span>
+    <span class="badge badge-blue">🔒 End-to-End Encrypted</span>
+    <span class="badge badge-purple">✓ TCPA Compliant</span>
+    <span class="badge badge-amber">✓ TrustedForm Certified</span>
+  </div>
+
+  <h2>How to use on a Replit site</h2>
+  <div class="instructions" style="margin-bottom:2rem">
+    1. Pick a form below and copy the <strong>Embed Snippet</strong>.<br/>
+    2. In your Replit site, open the HTML file you want the form to appear on.<br/>
+    3. Paste the snippet where you want the form rendered — inside a <code>&lt;div&gt;</code> or anywhere in <code>&lt;body&gt;</code>.<br/>
+    4. The form loads automatically. Submissions go directly into your MTOS lead pipeline.<br/>
+    <br/>
+    Or use the <strong>Standalone Page HTML</strong> to create a brand-new Replit site for a single form — just create an <code>index.html</code> and paste it in.
+  </div>
+
+  ${sections.map(({ config, embedCode, standaloneHtml }) => `
+  <div class="form-section">
+    <div class="form-title">${config.label}</div>
+    <div class="form-id">${config.id}</div>
+
+    <div class="label">Embed Snippet (paste into any existing page)</div>
+    <pre>${embedCode.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
+
+    <details>
+      <summary>▸ Show standalone page HTML (new Replit site)</summary>
+      <pre style="margin-top:.75rem">${standaloneHtml.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
+    </details>
+  </div>`).join("")}
+</body>
+</html>`;
+
+    const blob = new Blob([indexHtml], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mtos-intake-embed-kit.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    toast({ title: "Embed kit downloaded", description: `${configs.length} form${configs.length !== 1 ? "s" : ""} · open the HTML file to see all snippets.` });
+  };
+
   const handleCopyEmbed = (configId: string) => {
     // Embed JS is served by the public router (forms-public.ts) — the
     // auth-gated /api/forms/* router intentionally does NOT mount
@@ -331,6 +437,19 @@ export default function FormEngine() {
         </TabsList>
 
         <TabsContent value="builder" className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">
+                {configs.length > 0 ? `${configs.length} intake form${configs.length !== 1 ? "s" : ""} configured` : "No forms configured yet"}
+              </p>
+            </div>
+            {configs.length > 0 && (
+              <Button variant="outline" onClick={handleDownloadEmbedKit} className="gap-2">
+                <Download className="h-4 w-4" />
+                Download All Embed Codes
+              </Button>
+            )}
+          </div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {isLoadingConfigs ? (
               Array.from({ length: 6 }).map((_, i) => (
