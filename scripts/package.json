@@ -11,11 +11,13 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "@types/pdfkit": "catalog:",
+    "@types/pg": "^8.18.0",
     "tsx": "catalog:"
   },
   "dependencies": {
     "@workspace/db": "workspace:*",
     "drizzle-orm": "catalog:",
+    "pg": "^8.20.0",
     "pdfkit": "^0.18.0"
   }
 }
