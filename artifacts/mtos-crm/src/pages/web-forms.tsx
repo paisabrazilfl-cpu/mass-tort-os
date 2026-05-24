@@ -266,18 +266,16 @@ export default function WebFormsPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
-            <AppWindow className="h-6 w-6" /> Web Forms
+            <AppWindow className="h-6 w-6" /> Intake Forms
           </h1>
           <p className="text-muted-foreground mt-1 max-w-3xl text-sm">
-            Public, embeddable lead-capture forms — one per tort. Submissions
-            run through the same validation pipeline as the operator intake
-            (email + address validation, eligibility rules, audit log) and
-            land as leads with status{" "}
+            HIPAA-safe, encrypted public intake forms — one per tort campaign. Every
+            submission runs through the full qualification pipeline (email + address
+            validation, eligibility rules, audit log) and lands as a lead with status{" "}
             <code className="rounded bg-muted px-1 py-0.5 text-xs">
               web_form_intake
             </code>
-            . If a tort's form is disabled below, the public submit endpoint
-            returns 403 and no lead is created.
+            . Disabling a form immediately blocks public submissions with a 403.
           </p>
         </div>
       </div>

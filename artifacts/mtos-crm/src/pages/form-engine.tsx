@@ -13,7 +13,7 @@ import {
   FormConfig,
   CustomField
 } from "@workspace/api-client-react";
-import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw, ExternalLink, Scale } from "lucide-react";
+import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw, ExternalLink, Scale, Lock, ShieldCheck, FileCheck2, UserCheck2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -297,17 +297,36 @@ export default function FormEngine() {
     <div className="flex-1 space-y-8 p-8 pt-6 max-w-7xl mx-auto w-full">
       <div className="flex items-center justify-between">
         <div className="space-y-1">
-          <h2 className="text-3xl font-bold tracking-tight">Form Engine</h2>
+          <h2 className="text-3xl font-bold tracking-tight">Intake Form</h2>
           <p className="text-muted-foreground">
-            Generate and manage embeddable intake forms with TCPA + TrustedForm compliance.
+            Build and manage claimant-facing qualifying intake forms — every question is designed to drill down and determine true case eligibility.
           </p>
+        </div>
+      </div>
+
+      {/* Security trust strip */}
+      <div className="flex flex-wrap gap-2">
+        <div className="flex items-center gap-1.5 rounded-full border border-green-500/30 bg-green-500/8 px-3 py-1 text-xs font-medium text-green-700 dark:text-green-400">
+          <ShieldCheck className="h-3.5 w-3.5" /> HIPAA Safe
+        </div>
+        <div className="flex items-center gap-1.5 rounded-full border border-blue-500/30 bg-blue-500/8 px-3 py-1 text-xs font-medium text-blue-700 dark:text-blue-400">
+          <Lock className="h-3.5 w-3.5" /> End-to-End Encrypted
+        </div>
+        <div className="flex items-center gap-1.5 rounded-full border border-purple-500/30 bg-purple-500/8 px-3 py-1 text-xs font-medium text-purple-700 dark:text-purple-400">
+          <FileCheck2 className="h-3.5 w-3.5" /> TCPA Compliant
+        </div>
+        <div className="flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/8 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+          <Shield className="h-3.5 w-3.5" /> TrustedForm Certified
+        </div>
+        <div className="flex items-center gap-1.5 rounded-full border border-slate-400/30 bg-slate-500/8 px-3 py-1 text-xs font-medium text-slate-600 dark:text-slate-400">
+          <UserCheck2 className="h-3.5 w-3.5" /> Claimant Qualification Engine
         </div>
       </div>
 
       <Tabs defaultValue="builder" className="w-full">
         <TabsList className="grid w-full grid-cols-3 mb-8 max-w-2xl">
-          <TabsTrigger value="builder">Form Builder</TabsTrigger>
-          <TabsTrigger value="validation">Validation Tools</TabsTrigger>
+          <TabsTrigger value="builder">Intake Builder</TabsTrigger>
+          <TabsTrigger value="validation">Claimant Validation</TabsTrigger>
           <TabsTrigger value="background">Background Check</TabsTrigger>
         </TabsList>
 

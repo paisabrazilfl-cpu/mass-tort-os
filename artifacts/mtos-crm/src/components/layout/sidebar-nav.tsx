@@ -69,8 +69,8 @@ export const navigation: NavSection[] = [
   {
     section: "Lead Gen & Research",
     items: [
-      { name: "Form Engine",       href: "/form-engine",       icon: AppWindow  },
-      { name: "Web Forms",         href: "/web-forms",         icon: ListChecks },
+      { name: "Intake Form",       href: "/form-engine",       icon: AppWindow  },
+      { name: "Public Forms",      href: "/web-forms",         icon: ListChecks },
       { name: "Form API",          href: "/forms-api",         icon: Library    },
       { name: "Competitive Intel", href: "/competitive-intel", icon: Eye        },
       { name: "Ads Libraries",     href: "/ads-libraries",     icon: Search     },
