@@ -5,7 +5,7 @@ import {
   Building2, ShieldCheck, FileSearch, Clock, Wand2, Brain, Plug, Newspaper,
   TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings,
   Activity, CreditCard, Phone, Workflow, Eye, BookOpen, Library,
-  Webhook, Wrench, Search, ListChecks, Bot, Skull,
+  Webhook, Wrench, Search, ListChecks, Bot, Skull, Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -84,6 +84,7 @@ export const navigation: NavSection[] = [
   {
     section: "AI & Clinical",
     items: [
+      { name: "Abby",            href: "/abby",            icon: Sparkles    },
       { name: "AI Agents",       href: "/ai-agents",       icon: Bot         },
       { name: "NPI Lookup",      href: "/npi-lookup",      icon: Stethoscope },
       { name: "Decision Engine", href: "/decision-engine", icon: Scale       },

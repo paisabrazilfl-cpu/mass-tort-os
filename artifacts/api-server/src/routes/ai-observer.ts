@@ -86,6 +86,7 @@ const NAV_STRUCTURE = [
   {
     section: "AI & Clinical",
     items: [
+      { name: "Abby",            href: "/abby" },
       { name: "AI Agents",       href: "/ai-agents" },
       { name: "NPI Lookup",      href: "/npi-lookup" },
       { name: "Decision Engine", href: "/decision-engine" },

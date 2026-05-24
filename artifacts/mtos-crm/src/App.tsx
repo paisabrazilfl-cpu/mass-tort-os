@@ -67,6 +67,7 @@ import UserManualPage from "@/pages/user-manual";
 import AdsLibrariesPage from "@/pages/ads-libraries";
 import AutomationDeliveriesPage from "@/pages/automation-deliveries";
 import AiAgentsPage from "@/pages/ai-agents";
+import AbbyPage from "@/pages/abby";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
 // 401s are handled separately by api-fetch's auth-failure callback.
@@ -153,6 +154,7 @@ function AuthedRoutes() {
           <Route path="/automation-deliveries" component={AutomationDeliveriesPage} />
           <Route path="/automations/:id" component={AutomationEditorPage} />
           <Route path="/ai-agents" component={AiAgentsPage} />
+          <Route path="/abby" component={AbbyPage} />
           <Route component={NotFound} />
         </Switch>
       </RouteErrorBoundary>
