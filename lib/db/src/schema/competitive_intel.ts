@@ -2,9 +2,19 @@ import { pgTable, serial, text, timestamp, integer, jsonb, index, uniqueIndex } 
 import { firmsTable } from "./firms";
 import { usersTable } from "./users";
 
+/**
+ * Supported platforms for competitive intelligence tracking.
+ *  - google  : Google Ads Transparency Center (via SerpAPI)
+ *  - meta    : Meta/Facebook Ad Library (graph.facebook.com/ads_archive)
+ *  - tiktok  : TikTok Commercial Content Library (link-only; their Research
+ *              API requires special application approval)
+ */
+
 export const competitiveIntelAdvertisersTable = pgTable("competitive_intel_advertisers", {
   id: serial("id").primaryKey(),
   firm_id: integer("firm_id").notNull().references(() => firmsTable.id),
+  /** "google" | "meta" | "tiktok" — defaults to "google" for pre-existing rows */
+  platform: text("platform").notNull().default("google"),
   advertiser_id: text("advertiser_id").notNull(),
   label: text("label").notNull(),
   notes: text("notes"),
@@ -14,7 +24,11 @@ export const competitiveIntelAdvertisersTable = pgTable("competitive_intel_adver
   created_at: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   firmIdx: index("competitive_intel_advertisers_firm_idx").on(t.firm_id, t.created_at),
-  uniqPerFirm: uniqueIndex("competitive_intel_advertisers_firm_advid_uniq").on(t.firm_id, t.advertiser_id),
+  // Unique per (firm, platform, advertiser_id) — same firm can be on both
+  // Google and Meta simultaneously.
+  uniqPerFirmPlatform: uniqueIndex("competitive_intel_advertisers_firm_platform_advid_uniq").on(
+    t.firm_id, t.platform, t.advertiser_id,
+  ),
 }));
 
 export const competitiveIntelSnapshotsTable = pgTable("competitive_intel_snapshots", {
