@@ -59,6 +59,8 @@ export interface AttemptContext {
   totalAttempts: number;
   /** The previous attempt's failure, or null on the first attempt. */
   previousError: { code: string; message: string; details?: unknown } | null;
+  /** Optional abort signal forwarded to the attempt callback. */
+  abortSignal?: AbortSignal;
 }
 
 /** Audit row recorded for every attempt (success or failure). */

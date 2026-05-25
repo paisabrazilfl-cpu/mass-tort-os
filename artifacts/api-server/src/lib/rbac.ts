@@ -242,6 +242,12 @@ export const Permission = {
   // Competitive Intelligence (Google Ads Transparency Center via SerpAPI).
   // Admin-only — surfaces what other plaintiff firms are advertising for.
   COMPETITIVE_INTEL_MANAGE: "competitive_intel:manage",
+
+  // Config Snapshots — take / restore firm-scoped operational config snapshots.
+  SNAPSHOT_MANAGE: "snapshot:manage",
+
+  // AI Reranking — access to the AI-powered lead reranking endpoint.
+  AI_RERANK: "ai:rerank",
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];
