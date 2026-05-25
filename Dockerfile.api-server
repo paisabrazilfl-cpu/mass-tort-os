@@ -5,6 +5,7 @@ ENV NODE_ENV=production
 COPY node_modules ./node_modules
 COPY artifacts/api-server/dist ./artifacts/api-server/dist
 COPY artifacts/api-server/package.json ./artifacts/api-server/
+COPY docs ./docs
 COPY package.json ./
 
 EXPOSE 8080
