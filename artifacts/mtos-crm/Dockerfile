@@ -1,4 +1,4 @@
-FROM node:22-slim AS base
+FROM mirror.gcr.io/library/node:22-slim AS base
 WORKDIR /app
 RUN npm install -g corepack@0.32.0 && corepack enable
 
