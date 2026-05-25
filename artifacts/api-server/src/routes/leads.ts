@@ -1,7 +1,8 @@
 import { Router } from "express";
-import { db, leadsTable, documentsTable } from "@workspace/db";
+import { db, leadsTable, documentsTable, portalUsersTable, portalAuditLogTable } from "@workspace/db";
 import { eq, ilike, and, or, sql, gte, lte, desc } from "drizzle-orm";
 import { badRequest as httpBadRequest, serverError } from "../lib/http-errors";
+import { provisionPortalInvite } from "../lib/portal-invite";
 import {
   ListLeadsQueryParams,
   CreateLeadBody,
@@ -1095,6 +1096,103 @@ router.post(
         telnyx_message_id: result.externalMessageId,
       },
     });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/leads/:id/portal-status
+// CRM view of the client portal account for this lead — used by the
+// PortalStatusCard in lead-detail. Returns null portal_user when no account
+// exists yet (background check hasn't passed or invite hasn't been sent).
+// ---------------------------------------------------------------------------
+router.get(
+  "/:id/portal-status",
+  requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW_ANY),
+  async (req, res) => {
+    const leadId = Number(req.params.id);
+    if (!Number.isFinite(leadId)) {
+      httpBadRequest(res, "Invalid lead identifier");
+      return;
+    }
+
+    const [portalUser] = await db
+      .select({
+        id: portalUsersTable.id,
+        email: portalUsersTable.email,
+        name: portalUsersTable.name,
+        email_verified_at: portalUsersTable.email_verified_at,
+        mfa_enabled: portalUsersTable.mfa_enabled,
+        mfa_verified: portalUsersTable.mfa_verified,
+        last_login_at: portalUsersTable.last_login_at,
+        created_at: portalUsersTable.created_at,
+      })
+      .from(portalUsersTable)
+      .where(eq(portalUsersTable.lead_id, leadId));
+
+    if (!portalUser) {
+      res.json({ portal_user: null, recent_audit: [] });
+      return;
+    }
+
+    // Last 10 audit entries for this portal user (most recent first).
+    const recentAudit = await db
+      .select({
+        action: portalAuditLogTable.action,
+        ip_address: portalAuditLogTable.ip_address,
+        user_agent: portalAuditLogTable.user_agent,
+        created_at: portalAuditLogTable.created_at,
+      })
+      .from(portalAuditLogTable)
+      .where(eq(portalAuditLogTable.portal_user_id, portalUser.id))
+      .orderBy(desc(portalAuditLogTable.created_at))
+      .limit(10);
+
+    res.json({
+      portal_user: {
+        id: portalUser.id,
+        email: portalUser.email,
+        name: portalUser.name,
+        email_verified: !!portalUser.email_verified_at,
+        mfa_enabled: portalUser.mfa_enabled,
+        mfa_verified: portalUser.mfa_verified,
+        last_login_at: portalUser.last_login_at,
+        created_at: portalUser.created_at,
+      },
+      recent_audit: recentAudit,
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/leads/:id/resend-portal-invite
+// Re-issues a fresh signup token and re-sends the portal invite email.
+// Idempotent — safe to call even if a portal account already exists.
+// ---------------------------------------------------------------------------
+router.post(
+  "/:id/resend-portal-invite",
+  requirePermission(Permission.LEAD_UPDATE),
+  auditAction("resend_portal_invite"),
+  async (req, res) => {
+    const leadId = Number(req.params.id);
+    if (!Number.isFinite(leadId)) {
+      httpBadRequest(res, "Invalid lead identifier");
+      return;
+    }
+
+    const [lead] = await db
+      .select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(eq(leadsTable.id, leadId));
+
+    if (!lead) {
+      notFound(res, "Lead not found");
+      return;
+    }
+
+    // Fire-and-forget — catches its own errors internally.
+    void provisionPortalInvite(leadId);
+
+    res.json({ status: "ok", message: "Portal invite queued" });
   },
 );
 
