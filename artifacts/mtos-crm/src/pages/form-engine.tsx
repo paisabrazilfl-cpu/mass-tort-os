@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { 
   useGetFormConfigs,
@@ -13,7 +13,8 @@ import {
   FormConfig,
   CustomField
 } from "@workspace/api-client-react";
-import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw, ExternalLink, Scale, Lock, ShieldCheck, FileCheck2, UserCheck2, Download } from "lucide-react";
+import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw, ExternalLink, Scale, Lock, ShieldCheck, FileCheck2, UserCheck2, Download, Loader2, Sparkles } from "lucide-react";
+import { apiFetchRaw } from "@/lib/api-fetch";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -208,7 +209,8 @@ function PacerResultSection({ pacer }: { pacer?: PacerOutcome | null }) {
 
 export default function FormEngine() {
   const { toast } = useToast();
-  
+  const queryClient = useQueryClient();
+
   // Data Fetching
   const { data: formConfigsData, isLoading: isLoadingConfigs } = useGetFormConfigs();
   const configs = formConfigsData?.tort_campaigns || [];
@@ -218,6 +220,9 @@ export default function FormEngine() {
   const validateAddress = useValidateAddress();
   const runBackgroundCheck = useRunBackgroundCheck();
   const runLeadBackgroundCheck = useRunLeadBackgroundCheck();
+
+  // States: Seed
+  const [seeding, setSeeding] = useState(false);
 
   // States: Email
   const [emailInput, setEmailInput] = useState("");
@@ -342,6 +347,27 @@ export default function FormEngine() {
     toast({ title: "Embed kit downloaded", description: `${configs.length} form${configs.length !== 1 ? "s" : ""} · open the HTML file to see all snippets.` });
   };
 
+  const handleSeedAll = useCallback(async () => {
+    setSeeding(true);
+    try {
+      const res = await apiFetchRaw("/api/forms/web-config/seed-all", { method: "POST" });
+      const data = await res.json() as { updated?: number; not_found?: number };
+      if (res.ok) {
+        toast({
+          title: "Comprehensive questions applied",
+          description: `${data.updated ?? 0} forms seeded with 15–20 deep-qualifying questions each.`,
+        });
+        queryClient.invalidateQueries({ queryKey: getGetFormConfigsQueryKey() });
+      } else {
+        toast({ title: "Seed failed", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Seed failed", variant: "destructive" });
+    } finally {
+      setSeeding(false);
+    }
+  }, [toast, queryClient]);
+
   const handleCopyEmbed = (configId: string) => {
     // Embed JS is served by the public router (forms-public.ts) — the
     // auth-gated /api/forms/* router intentionally does NOT mount
@@ -443,12 +469,26 @@ export default function FormEngine() {
                 {configs.length > 0 ? `${configs.length} intake form${configs.length !== 1 ? "s" : ""} configured` : "No forms configured yet"}
               </p>
             </div>
-            {configs.length > 0 && (
-              <Button variant="outline" onClick={handleDownloadEmbedKit} className="gap-2">
-                <Download className="h-4 w-4" />
-                Download All Embed Codes
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => void handleSeedAll()}
+                disabled={seeding}
+                className="gap-2"
+                title="Write comprehensive 15–20 question intake forms to all 31 campaigns"
+              >
+                {seeding
+                  ? <><Loader2 className="h-4 w-4 animate-spin" /> Seeding…</>
+                  : <><Sparkles className="h-4 w-4" /> Apply Comprehensive Questions</>
+                }
               </Button>
-            )}
+              {configs.length > 0 && (
+                <Button variant="outline" onClick={handleDownloadEmbedKit} className="gap-2">
+                  <Download className="h-4 w-4" />
+                  Download All Embed Codes
+                </Button>
+              )}
+            </div>
           </div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {isLoadingConfigs ? (

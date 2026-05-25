@@ -32,6 +32,7 @@ import { findExistingLeadForIntake } from "../lib/lead-dedup";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { updateWebFormConfig } from "./web-forms";
 import { buildDefaultWebFormConfig } from "../lib/web-form-defaults";
+import { COMPREHENSIVE_FORM_DEFAULTS } from "../lib/comprehensive-form-defaults";
 import type { Request, Response } from "express";
 
 // Unified error envelope helpers — keep responses identical in shape to the
@@ -396,6 +397,42 @@ router.patch(
     } catch (err) {
       logger.error({ err }, "Failed to toggle web form");
       serverError(res, "Failed to toggle web form");
+    }
+  },
+);
+
+/**
+ * POST /forms/web-config/seed-all
+ * One-shot: write all 31 comprehensive form configs to the database.
+ * Only updates rows that already exist (does NOT create new tort configs).
+ * Safe to call multiple times — idempotent overwrite.
+ */
+router.post(
+  "/web-config/seed-all",
+  authMiddleware,
+  requirePermission(Permission.FORMS_CONFIG_MANAGE),
+  auditAction("web_form_config_seed_all"),
+  async (_req, res) => {
+    try {
+      const results: { tort_id: string; status: "updated" | "not_found" }[] = [];
+
+      for (const [tortId, config] of COMPREHENSIVE_FORM_DEFAULTS) {
+        const existing = await getFormConfig(tortId);
+        if (!existing) {
+          results.push({ tort_id: tortId, status: "not_found" });
+          continue;
+        }
+        await updateWebFormConfig(tortId, config, null);
+        results.push({ tort_id: tortId, status: "updated" });
+      }
+
+      const updated = results.filter(r => r.status === "updated").length;
+      const notFound = results.filter(r => r.status === "not_found").length;
+
+      res.json({ ok: true, updated, not_found: notFound, results });
+    } catch (err) {
+      logger.error({ err }, "Failed to seed all web form configs");
+      serverError(res, "Failed to seed web form configs");
     }
   },
 );
