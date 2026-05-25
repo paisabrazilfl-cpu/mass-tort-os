@@ -1,8 +1,8 @@
-app = "mtos-api-server"
+app = "mtos-crm"
 primary_region = "iad"
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "Dockerfile.mtos-crm"
 
 [env]
   NODE_ENV = "production"
@@ -17,13 +17,13 @@ primary_region = "iad"
   processes = ["app"]
 
   [[http_service.checks]]
-    grace_period = "30s"
+    grace_period = "20s"
     interval = "15s"
     method = "GET"
     timeout = "5s"
-    path = "/api/healthz"
+    path = "/"
 
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
-  memory_mb = 1024
+  memory_mb = 512

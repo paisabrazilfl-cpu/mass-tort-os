@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+.git
+.github
+*.log
+.env
+.env.*
+**/.vite
+**/*.tsbuildinfo
+screenshots
+*.pdf
+*.jpg
+*.png
