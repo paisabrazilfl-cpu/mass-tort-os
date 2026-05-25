@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
-import { db, formConfigurationsTable, leadsTable, workflowSettingsTable } from "@workspace/db";
+import { db, formConfigurationsTable, leadsTable, workflowSettingsTable, vendorsTable } from "@workspace/db";
 import type { WebFormConfig, WebFormField, EligibilityRule } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { getFormConfig } from "../lib/form-config-service";
@@ -727,13 +727,20 @@ router.get("/:tortId/preview", async (req, res) => {
     }
     const safeLabel = String(config.label).replace(/[<>&"']/g, "");
     const safeTortId = encodeURIComponent(tortId);
+    // Thread vendor token into the embed.js src so the form's submit fetch includes ?v=TOKEN.
+    const rawVt = typeof req.query.v === "string" ? req.query.v : "";
+    const safeVt = /^[0-9a-f]{32,64}$/i.test(rawVt) ? rawVt : "";
+    const embedSrc = safeVt
+      ? `${baseUrl}/api/web-forms/${safeTortId}/embed.js?v=${safeVt}`
+      : `${baseUrl}/api/web-forms/${safeTortId}/embed.js`;
+    const isVendorLink = Boolean(safeVt);
     const html = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex,nofollow" />
-<title>${safeLabel} — Web Form Preview</title>
+<title>${safeLabel}</title>
 <style>
 html,body{margin:0;padding:0;background:#f8fafc;min-height:100%}
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a}
@@ -745,10 +752,10 @@ body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172
 </head>
 <body>
 <div class="wrap">
-<div class="bar">Preview · responsive · embedded form for <strong>${safeLabel}</strong></div>
+${isVendorLink ? "" : `<div class="bar">Preview · responsive · embedded form for <strong>${safeLabel}</strong></div>`}
 <div class="card"><div id="mtos-web-form"></div></div>
 </div>
-<script src="${baseUrl}/api/web-forms/${safeTortId}/embed.js" defer></script>
+<script src="${embedSrc}" defer></script>
 </body>
 </html>`;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -778,7 +785,10 @@ router.get("/:tortId/embed.js", async (req, res) => {
       notFound(res, "Web form is not enabled for this campaign");
       return;
     }
-    const js = generateWebFormEmbed(tortId, config.label, cfg, baseUrl);
+    // Pass vendor token through so the generated embed includes it in its submit URL.
+    const vt = typeof req.query.v === "string" && /^[0-9a-f]{32,64}$/i.test(req.query.v)
+      ? req.query.v : undefined;
+    const js = generateWebFormEmbed(tortId, config.label, cfg, baseUrl, vt);
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
@@ -821,6 +831,22 @@ router.post("/:tortId/submit", async (req, res) => {
     req.body && typeof req.body === "object"
       ? (req.body as Record<string, unknown>)
       : {};
+
+  // Resolve optional vendor token (?v=TOKEN) and stamp vendor_id on the lead.
+  const vToken = req.query.v;
+  if (typeof vToken === "string" && /^[0-9a-f]{32,64}$/i.test(vToken)) {
+    try {
+      const [vendor] = await db
+        .select({ id: vendorsTable.id })
+        .from(vendorsTable)
+        .where(eq(vendorsTable.portal_token, vToken));
+      if (vendor) {
+        (body as Record<string, unknown>).vendor_id = vendor.id;
+      }
+    } catch (err) {
+      logger.warn({ err }, "web-form vendor token resolution failed — lead will be unattributed");
+    }
+  }
 
   // Audit the attempt regardless of outcome (TCPA / abuse trail).
   void auditLog("web_form_submission_attempt", tortId, "web_form_embed", {
@@ -888,6 +914,7 @@ function generateWebFormEmbed(
   label: string,
   cfg: WebFormConfig,
   baseUrl: string,
+  vendorToken?: string,
 ): string {
   const data = {
     api: `${baseUrl}/api/web-forms`,
@@ -897,6 +924,7 @@ function generateWebFormEmbed(
     introSubhead: cfg.intro_subhead,
     fields: cfg.fields,
     rules: cfg.eligibility_rules,
+    vt: vendorToken ?? "",
   };
   const json = JSON.stringify(data);
   // Note: the embed runtime is intentionally small (~3KB) and dependency-free
@@ -1004,7 +1032,7 @@ function init(){
         return;
       }
     }
-    fetch(DATA.api+"/"+DATA.tortId+"/submit",{
+    fetch(DATA.api+"/"+DATA.tortId+"/submit"+(DATA.vt?"?v="+encodeURIComponent(DATA.vt):""),{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify(payload)

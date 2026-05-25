@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomBytes } from "node:crypto";
 import { db, vendorsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { badRequest, notFound } from "../lib/http-errors";
@@ -11,6 +12,14 @@ import {
 } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
 import { Permission, requirePermission, auditAction } from "../lib/rbac";
+
+function generatePortalToken(): string {
+  return randomBytes(16).toString("hex");
+}
+
+function buildInternalCode(id: number): string {
+  return `V-${String(id).padStart(3, "0")}`;
+}
 
 const router = Router();
 
@@ -39,11 +48,19 @@ router.post("/", requirePermission(Permission.VENDORS_MANAGE), auditAction("crea
       type: parsed.data.type ?? "lead_gen",
       status: parsed.data.status ?? "active",
       notes: parsed.data.notes ?? null,
+      portal_token: generatePortalToken(),
     })
     .returning();
 
-  logger.info({ vendorId: vendor.id }, "Vendor created");
-  res.status(201).json(vendor);
+  // Stamp internal_code now that we know the ID (e.g. V-001)
+  const [updated] = await db
+    .update(vendorsTable)
+    .set({ internal_code: buildInternalCode(vendor.id) })
+    .where(eq(vendorsTable.id, vendor.id))
+    .returning();
+
+  logger.info({ vendorId: vendor.id, internal_code: updated.internal_code }, "Vendor created");
+  res.status(201).json(updated);
 });
 
 router.get("/:id", requirePermission(Permission.VENDORS_VIEW), async (req, res) => {

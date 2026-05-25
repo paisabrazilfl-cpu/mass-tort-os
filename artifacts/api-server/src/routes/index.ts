@@ -45,6 +45,7 @@ import formsApiDirectoryRouter from "./forms-api-directory";
 import automationWebhookRouter from "./automation-webhook";
 import aiObserverRouter from "./ai-observer";
 import aiChatRouter from "./ai-chat";
+import vendorPortalRouter from "./vendor-portal";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -64,6 +65,7 @@ markPublic(healthRouter, "health");
 markPublic(formsPublicRouter, "forms-public");
 markPublic(webFormsRouter, "web-forms");
 markPublic(webhooksRouter, "webhooks");
+markPublic(vendorPortalRouter, "vendor-portal");
 // Automation webhook triggers: slug+secret is the credential, no Bearer.
 // Already marked public inside automation-webhook.ts via markPublic().
 // Label alias kept for the route-matrix validator's label uniqueness check.
@@ -140,6 +142,8 @@ router.use("/automations/webhook", automationWebhookRouter);
 // reports the correct mount path). They are public — bearer-gated per
 // handler against the active vapi integration row.
 router.use("/vapi-tools", vapiToolsRouter);
+// Vendor portal: token-gated, no JWT. Must be before authMiddleware.
+router.use("/vendor-portal", vendorPortalRouter);
 router.use(authMiddleware);
 // Firm context loads req.firm from the firm_id JWT claim stamped by the
 // auth middleware. Mounted before the subscription gate so the gate (and

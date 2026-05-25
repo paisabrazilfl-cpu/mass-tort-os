@@ -13,6 +13,7 @@ import { ThemeProvider } from "@/contexts/theme-context";
 import { toast } from "@/hooks/use-toast";
 import { describeError } from "@/lib/api-fetch";
 
+import VendorPortalPage from "@/pages/vendor-portal";
 import LoginPage from "@/pages/login";
 import LoginMfaPage from "@/pages/login-mfa";
 import RegisterPage from "@/pages/register";
@@ -169,6 +170,8 @@ function Router() {
       <Route path="/login/mfa" component={LoginMfaPage} />
       <Route path="/register" component={RegisterPage} />
       <Route path="/verify-email" component={VerifyEmailPage} />
+      {/* Vendor portal — public, token is the credential, no auth required */}
+      <Route path="/vp/:token" component={VendorPortalPage} />
       <Route>
         <RequireAuth>
           <AuthedRoutes />

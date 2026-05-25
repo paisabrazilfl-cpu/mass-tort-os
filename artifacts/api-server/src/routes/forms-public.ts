@@ -7,6 +7,8 @@ import { validateAddress } from "../lib/address-validator";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { badRequest, notFound, serverError } from "../lib/http-errors";
+import { db, vendorsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -173,6 +175,24 @@ router.post("/submit/:tortId", async (req, res) => {
   if (req.body && typeof req.body === "object") {
     req.body.tort_type = config.label;
     req.body.source = `form_embed_${tortId}`;
+  }
+
+  // Resolve optional vendor token (?v=TOKEN) and stamp vendor_id on the lead.
+  // The token is the sole credential — no JWT involved. Invalid/unknown tokens
+  // are silently ignored so vendors cannot probe for valid IDs.
+  const vToken = req.query.v;
+  if (typeof vToken === "string" && /^[0-9a-f]{32,64}$/i.test(vToken)) {
+    try {
+      const [vendor] = await db
+        .select({ id: vendorsTable.id })
+        .from(vendorsTable)
+        .where(eq(vendorsTable.portal_token, vToken));
+      if (vendor && req.body && typeof req.body === "object") {
+        req.body.vendor_id = vendor.id;
+      }
+    } catch (err) {
+      logger.warn({ err }, "vendor token resolution failed — lead will be unattributed");
+    }
   }
 
   // Audit the attempt (non-blocking) so every public submission is traceable
