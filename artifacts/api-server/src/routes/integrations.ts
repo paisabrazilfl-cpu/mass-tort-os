@@ -1,6 +1,6 @@
 import { Router, Response } from "express";
 import { db, integrationsTable } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { PRESET_INTEGRATIONS } from "../lib/integration-presets";
@@ -97,11 +97,14 @@ export async function getIntegrationCredentialsById(id: number): Promise<Decrypt
  * Returns the most recent active integration for that provider; logs a warning
  * if multiple are present so the caller can switch to id-based lookup.
  */
-export async function getIntegrationCredentials(provider: string): Promise<DecryptedCredentials | null> {
+export async function getIntegrationCredentials(provider: string, firmId?: number): Promise<DecryptedCredentials | null> {
+  const conditions = firmId !== undefined
+    ? and(eq(integrationsTable.provider, provider), eq(integrationsTable.firm_id, firmId))
+    : eq(integrationsTable.provider, provider);
   const rows = await db
     .select()
     .from(integrationsTable)
-    .where(eq(integrationsTable.provider, provider))
+    .where(conditions)
     .orderBy(desc(integrationsTable.created_at));
   const active = rows.filter(r => r.status === "active");
   if (active.length === 0) return null;

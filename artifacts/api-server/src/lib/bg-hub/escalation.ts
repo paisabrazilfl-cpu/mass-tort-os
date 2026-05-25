@@ -35,6 +35,11 @@ export const BACKGROUND_ESCALATION_RULES: Record<
     review: ["phone_not_checked", "voip", "prepaid", "carrier_unknown"],
   },
 
+  phone_provenance: {
+    fail: ["phone_provenance_fraud", "phone_provenance_stolen"],
+    review: ["phone_provenance_not_checked", "phone_provenance_ported_recently", "phone_provenance_source_unavailable"],
+  },
+
   residency: {
     fail: ["hard_address_mismatch"],
     review: ["residency_not_checked", "no_residency_corroboration"],
@@ -114,9 +119,20 @@ export interface FlagEvaluation {
   notes: string[];
 }
 
+// Stub lanes are not yet fully implemented — their adapters may emit zero
+// flags on an inconclusive run, which the arbiter must treat as REVIEW_REQUIRED
+// rather than silently passing. Listed explicitly so adding a live adapter
+// promotes a lane out of STUB_LANES in one place.
+export const STUB_LANES: readonly BackgroundLane[] = [
+  "residency",
+  "attorney",
+  "phone_provenance",
+];
+
 // Translate a set of observed flags into a status + score for one lane.
 // Precedence is: any FAIL flag → FAIL; otherwise any REVIEW flag → REVIEW;
 // otherwise any UNKNOWN flag → REVIEW (because we don't trust silent drift);
+// stub lanes with zero flags → REVIEW_REQUIRED (never silently pass);
 // otherwise PASS.
 export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEvaluation {
   const rules = BACKGROUND_ESCALATION_RULES[lane];
@@ -131,6 +147,13 @@ export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEval
   const reviewHits = flags.filter((f) => rules.review.includes(f));
   const unknownHits = flags.filter((f) => !rules.fail.includes(f) && !rules.review.includes(f));
 
+  if (failHits.length === 0 && reviewHits.length === 0 && unknownHits.length === 0 && (STUB_LANES as readonly string[]).includes(lane)) {
+    return {
+      status: "REVIEW_REQUIRED",
+      score: 50,
+      notes: [`Stub lane "${lane}" — no adapter output; queued for manual review.`],
+    };
+  }
   if (failHits.length > 0) {
     return {
       status: "FAIL",

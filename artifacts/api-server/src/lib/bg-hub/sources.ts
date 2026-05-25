@@ -224,4 +224,15 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
       live_adapter_available: false,
     },
   ],
+
+  phone_provenance: [
+    {
+      name: "Telnyx Number Lookup",
+      url: "https://developers.telnyx.com/api/lookup",
+      source_type: "technical",
+      requires_api_key: true,
+      live_adapter_available: false,
+      notes: "Stub lane — live adapter not yet implemented.",
+    },
+  ],
 };

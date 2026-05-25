@@ -17,6 +17,7 @@ export type BackgroundLane =
   | "address"
   | "email"
   | "phone"
+  | "phone_provenance"
   | "residency"
   | "criminal_court"
   | "incarceration"
