@@ -34,6 +34,15 @@ export type RegisterOutcome =
   | { kind: "pending_verification"; email: string; message: string }
   | { kind: "error"; code: string; message: string };
 
+type AdminUnlockOutcome =
+  | { kind: "ok" }
+  | { kind: "must_change" }
+  | { kind: "error"; message: string };
+
+type AdminPinChangeOutcome =
+  | { kind: "ok" }
+  | { kind: "error"; message: string };
+
 type Ctx = {
   user: AuthUser | null;
   status: Status;
@@ -49,6 +58,9 @@ type Ctx = {
   verifyEmail: (token: string) => Promise<LoginOutcome>;
   cancelMfa: () => void;
   logout: () => Promise<void>;
+  unlockAdmin: (pin: string) => Promise<AdminUnlockOutcome>;
+  changeAdminPin: (current: string, newPin: string) => Promise<AdminPinChangeOutcome>;
+  loginWithMagicLink: (token: string, totpCode?: string) => Promise<LoginOutcome>;
 };
 
 const AuthContext = createContext<Ctx | null>(null);
@@ -407,6 +419,70 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPendingMfa(null);
   }, []);
 
+  const unlockAdmin = useCallback(async (pin: string): Promise<AdminUnlockOutcome> => {
+    try {
+      const body = await apiFetch<Record<string, unknown>>("/api/auth/admin-pin/unlock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin }),
+      });
+      if (body.must_change) return { kind: "must_change" };
+      if (body.token && typeof body.token === "string") {
+        localStorage.setItem("admin_unlock_token", body.token);
+      }
+      return { kind: "ok" };
+    } catch (err) {
+      return { kind: "error", message: err instanceof Error ? err.message : "Failed to unlock admin." };
+    }
+  }, []);
+
+  const changeAdminPin = useCallback(async (current: string, newPin: string): Promise<AdminPinChangeOutcome> => {
+    try {
+      const body = await apiFetch<Record<string, unknown>>("/api/auth/admin-pin/change", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ current_pin: current, new_pin: newPin }),
+      });
+      if (body.token && typeof body.token === "string") {
+        localStorage.setItem("admin_unlock_token", body.token);
+      }
+      return { kind: "ok" };
+    } catch (err) {
+      return { kind: "error", message: err instanceof Error ? err.message : "Failed to change PIN." };
+    }
+  }, []);
+
+  const loginWithMagicLink = useCallback(async (token: string, totpCode?: string): Promise<LoginOutcome> => {
+    try {
+      const res = await fetch("/api/auth/magic-link/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, ...(totpCode ? { totp_code: totpCode } : {}) }),
+      });
+      let body: Record<string, unknown> = {};
+      try { body = (await res.json()) as Record<string, unknown>; } catch { /* tolerate */ }
+      if (body.mfa_required === true) return { kind: "mfa_required" };
+      if (!res.ok) {
+        return { kind: "error", code: "invalid_token", message: (typeof body.message === "string" && body.message) || "Magic link is invalid or expired." };
+      }
+      const userPayload = body.user as AuthUser | undefined;
+      const accessToken = typeof body.token === "string" ? body.token : null;
+      const refreshToken = typeof body.refresh_token === "string" ? body.refresh_token : null;
+      const expiresIn = typeof body.expires_in === "number" ? body.expires_in : 900;
+      if (!userPayload || !accessToken || !refreshToken) {
+        return { kind: "error", code: "bad_response", message: "Magic link response was malformed." };
+      }
+      setTokens({ access: accessToken, refresh: refreshToken, userId: userPayload.id });
+      setUser(userPayload);
+      setStatus("authed");
+      setPendingMfa(null);
+      scheduleRefresh(expiresIn);
+      return { kind: "ok" };
+    } catch {
+      return { kind: "error", code: "network", message: "Network error — please check your connection." };
+    }
+  }, [scheduleRefresh]);
+
   return (
     <AuthContext.Provider
       value={{
@@ -419,6 +495,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         verifyEmail,
         cancelMfa,
         logout,
+        unlockAdmin,
+        changeAdminPin,
+        loginWithMagicLink,
       }}
     >
       {children}

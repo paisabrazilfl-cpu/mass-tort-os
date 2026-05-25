@@ -19,6 +19,7 @@ export const faxResultsTable = pgTable("fax_results", {
   // enforced FK — we want orphan fax rows to remain visible in the inbox
   // even if the lead is later deleted.
   lead_id: integer("lead_id"),
+  external_fax_id: text("external_fax_id"),
   source_file: text("source_file").notNull(),
   vault_path: text("vault_path").notNull(),
   rx_number: text("rx_number").default("").notNull(),

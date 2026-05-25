@@ -9,6 +9,7 @@ import { z } from "zod/v4";
  */
 export const workflowSettingsTable = pgTable("workflow_settings", {
   id: serial("id").primaryKey(),
+  firm_id: integer("firm_id"),
   scope: varchar("scope", { length: 100 }).notNull().unique(),
   esign_provider_integration_id: integer("esign_provider_integration_id"),
   fax_provider_integration_id: integer("fax_provider_integration_id"),
