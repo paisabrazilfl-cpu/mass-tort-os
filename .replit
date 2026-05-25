@@ -102,6 +102,10 @@ args = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1
 channel = "stable-25_05"
 
 [[ports]]
+localPort = 4999
+externalPort = 3003
+
+[[ports]]
 localPort = 8080
 externalPort = 8080
 

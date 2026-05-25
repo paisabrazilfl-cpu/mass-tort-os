@@ -32,23 +32,31 @@ const API_BASE_URL = (
   ""
 ).replace(/\/+$/, "");
 
+process.stdout.write(`[mtos-crm] startup — PORT=${PORT} API_BASE_URL=${API_BASE_URL || "(not set)"} node=${process.version}\n`);
+
 if (!API_BASE_URL) {
-  console.error(
-    "FATAL: API_BASE_URL (or VITE_API_BASE_URL) is required. Set it on the Railway service so /api/* requests can be proxied to the api-server.",
+  process.stdout.write(
+    "[mtos-crm] FATAL: API_BASE_URL (or VITE_API_BASE_URL) is required. Set it on the Railway service so /api/* requests can be proxied to the api-server.\n",
   );
-  process.exit(1);
+  // Keep process alive briefly so Railway captures the log before exit
+  setTimeout(() => process.exit(1), 2000);
 }
 
 const DIST_DIR = path.resolve(__dirname, "dist", "public");
-if (!fs.existsSync(DIST_DIR)) {
-  console.error(
-    `FATAL: build output not found at ${DIST_DIR}. Run \`pnpm --filter @workspace/mtos-crm build\` first.`,
+const distExists = fs.existsSync(DIST_DIR);
+process.stdout.write(`[mtos-crm] dist dir: ${DIST_DIR} — exists=${distExists}\n`);
+
+if (!distExists) {
+  process.stdout.write(
+    `[mtos-crm] FATAL: build output not found at ${DIST_DIR}. Run \`pnpm --filter @workspace/mtos-crm build\` first.\n`,
   );
-  process.exit(1);
+  // Keep process alive briefly so Railway captures the log before exit
+  setTimeout(() => process.exit(1), 2000);
 }
+
 const INDEX_HTML = path.join(DIST_DIR, "index.html");
 
-const apiOrigin = new URL(API_BASE_URL);
+const apiOrigin = new URL(API_BASE_URL || "http://localhost");
 const upstream = apiOrigin.protocol === "https:" ? https : http;
 
 // Conservative mime-type table covering everything Vite emits. Unknown
@@ -76,6 +84,11 @@ const MIME = {
 };
 
 function proxyRequest(req, res) {
+  if (!API_BASE_URL) {
+    res.writeHead(503, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "API_BASE_URL not configured" }));
+    return;
+  }
   // Strip hop-by-hop headers + the inbound Host so Railway routes the
   // upstream by its own host header (otherwise the request looks like it
   // came from the SPA host and Railway routes it back to us — infinite loop).
@@ -107,7 +120,7 @@ function proxyRequest(req, res) {
   });
 
   upstreamReq.on("error", (err) => {
-    console.error(`proxy: upstream error for ${req.method} ${req.url}: ${err.message}`);
+    process.stdout.write(`proxy: upstream error for ${req.method} ${req.url}: ${err.message}\n`);
     if (!res.headersSent) {
       res.writeHead(502, { "content-type": "application/json" });
     }
@@ -168,30 +181,32 @@ const server = http.createServer((req, res) => {
     }
 
     // Static file lookup.
-    const filePath = resolveStatic(url);
-    if (filePath) return serveFile(filePath, res);
+    if (distExists) {
+      const filePath = resolveStatic(url);
+      if (filePath) return serveFile(filePath, res);
 
-    // SPA fallback — every non-asset path renders index.html so the
-    // client-side router can take over.
-    if (fs.existsSync(INDEX_HTML)) return serveFile(INDEX_HTML, res, 200);
+      // SPA fallback — every non-asset path renders index.html so the
+      // client-side router can take over.
+      if (fs.existsSync(INDEX_HTML)) return serveFile(INDEX_HTML, res, 200);
+    }
 
-    res.writeHead(404, { "content-type": "text/plain" });
-    res.end("Not found");
+    res.writeHead(503, { "content-type": "text/plain" });
+    res.end("Service starting — dist not ready");
   } catch (err) {
-    console.error("request handler error:", err);
+    process.stdout.write(`request handler error: ${err}\n`);
     if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain" });
     res.end("Internal server error");
   }
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`mtos-crm static + proxy server listening on 0.0.0.0:${PORT}`);
-  console.log(`  dist:       ${DIST_DIR}`);
-  console.log(`  /api/* →   ${API_BASE_URL}`);
+  process.stdout.write(`[mtos-crm] server listening on 0.0.0.0:${PORT}\n`);
+  process.stdout.write(`[mtos-crm] dist: ${DIST_DIR} (exists=${distExists})\n`);
+  process.stdout.write(`[mtos-crm] /api/* → ${API_BASE_URL || "(not proxied)"}\n`);
 });
 
 function shutdown(sig) {
-  console.log(`${sig} received — closing server`);
+  process.stdout.write(`[mtos-crm] ${sig} received — closing server\n`);
   server.close(() => process.exit(0));
   // Forced exit if the server doesn't drain in 10 s.
   setTimeout(() => process.exit(0), 10_000).unref();
