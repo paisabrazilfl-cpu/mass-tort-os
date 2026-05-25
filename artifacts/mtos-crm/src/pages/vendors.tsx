@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import {
   useListVendors,
   useCreateVendor,
@@ -16,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Copy, Check, ExternalLink } from "lucide-react";
 import { format } from "date-fns";
 
 interface VendorForm {
@@ -38,6 +39,32 @@ const emptyForm: VendorForm = {
   status: "active",
   notes: "",
 };
+
+function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-7 px-2 gap-1 text-xs text-muted-foreground"
+      onClick={() => {
+        navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        });
+      }}
+    >
+      {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
+      {copied ? "Copied" : label}
+    </Button>
+  );
+}
+
+function buildPortalUrl(token: string | null | undefined): string | null {
+  if (!token) return null;
+  const base = window.location.origin;
+  return `${base}/vp/${token}`;
+}
 
 export default function Vendors() {
   const { data: vendors, isLoading } = useListVendors({
@@ -137,10 +164,12 @@ export default function Vendors() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead>Code</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Contact</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Portal Link</TableHead>
               <TableHead>Created</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -149,55 +178,79 @@ export default function Vendors() {
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i}>
+                  <TableCell><Skeleton className="h-4 w-14" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-32" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-40" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-20" /></TableCell>
                   <TableCell><Skeleton className="h-6 w-16" /></TableCell>
+                  <TableCell><Skeleton className="h-6 w-24" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                   <TableCell><Skeleton className="h-8 w-20 ml-auto" /></TableCell>
                 </TableRow>
               ))
             ) : vendors?.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center">
+                <TableCell colSpan={8} className="h-24 text-center">
                   No vendors yet.
                 </TableCell>
               </TableRow>
             ) : (
-              vendors?.map((vendor) => (
-                <TableRow key={vendor.id}>
-                  <TableCell className="font-medium">{vendor.name}</TableCell>
-                  <TableCell>
-                    <div className="text-sm">{vendor.contact_name || "-"}</div>
-                    <div className="text-xs text-muted-foreground">{vendor.contact_email || ""}</div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{vendor.type}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={vendor.status === "active" ? "default" : "secondary"}>
-                      {vendor.status.toUpperCase()}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-sm font-mono">
-                    {format(new Date(vendor.created_at), "yyyy-MM-dd")}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(vendor)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => { setDeletingId(vendor.id); setDeleteDialogOpen(true); }}
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
+              vendors?.map((vendor: any) => {
+                const portalUrl = buildPortalUrl(vendor.portal_token);
+                return (
+                  <TableRow key={vendor.id}>
+                    <TableCell>
+                      <span className="font-mono text-xs font-semibold text-muted-foreground">
+                        {vendor.internal_code ?? `V-${vendor.id}`}
+                      </span>
+                    </TableCell>
+                    <TableCell className="font-medium">{vendor.name}</TableCell>
+                    <TableCell>
+                      <div className="text-sm">{vendor.contact_name || "-"}</div>
+                      <div className="text-xs text-muted-foreground">{vendor.contact_email || ""}</div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{vendor.type}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={vendor.status === "active" ? "default" : "secondary"}>
+                        {vendor.status.toUpperCase()}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {portalUrl ? (
+                        <div className="flex items-center gap-1">
+                          <CopyButton text={portalUrl} label="Copy" />
+                          <Link href={`/vp/${vendor.portal_token}`} target="_blank">
+                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground">
+                              <ExternalLink className="h-3 w-3" />
+                            </Button>
+                          </Link>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm font-mono">
+                      {format(new Date(vendor.created_at), "yyyy-MM-dd")}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button variant="ghost" size="sm" onClick={() => openEdit(vendor)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => { setDeletingId(vendor.id); setDeleteDialogOpen(true); }}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -208,7 +261,7 @@ export default function Vendors() {
           <DialogHeader>
             <DialogTitle>{editingId ? "Edit Vendor" : "Add Vendor"}</DialogTitle>
             <DialogDescription>
-              {editingId ? "Update vendor details." : "Create a new vendor."}
+              {editingId ? "Update vendor details." : "Create a new vendor. A portal link and partner code will be auto-assigned."}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
