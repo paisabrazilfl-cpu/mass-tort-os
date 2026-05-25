@@ -758,7 +758,7 @@ describe("isCaseVisibleToUser()", () => {
     assert.equal(isCaseVisibleToUser(otherUser, orphanRow), false);
   });
 
-  for (const role of ["paralegal", "attorney", "admin"] as const) {
+  for (const role of ["paralegal", "attorney", "admin", "super_admin"] as const) {
     test(`${role} sees every row regardless of ownership (no per-row scope)`, () => {
       const u = { id: 1, role };
       assert.equal(isCaseVisibleToUser(u, ownedRow), true);

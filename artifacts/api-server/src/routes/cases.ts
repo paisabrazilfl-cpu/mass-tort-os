@@ -6,11 +6,11 @@ import { CreateCaseBody, UploadCaseFileBody } from "@workspace/api-zod";
 import { enqueueJob, getQueueStats, requeueDeadLetterJob } from "../lib/queue";
 import { auditLog } from "../lib/audit";
 import { updateCaseStatus } from "../lib/case-status";
+import { requireFirmId } from "../lib/firm-scope";
 import crypto from "crypto";
 import type { AuthUser } from "../lib/rbac";
 import { Permission, requirePermission, auditAction, denyForbidden } from "../lib/rbac";
 import { badRequest, notFound, forbidden } from "../lib/http-errors";
-import { requireFirmId } from "../lib/firm-scope";
 
 /**
  * Cases viewer-ownership predicate, factored out so the role × route test
@@ -57,6 +57,7 @@ router.post("/", requirePermission(Permission.CASE_CREATE), auditAction("create_
     res.status(400).json({ status: "error", code: "validation_failed", message: "Body must be a JSON object", details: parsed.error.flatten() });
     return;
   }
+  const firmId = requireFirmId(req);
   const data = parsed.data;
   const case_id = crypto.randomUUID();
 
@@ -70,10 +71,9 @@ router.post("/", requirePermission(Permission.CASE_CREATE), auditAction("create_
 
   // Multi-tenant stamp: carry the caller's firm into the worker so the new
   // row is bound to the right firm at INSERT time, not patched up later.
-  const firm_id = requireFirmId(req);
-  const job_id = await enqueueJob("create_case", { case_id, data, created_by_user_id, firm_id });
+  const job_id = await enqueueJob("create_case", { case_id, data, created_by_user_id, firm_id: firmId });
 
-  await auditLog("case", case_id, "intake_submitted", { data, created_by_user_id, firm_id }, {
+  await auditLog("case", case_id, "intake_submitted", { data, created_by_user_id, firm_id: firmId }, {
     ip_address: req.ip,
     user_agent: req.get("user-agent"),
   });
@@ -110,6 +110,7 @@ router.post("/:id/upload", requirePermission(Permission.CASE_UPLOAD), auditActio
   }
   if (!(await assertCaseInFirm(req, res, case_id))) return;
 
+  const firmId = requireFirmId(req);
   const parsed = UploadCaseFileBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ status: "error", code: "validation_failed", message: "Invalid request body", details: parsed.error.flatten() });
@@ -138,6 +139,7 @@ router.post("/:id/upload", requirePermission(Permission.CASE_UPLOAD), auditActio
     case_id,
     file_name,
     content,
+    firm_id: firmId,
     // The worker treats a missing content_type as "let the OCR/MIME sniffer
     // decide". Drizzle's payload column is jsonb so undefined drops the key
     // (preferred) — coercing to null was a TS mismatch and added noise.
@@ -182,6 +184,7 @@ router.patch("/:id/status", requirePermission(Permission.CASE_ANALYZE), async (r
     return;
   }
   if (!(await assertCaseInFirm(req, res, case_id))) return;
+  const firmId = requireFirmId(req);
   const parsed = PatchCaseStatusBody.safeParse(req.body);
   if (!parsed.success) {
     badRequest(res, "Invalid request body", parsed.error.issues);
@@ -191,6 +194,7 @@ router.patch("/:id/status", requirePermission(Permission.CASE_ANALYZE), async (r
     case_id,
     new_status: parsed.data.status,
     changed_by: req.user!.id,
+    firm_id: firmId,
     context: parsed.data.reason ? { reason: parsed.data.reason } : undefined,
     source: "http:patch_case_status",
   });
@@ -213,8 +217,9 @@ router.post("/:id/analyze", requirePermission(Permission.CASE_ANALYZE), async (r
     return;
   }
   if (!(await assertCaseInFirm(req, res, case_id))) return;
+  const firmId = requireFirmId(req);
 
-  const job_id = await enqueueJob("analyze_case", { case_id });
+  const job_id = await enqueueJob("analyze_case", { case_id, firm_id: firmId });
 
   await auditLog("case", case_id, "analysis_queued", {}, {
     ip_address: req.ip,
@@ -267,6 +272,7 @@ router.get("/worker/queue-stats", requirePermission(Permission.CASE_WORKER_ADMIN
 router.get("/worker/jobs", requirePermission(Permission.CASE_WORKER_ADMIN), async (req, res) => {
   const statusFilter = typeof req.query.status === "string" ? req.query.status : undefined;
   const limit = Math.min(Number(req.query.limit) || 100, 500);
+  const firmId = requireFirmId(req);
 
   const rows = await db
     .select({
@@ -281,7 +287,12 @@ router.get("/worker/jobs", requirePermission(Permission.CASE_WORKER_ADMIN), asyn
       payload: jobQueueTable.payload,
     })
     .from(jobQueueTable)
-    .where(statusFilter ? eq(jobQueueTable.status, statusFilter) : undefined)
+    .where(
+      and(
+        statusFilter ? eq(jobQueueTable.status, statusFilter) : undefined,
+        eq(jobQueueTable.firm_id, firmId),
+      ),
+    )
     .orderBy(desc(jobQueueTable.created_at))
     .limit(limit);
 
@@ -359,10 +370,12 @@ router.get("/:id", requirePermission(Permission.CASE_VIEW_OWN, Permission.CASE_V
   }
 
   // Children are independent — fetch in parallel to cut latency ~3×.
+  // Note: caseDocumentsTable and analysisTable don't have firm_id directly (they link via case_id).
+  // auditLogTable has firm_id.
   const [docs, analyses, auditEntries] = await Promise.all([
     db.select().from(caseDocumentsTable).where(eq(caseDocumentsTable.case_id, case_id)),
     db.select().from(analysisTable).where(eq(analysisTable.case_id, case_id)).orderBy(desc(analysisTable.created_at)),
-    db.select().from(auditLogTable).where(eq(auditLogTable.entity_id, case_id)).orderBy(desc(auditLogTable.occurred_at)).limit(50),
+    db.select().from(auditLogTable).where(and(eq(auditLogTable.entity_id, case_id), eq(auditLogTable.firm_id, firmId))).orderBy(desc(auditLogTable.occurred_at)).limit(50),
   ]);
 
   res.json({

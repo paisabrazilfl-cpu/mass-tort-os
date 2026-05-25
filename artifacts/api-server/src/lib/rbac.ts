@@ -799,7 +799,10 @@ function auditDenial(req: Request, reason: string, opts: AuditDenialOpts = {}): 
   }, {
     ip_address: ip,
     user_agent: req.headers["user-agent"],
-  }).catch(() => {});
+    firm_id: u?.firm_id ?? null,
+  }).catch((err) => {
+    logger.error({ err, reason, userId }, "Failed to write auditLog for denial");
+  });
 }
 
 /**
@@ -830,7 +833,10 @@ export function auditAction(action: string) {
       }, {
         ip_address: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
         user_agent: req.headers["user-agent"],
-      }).catch(() => {});
+        firm_id: user.firm_id,
+      }).catch((err) => {
+        logger.error({ err, action, userId: user.id }, "Failed to write auditLog for user action");
+      });
     }
     next();
   };
@@ -1093,8 +1099,8 @@ export async function cleanupExpiredTokens(): Promise<void> {
   try {
     await db.delete(refreshTokensTable)
       .where(lt(refreshTokensTable.expires_at, new Date()));
-  } catch {
-    logger.warn("Refresh token cleanup failed");
+  } catch (err) {
+    logger.error({ err }, "Refresh token cleanup failed");
   }
 }
 

@@ -81,13 +81,15 @@ function backoffUntil(retryCount: number): Date {
 
 export async function enqueueJob<T extends JobType>(
   job_type: T,
-  payload: JobPayload[T]
+  payload: JobPayload[T] & { firm_id?: number | null }
 ): Promise<number> {
+  const { firm_id, ...restPayload } = payload;
   const [job] = await db
     .insert(jobQueueTable)
     .values({
       job_type,
-      payload: payload as Record<string, unknown>,
+      payload: restPayload as Record<string, unknown>,
+      firm_id: firm_id ?? (restPayload as any).firm_id ?? null,
       status: "pending",
     })
     .returning({ id: jobQueueTable.id });

@@ -94,18 +94,69 @@ const upsertSchema = z.object({
 
 const runBodySchema = z.object({ input: z.record(z.string(), z.any()).optional() });
 
+const assistGraphSchema = graphSchema;
+
+function buildCatalogSummary(): string {
+  const cats = Array.from(new Set(NODE_CATALOG.map(n => n.category))).sort();
+  return cats.map(cat => {
+    const nodes = NODE_CATALOG.filter(n => n.category === cat);
+    return `[${cat}]\n` + nodes.map(n => {
+      const out = Array.isArray(n.outputs) ? ` [${n.outputs.join('|')}]` : "";
+      return `  - ${n.type}${out}: ${n.description}`;
+    }).join("\n");
+  }).join("\n\n");
+}
+
+function validateAssistGraph(graph: z.infer<typeof assistGraphSchema>): { issues: string[]; warnings: string[] } {
+  const issues: string[] = [];
+  const warnings: string[] = [];
+  const nodeIds = new Set(graph.nodes.map(n => n.id));
+
+  for (const node of graph.nodes) {
+    const def = NODE_CATALOG.find(n => n.type === node.type);
+    if (!def) {
+      issues.push(`Unknown node type: ${node.type}`);
+      continue;
+    }
+  }
+
+  for (const edge of graph.edges) {
+    if (!nodeIds.has(edge.source)) issues.push(`Edge source not found: ${edge.source}`);
+    if (!nodeIds.has(edge.target)) issues.push(`Edge target not found: ${edge.target}`);
+
+    const sourceNode = graph.nodes.find(n => n.id === edge.source);
+    if (sourceNode) {
+      const def = NODE_CATALOG.find(n => n.type === sourceNode.type);
+      if (def && Array.isArray(def.outputs) && edge.sourceHandle && !def.outputs.includes(edge.sourceHandle)) {
+        issues.push(`Invalid output handle "${edge.sourceHandle}" for node type ${sourceNode.type}`);
+      }
+    }
+  }
+
+  return { issues, warnings };
+}
+
+export const __assistInternals = {
+  validateAssistGraph,
+  buildCatalogSummary,
+  assistGraphSchema
+};
+
 // ── Node catalog ─────────────────────────────────────────────────────────────
 router.get("/node-catalog", requirePermission(Permission.AUTOMATIONS_VIEW), (_req, res) => {
   res.json({ nodes: NODE_CATALOG });
 });
 
 // ── Debug / one-shot migration ───────────────────────────────────────────────
-router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), async (_req, res) => {
+router.get("/debug/tables", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
   try {
     await repairSchema();
     const [wf, ar, ci, sh] = await Promise.all([
       pool.query("SELECT COUNT(*) FROM automation_workflows"),
-      pool.query("SELECT COUNT(*) FROM automation_runs").catch(() => ({ rows: [{ count: "error" }] })),
+      pool.query("SELECT COUNT(*) FROM automation_runs").catch((err) => {
+        logger.error({ err }, "debug/tables: failed to query automation_runs");
+        return { rows: [{ count: "error" }] };
+      }),
       pool.query("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='competitive_intel_advertisers') AS e"),
       pool.query("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='self_heal_sessions') AS e"),
     ]);
@@ -268,8 +319,8 @@ router.post("/:id/run", requirePermission(Permission.AUTOMATIONS_EXECUTE), async
 router.get("/:id/runs", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
+  const firmId = requireFirmId(req);
   try {
-    const firmId = requireFirmId(req);
     const rows = await db
       .select({
         id: automationRunsTable.id,
@@ -295,8 +346,8 @@ router.get("/:id/runs", requirePermission(Permission.AUTOMATIONS_VIEW), async (r
 router.get("/runs/:runId", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {
   const runId = Number(req.params.runId);
   if (!Number.isInteger(runId)) { badRequest(res, "runId must be integer"); return; }
+  const firmId = requireFirmId(req);
   try {
-    const firmId = requireFirmId(req);
     const [row] = await db
       .select()
       .from(automationRunsTable)

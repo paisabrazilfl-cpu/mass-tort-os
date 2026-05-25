@@ -416,9 +416,11 @@ async function auditCiRun(state: CiState): Promise<void> {
           }),
         ],
       )
-      .catch(() => {});
-  } catch {
-    /* audit is non-fatal */
+      .catch((err) => {
+        logger.error({ err }, "auditCiRun: insert failed");
+      });
+  } catch (err) {
+    logger.error({ err }, "auditCiRun: failed (non-fatal)");
   }
 }
 

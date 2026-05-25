@@ -119,6 +119,7 @@ router.get("/export", requirePermission(Permission.LEAD_EXPORT), auditAction("ex
   // and OOM the API container. 50k is generous for a CRM export; clients that
   // need more should paginate.
   const EXPORT_HARD_CAP = 50_000;
+  const firmId = requireFirmId(req);
   let conditions;
   try {
     conditions = buildLeadFilters(parsed.data);
@@ -203,6 +204,7 @@ router.get("/", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW
   const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 50, 1), 500);
   const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
 
+  const firmId = requireFirmId(req);
   let conditions;
   try {
     conditions = buildLeadFilters(parsed.data);
@@ -254,6 +256,7 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
   }
 
   const data = parsed.data;
+  const firmId = requireFirmId(req);
 
   // Normalize hospital_fax to E.164 via shared validator. A 4xx is returned
   // for malformed numbers so a typo never lands as plain text on the lead
@@ -389,7 +392,7 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
           ),
           // Multi-tenant stamp: tie every new row to the caller's firm so
           // the row appears in this firm's scoped queries (and ONLY this firm's).
-          firm_id: requireFirmId(req),
+          firm_id: firmId,
         })
         .returning();
 
@@ -481,7 +484,7 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
         data.phone_primary ?? data.phone ?? null,
       ),
       // Multi-tenant stamp: see the review_required branch above.
-      firm_id: requireFirmId(req),
+      firm_id: firmId,
     })
     .returning();
 
@@ -523,6 +526,7 @@ router.get("/:id", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_V
     badRequest(res, parsed.error);
     return;
   }
+  const firmId = requireFirmId(req);
 
   const [lead] = await db
     .select()
@@ -555,11 +559,12 @@ router.get("/:id", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_V
  * Ownership/role check shared by lead-scoped automation endpoints.
  * Returns true if request is allowed; false (and writes 403/404) otherwise.
  */
-async function ensureLeadAccess(req: Express.Request, res: import("express").Response, leadId: number): Promise<boolean> {
+async function ensureLeadAccess(req: import("express").Request, res: import("express").Response, leadId: number): Promise<boolean> {
   if (!Number.isFinite(leadId)) {
     httpBadRequest(res, "Invalid lead id");
     return false;
   }
+  const firmId = requireFirmId(req);
   const [check] = await db
     .select({
       id: leadsTable.id,
@@ -629,6 +634,7 @@ router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("upd
     badRequest(res, paramsParsed.error);
     return;
   }
+  const firmId = requireFirmId(req);
 
   // Multi-tenant + ownership gate. We read the row scoped to the caller's
   // firm; a row in another firm comes back undefined and the request 404s
@@ -873,6 +879,7 @@ router.delete("/:id", requirePermission(Permission.LEAD_DELETE), auditAction("de
     badRequest(res, parsed.error);
     return;
   }
+  const firmId = requireFirmId(req);
 
   // Scope DELETE by firm_id so a cross-firm IDOR can't nuke another tenant's
   // rows. RETURNING tells us whether anything matched — a no-op delete is a
@@ -895,6 +902,7 @@ router.post("/:id/qualify", requirePermission(Permission.LEAD_QUALIFY), auditAct
     badRequest(res, parsed.error);
     return;
   }
+  const firmId = requireFirmId(req);
 
   const [lead] = await db
     .select()
@@ -998,6 +1006,7 @@ router.post("/:id/intelligence", requirePermission(Permission.LEAD_QUALIFY), aud
       httpBadRequest(res, "Invalid lead identifier");
       return;
     }
+    const firmId = requireFirmId(req);
 
     const [lead] = await db
       .select()
@@ -1036,6 +1045,7 @@ router.patch("/:id/notes", requirePermission(Permission.LEAD_UPDATE), auditActio
       httpBadRequest(res, "Invalid lead identifier");
       return;
     }
+    const firmId = requireFirmId(req);
 
     const user = req.user!;
     // Firm-scoped existence check first; an out-of-firm lead becomes a 404
@@ -1121,6 +1131,7 @@ router.post(
     // Already firm-scoped via ensureLeadAccess() above; re-state here as
     // defense-in-depth so a future refactor that drops the helper still
     // can't read a cross-firm phone number into a Telnyx send.
+    const firmId = requireFirmId(req);
     const [leadRow] = await db
       .select()
       .from(leadsTable)
@@ -1137,7 +1148,6 @@ router.post(
     }
 
     const user = req.user!;
-    const firmId = await getFirmIdForUser(user.id);
 
     const result = await sendSmsViaRouter({
       to: phone,

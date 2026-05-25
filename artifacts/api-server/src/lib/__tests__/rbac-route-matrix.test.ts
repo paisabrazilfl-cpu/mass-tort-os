@@ -504,7 +504,7 @@ const MATRIX: MatrixRow[] = [
 
 describe("role × route allow/deny matrix", () => {
   for (const row of MATRIX) {
-    for (const role of ["admin", "attorney", "paralegal", "viewer"] as const) {
+    for (const role of ["super_admin", "admin", "attorney", "paralegal", "viewer"] as const) {
       const expected = row.expect[role];
       test(`${role.padEnd(9)} ${row.method} ${row.path} ⇒ ${expected}`, async () => {
         const r = await probe(row.method, row.path, { token: tokenFor(role), body: row.body });

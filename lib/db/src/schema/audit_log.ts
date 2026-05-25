@@ -1,6 +1,7 @@
 import {
   pgTable,
   serial,
+  integer,
   varchar,
   jsonb,
   text,
@@ -18,12 +19,14 @@ export const auditLogTable = pgTable("audit_log", {
   details: jsonb("details"),
   ip_address: varchar("ip_address", { length: 45 }),
   user_agent: text("user_agent"),
+  firm_id: integer("firm_id"),
   occurred_at: timestamp("occurred_at").defaultNow().notNull(),
 }, (t) => ({
   entityIdx: index("audit_log_entity_idx").on(t.entity_type, t.entity_id, t.occurred_at),
   occurredAtIdx: index("audit_log_occurred_at_idx").on(t.occurred_at),
   actionIdx: index("audit_log_action_idx").on(t.action, t.occurred_at),
   entityTypeIdx: index("audit_log_entity_type_idx").on(t.entity_type, t.occurred_at),
+  firmIdx: index("audit_log_firm_idx").on(t.firm_id),
 }));
 
 export const insertAuditLogSchema = createInsertSchema(auditLogTable).omit({

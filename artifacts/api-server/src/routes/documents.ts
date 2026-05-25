@@ -148,6 +148,7 @@ router.get("/", requirePermission(Permission.DOCUMENTS_VIEW), async (req, res) =
     return;
   }
 
+  const firmId = requireFirmId(req);
   const { lead_id } = parsed.data;
 
   // Pagination cap — defaults 50/page, hard ceiling 500. Without this the
@@ -188,9 +189,9 @@ router.post("/", requirePermission(Permission.DOCUMENTS_CREATE), auditAction("cr
     return;
   }
 
+  const firmId = requireFirmId(req);
   const data = parsed.data;
   try {
-    const firmId = requireFirmId(req);
     // Verify the parent lead belongs to the caller's firm BEFORE inserting,
     // otherwise an operator from firm A could attach a document row to firm B's
     // lead and later read/edit it via the (now firm-scoped) list/view routes.
@@ -234,6 +235,7 @@ router.patch("/:id", requirePermission(Permission.DOCUMENTS_UPDATE), auditAction
     return;
   }
 
+  const firmId = requireFirmId(req);
   const body = bodyParsed.data;
   const updateData: Record<string, unknown> = {};
 
@@ -245,7 +247,6 @@ router.patch("/:id", requirePermission(Permission.DOCUMENTS_UPDATE), auditAction
   if (body.notes !== undefined) updateData.notes = body.notes;
 
   try {
-    const firmId = requireFirmId(req);
     // Scope the UPDATE via a subquery on leads.firm_id. Without this any
     // operator could PATCH any document in the system by id.
     const scopedLeadIds = db
