@@ -1,0 +1,3 @@
+## 2025-05-15 - [Levenshtein Memory & GC Optimization]
+**Learning:** In high-throughput fuzzy matching (like NPI verification or lead dedup), repeated allocations of `Array<number>` in the Levenshtein distance inner loop cause significant GC pressure. `Int32Array` provides contiguous memory and better performance in V8. Additionally, swapping input strings to ensure the inner loop runs over the shorter string minimizes the size of the required buffers.
+**Action:** Always use `TypedArrays` and swap strings by length for Levenshtein/distance algorithms to ensure O(min(N,M)) space and better cache locality.
