@@ -16,6 +16,7 @@ import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
 import { findExistingLeadForIntake } from "../lib/lead-dedup";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { runBackgroundCheck } from "../lib/background-check";
+import { provisionPortalInvite } from "../lib/portal-invite";
 
 const router: IRouter = Router();
 
@@ -450,6 +451,10 @@ async function runWebFormPipeline(
         .where(eq(leadsTable.id, leadId));
       stepBg.status = "passed";
       stepBg.data = { status: bg.status };
+
+      if (bg.status === "clean" && leadId) {
+        void provisionPortalInvite(leadId);
+      }
     } catch (bgErr) {
       logger.warn({ err: bgErr, leadId }, "web-form background check failed");
       stepBg.status = "failed";

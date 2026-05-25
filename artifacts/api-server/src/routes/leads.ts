@@ -1,7 +1,15 @@
 import { Router } from "express";
-import { db, leadsTable, documentsTable } from "@workspace/db";
+import { db, leadsTable, documentsTable, portalUsersTable, portalAuditLogTable } from "@workspace/db";
 import { eq, ilike, and, or, sql, gte, lte, desc } from "drizzle-orm";
 import { badRequest as httpBadRequest, serverError } from "../lib/http-errors";
+import { provisionPortalInvite } from "../lib/portal-invite";
+import {
+  generateImpersonationPortalToken,
+  writePortalAudit,
+  getClientIp,
+  tortTypeToSlug,
+  getPortalBaseUrl,
+} from "../lib/portal-auth";
 import {
   ListLeadsQueryParams,
   CreateLeadBody,
@@ -1095,6 +1103,201 @@ router.post(
         telnyx_message_id: result.externalMessageId,
       },
     });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/leads/:id/portal-impersonate
+// Generates a short-lived (10 min) impersonation portal JWT so a CRM admin
+// can view the client portal exactly as the client sees it. No refresh token
+// is issued — the session ends when the token expires.
+// Restricted to admin and super_admin roles. Full audit trail in both
+// portal_audit_log (via writePortalAudit) and the CRM audit log (auditAction).
+// ---------------------------------------------------------------------------
+router.post(
+  "/:id/portal-impersonate",
+  requirePermission(Permission.LEAD_VIEW_ANY),
+  auditAction("portal_admin_impersonate"),
+  async (req, res) => {
+    const leadId = Number(req.params.id);
+    if (!Number.isFinite(leadId)) {
+      httpBadRequest(res, "Invalid lead identifier");
+      return;
+    }
+
+    const adminUser = req.user!;
+
+    // Only super_admin and admin may impersonate — not attorneys, paralegals, etc.
+    if (!["super_admin", "admin"].includes(adminUser.role)) {
+      res.status(403).json({
+        status: "error",
+        code: "FORBIDDEN",
+        message: "Portal impersonation requires admin access",
+      });
+      return;
+    }
+
+    // Look up the portal user for this lead.
+    const [portalUser] = await db
+      .select({
+        id: portalUsersTable.id,
+        lead_id: portalUsersTable.lead_id,
+        firm_id: portalUsersTable.firm_id,
+        email: portalUsersTable.email,
+        name: portalUsersTable.name,
+        token_version: portalUsersTable.token_version,
+      })
+      .from(portalUsersTable)
+      .where(eq(portalUsersTable.lead_id, leadId));
+
+    if (!portalUser) {
+      notFound(res, "No portal account exists for this lead — send an invite first");
+      return;
+    }
+
+    // Look up tort_type to build the portal URL slug.
+    const [lead] = await db
+      .select({ tort_type: leadsTable.tort_type })
+      .from(leadsTable)
+      .where(eq(leadsTable.id, leadId));
+
+    const slug = tortTypeToSlug(lead?.tort_type ?? "portal");
+    const token = generateImpersonationPortalToken(
+      {
+        id: portalUser.id,
+        lead_id: portalUser.lead_id,
+        firm_id: portalUser.firm_id,
+        email: portalUser.email,
+        name: portalUser.name,
+        tv: portalUser.token_version,
+      },
+      adminUser.id,
+    );
+
+    const portalUrl = `${getPortalBaseUrl()}/${slug}/impersonate?token=${token}`;
+
+    await writePortalAudit({
+      portal_user_id: portalUser.id,
+      admin_user_id: adminUser.id,
+      lead_id: leadId,
+      firm_id: portalUser.firm_id,
+      action: "portal.admin_impersonate_start",
+      ip: getClientIp(req),
+      user_agent: req.headers["user-agent"] as string | undefined,
+      metadata: {
+        admin_email: adminUser.email,
+        admin_role: adminUser.role,
+        expires_in_seconds: 600,
+      },
+    });
+
+    res.json({
+      token,
+      expires_in: 600,
+      portal_url: portalUrl,
+      portal_user: {
+        id: portalUser.id,
+        email: portalUser.email,
+        name: portalUser.name,
+      },
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/leads/:id/portal-status
+// CRM view of the client portal account for this lead — used by the
+// PortalStatusCard in lead-detail. Returns null portal_user when no account
+// exists yet (background check hasn't passed or invite hasn't been sent).
+// ---------------------------------------------------------------------------
+router.get(
+  "/:id/portal-status",
+  requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW_ANY),
+  async (req, res) => {
+    const leadId = Number(req.params.id);
+    if (!Number.isFinite(leadId)) {
+      httpBadRequest(res, "Invalid lead identifier");
+      return;
+    }
+
+    const [portalUser] = await db
+      .select({
+        id: portalUsersTable.id,
+        email: portalUsersTable.email,
+        name: portalUsersTable.name,
+        email_verified_at: portalUsersTable.email_verified_at,
+        mfa_enabled: portalUsersTable.mfa_enabled,
+        mfa_verified: portalUsersTable.mfa_verified,
+        last_login_at: portalUsersTable.last_login_at,
+        created_at: portalUsersTable.created_at,
+      })
+      .from(portalUsersTable)
+      .where(eq(portalUsersTable.lead_id, leadId));
+
+    if (!portalUser) {
+      res.json({ portal_user: null, recent_audit: [] });
+      return;
+    }
+
+    // Last 10 audit entries for this portal user (most recent first).
+    const recentAudit = await db
+      .select({
+        action: portalAuditLogTable.action,
+        ip_address: portalAuditLogTable.ip_address,
+        user_agent: portalAuditLogTable.user_agent,
+        created_at: portalAuditLogTable.created_at,
+      })
+      .from(portalAuditLogTable)
+      .where(eq(portalAuditLogTable.portal_user_id, portalUser.id))
+      .orderBy(desc(portalAuditLogTable.created_at))
+      .limit(10);
+
+    res.json({
+      portal_user: {
+        id: portalUser.id,
+        email: portalUser.email,
+        name: portalUser.name,
+        email_verified: !!portalUser.email_verified_at,
+        mfa_enabled: portalUser.mfa_enabled,
+        mfa_verified: portalUser.mfa_verified,
+        last_login_at: portalUser.last_login_at,
+        created_at: portalUser.created_at,
+      },
+      recent_audit: recentAudit,
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/leads/:id/resend-portal-invite
+// Re-issues a fresh signup token and re-sends the portal invite email.
+// Idempotent — safe to call even if a portal account already exists.
+// ---------------------------------------------------------------------------
+router.post(
+  "/:id/resend-portal-invite",
+  requirePermission(Permission.LEAD_UPDATE),
+  auditAction("resend_portal_invite"),
+  async (req, res) => {
+    const leadId = Number(req.params.id);
+    if (!Number.isFinite(leadId)) {
+      httpBadRequest(res, "Invalid lead identifier");
+      return;
+    }
+
+    const [lead] = await db
+      .select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(eq(leadsTable.id, leadId));
+
+    if (!lead) {
+      notFound(res, "Lead not found");
+      return;
+    }
+
+    // Fire-and-forget — catches its own errors internally.
+    void provisionPortalInvite(leadId);
+
+    res.json({ status: "ok", message: "Portal invite queued" });
   },
 );
 

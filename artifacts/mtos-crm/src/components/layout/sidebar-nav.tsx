@@ -5,7 +5,7 @@ import {
   Building2, ShieldCheck, FileSearch, Clock, Wand2, Brain, Plug, Newspaper,
   TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings,
   Activity, CreditCard, Phone, Workflow, Eye, BookOpen, Library,
-  Webhook, Wrench, Search, ListChecks, Bot, Skull, Sparkles,
+  Webhook, Wrench, Search, ListChecks, Bot, Skull, Sparkles, Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -115,6 +115,7 @@ export const navigation: NavSection[] = [
       { name: "Buyers",            href: "/buyers",               icon: Building    },
       { name: "Assignment Matrix", href: "/template-assignments", icon: Grid3x3     },
       { name: "Workflow Settings", href: "/workflow-settings",    icon: Settings    },
+      { name: "Portal Settings",   href: "/portal-settings",      icon: Globe       },
       { name: "Integrations",      href: "/integrations",         icon: Plug        },
       { name: "Billing",           href: "/billing",              icon: CreditCard  },
       { name: "Compliance",        href: "/compliance",           icon: Shield      },

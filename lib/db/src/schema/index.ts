@@ -40,5 +40,8 @@ export * from "./api_keys";
 export * from "./self_heal_sessions";
 export * from "./competitive_intel";
 export * from "./webhook_deliveries";
+export * from "./portal_users";
+export * from "./portal_audit_log";
+export * from "./firm_portal_configs";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";
