@@ -107,6 +107,9 @@ const AUTH_ONLY_ROUTES = new Set([
   // billing router — minimal subscription posture for the global banner;
   // any authenticated user can read it (no Stripe IDs surfaced).
   "billing GET /firm-status",
+  // firm invites — any authenticated firm member can view or mint invite links.
+  "auth GET /firm-invites",
+  "auth POST /firm-invites",
 ]);
 
 interface RouteIssue {

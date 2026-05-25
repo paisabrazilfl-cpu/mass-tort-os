@@ -492,14 +492,14 @@ const CreateInviteBody = z.object({
 });
 
 /**
- * List the requester's firm's outstanding + historical invites. Admin
- * only. Each row exposes status (pending / claimed / expired) but never
- * the plaintext token — the link is only surfaced once, on creation.
+ * List the requester's firm's outstanding + historical invites. Any
+ * authenticated firm member can view. Each row exposes status (pending /
+ * claimed / expired) but never the plaintext token — the link is only
+ * surfaced once, on creation.
  */
 router.get(
   "/firm-invites",
   authMiddleware,
-  requirePermission(Permission.INVITES_MANAGE),
   async (req, res) => {
     const firmId = req.user!.firm_id;
     if (firmId == null) {
@@ -533,15 +533,14 @@ router.get(
 );
 
 /**
- * Mint a new firm invite. Admin only. The plaintext token is returned
- * EXACTLY once in this response — it is never persisted in plaintext
- * and never re-readable from /firm-invites GET. The caller renders a
- * shareable URL (`/register?invite=<token>`) for the admin to hand off.
+ * Mint a new firm invite. Any authenticated firm member can create one.
+ * The plaintext token is returned EXACTLY once in this response — it is
+ * never persisted in plaintext and never re-readable from /firm-invites GET.
+ * The caller renders a shareable URL (`/register?invite=<token>`).
  */
 router.post(
   "/firm-invites",
   authMiddleware,
-  requirePermission(Permission.INVITES_MANAGE),
   async (req, res) => {
     const parsed = CreateInviteBody.safeParse(req.body ?? {});
     if (!parsed.success) {
