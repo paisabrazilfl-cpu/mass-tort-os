@@ -46,6 +46,7 @@ import automationWebhookRouter from "./automation-webhook";
 import aiObserverRouter from "./ai-observer";
 import aiChatRouter from "./ai-chat";
 import vendorPortalRouter from "./vendor-portal";
+import portalRouter from "./portal/index";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -144,6 +145,10 @@ router.use("/automations/webhook", automationWebhookRouter);
 router.use("/vapi-tools", vapiToolsRouter);
 // Vendor portal: token-gated, no JWT. Must be before authMiddleware.
 router.use("/vendor-portal", vendorPortalRouter);
+// Client portal: manages its own JWT layer (portalAuthMiddleware). Must be
+// before authMiddleware so portal routes are not gated by CRM credentials.
+markPublic(portalRouter, "portal");
+router.use("/portal", portalRouter);
 router.use(authMiddleware);
 // Firm context loads req.firm from the firm_id JWT claim stamped by the
 // auth middleware. Mounted before the subscription gate so the gate (and

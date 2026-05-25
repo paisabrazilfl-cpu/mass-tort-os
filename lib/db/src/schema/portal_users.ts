@@ -64,6 +64,11 @@ export const portalUsersTable = pgTable(
     signup_token_hash: text("signup_token_hash"),
     signup_token_expires_at: timestamp("signup_token_expires_at"),
 
+    // Single active refresh token stored as SHA-256 hash (one session per user
+    // for MVP). Cleared on logout / token_version bump. Null = no active session.
+    refresh_token_hash: text("refresh_token_hash"),
+    refresh_token_expires_at: timestamp("refresh_token_expires_at"),
+
     // Security hardening — mirrors mtos_users lockout pattern.
     last_login_at: timestamp("last_login_at"),
     failed_login_attempts: integer("failed_login_attempts").notNull().default(0),
