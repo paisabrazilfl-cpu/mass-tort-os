@@ -8,6 +8,7 @@ import { encryptLeadFields, decryptLeadFields, rebindLeadEncryptionAad } from ".
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
 import { runBackgroundCheck } from "../lib/background-check";
+import { provisionPortalInvite } from "../lib/portal-invite";
 import { searchPcl } from "../lib/pacer/pcl-client";
 import { runFullConflictCheck } from "../lib/conflict-engine";
 import { TORT_REGISTRY, validateTortClaim, getTortCategories } from "../lib/tort-engine";
@@ -989,6 +990,10 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
           updated_at: new Date(),
         })
         .where(eq(leadsTable.id, lead.id));
+
+      if (bgCheck.status === "clean") {
+        void provisionPortalInvite(lead.id);
+      }
     } catch (bgErr) {
       logger.warn({ err: bgErr, leadId: lead.id }, "Background check failed post-insert");
     }
