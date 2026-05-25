@@ -15,9 +15,6 @@
 import crypto from "crypto";
 import { db, firmInvitesTable, firmsTable } from "@workspace/db";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
-import { enqueueJob } from "./queue";
-import { resolveAppPublicUrl } from "./email-verification";
-import { logger } from "./logger";
 
 // Single-use semantics are enforced via the `claimed_at` column rather
 // than `claimed_by_user_id`. The reason: registration needs to know the
@@ -222,62 +219,4 @@ export async function listInvitesForFirm(firmId: number): Promise<FirmInviteRow[
     .where(eq(firmInvitesTable.firm_id, firmId))
     .orderBy(desc(firmInvitesTable.created_at))
     .limit(100);
-}
-
-/**
- * Revoke an outstanding (unclaimed) invite. Firm-scoped so an admin can
- * never delete another firm's invite even by guessing the id. Returns
- * false when no matching unclaimed invite existed.
- */
-export async function revokeInvite(id: number, firmId: number): Promise<boolean> {
-  const rows = await db
-    .delete(firmInvitesTable)
-    .where(
-      and(
-        eq(firmInvitesTable.id, id),
-        eq(firmInvitesTable.firm_id, firmId),
-        isNull(firmInvitesTable.claimed_at),
-      ),
-    )
-    .returning({ id: firmInvitesTable.id });
-  return rows.length > 0;
-}
-
-/** Build the user-facing invite-acceptance URL (the SPA /register page). */
-export function buildInviteUrl(plaintext: string): string {
-  return `${resolveAppPublicUrl()}/register?invite=${encodeURIComponent(plaintext)}`;
-}
-
-/**
- * Email a firm invitation. The recipient address IS the account they will
- * sign in with — registration locks the email to it. Delivery is enqueued
- * onto the job queue (same retry path as the verification email); never
- * throws back into the request.
- */
-export async function sendFirmInviteEmail(
-  to: string,
-  firmName: string,
-  plaintextToken: string,
-): Promise<void> {
-  const link = buildInviteUrl(plaintextToken);
-  const safeFirm = (firmName || "your team").replace(/[<>&]/g, "");
-  const safeTo = to.replace(/[<>&]/g, "");
-  const subject = `You're invited to join ${safeFirm} on Mass Tort OS`;
-  const text =
-    `You've been invited to join ${safeFirm} on Mass Tort OS.\n\n` +
-    `Set up your account here — ${safeTo} will be your sign-in address:\n\n${link}\n\n` +
-    `This invitation expires in 14 days. If you weren't expecting it, you can ignore this email.\n\n` +
-    `— Mass Tort OS`;
-  const html =
-    `<p>You've been invited to join <strong>${safeFirm}</strong> on Mass Tort OS.</p>` +
-    `<p>Set up your account below — <strong>${safeTo}</strong> will be your sign-in address:</p>` +
-    `<p><a href="${link}">Accept your invitation</a></p>` +
-    `<p>This invitation expires in 14 days. If you weren't expecting it, you can ignore this email.</p>` +
-    `<p>— Mass Tort OS</p>`;
-  try {
-    await enqueueJob("send_workflow_email", { to, to_name: to, subject, html, text });
-    logger.info({ to, firm: safeFirm }, "Firm invite email queued");
-  } catch (err) {
-    logger.error({ err, to }, "Failed to enqueue firm invite email");
-  }
 }

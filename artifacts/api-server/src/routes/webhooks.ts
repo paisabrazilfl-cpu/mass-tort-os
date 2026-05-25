@@ -13,11 +13,8 @@
  * Errors are logged + audited.
  */
 import { Router } from "express";
-import { dispatchTrigger } from "../lib/automations/dispatch";
-import { processInboundFax } from "../lib/fax/inbound";
 import {
   db,
-  pool,
   documentEnvelopesTable,
   integrationsTable,
   firmsTable,
@@ -41,8 +38,8 @@ import { verifyFastenSignature } from "../lib/fasten/webhook";
 import { getFastenWebhookSecret } from "../lib/fasten/client";
 import { fastenConnectionsTable } from "@workspace/db";
 import { enqueueJob } from "../lib/queue";
+import { dispatchTrigger } from "../lib/automations/dispatch";
 import { getEmailVerifier, getSmsVerifier, type VerifyContext, type SignatureStatus } from "../lib/webhook-verifiers";
-import { markWebhookProcessed } from "../lib/webhook-idempotency";
 import { invalidateStripeConfiguredCache } from "../lib/subscription-gate";
 import type Stripe from "stripe";
 
@@ -109,6 +106,17 @@ async function applyEnvelopeEvent(provider: string, evt: NormalizedEvent): Promi
     } catch (err) {
       logger.error({ err, envelope_id: env.id }, "onEnvelopeSigned threw — ignoring to keep webhook 200");
     }
+    // Dispatch internal automation trigger for trigger.document_signed workflows.
+    void dispatchTrigger("trigger.document_signed", {
+      input: {
+        envelope_id: env.id,
+        lead_id: env.lead_id ?? null,
+        external_envelope_id: evt.externalEnvelopeId,
+        provider,
+      },
+      firmId: (env as unknown as { firm_id?: number | null }).firm_id ?? null,
+      source: `webhook:${provider}`,
+    });
   }
 }
 
@@ -117,36 +125,13 @@ async function applyEnvelopeEvent(provider: string, evt: NormalizedEvent): Promi
  * If multiple are active we just take the first; admins are advised to keep one per provider.
  */
 async function loadProviderSecret(provider: string, secretField: string): Promise<string | null> {
-  // Multi-firm note: provider webhooks (Stripe, Dropbox Sign, DocuSign, …)
-  // arrive from external services with no firm context in the URL. We try
-  // EVERY active integration row for the provider in turn — the one whose
-  // secret successfully verifies the signature IS the firm the callback
-  // belongs to (cryptographic discovery). Returning the first secret here
-  // and trusting it would let firm B's secret silently validate firm A's
-  // signature; the caller's signature check guards against that, but to be
-  // explicit we also surface a warning when more than one firm has the same
-  // provider active so an operator can resolve the ambiguity. Each call
-  // returns one secret at a time so the existing single-secret callers keep
-  // working in the single-firm shell.
   const rows = await db
     .select()
     .from(integrationsTable)
     .where(eq(integrationsTable.provider, provider));
-  const active = rows.filter((r) => r.status === "active");
-  if (active.length === 0) return null;
-  if (active.length > 1) {
-    const distinctFirms = new Set(active.map((r) => r.firm_id));
-    if (distinctFirms.size > 1) {
-      logger.warn(
-        { provider, secretField, firmCount: distinctFirms.size, firmIds: [...distinctFirms] },
-        "loadProviderSecret: multiple firms have the same provider active — webhook routing is firm-ambiguous until each firm gets a distinct webhook URL",
-      );
-    }
-  }
-  for (const row of active) {
-    // Pass row.firm_id into the credential lookup so the AAD-scoped decrypt
-    // path stays explicit about whose row we are reading.
-    const creds = await getIntegrationCredentialsById(row.id, row.firm_id ?? undefined);
+  for (const row of rows) {
+    if (row.status !== "active") continue;
+    const creds = await getIntegrationCredentialsById(row.id);
     const val = creds && (creds as Record<string, unknown>)[secretField];
     if (typeof val === "string" && val.length > 0) return val;
   }
@@ -614,6 +599,17 @@ async function applyVapiEvent(body: unknown): Promise<void> {
           updated_at: new Date(),
         })
         .where(eq(callLogsTable.id, row.id));
+      // Dispatch trigger.inbound_call to any enabled automation workflows.
+      void dispatchTrigger("trigger.inbound_call", {
+        input: {
+          call_id: row.id,
+          vapi_call_id: vapiCallId,
+          lead_id: row.lead_id ?? null,
+          duration,
+        },
+        firmId: row.firm_id ?? null,
+        source: "vapi_webhook",
+      });
       return;
     }
     case "intake-result": {
@@ -713,6 +709,23 @@ async function applyTelnyxSmsEvent(body: unknown): Promise<void> {
       setFailed = true;
       errorDetail = p.data?.payload?.errors?.[0]?.detail ?? "telnyx_failed";
       break;
+    case "message.received": {
+      // Inbound SMS — dispatch trigger but do not update outbound sms_messages table.
+      // Cast to a wider type because TelnyxSmsWebhookPayload models outbound-only fields.
+      type InboundPl = { from?: { phone_number?: string }; text?: string; to?: Array<{ phone_number?: string }> };
+      const inboundPl = p.data?.payload as unknown as InboundPl | undefined;
+      void dispatchTrigger("trigger.inbound_sms", {
+        input: {
+          message_id: messageId,
+          from: inboundPl?.from?.phone_number ?? null,
+          body: inboundPl?.text ?? null,
+          to: inboundPl?.to?.[0]?.phone_number ?? null,
+        },
+        firmId: null,
+        source: "telnyx_webhook",
+      });
+      return;
+    }
     default:
       logger.info({ eventType }, "telnyx sms webhook: unhandled event type");
       return;
@@ -821,74 +834,21 @@ function buildVerifyCtx(req: import("express").Request): VerifyContext {
  * the webhook still 200s but signature_status falls through to
  * "unverified".
  */
-async function loadProviderForWebhook(
-  provider: string,
-  explicitIntegrationId?: number | null,
-): Promise<{
+async function loadProviderForWebhook(provider: string): Promise<{
   integrationId: number | null;
-  firmId: number | null;
   creds: import("./integrations").DecryptedCredentials | null;
 }> {
-  // Per-firm webhook URL path: if the inbound webhook URL carried an
-  // explicit integration id (e.g. /api/webhooks/sms/telnyx/i/42) we use
-  // that row directly instead of guessing among all active integrations
-  // for the provider. This is the disambiguation hook the prior audit
-  // flagged: providers like Telnyx send all callbacks to one URL, so
-  // until a firm registers its own per-firm URL with the provider the
-  // server has to guess. With this path, Firm B can configure Telnyx to
-  // POST to /api/webhooks/sms/telnyx/i/<firm-B-integration-id> and the
-  // server will route to that exact row, no ambiguity.
-  if (explicitIntegrationId && Number.isFinite(explicitIntegrationId)) {
-    const [row] = await db
-      .select({ id: integrationsTable.id, status: integrationsTable.status, firm_id: integrationsTable.firm_id, provider: integrationsTable.provider })
-      .from(integrationsTable)
-      .where(eq(integrationsTable.id, explicitIntegrationId));
-    if (!row || row.status !== "active") return { integrationId: null, firmId: null, creds: null };
-    if (row.provider !== provider) {
-      logger.warn(
-        { url_provider: provider, row_provider: row.provider, integration_id: row.id },
-        "loadProviderForWebhook: explicit integration id is for a different provider — refusing to route",
-      );
-      return { integrationId: null, firmId: null, creds: null };
-    }
-    const creds = await getIntegrationCredentialsById(row.id, row.firm_id ?? undefined);
-    return { integrationId: row.id, firmId: row.firm_id ?? null, creds };
-  }
   const rows = await db
-    .select({ id: integrationsTable.id, status: integrationsTable.status, firm_id: integrationsTable.firm_id })
+    .select({ id: integrationsTable.id, status: integrationsTable.status })
     .from(integrationsTable)
     .where(eq(integrationsTable.provider, provider));
-  const active = rows.filter((r) => r.status === "active");
-  if (active.length === 0) return { integrationId: null, firmId: null, creds: null };
-  if (active.length > 1) {
-    const distinctFirms = new Set(active.map((r) => r.firm_id));
-    if (distinctFirms.size > 1) {
-      logger.warn(
-        { provider, firmCount: distinctFirms.size, firmIds: [...distinctFirms] },
-        "loadProviderForWebhook: multiple firms have this provider active — picking the first match. Switch each firm to the per-firm /i/:integrationId URL to disambiguate.",
-      );
-    }
-  }
-  const chosen = active[0];
-  const creds = await getIntegrationCredentialsById(chosen.id, chosen.firm_id ?? undefined);
-  return { integrationId: chosen.id, firmId: chosen.firm_id ?? null, creds };
+  const active = rows.find((r) => r.status === "active");
+  if (!active) return { integrationId: null, creds: null };
+  const creds = await getIntegrationCredentialsById(active.id);
+  return { integrationId: active.id, creds };
 }
 
-// Parse the optional /i/:integrationId suffix from req.params. We accept
-// EITHER /api/webhooks/<channel>/:provider OR /api/webhooks/<channel>/:provider/i/:integrationId
-// using the same handler, which keeps Express route registrations simple.
-function readExplicitIntegrationId(req: import("express").Request): number | null {
-  const raw = (req.params as Record<string, string>).integrationId;
-  if (!raw) return null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-// Two route shapes share the same handler:
-//   /api/webhooks/email/:provider                       — single-firm or "any active integration" routing
-//   /api/webhooks/email/:provider/i/:integrationId      — per-firm: provider posts to a URL that names the
-//                                                          exact integration row, no cross-firm ambiguity.
-router.post(["/email/:provider", "/email/:provider/i/:integrationId"], async (req, res) => {
+router.post("/email/:provider", async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
   if (!EMAIL_EVENT_PROVIDERS.has(provider)) {
     notFound(res, "unknown_email_provider");
@@ -900,7 +860,7 @@ router.post(["/email/:provider", "/email/:provider/i/:integrationId"], async (re
     ? [req.body]
     : [];
 
-  const { integrationId, firmId, creds } = await loadProviderForWebhook(provider, readExplicitIntegrationId(req));
+  const { integrationId, creds } = await loadProviderForWebhook(provider);
 
   // Verify ONCE per request — provider sigs cover the whole rawBody.
   const verifier = getEmailVerifier(provider);
@@ -917,32 +877,10 @@ router.post(["/email/:provider", "/email/:provider/i/:integrationId"], async (re
     const externalId = pickFirstString(evt, ["MessageID", "messageId", "message_id", "id", "sg_message_id"]);
     const eventType = pickFirstString(evt, ["RecordType", "event", "type", "EventType"]) ?? "unknown";
     const recipient = pickFirstString(evt, ["Recipient", "recipient", "email", "To"]);
-
-    // Idempotency: skip duplicates from provider retries. We dedup on the
-    // composite (provider, externalId+eventType) because some providers
-    // (SendGrid, Postmark) re-use a single message id across delivered /
-    // opened / clicked events — each event type is a distinct first
-    // sighting from our perspective.
-    const dedupKey = externalId ? `${externalId}:${eventType}` : null;
-    const isFirstSighting = dedupKey
-      ? await markWebhookProcessed({
-          provider,
-          externalEventId: dedupKey,
-          firmId,
-          integrationId,
-          eventType,
-        })
-      : true;
-    if (!isFirstSighting) continue;
-
     try {
       await db.insert(emailEventsTable).values({
         integration_id: integrationId,
-        // firmId is resolved from the matched integration row. Until the
-        // outbound email_messages table ships (per-message firm), this is
-        // the best correlation we have — better than NULL which made the
-        // events un-filterable per firm.
-        firm_id: firmId,
+        firm_id: null,   // email correlation requires an outbound email_messages table; not yet shipped
         lead_id: null,
         provider,
         external_message_id: externalId,
@@ -958,7 +896,7 @@ router.post(["/email/:provider", "/email/:provider/i/:integrationId"], async (re
   res.json({ ok: true, received: events.length, signature_status: signatureStatus });
 });
 
-router.post(["/fax/:provider", "/fax/:provider/i/:integrationId"], async (req, res) => {
+router.post("/fax/:provider", async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
   if (!FAX_EVENT_PROVIDERS.has(provider)) {
     notFound(res, "unknown_fax_provider");
@@ -966,7 +904,7 @@ router.post(["/fax/:provider", "/fax/:provider/i/:integrationId"], async (req, r
   }
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
 
-  const { integrationId, firmId } = await loadProviderForWebhook(provider, readExplicitIntegrationId(req));
+  const { integrationId } = await loadProviderForWebhook(provider);
   // No documented common signature schemes for srfax/efax/phaxio/documo/telnyx_fax
   // (Telnyx Fax uses the same Ed25519 scheme as its SMS API but the v2 raw fax
   // webhook is opt-in and rarely configured). Mark unverified.
@@ -989,80 +927,26 @@ router.post(["/fax/:provider", "/fax/:provider/i/:integrationId"], async (req, r
     return Number.isFinite(n) ? n : null;
   })();
 
-  // Idempotency: dedup retries from the fax provider. Some providers
-  // (Phaxio, Documo) push a status-change event every time the queue
-  // state flips, so we key on externalId + eventType to keep each
-  // distinct transition while suppressing the literal retry.
-  const dedupKey = externalId ? `${externalId}:${eventType}` : null;
-  const isFirstSighting = dedupKey
-    ? await markWebhookProcessed({
-        provider,
-        externalEventId: dedupKey,
-        firmId,
-        integrationId,
-        eventType,
-      })
-    : true;
-  if (!isFirstSighting) {
-    res.json({ ok: true, deduped: true });
-    return;
-  }
-
-  let faxEventId: number | null = null;
   try {
-    const [evtRow] = await db
-      .insert(faxEventsTable)
-      .values({
-        integration_id: integrationId,
-        firm_id: firmId,
-        // lead_id is backfilled below if the inbound-fax intake correlates
-        // this fax to a claimant.
-        lead_id: null,
-        provider,
-        external_fax_id: externalId,
-        event_type: eventType.slice(0, 64),
-        status: status?.slice(0, 64),
-        pages,
-        signature_status: signatureStatus,
-        raw_payload: evt,
-      })
-      .returning({ id: faxEventsTable.id });
-    faxEventId = evtRow?.id ?? null;
+    await db.insert(faxEventsTable).values({
+      integration_id: integrationId,
+      firm_id: null,   // fax correlation requires an outbound fax_messages table; not yet shipped
+      lead_id: null,
+      provider,
+      external_fax_id: externalId,
+      event_type: eventType.slice(0, 64),
+      status: status?.slice(0, 64),
+      pages,
+      signature_status: signatureStatus,
+      raw_payload: evt,
+    });
   } catch (err) {
     logger.warn({ err, provider }, "fax_events insert failed");
   }
-
-  // Inbound-fax intake (Stage 4): for a *received* fax, download the
-  // document, correlate it to a claimant by sender number, store it on the
-  // profile, and fire trigger.inbound_fax. Outbound delivery-status
-  // callbacks are skipped. Never throws.
-  const inbound = await processInboundFax({
-    provider,
-    firmId,
-    integrationId,
-    externalFaxId: externalId ?? null,
-    eventType,
-    status: status ?? null,
-    payload: evt as Record<string, unknown>,
-  });
-  if (inbound.handled && inbound.lead_id != null && faxEventId != null) {
-    await db
-      .update(faxEventsTable)
-      .set({ lead_id: inbound.lead_id })
-      .where(eq(faxEventsTable.id, faxEventId))
-      .catch((err) => logger.warn({ err }, "fax_events lead_id backfill failed"));
-  }
-
-  res.json({
-    ok: true,
-    signature_status: signatureStatus,
-    inbound: inbound.handled
-      ? { lead_id: inbound.lead_id, fax_result_id: inbound.fax_result_id }
-      : { handled: false, reason: inbound.reason },
-  });
+  res.json({ ok: true, signature_status: signatureStatus });
 });
 
-router.post(["/sms/:provider", "/sms/:provider/i/:integrationId"], async (req, res) => {
+router.post("/sms/:provider", async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
   // twilio is allowed here so its signature scheme is enforced via the
   // shared verifier registry; bandwidth/plivo/messagebird/sinch are
@@ -1074,7 +958,7 @@ router.post(["/sms/:provider", "/sms/:provider/i/:integrationId"], async (req, r
   }
   const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
 
-  const { integrationId, firmId, creds } = await loadProviderForWebhook(provider, readExplicitIntegrationId(req));
+  const { integrationId, creds } = await loadProviderForWebhook(provider);
   const verifier = getSmsVerifier(provider);
   let signatureStatus: SignatureStatus = "unverified";
   if (verifier) signatureStatus = verifier(buildVerifyCtx(req), creds);
@@ -1102,24 +986,6 @@ router.post(["/sms/:provider", "/sms/:provider/i/:integrationId"], async (req, r
     if (["sent", "queued", "accepted"].includes(s)) return s;
     return s.slice(0, 30);
   })();
-
-  // Idempotency: providers retry every 5xx / timeout. Without a dedup
-  // ledger a duplicate retry would re-stamp delivered_at / failed_at and
-  // re-fire any automation that listens on the row. markWebhookProcessed
-  // claims the (provider, externalId) pair atomically.
-  const isFirstSighting = externalId
-    ? await markWebhookProcessed({
-        provider,
-        externalEventId: externalId,
-        firmId,
-        integrationId,
-        eventType: status,
-      })
-    : true;
-  if (!isFirstSighting) {
-    res.json({ ok: true, signature_status: signatureStatus, deduped: true });
-    return;
-  }
 
   // SECURITY: only mutate sms_messages when the signature was actually
   // verified. "unverified" means we either lack the secret or the header
@@ -1184,7 +1050,7 @@ function normalizeVoiceStatus(raw: string | undefined): string {
   return s.slice(0, 30);
 }
 
-router.post(["/voice/:provider", "/voice/:provider/i/:integrationId"], async (req, res) => {
+router.post("/voice/:provider", async (req, res) => {
   const provider = String(req.params.provider || "").toLowerCase();
   if (!VOICE_EVENT_PROVIDERS.has(provider)) {
     notFound(res, "unknown_voice_provider");
@@ -1198,7 +1064,7 @@ router.post(["/voice/:provider", "/voice/:provider/i/:integrationId"], async (re
   // `x-<provider>-signature` header (HMAC-SHA256 over rawBody). Anything
   // we cannot verify falls back to "unverified" and is blocked from
   // persisting below.
-  const { creds: voiceCreds } = await loadProviderForWebhook(provider, readExplicitIntegrationId(req));
+  const { creds: voiceCreds } = await loadProviderForWebhook(provider);
   let signatureStatus: SignatureStatus = "unverified";
   const voiceSecret = typeof voiceCreds?.client_secret === "string" ? voiceCreds.client_secret : null;
   const voiceSig =
@@ -1387,119 +1253,6 @@ router.post("/fasten", async (req, res) => {
   } catch (err) {
     logger.error({ err }, "Fasten webhook handler error");
     res.status(200).json({ ok: true, note: "handler_error_logged" });
-  }
-});
-
-
-// ── Trigger automation workflows on document signed ──────────────────────
-// Hooked from the Dropbox Sign / DocuSign webhook handlers above.
-// dispatchTrigger is fire-and-forget so webhook always 200 OK.
-export function dispatchDocumentSigned(payload: {
-  lead_id: number | null;
-  envelope_id: number | null;
-  provider: string;
-  external_envelope_id: string | null;
-  signed_at: string;
-  firm_id?: number | null;
-}): void {
-  if (!payload.lead_id) return;
-  dispatchTrigger("trigger.document_signed", {
-    input: payload,
-    firmId: payload.firm_id ?? null,
-    source: "webhooks.document_signed",
-  }).catch((err) => {
-    logger.error({ err, lead_id: payload.lead_id, envelope_id: payload.envelope_id }, "dispatchTrigger document_signed failed");
-  });
-}
-
-export function dispatchInboundCall(payload: {
-  call_id: number;
-  lead_id?: number | null;
-  from_number?: string | null;
-  to_number?: string | null;
-  firm_id?: number | null;
-}): void {
-  dispatchTrigger("trigger.inbound_call", {
-    input: payload,
-    firmId: payload.firm_id ?? null,
-    source: "webhooks.inbound_call",
-  }).catch((err) => {
-    logger.error({ err, call_id: payload.call_id }, "dispatchTrigger inbound_call failed");
-  });
-}
-
-export function dispatchInboundSms(payload: {
-  message_id: number;
-  lead_id?: number | null;
-  from_number?: string | null;
-  body?: string | null;
-  firm_id?: number | null;
-}): void {
-  dispatchTrigger("trigger.inbound_sms", {
-    input: payload,
-    firmId: payload.firm_id ?? null,
-    source: "webhooks.inbound_sms",
-  }).catch((err) => {
-    logger.error({ err, message_id: payload.message_id }, "dispatchTrigger inbound_sms failed");
-  });
-}
-
-
-// ── Automation workflow webhook trigger (PUBLIC — external provider callbacks) ──
-// Mounted on the public webhooks router so no JWT is needed.
-// Security: HMAC-SHA256 per-workflow slug+secret. Returns 200 for unknown slugs.
-router.post("/automation-trigger/:slugOrId", async (req, res) => {
-  const slugOrId = (req.params.slugOrId ?? "").slice(0, 100);
-  if (!slugOrId) { res.json({ ok: true }); return; }
-
-  const providedSig = req.headers["x-mtos-signature"] as string | undefined;
-
-  let wf: { id: number; trigger_config: unknown } | undefined;
-  try {
-    const raw = await pool.query<{ id: number; trigger_config: unknown }>(
-      `SELECT id, trigger_config FROM automation_workflows
-       WHERE enabled = true AND trigger_type = 'trigger.webhook'
-         AND (id::text = $1 OR trigger_config->>'slug' = $1) LIMIT 1`,
-      [slugOrId]
-    );
-    wf = raw.rows[0];
-  } catch (err) {
-    logger.error({ err, slugOrId }, "automation-trigger: db lookup failed");
-    res.json({ ok: true });
-    return;
-  }
-
-  if (!wf) { res.json({ ok: true }); return; } // no enumeration
-
-  const config = (wf.trigger_config ?? {}) as Record<string, unknown>;
-  const secret = typeof config["secret"] === "string" ? config["secret"] : null;
-
-  if (secret) {
-    if (!providedSig) { res.status(401).json({ error: "x-mtos-signature required" }); return; }
-    const { createHmac, timingSafeEqual } = await import("node:crypto");
-    const rawBody = (req as any).rawBody || Buffer.from(JSON.stringify(req.body));
-    const expected = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
-    try {
-      const a = Buffer.from(providedSig);
-      const b = Buffer.from(expected);
-      if (a.length !== b.length || !timingSafeEqual(a, b)) {
-        res.status(401).json({ error: "Invalid signature" }); return;
-      }
-    } catch { res.status(401).json({ error: "Invalid signature" }); return; }
-  }
-
-  res.json({ ok: true, workflow_id: wf.id });
-  try {
-    const { dispatchTrigger } = await import("../lib/automations/dispatch");
-    dispatchTrigger("trigger.webhook", {
-      input: { body: req.body, headers: req.headers, slug: slugOrId },
-      firmId: null,
-      source: "webhooks.automation-trigger",
-    }).catch((err) => {
-      logger.error({ err, slug: slugOrId, workflow_id: wf!.id }, "dispatchTrigger automation-trigger failed");
-    });
-  } catch (err) {
-    logger.error({ err, workflow_id: wf.id }, "automation-trigger: dispatch setup failed");
   }
 });
 

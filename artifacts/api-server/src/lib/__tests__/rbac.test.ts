@@ -1,10 +1,6 @@
 // Disable audit writes before importing rbac.ts so audit module reads the
 // flag at import time and skips pg inserts.
 process.env["RBAC_DISABLE_AUDIT"] = "1";
-// Exercise the real five-role hierarchy. Production flattens every account
-// to admin (rbac.ts -> elevateRole); this suite must see the unflattened
-// model so its denial-path assertions hold.
-process.env["FLATTEN_ROLES_TO_ADMIN"] = "0";
 
 import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
@@ -758,7 +754,7 @@ describe("isCaseVisibleToUser()", () => {
     assert.equal(isCaseVisibleToUser(otherUser, orphanRow), false);
   });
 
-  for (const role of ["paralegal", "attorney", "admin", "super_admin"] as const) {
+  for (const role of ["paralegal", "attorney", "admin"] as const) {
     test(`${role} sees every row regardless of ownership (no per-row scope)`, () => {
       const u = { id: 1, role };
       assert.equal(isCaseVisibleToUser(u, ownedRow), true);

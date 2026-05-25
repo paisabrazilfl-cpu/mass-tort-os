@@ -23,9 +23,6 @@ export interface ApiKeyAuthResult {
   scopes: readonly string[];
   user_id: number;
   user_email: string;
-  // Mirrors UserRole in lib/rbac.ts. `super_admin` is included so a key
-  // created by the platform owner resolves to the full permission set —
-  // a wildcard-scope ("*") key created by a super_admin is the master key.
   user_role: "super_admin" | "admin" | "attorney" | "paralegal" | "viewer";
   firm_id: number;
 }
@@ -84,9 +81,7 @@ export async function authenticateApiKey(plaintext: string): Promise<ApiKeyAuthR
   db.update(apiKeysTable)
     .set({ last_used_at: new Date() })
     .where(eq(apiKeysTable.id, row.id))
-    .catch((err) => {
-      logger.warn({ err, api_key_id: row.id }, "api-key last_used_at update failed");
-    });
+    .catch(() => {});
 
   return {
     id: row.id,

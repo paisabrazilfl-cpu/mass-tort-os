@@ -6,6 +6,7 @@ export type JobType =
   | "create_case"
   | "ingest_file"
   | "analyze_case"
+  | "process_fax"
   | "send_esign_packet"
   | "fax_med_records_request"
   | "send_workflow_email"
@@ -13,9 +14,15 @@ export type JobType =
   | "fasten_records_sync";
 
 export interface JobPayload {
-  create_case: { case_id: string; data: Record<string, unknown>; created_by_user_id?: number | null; firm_id?: number | null };
+  create_case: { case_id: string; data: Record<string, unknown>; created_by_user_id?: number | null };
   ingest_file: { case_id: string; file_name: string; content: string; content_type?: string };
   analyze_case: { case_id: string };
+  process_fax: {
+    fax_result_id: number;
+    vault_path: string;
+    source_file: string;
+    mime_type: string;
+  };
   send_esign_packet: {
     lead_id: number;
     template_id: number;
@@ -81,15 +88,13 @@ function backoffUntil(retryCount: number): Date {
 
 export async function enqueueJob<T extends JobType>(
   job_type: T,
-  payload: JobPayload[T] & { firm_id?: number | null }
+  payload: JobPayload[T]
 ): Promise<number> {
-  const { firm_id, ...restPayload } = payload;
   const [job] = await db
     .insert(jobQueueTable)
     .values({
       job_type,
-      payload: restPayload as Record<string, unknown>,
-      firm_id: firm_id ?? (restPayload as any).firm_id ?? null,
+      payload: payload as Record<string, unknown>,
       status: "pending",
     })
     .returning({ id: jobQueueTable.id });

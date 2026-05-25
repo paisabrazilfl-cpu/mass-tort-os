@@ -26,10 +26,6 @@ process.env["RBAC_DISABLE_AUDIT"] = "1";
 // this, every PUT/POST in the matrix would trip the 402 NO_FIRM branch
 // because the ephemeral test users aren't members of any firm.
 process.env["MTOS_DISABLE_BILLING_GATE"] = "1";
-// Role flattening off — this suite exercises the real five-role hierarchy
-// (the production default promotes every account to admin; see
-// rbac.ts → elevateRole). Without this the deny rows below would all pass.
-process.env["FLATTEN_ROLES_TO_ADMIN"] = "0";
 
 // Typed helpers (no `as any`).
 
@@ -110,7 +106,7 @@ before(async () => {
 
   // One ephemeral user per role. Password hash is a placeholder — we mint
   // JWTs directly, the login path doesn't run.
-  for (const role of ["admin", "attorney", "paralegal", "viewer"] as const) {
+  for (const role of ["admin", "user_manager", "attorney", "paralegal", "agent", "viewer"] as const) {
     const email = `rbac-matrix-${role}-${TS}@mtos.test`;
     const inserted = await db.execute(sql`
       INSERT INTO mtos_users (email, name, role, password_hash, token_version, firm_id)
@@ -175,21 +171,29 @@ async function probe(
 // 1. Public allowlist enforcement (asserts against validateRouteTable's policy).
 
 describe("public allowlist (validateRouteTable policy)", () => {
-  test("only health / forms-public / web-forms / webhooks routers are stamped 'public'", () => {
+  test("only known public routers are stamped 'public'", () => {
     if (!booted) throw new Error("app not booted");
     const publicRouters = new Set(
       booted.policy
         .filter((p) => p.status === "public")
         .map((p) => p.router),
     );
-    const expected = new Set(["health", "forms-public", "web-forms", "webhooks", "vapi-tools", "spa"]);
+    const expected = new Set([
+      "health",
+      "forms-public",
+      "web-forms",
+      "webhooks",
+      "vapi-tools",
+      "spa",
+      "automation-webhook",
+    ]);
     for (const r of publicRouters) {
       assert.ok(expected.has(r), `unexpected public router: ${r}`);
     }
     assert.ok(publicRouters.size > 0, "expected at least one public router in policy");
   });
 
-  test("auth router exceptions are exactly login / refresh / register / verify-email / invite-info / magic-link", () => {
+  test("auth router exceptions are exactly login / refresh / register / verify-email / invite-info", () => {
     if (!booted) throw new Error("app not booted");
     const exceptions = booted.policy
       .filter((p) => p.status === "auth-exception")
@@ -206,23 +210,12 @@ describe("public allowlist (validateRouteTable policy)", () => {
     // hashed token in the query string is the credential, and the
     // response carries no token / hash material — only firm name and
     // optional email prefill so the /register page can render context.
-    //
-    // POST /magic-link/request + /magic-link/verify are the passwordless
-    // email sign-in pair. Both bootstrap a session for a user who has
-    // none; the single-use, short-lived, SHA-256-hashed token is the
-    // credential (see lib/magic-link.ts).
     assert.deepEqual(exceptions, [
       "GET /invite-info",
       "GET /verify-email",
       "POST /login",
-      "POST /magic-link/request",
-      "POST /magic-link/verify",
-      "POST /passkey/login/options",
-      "POST /passkey/login/verify",
       "POST /refresh",
       "POST /register",
-      "POST /sms/request",
-      "POST /sms/verify",
     ]);
   });
 
@@ -237,20 +230,12 @@ describe("public allowlist (validateRouteTable policy)", () => {
     // Cross-check the auth-only allowlist against the policy report.
     const authOnly = booted.policy.filter((p) => p.status === "auth-only").map((p) => `${p.router} ${p.method} ${p.path}`).sort();
     const expectedAuthOnly = [
-      "auth DELETE /passkey/credentials/:id",
-      "auth DELETE /phone",
       "auth GET /me",
-      "auth GET /passkey/credentials",
-      "auth GET /phone",
       "auth POST /change-password",
       "auth POST /logout",
       "auth POST /mfa/disable",
       "auth POST /mfa/setup",
       "auth POST /mfa/verify",
-      "auth POST /passkey/register/options",
-      "auth POST /passkey/register/verify",
-      "auth POST /phone/request",
-      "auth POST /phone/verify",
       "billing GET /firm-status",
       "forms GET /categories",
       "forms POST /validate/address",
@@ -405,25 +390,29 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
     );
   });
 
-  test("public path-prefix contract: every 'public' policy entry resolves under /api/healthz, /api/forms-public/, /api/web-forms/, /api/webhooks/, /api/vapi-tools/, or the SPA fallback (non-/api GETs)", () => {
+  test("public path-prefix contract: every 'public' policy entry resolves under an approved prefix or the SPA fallback (non-/api GETs)", () => {
     if (!booted) throw new Error("app not booted");
     // router-label → mounted URL prefix (mirror of routes/index.ts).
     const ROUTER_PREFIX: Record<string, string> = {
-      health: "/api",
+      health: "/api/health",
       "forms-public": "/api/forms-public",
       "web-forms": "/api/web-forms",
       webhooks: "/api/webhooks",
       "vapi-tools": "/api/vapi-tools",
+      // Automation webhook trigger: slug+HMAC-secret is the credential.
+      "automation-webhook": "/api/automations/webhook",
       // SPA fallback: serves the React shell (index.html) for any non-/api GET
       // when the CRM static bundle is present. No PII, no auth required.
       spa: "",
     };
     const ALLOWED_PUBLIC_PREFIXES = [
       "/api/healthz",
+      "/api/health",
       "/api/forms-public/",
       "/api/web-forms/",
       "/api/webhooks/",
       "/api/vapi-tools/",
+      "/api/automations/webhook/",
     ];
     for (const p of booted.policy) {
       if (p.status !== "public") continue;
@@ -472,39 +461,42 @@ const MATRIX: MatrixRow[] = [
   {
     method: "GET",
     path: "/api/forms/config",
-    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
+    // user_manager has FORMS_CONFIG_VIEW (oversight); agent only has PUBLIC variant → deny
+    expect: { super_admin: "allow", admin: "allow", user_manager: "allow", attorney: "allow", paralegal: "deny", agent: "deny", viewer: "deny" },
   },
   {
     method: "GET",
     path: "/api/forms/config/test-tort",
-    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
     // 404 is a fine "allow" outcome (the test tort doesn't exist) — what we
     // care about is that the gate didn't 403.
+    expect: { super_admin: "allow", admin: "allow", user_manager: "allow", attorney: "allow", paralegal: "deny", agent: "deny", viewer: "deny" },
     allowStatuses: [200, 404],
   },
   {
     method: "GET",
     path: "/api/decision-engine/portfolio",
-    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "deny", viewer: "deny" },
+    // user_manager has DECISION_ENGINE_VIEW; agent does not
+    expect: { super_admin: "allow", admin: "allow", user_manager: "allow", attorney: "allow", paralegal: "deny", agent: "deny", viewer: "deny" },
   },
   {
     method: "PUT",
     path: "/api/decision-engine/settings",
     body: {},
-    expect: { super_admin: "allow", admin: "allow", attorney: "deny", paralegal: "deny", viewer: "deny" },
+    // Only super_admin/admin have DECISION_ENGINE_MANAGE
+    expect: { super_admin: "allow", admin: "allow", user_manager: "deny", attorney: "deny", paralegal: "deny", agent: "deny", viewer: "deny" },
     // PUT with empty body may 400; that still proves the role gate let admin in.
     allowStatuses: [200, 400, 422],
   },
   {
     method: "GET",
     path: "/api/auth/me",
-    expect: { super_admin: "allow", admin: "allow", attorney: "allow", paralegal: "allow", viewer: "allow" },
+    expect: { super_admin: "allow", admin: "allow", user_manager: "allow", attorney: "allow", paralegal: "allow", agent: "allow", viewer: "allow" },
   },
 ];
 
 describe("role × route allow/deny matrix", () => {
   for (const row of MATRIX) {
-    for (const role of ["super_admin", "admin", "attorney", "paralegal", "viewer"] as const) {
+    for (const role of ["admin", "user_manager", "attorney", "paralegal", "agent", "viewer"] as const) {
       const expected = row.expect[role];
       test(`${role.padEnd(9)} ${row.method} ${row.path} ⇒ ${expected}`, async () => {
         const r = await probe(row.method, row.path, { token: tokenFor(role), body: row.body });
@@ -943,7 +935,7 @@ describe("real login + MFA smoke test (Task #51 T005, blocker #20)", () => {
         userRows as unknown as { rows?: Array<{ id: number; role: string }> }
       ).rows?.[0];
       assert.ok(userRow, "register must persist a user row even without issuing a token");
-      assert.equal(userRow!.role, "admin", "public registration must assign admin role (single-tier model)");
+      assert.equal(userRow!.role, "viewer", "public registration must assign viewer role");
       cleanupIds.push(userRow!.id);
 
       // 2. Real /login (now that the row is verified): password path

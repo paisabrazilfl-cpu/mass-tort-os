@@ -6,7 +6,6 @@
 import { db, casesTable, caseDocumentsTable, analysisTable, faxResultsTable, reviewQueueTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./lib/logger";
-import { dispatchTrigger } from "./lib/automations/dispatch";
 import { claimNextJob, markJobDone, markJobFailed, reclaimStaleProcessingJobs } from "./lib/queue";
 import { saveFile, readFile, listCaseFiles } from "./lib/vault";
 import { extractFeatures } from "./lib/ai-extract";
@@ -73,11 +72,10 @@ async function processJob(job: {
   logger.info({ job_id: job.id, job_type: job.job_type }, "Processing job");
 
   if (job.job_type === "create_case") {
-    const { case_id, data, created_by_user_id, firm_id } = payload as {
+    const { case_id, data, created_by_user_id } = payload as {
       case_id: unknown;
       data: unknown;
       created_by_user_id?: unknown;
-      firm_id?: unknown;
     };
     assertCaseId(case_id);
     if (data !== undefined && data !== null && (typeof data !== "object" || Array.isArray(data))) {
@@ -95,12 +93,6 @@ async function processJob(job: {
     const isRealUserId =
       typeof created_by_user_id === "number" && Number.isInteger(created_by_user_id) && created_by_user_id > 0;
     const ownerUserId = isRealUserId ? created_by_user_id : await ensureSystemUser();
-    // Multi-tenant stamp: the API enqueues firm_id from req.user.firm_id.
-    // For legacy queued payloads (pre-firm-scoping deploy) that omit it, we
-    // leave firm_id NULL — the analytics aggregates use an inner-join on
-    // firm so NULL rows are excluded everywhere instead of leaking globally.
-    const firmId =
-      typeof firm_id === "number" && Number.isInteger(firm_id) && firm_id > 0 ? firm_id : null;
     await db
       .insert(casesTable)
       .values({
@@ -108,11 +100,10 @@ async function processJob(job: {
         data: (data as Record<string, unknown>) ?? {},
         status: "open",
         created_by_user_id: ownerUserId,
-        firm_id: firmId,
       })
       .onConflictDoNothing();
-    await auditLog("case", case_id, "created", { data: data ?? {}, created_by_user_id: ownerUserId, firm_id: firmId });
-    logger.info({ case_id, created_by_user_id: ownerUserId, firm_id: firmId }, "Case created");
+    await auditLog("case", case_id, "created", { data: data ?? {}, created_by_user_id: ownerUserId });
+    logger.info({ case_id, created_by_user_id: ownerUserId }, "Case created");
   } else if (job.job_type === "ingest_file") {
     const { case_id, file_name, content, content_type } = payload as {
       case_id: unknown;

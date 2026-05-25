@@ -9,18 +9,6 @@ import { searchPcl } from "../pacer/pcl-client";
 
 import { BACKGROUND_SOURCES } from "./sources";
 import { statusFromFlags } from "./escalation";
-import { searchEdgar } from "./sec-edgar";
-import { _runGarboCheckWithOverride, isGarboConfigured } from "./garbo";
-import { _lookupPhoneProvenanceWithOverride } from "./phone-provenance";
-import { enrichEmail } from "./email-enrichment";
-import {
-  bopInmateSearchUrl,
-  nsopwSearchUrl,
-  propertyRecordsSearchUrl,
-  stateBarSearchUrl,
-  stateSosSearchUrl,
-  vineLinkSearchUrl,
-} from "./smart-links";
 import type { BackgroundLane, BackgroundLaneResult, LeadLike } from "./types";
 
 // Adapters wrap (don't replace) existing real validators where we have them,
@@ -40,7 +28,6 @@ function makeResult(
   raw?: unknown,
   extraNotes: string[] = [],
   error?: string,
-  manualActionUrls?: BackgroundLaneResult["manual_action_urls"],
 ): BackgroundLaneResult {
   const evaluated = statusFromFlags(lane, flags);
   return {
@@ -53,7 +40,6 @@ function makeResult(
     checked_at: new Date().toISOString(),
     raw,
     error,
-    manual_action_urls: manualActionUrls,
   };
 }
 
@@ -114,14 +100,9 @@ export async function adaptEmail(lead: LeadLike): Promise<BackgroundLaneResult> 
   if (result.suggestion) {
     flags.push("typo_suggestion");
   }
-  // Email enrichment — disposable / role / free-provider signals from
-  // lib/bg-hub/email-enrichment.ts. The existing validator already
-  // emits some of these via its internal regex; we merge the canonical
-  // flag set here so the curated disposable-domain list (40+ entries)
-  // is the source of truth instead of the validator's smaller list.
-  const enrichment = enrichEmail(email);
-  for (const f of enrichment.flags) {
-    if (!flags.includes(f)) flags.push(f);
+  // Role-based heuristic on top of the validator (operator-facing).
+  if (/^(admin|info|support|sales|contact|noreply|no-reply)@/i.test(email)) {
+    flags.push("role_based_email");
   }
   // Never claim SMTP was checked — we don't do mailbox probing.
   flags.push("smtp_not_checked");
@@ -172,23 +153,11 @@ export async function adaptPhone(lead: LeadLike): Promise<BackgroundLaneResult> 
 }
 
 // ---------------------------------------------------------------------------
-// Residency — honest stub for automation, but emits a prefilled smart-link
-// to the local county property-records / appraiser portal so the operator
-// can run the lookup in one click. NCOA / county-records-aggregator
-// automation requires a paid integration (Smarty, ATTOM, LexisNexis Risk)
-// that we don't ship — the smart-link path is the free, ethical fallback.
+// Residency — honest stub. We have no live county-property-records adapter.
 // ---------------------------------------------------------------------------
 export async function adaptResidency(lead: LeadLike): Promise<BackgroundLaneResult> {
   const haveAddress = Boolean(lead.address && lead.city && lead.state);
   const flags = haveAddress ? ["no_residency_corroboration"] : ["residency_not_checked"];
-  const propertyUrl = propertyRecordsSearchUrl(lead);
-  const manualUrls = propertyUrl
-    ? [{
-        label: `Search ${lead.city ?? "local"} property records`,
-        url: propertyUrl,
-        note: "Verify the lead is listed on a current property/tax assessment for this address.",
-      }]
-    : undefined;
   return makeResult(
     "residency",
     flags,
@@ -201,8 +170,6 @@ export async function adaptResidency(lead: LeadLike): Promise<BackgroundLaneResu
     haveAddress
       ? ["Operator: confirm via county property/tax assessor lookup."]
       : ["Address incomplete — residency cannot be checked."],
-    undefined,
-    manualUrls,
   );
 }
 
@@ -238,33 +205,16 @@ export async function adaptCriminalCourt(lead: LeadLike): Promise<BackgroundLane
       flags.push("court_records_found_review");
     }
     // OFAC honesty check: runBackgroundCheck() can return status: "clean"
-    // even when OFAC was never actually queried or unreachable. It records
-    // the issue in `bg.notes` rather than mutating the headline status. We
-    // split that into two outcomes:
-    //
-    //   ofac_unconfigured — operator deliberately disabled Treasury and
-    //                       didn't supply an OFAC_API_KEY. Pre-flight
-    //                       signal, routes to NOT_RUN via the `skip`
-    //                       category in escalation.ts.
-    //   ofac_unavailable  — we tried and got nothing back (5xx, network
-    //                       error, malformed response). Routes to REVIEW.
-    //
-    // With the free Treasury SDN path enabled (default), the unconfigured
-    // branch is essentially unreachable. We keep emitting it so an
-    // operator who deliberately disables Treasury sees an honest NOT_RUN
-    // signal instead of a misleading REVIEW.
-    const ofacNotes = (bg.notes ?? []).filter((n) => /ofac/i.test(n));
-    const ofacUnconfigured = ofacNotes.some((n) =>
-      /skipped.*no\s+provider|unconfigured|not\s+configured/i.test(n),
+    // even when OFAC was never actually queried (key missing) or unreachable
+    // (provider HTTP error). It records the issue in `bg.notes` rather than
+    // mutating the headline status. We must inspect the notes and escalate
+    // to REVIEW so a partially-checked lead never silently PASSes through
+    // the criminal_court lane just because the court half came back clean.
+    const ofacSkipped = (bg.notes ?? []).some((n) =>
+      /ofac.*(skipped|unavailable|unconfigured|not\s+configured|provider)/i.test(n),
     );
-    const ofacUnreachable = ofacNotes.some(
-      (n) => !/skipped.*no\s+provider|unconfigured|not\s+configured/i.test(n)
-        && /unavailable|provider returned|http \d|timeout|unreachable/i.test(n),
-    );
-    if (ofacUnreachable) {
+    if (ofacSkipped) {
       flags.push("ofac_unavailable");
-    } else if (ofacUnconfigured) {
-      flags.push("ofac_unconfigured");
     }
     // Same defense for the courts side: if the source-notes call out the
     // CourtListener fetch failed but bg.status didn't propagate "error",
@@ -302,179 +252,51 @@ export async function adaptCriminalCourt(lead: LeadLike): Promise<BackgroundLane
 }
 
 // ---------------------------------------------------------------------------
-// Incarceration — stub for live data (Federal BOP has no stable JSON API
-// and most state DOCs are web-only). We emit smart-links to BOP's public
-// inmate locator and VINELink (which covers ~46 states) so the operator
-// can run the lookup in two clicks instead of typing the name into five
-// websites. Full automation requires a paid VINELink partner API key.
+// Incarceration — honest stub. Federal BOP has no stable JSON API.
 // ---------------------------------------------------------------------------
 export async function adaptIncarceration(lead: LeadLike): Promise<BackgroundLaneResult> {
-  const manualUrls: BackgroundLaneResult["manual_action_urls"] = [
-    {
-      label: "Search Federal BOP Inmate Locator",
-      url: bopInmateSearchUrl(lead),
-      note: "Confirms federal-prison custody status. BOP terms of use forbid automated queries; click to run manually.",
-    },
-  ];
-  const vine = vineLinkSearchUrl(lead);
-  if (vine) {
-    manualUrls.push({
-      label: lead.state ? `VINELink (${lead.state} state DOC)` : "VINELink (all-state inmate locator)",
-      url: vine,
-      note: "State + county custody lookup. Covers ~46 states.",
-    });
-  }
   return makeResult(
     "incarceration",
     ["incarceration_check_not_run"],
     {
       searched_name: fullName(lead),
-      manual_sources: ["Federal BOP Inmate Locator", "VINELink (state DOC)", "County jail lookup"],
+      manual_sources: ["Federal BOP Inmate Locator", "State DOC", "County jail lookup"],
     },
-    ["Operator: click a smart-link below to run the lookup. Full automation requires a paid VINELink partner API."],
-    undefined,
-    manualUrls,
+    ["Operator: BOP/DOC lookups must be done by hand — no live adapter wired."],
   );
 }
 
 // ---------------------------------------------------------------------------
-// Sex offender (NSOPW + Garbo) — hybrid lane.
-//
-// Direct NSOPW scraping is forbidden by their TOS, but Garbo (an
-// FCRA-compliant API-first provider) aggregates the sex-offender
-// registry data from compliant sources we can lawfully consume.
-// When the operator has wired up a Garbo integration we run the live
-// check; otherwise we fall back to the NSOPW prefilled smart-link the
-// operator clicks manually.
-//
-// Garbo signal mapping:
-//   hit with is_sex_offender_registry=true → flag "garbo_sex_offender_hit" → FAIL
-//   error / network failure                → flag "garbo_unreachable"     → REVIEW
-//   ok with empty hits                     → no flags                     → PASS
-//                                            (NSOPW smart-link still surfaced
-//                                            as a manual-confirm option)
+// Sex offender (NSOPW) — honest stub. NSOPW prohibits automated scraping.
 // ---------------------------------------------------------------------------
 export async function adaptNSOPW(lead: LeadLike): Promise<BackgroundLaneResult> {
-  const manualUrls: BackgroundLaneResult["manual_action_urls"] = [
-    {
-      label: "Search NSOPW (National Sex Offender Public Website)",
-      url: nsopwSearchUrl(lead),
-      note: "Manual fallback — click to run the lookup yourself. Always available regardless of Garbo configuration.",
-    },
-  ];
-
-  const garboConfigured = await isGarboConfigured().catch(() => false);
-  if (!garboConfigured) {
-    return makeResult(
-      "sex_offender_nsopw",
-      ["nsopw_manual_check_required"],
-      {
-        searched_name: fullName(lead),
-        searched_state: lead.state,
-        searched_zip: lead.zip,
-        source: "https://www.nsopw.gov/",
-        automation_policy:
-          "No fake PASS. Configure a Garbo integration (Settings → Integrations → Garbo) for live automated screening, or run NSOPW manually via the smart-link.",
-      },
-      ["Click the smart-link below to run NSOPW. Record the result before clearing this lane."],
-      undefined,
-      manualUrls,
-    );
-  }
-
-  // Garbo is configured — run the live check.
-  const garbo = await _runGarboCheckWithOverride({
-    first_name: lead.first_name ?? "",
-    last_name: lead.last_name ?? "",
-    date_of_birth: lead.dob ?? null,
-    state: lead.state ?? null,
-    email: lead.email ?? null,
-    phone: lead.phone ?? null,
-  });
-
-  if (garbo.status === "unconfigured") {
-    // Race: configured-check passed, then the row got disabled.
-    // Degrade gracefully to the smart-link path.
-    return makeResult(
-      "sex_offender_nsopw",
-      ["nsopw_manual_check_required"],
-      { searched_name: fullName(lead), garbo_status: "unconfigured", garbo_note: garbo.note },
-      ["Garbo integration disappeared between configuration check and call. Fall back to manual NSOPW lookup."],
-      undefined,
-      manualUrls,
-    );
-  }
-  if (garbo.status === "error") {
-    return makeResult(
-      "sex_offender_nsopw",
-      ["garbo_unreachable"],
-      { searched_name: fullName(lead), garbo_status: "error", garbo_note: garbo.note },
-      [`Garbo unreachable — falling back to manual NSOPW lookup. Reason: ${garbo.note}`],
-      garbo.note,
-      manualUrls,
-    );
-  }
-  // ok
-  const registryHits = garbo.hits.filter((h) => h.is_sex_offender_registry || h.category === "sexual");
-  const flags: string[] = [];
-  if (registryHits.length > 0) flags.push("garbo_sex_offender_hit");
   return makeResult(
     "sex_offender_nsopw",
-    flags,
+    ["nsopw_manual_check_required"],
     {
       searched_name: fullName(lead),
-      garbo_status: "ok",
-      garbo_hits_total: garbo.hits.length,
-      garbo_sex_offender_hits: registryHits,
-      garbo_all_hits: garbo.hits,
-      checked_at: garbo.checked_at,
+      searched_state: lead.state,
+      searched_zip: lead.zip,
+      source: "https://www.nsopw.gov/",
+      automation_policy:
+        "No fake PASS. Manual NSOPW lookup required — automated scraping is prohibited by NSOPW terms of use.",
     },
-    registryHits.length > 0
-      ? [`Garbo: ${registryHits.length} sex-offender registry hit${registryHits.length === 1 ? "" : "s"}.`]
-      : ["Garbo: no sex-offender registry hits."],
-    undefined,
-    manualUrls,
+    ["Open NSOPW manually and record the result before clearing this lane."],
   );
 }
 
 // ---------------------------------------------------------------------------
-// Attorney — full automation requires per-state bar API integrations
-// (10+ unique APIs, each paid or rate-limited). We emit a deep-link to
-// the lead's state-of-record bar lookup where the URL is documented
-// (CA, NY, TX, FL, IL, PA, OH, GA, NC, WA) and a DuckDuckGo bang
-// fallback otherwise. PACER attorney-search is also surfaced for
-// federal admissions.
+// Attorney — honest stub. State bar lookups vary state-to-state.
 // ---------------------------------------------------------------------------
 export async function adaptAttorney(lead: LeadLike): Promise<BackgroundLaneResult> {
-  const bar = stateBarSearchUrl(lead);
-  const manualUrls: BackgroundLaneResult["manual_action_urls"] = [
-    {
-      label: bar.coverage === "deep_link"
-        ? `Search ${lead.state ?? "state"} bar — prefilled`
-        : `Search ${lead.state ?? "state"} bar (landing page)`,
-      url: bar.url,
-      note: bar.coverage === "deep_link"
-        ? "Confirms attorney good-standing in their state of admission. Result loads with the lead's name prefilled."
-        : "No documented deep-link for this state — landing page opens; paste the name into the form.",
-    },
-  ];
   return makeResult(
     "attorney",
     ["attorney_not_checked"],
     {
       searched_name: fullName(lead),
-      searched_state: lead.state,
       manual_source:
         "State bar lookup required only if the lead claims attorney status or legal-entity connection.",
-      coverage: bar.coverage,
     },
-    [
-      bar.coverage === "deep_link"
-        ? "Click below to run the state bar lookup — name is prefilled."
-        : "No deep-link known for this state; click below to open the search page and paste the name.",
-    ],
-    undefined,
-    manualUrls,
   );
 }
 
@@ -665,21 +487,13 @@ export async function adaptPacer(lead: LeadLike): Promise<BackgroundLaneResult> 
 }
 
 // ---------------------------------------------------------------------------
-// Business entity — hybrid: live SEC EDGAR + state-SoS smart-links.
-//
-// SEC EDGAR covers publicly-traded companies, large LLCs, and anyone
-// who's done a Reg D filing — roughly 10K entities. That's a real
-// PASS-or-MATCH signal: if EDGAR returns a hit, we surface the
-// CIK/ticker/filings URL and the lane goes PASS. If EDGAR returns
-// no hit we still emit the smart-link to the state SoS portal for
-// manual confirmation of small entities, and the lane stays REVIEW.
-//
-// OpenCorporates would close the small-LLC gap, but it's a paid
-// integration we don't ship. Operators who pay for it can register
-// a sync handler under integration-sync.ts.
+// Business entity — honest stub. SAM.gov and Secretary-of-State searches
+// are not wired. Skipped entirely (NOT_RUN) when the lead has no business name.
 // ---------------------------------------------------------------------------
 export async function adaptBusiness(lead: LeadLike): Promise<BackgroundLaneResult> {
   if (!lead.business_name?.trim()) {
+    // Use NOT_RUN directly because the precondition isn't met. Bypass
+    // the flag taxonomy here — there are no flags to score.
     return {
       lane: "business_entity",
       status: "NOT_RUN",
@@ -691,113 +505,12 @@ export async function adaptBusiness(lead: LeadLike): Promise<BackgroundLaneResul
       raw: { business_name: null },
     };
   }
-  const businessName = lead.business_name.trim();
-
-  // SEC EDGAR live lookup. No API key required — SEC requires a polite
-  // User-Agent which the client sets from EDGAR_CONTACT_EMAIL.
-  let edgar: Awaited<ReturnType<typeof searchEdgar>>;
-  try {
-    edgar = await searchEdgar(businessName);
-  } catch (err) {
-    edgar = { status: "error", matches: [], fetched_at: null, note: (err as Error).message };
-  }
-
-  // SoS smart-link fallback — always emit so the operator can audit
-  // small-business entities that don't show up in EDGAR.
-  const sos = stateSosSearchUrl(lead);
-  const manualUrls: BackgroundLaneResult["manual_action_urls"] = [];
-  if (sos) {
-    manualUrls.push({
-      label: sos.coverage === "deep_link"
-        ? `Search ${lead.state ?? "state"} Secretary of State — prefilled`
-        : `Search ${lead.state ?? "state"} Secretary of State (landing page)`,
-      url: sos.url,
-      note: sos.coverage === "deep_link"
-        ? "Confirms the entity is registered and in good standing with the state. Pre-filled with the business name."
-        : "No documented deep-link for this state — landing page opens; paste the business name into the form.",
-    });
-  }
-
-  if (edgar.status === "ok" && edgar.matches.length > 0) {
-    // We found a registered SEC entity matching the name. PASS — but
-    // surface the matches so the operator can sanity-check that the
-    // CIK is actually the right company (name collisions are rare but
-    // non-zero — "Apple Inc" vs "Apple Corps", for example).
-    return makeResult(
-      "business_entity",
-      [],
-      {
-        business_name: businessName,
-        sec_matches: edgar.matches,
-        fetched_at: edgar.fetched_at,
-      },
-      [`SEC EDGAR: ${edgar.matches.length} registered entity match${edgar.matches.length === 1 ? "" : "es"} found.`],
-      undefined,
-      manualUrls,
-    );
-  }
-
-  // No SEC hit OR SEC was unreachable. Surface as manual-review with
-  // smart-links; this is the common case for small LLCs / partnerships.
-  const flags = edgar.status === "error"
-    ? ["manual_entity_check_required"] // EDGAR unreachable — still need a manual check
-    : ["manual_entity_check_required"]; // No EDGAR hit — small entity, manual check
   return makeResult(
     "business_entity",
-    flags,
+    ["manual_entity_check_required"],
     {
-      business_name: businessName,
-      sec_matches: [],
-      sec_status: edgar.status,
-      sec_note: edgar.note,
-      fetched_at: edgar.fetched_at,
-      manual_sources: ["Secretary of State (NASS directory)", "OpenCorporates (paid)", "SAM.gov (federal contractors)"],
+      business_name: lead.business_name,
+      manual_sources: ["Secretary of State (NASS directory)", "SAM.gov", "OpenCorporates"],
     },
-    [
-      edgar.status === "error"
-        ? `SEC EDGAR unreachable: ${edgar.note}. Falling back to manual SoS lookup.`
-        : "Not found in SEC EDGAR (entity is below SEC reporting threshold or unregistered with SEC). Run the state SoS lookup below.",
-    ],
-    undefined,
-    manualUrls,
   );
 }
-
-// ---------------------------------------------------------------------------
-// Phone provenance — live carrier + line-type + portability lookup via
-// Telnyx Number Lookup. Reuses the existing `telnyx` integration row's
-// api_key (set up for SMS send) so most operators get this lane "free"
-// the moment they enable Telnyx SMS. Classifies into low/moderate/high
-// burner-risk; high-risk verdicts (non-fixed-VOIP, known burner
-// carriers) emit REVIEW flags so a paralegal looks before the lead
-// gets routed to a buyer.
-// ---------------------------------------------------------------------------
-export async function adaptPhoneProvenance(lead: LeadLike): Promise<BackgroundLaneResult> {
-  const phone = (lead.phone ?? "").trim();
-  if (!phone) {
-    return makeResult("phone_provenance", ["phone_provenance_unconfigured"], { phone: null }, [
-      "No phone on lead — provenance check skipped.",
-    ]);
-  }
-  // Pass the firm context through if the LeadLike has it available; we
-  // intentionally don't require it (the helper falls back to env when
-  // there's no integration row, so single-firm deployments keep working).
-  const result = await _lookupPhoneProvenanceWithOverride(phone);
-  const flags = [...result.flags];
-  return makeResult(
-    "phone_provenance",
-    flags,
-    {
-      phone: result.phone,
-      line_type: result.line_type,
-      carrier: result.carrier,
-      country_code: result.country_code,
-      recently_ported: result.recently_ported,
-      risk: result.risk,
-      status: result.status,
-      note: result.note,
-    },
-    result.note ? [result.note] : [],
-  );
-}
-

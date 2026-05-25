@@ -1,5 +1,5 @@
 import { db, leadsTable, formConfigurationsTable } from "@workspace/db";
-import { sql, desc, eq } from "drizzle-orm";
+import { sql, desc, eq, and } from "drizzle-orm";
 import { logger } from "./logger";
 
 export interface PredictiveScore {
@@ -99,8 +99,13 @@ function getQualityTier(conversionScore: number, riskScore: number): string {
   return "unqualified";
 }
 
-export async function scoreLeadPredictive(leadId: number): Promise<PredictiveScore> {
-  const [lead] = await db.select().from(leadsTable).where(sql`${leadsTable.id} = ${leadId}`);
+// firmId guards against IDOR: callers must pass req.user!.firm_id so we
+// verify the lead belongs to their firm before returning score data.
+export async function scoreLeadPredictive(leadId: number, firmId?: number): Promise<PredictiveScore> {
+  const where = firmId != null
+    ? and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId))
+    : sql`${leadsTable.id} = ${leadId}`;
+  const [lead] = await db.select().from(leadsTable).where(where);
   if (!lead) throw new Error(`Lead ${leadId} not found`);
 
   const row: TrainingRow = {
@@ -139,10 +144,12 @@ export async function scoreLeadPredictive(leadId: number): Promise<PredictiveSco
   return { lead_id: leadId, conversion_probability: Math.round(conversionProb * 100), risk_score: Math.round(riskScore * 100), quality_tier: qualityTier, factors };
 }
 
-export async function getModelStats(): Promise<ModelStats> {
+export async function getModelStats(firmId?: number): Promise<ModelStats> {
+  const firmPred = firmId != null ? eq(leadsTable.firm_id, firmId) : undefined;
+
   const [counts] = await db.select({
     total: sql<number>`count(*)::int`,
-  }).from(leadsTable);
+  }).from(leadsTable).where(firmPred);
 
   // Real backtest: replay the scorer against every lead that has reached a
   // terminal outcome (signed | rejected) and compare its predicted quality
@@ -164,7 +171,11 @@ export async function getModelStats(): Promise<ModelStats> {
     tort_type: leadsTable.tort_type,
   })
     .from(leadsTable)
-    .where(sql`${leadsTable.status} in ('signed','rejected')`);
+    .where(
+      firmPred
+        ? and(sql`${leadsTable.status} in ('signed','rejected')`, firmPred)
+        : sql`${leadsTable.status} in ('signed','rejected')`,
+    );
 
   let correct = 0;
   for (const lead of terminalLeads) {
@@ -204,21 +215,17 @@ export async function getModelStats(): Promise<ModelStats> {
 }
 
 export async function getBatchPredictions(limit = 50, firmId?: number): Promise<PredictiveScore[]> {
-  // Firm scope is required for batch surfaces — without it the analytics
-  // endpoint would return predictions for leads outside the caller's firm.
-  // We keep the parameter optional so internal callers (CLI, jobs running
-  // with no request context) can still operate against all rows by passing
-  // `undefined` explicitly.
+  const firmPred = firmId != null ? eq(leadsTable.firm_id, firmId) : undefined;
   const leads = await db
     .select({ id: leadsTable.id })
     .from(leadsTable)
-    .where(firmId === undefined ? undefined : eq(leadsTable.firm_id, firmId))
+    .where(firmPred)
     .orderBy(desc(leadsTable.created_at))
     .limit(limit);
   const results: PredictiveScore[] = [];
   for (const lead of leads) {
     try {
-      results.push(await scoreLeadPredictive(lead.id));
+      results.push(await scoreLeadPredictive(lead.id, firmId));
     } catch (err) {
       logger.error({ err, lead_id: lead.id }, "Batch prediction failed for lead");
     }
@@ -242,6 +249,7 @@ export async function getTortPredictions(firmId?: number): Promise<{ tort_type: 
     labelToId.set(row.label.toLowerCase(), row.id);
   }
 
+  const firmPred = firmId != null ? eq(leadsTable.firm_id, firmId) : undefined;
   const leads = await db.select({
     id: leadsTable.id,
     tort_type: leadsTable.tort_type,
@@ -256,7 +264,7 @@ export async function getTortPredictions(firmId?: number): Promise<{ tort_type: 
     ad_spend: leadsTable.ad_spend,
     source: leadsTable.source,
     status: leadsTable.status,
-  }).from(leadsTable);
+  }).from(leadsTable).where(firmPred);
 
   const byTort: Record<string, { conversions: number[]; risks: number[] }> = {};
   for (const lead of leads) {

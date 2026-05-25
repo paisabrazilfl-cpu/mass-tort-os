@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/sheet";
 import {
   Wand2, AlertTriangle, ExternalLink, RefreshCw, Send, CheckCircle2,
-  Clock, XCircle, Loader2, GitPullRequest, Sparkles, StopCircle, Trash2,
+  Clock, XCircle, Loader2, GitPullRequest, Sparkles,
 } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { useToast } from "@/hooks/use-toast";
@@ -144,52 +144,6 @@ export default function SelfHealPage() {
   }
 
   useEffect(() => { void loadAll(); }, []);
-
-  // Cancel a session that's still running. Best-effort against Jules; the
-  // server flips local status to "cancelled" regardless so the UI never
-  // gets stuck on a "Working…" row that Jules has stopped reporting on.
-  async function cancelSession(id: number) {
-    const res = await apiFetchRaw(`/api/admin/self-heal/${id}/cancel`, { method: "POST" });
-    if (res.ok) {
-      const j = await res.json().catch(() => null);
-      toast({
-        title: "Session cancelled",
-        description: j?.jules_cancelled
-          ? "Stopped Jules and marked local row cancelled."
-          : j?.jules_error
-            ? `Local row cancelled; Jules cancel failed: ${j.jules_error}`
-            : "Marked local row cancelled.",
-      });
-      void loadAll();
-    } else {
-      const j = await res.json().catch(() => ({}));
-      toast({ title: "Cancel failed", description: j.message || res.statusText, variant: "destructive" });
-    }
-  }
-
-  // Hard-delete the local row. Server refuses with 409 if the session is
-  // still in-flight — the operator has to cancel first so we don't
-  // accidentally orphan an active PR-writing session.
-  async function deleteSession(id: number) {
-    if (!window.confirm("Delete this session from your history? This cannot be undone.")) return;
-    const res = await apiFetchRaw(`/api/admin/self-heal/${id}`, { method: "DELETE" });
-    if (res.status === 204) {
-      toast({ title: "Session deleted" });
-      if (openId === id) setOpenId(null);
-      void loadAll();
-    } else if (res.status === 409) {
-      toast({
-        title: "Cancel first",
-        description: "This session is still running. Click Stop, then Delete.",
-        variant: "destructive",
-      });
-    } else {
-      const j = await res.json().catch(() => ({}));
-      toast({ title: "Delete failed", description: j.message || res.statusText, variant: "destructive" });
-    }
-  }
-
-  const IN_FLIGHT_STATUSES = new Set(["pending", "awaiting_approval", "dispatched", "working"]);
 
   // Soft polling every 12s while any row is in-flight, and while the drawer
   // is open. Pauses if the tab is hidden.
@@ -325,8 +279,8 @@ export default function SelfHealPage() {
             <div className="text-sm">
               <div className="font-medium text-amber-900">JULES_API_KEY is not set.</div>
               <div className="text-amber-800 mt-1">
-                Add it as an env var on the api-server (Railway → api-server → Variables → JULES_API_KEY). Get a key at{" "}
-                <a className="underline" href="https://jules.google.com/settings#api" target="_blank" rel="noopener noreferrer">
+                Add it in Replit Secrets to enable dispatch. Get a key at{" "}
+                <a className="underline" href="https://jules.google.com/settings#api" target="_blank" rel="noreferrer">
                   jules.google.com/settings#api
                 </a>{" "}and install the Jules GitHub App on your repo.
               </div>
@@ -421,6 +375,9 @@ export default function SelfHealPage() {
               {submitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wand2 className="h-4 w-4 mr-2" />}
               Auto-Fix
             </Button>
+            <span className="text-xs text-muted-foreground">
+              Source: <code>{config?.default_source ?? "—"}</code> · branch <code>{branch || "main"}</code>
+            </span>
           </div>
         </CardContent>
       </Card>
@@ -453,45 +410,18 @@ export default function SelfHealPage() {
                       {r.last_error && <span className="text-rose-600"> · {r.last_error.slice(0, 80)}</span>}
                     </div>
                   </div>
-                  <div className="ml-3 flex items-center gap-1 shrink-0">
-                    {r.pr_url && (
-                      <a
-                        href={r.pr_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="inline-flex items-center gap-1 text-xs text-violet-700 hover:underline mr-1"
-                      >
-                        <GitPullRequest className="h-3 w-3" /> PR
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    )}
-                    {IN_FLIGHT_STATUSES.has(r.status) && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        title="Stop this Jules session"
-                        onClick={(e) => { e.stopPropagation(); void cancelSession(r.id); }}
-                        data-testid={`button-stop-${r.id}`}
-                        className="h-7 px-2"
-                      >
-                        <StopCircle className="h-3.5 w-3.5 text-amber-600" />
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      title={IN_FLIGHT_STATUSES.has(r.status)
-                        ? "Stop the session before deleting"
-                        : "Delete from history"}
-                      onClick={(e) => { e.stopPropagation(); void deleteSession(r.id); }}
-                      data-testid={`button-delete-${r.id}`}
-                      className="h-7 px-2"
-                      disabled={IN_FLIGHT_STATUSES.has(r.status)}
+                  {r.pr_url && (
+                    <a
+                      href={r.pr_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="ml-3 inline-flex items-center gap-1 text-xs text-violet-700 hover:underline"
                     >
-                      <Trash2 className="h-3.5 w-3.5 text-rose-600" />
-                    </Button>
-                  </div>
+                      <GitPullRequest className="h-3 w-3" /> PR
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
                 </div>
               ))}
             </div>

@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Plug, Plus, Activity, RefreshCw, Trash2, Settings, CheckCircle, XCircle,
+  Plug, Plus, TestTube, RefreshCw, Trash2, Settings, CheckCircle, XCircle,
   Star, Search, Sparkles, Brain, FileSignature, Phone, MessageSquare, Mail,
   Printer, ScanText, MapPin, ShieldCheck, UserCheck, CreditCard, Database,
   Calendar as CalendarIcon, Briefcase, TrendingUp, Bot, Globe, Zap, Shield,
@@ -211,31 +211,15 @@ export default function Integrations() {
 
   const testIntegration = async (id: number) => {
     setTesting(id);
-    try {
-      const res = await apiFetchRaw(`/api/integrations/${id}/test`, { method: "POST" });
-      const data = await res.json().catch(() => ({} as Record<string, unknown>));
-      // Compose a concise multi-line description: rolled-up message + latency
-      // when we did an actual live ping, so the operator sees real evidence.
-      const lines: string[] = [];
-      if (typeof data.message === "string") lines.push(data.message);
-      if (data.live_api_ping && typeof data.response_status === "number") {
-        lines.push(`HTTP ${data.response_status} in ${data.latency_ms ?? "?"} ms`);
-      }
-      toast({
-        title: data.success ? "Ping OK" : "Ping failed",
-        description: lines.join(" • ") || (data.success ? "Credentials decrypt cleanly." : "See server logs for detail."),
-        variant: data.success ? "default" : "destructive",
-      });
-    } catch (err) {
-      toast({
-        title: "Ping failed",
-        description: err instanceof Error ? err.message : "Network error",
-        variant: "destructive",
-      });
-    } finally {
-      setTesting(null);
-      fetchData();
-    }
+    const res = await apiFetchRaw(`/api/integrations/${id}/test`, { method: "POST" });
+    const data = await res.json();
+    toast({
+      title: data.success ? "Credentials verified" : "Credential check failed",
+      description: data.message,
+      variant: data.success ? "default" : "destructive",
+    });
+    setTesting(null);
+    fetchData();
   };
 
   const syncIntegration = async (id: number) => {
@@ -356,22 +340,13 @@ export default function Integrations() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => testIntegration(i.id)}
-                          disabled={testing === i.id}
-                          title="Ping integration — verify credentials decrypt and (for webhooks) the URL responds"
-                          data-testid={`button-ping-${i.id}`}
-                          className="h-7 px-2 text-xs"
-                        >
-                          <Activity className={`h-3.5 w-3.5 mr-1 ${testing === i.id ? "animate-pulse" : ""}`} />
-                          {testing === i.id ? "Pinging…" : "Ping"}
+                        <Button variant="ghost" size="sm" onClick={() => testIntegration(i.id)} disabled={testing === i.id} data-testid={`button-test-${i.id}`}>
+                          <TestTube className={`h-4 w-4 ${testing === i.id ? "animate-pulse" : ""}`} />
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => syncIntegration(i.id)} disabled={syncing === i.id} title="Re-sync" data-testid={`button-sync-${i.id}`}>
+                        <Button variant="ghost" size="sm" onClick={() => syncIntegration(i.id)} disabled={syncing === i.id} data-testid={`button-sync-${i.id}`}>
                           <RefreshCw className={`h-4 w-4 ${syncing === i.id ? "animate-spin" : ""}`} />
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => deleteIntegration(i.id)} title="Delete integration" data-testid={`button-delete-${i.id}`}>
+                        <Button variant="ghost" size="sm" onClick={() => deleteIntegration(i.id)} data-testid={`button-delete-${i.id}`}>
                           <Trash2 className="h-4 w-4 text-red-500" />
                         </Button>
                       </div>

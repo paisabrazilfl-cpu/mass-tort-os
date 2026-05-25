@@ -81,38 +81,20 @@ app.use("/api/web-forms", cors({
   allowedHeaders: ["Content-Type"],
   maxAge: 86400,
 }));
-// Stricter per-IP rate limit on the public PII intake surface. The global
-// limiter at line 41 sits at 500/15m which is appropriate for the CRM admin
-// app behind auth but far too generous for an unauthenticated form that
-// accepts SSN/DOB/address. 30 submissions per IP per 15 minutes — well
-// above any legitimate operator-testing rate, but cuts the scrape envelope
-// from ~33 RPS down to ~0.03 RPS per IP. OPTIONS preflight is exempted so
-// CORS still works.
-app.use("/api/web-forms", rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => req.method === "OPTIONS" || req.method === "GET",
-  keyGenerator: (req) => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
-  message: { status: "error", code: "rate_limited", message: "Too many submissions from this address. Please try again later." },
-}));
 // Strict CORS for the CRM admin app and all other authenticated routes.
-//
-// Production callers come from the SPA host(s), which differ per environment
-// (Railway gives every service a *.up.railway.app URL plus any custom
-// domain). Read the allowlist from `ALLOWED_ORIGINS` (comma-separated).
-// When unset in production we fail-closed to an empty list so the browser
-// blocks every cross-origin request — safer than silently allowing any
-// origin. In dev (NODE_ENV !== "production") we still allow `true` (reflect
-// any origin) so local Vite dev servers work without env config.
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
+// REPL_SLUG may not be injected in autoscale; fall back to ALLOWED_ORIGIN
+// and PUBLIC_BASE_URL so monitoring and the SPA still work in production
+// even if the Replit env var is absent. If none resolve, lock down to false
+// (deny all cross-origin) rather than silently allowing everything.
+const prodOrigins: string[] = [
+  process.env.REPL_SLUG ? `https://${process.env.REPL_SLUG}.replit.app` : null,
+  process.env.ALLOWED_ORIGIN ?? null,
+  process.env.PUBLIC_BASE_URL ?? null,
+].filter((o): o is string => Boolean(o));
 app.use(cors({
-  origin: process.env.NODE_ENV === "production" ? ALLOWED_ORIGINS : true,
+  origin: process.env.NODE_ENV === "production"
+    ? (prodOrigins.length > 0 ? prodOrigins : false)
+    : true,
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
@@ -124,25 +106,38 @@ app.use(cors({
 // number formatting / drops insignificant whitespace and silently breaks
 // signature checks on legitimate webhooks. We only attach `rawBody` for
 // `/api/webhooks/*` to avoid a memory hit on every request.
+// Webhook routes need 55 MB to handle large provider payloads and raw-body
+// HMAC verification. All other routes get a 1 MB cap — a 55 MB global limit
+// let attackers POST huge bodies to every unauthenticated endpoint (e.g.
+// /api/auth/login, /api/web-forms/*) to cause OOM pressure on the API process.
 app.use(express.json({
   limit: "55mb",
   verify: (req, _res, buf) => {
-    // /api/webhooks/* — external provider callbacks signed against the raw bytes.
-    // /api/automations/webhook/* — public HMAC-signed inbound automation
-    //   triggers; the signature is computed over the body the caller sent,
-    //   so JSON.stringify(req.body) here would mismatch on key order or
-    //   whitespace differences and silently 401 every legitimate webhook.
     const url = req.url ?? "";
     if (
-      buf &&
-      buf.length > 0 &&
+      buf && buf.length > 0 &&
       (url.startsWith("/api/webhooks/") || url.startsWith("/api/automations/webhook/"))
     ) {
       (req as unknown as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
     }
+    // Enforce 1 MB limit on all non-webhook routes. The express.json limit
+    // above is set high so webhooks can pass; we do a secondary check here
+    // against everything else. Throwing causes Express to surface a 413.
+    if (
+      !url.startsWith("/api/webhooks/") &&
+      !url.startsWith("/api/automations/webhook/") &&
+      buf && buf.length > 1 * 1024 * 1024
+    ) {
+      // Cast to `any` so we can attach the HTTP status code that Express's
+      // global error handler reads. `ErrnoException` doesn't carry `status`.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const err: any = new Error("Request body too large");
+      err.status = 413;
+      throw err;
+    }
   },
 }));
-app.use(express.urlencoded({ extended: true, limit: "55mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 app.use(idsMiddleware());
 

@@ -8,7 +8,7 @@
  *  - Persist a row in document_envelopes / fax_results so admin can audit
  *  - Use structured error returns from adapters; throw with a clear message on terminal errors
  */
-import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable } from "@workspace/db";
+import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable, workflowSettingsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
@@ -66,8 +66,7 @@ interface SendWorkflowEmailPayload {
 /**
  * Build the PDF for an envelope.
  *  - source="pdf"  → load the uploaded file from template-storage
- *  - source="ai"   → render via lib/drafting-ai.generateDraft, then typeset
- *                    the returned content into a multi-page PDF.
+ *  - source="ai"   → not yet implemented (returns a placeholder PDF + logs warning)
  */
 async function buildTemplatePdf(template: typeof documentTemplatesTable.$inferSelect, lead: typeof leadsTable.$inferSelect): Promise<Buffer> {
   if (template.source === "pdf") {
@@ -77,36 +76,32 @@ async function buildTemplatePdf(template: typeof documentTemplatesTable.$inferSe
     return await downloadTemplate(template.storage_path);
   }
 
-  // AI-drafted templates: feed the decrypted lead row + template_type into
-  // the drafting-ai service and typeset its response. template_type is the
-  // discriminator that picks the right TEMPLATE_PROMPTS entry inside
-  // drafting-ai.ts (hipaa_authorization | retainer_agreement |
-  // medical_records_request | demand_letter | client_intake_summary).
-  // Per-row AAD scoping on decrypt prevents a swapped ciphertext from
-  // another lead row from silently leaking into the generated document.
-  const { generateDraft } = await import("./drafting-ai");
-  const { decryptLeadFields } = await import("./encryption");
-  const leadData = decryptLeadFields(lead, String(lead.id));
-  let draft;
-  try {
-    draft = await generateDraft({
-      template_type: template.template_type,
-      lead_data: leadData,
-    });
-  } catch (err) {
-    // If drafting-ai rejects the template_type (the row has source=ai but
-    // no matching prompt), surface a real error rather than silently sending
-    // the old placeholder PDF. The envelope step gets marked failed with the
-    // error message attached, which is what the operator needs to see.
-    logger.error({ err, template_id: template.id, template_type: template.template_type, lead_id: lead.id }, "drafting-ai generation failed");
-    throw err;
-  }
-
-  // Typeset the generated content. createBlankPdfWithText already handles
-  // word-wrapping, page breaks, and the title header — same helper that
-  // /api/drafting/generate-pdf uses, so the two surfaces stay in sync.
-  const { createBlankPdfWithText } = await import("./pdf-redaction");
-  const bytes = await createBlankPdfWithText(draft.content, draft.title);
+  // AI-drafted templates fall back to a stub PDF until drafting-ai is wired.
+  // We still send something rather than dropping the workflow on the floor.
+  logger.warn(
+    { template_id: template.id, lead_id: lead.id },
+    "AI-drafted template requested but drafting-ai not yet implemented — sending placeholder PDF",
+  );
+  const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([612, 792]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  page.drawText(template.name, { x: 50, y: 740, size: 20, font, color: rgb(0, 0, 0) });
+  page.drawText(`Lead: ${lead.name || `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim()}`, {
+    x: 50,
+    y: 700,
+    size: 12,
+    font,
+  });
+  page.drawText(`Tort: ${lead.tort_type}`, { x: 50, y: 680, size: 12, font });
+  page.drawText("(AI drafting not yet implemented — placeholder body.)", {
+    x: 50,
+    y: 640,
+    size: 10,
+    font,
+    color: rgb(0.4, 0.4, 0.4),
+  });
+  const bytes = await pdf.save();
   return Buffer.from(bytes);
 }
 
@@ -647,9 +642,18 @@ export async function handleSendWorkflowEmail(payload: SendWorkflowEmailPayload)
     throw new Error(`No email adapter wired for provider "${resolved.provider}".`);
   }
 
-  const fromEmail = (resolved.credentials as Record<string, unknown>).from_email as string | undefined
+  const globalSettings = await db
+    .select({ fromAddress: workflowSettingsTable.default_email_from_address, fromName: workflowSettingsTable.default_email_from_name })
+    .from(workflowSettingsTable)
+    .where(eq(workflowSettingsTable.scope, "global"))
+    .limit(1)
+    .then((r) => r[0] ?? null);
+
+  const fromEmail = resolved.credentials.from_email
+    || globalSettings?.fromAddress
     || "noreply@example.com";
-  const fromName = (resolved.credentials as Record<string, unknown>).from_name as string | undefined
+  const fromName = resolved.credentials.from_name
+    || globalSettings?.fromName
     || "MTOS";
 
   let outcome;
@@ -710,19 +714,7 @@ export async function handleSendWorkflowSms(payload: SendWorkflowSmsPayload): Pr
     return;
   }
 
-  // Derive firmId from the lead itself, not the job payload. The payload
-  // is enqueued by the workflow engine and survives across job retries —
-  // a stale or tampered payload could otherwise credit the SMS to the
-  // wrong firm in audit/metering. The lead row is the source of truth.
-  // We still log when the payload disagrees so a real bug doesn't get
-  // silently masked by the override.
-  if (payload.firm_id != null && lead.firm_id != null && payload.firm_id !== lead.firm_id) {
-    logger.warn(
-      { payload_firm_id: payload.firm_id, lead_firm_id: lead.firm_id, lead_id: payload.lead_id },
-      "send_workflow_sms: payload.firm_id disagrees with lead.firm_id — using lead.firm_id",
-    );
-  }
-  const firmId = lead.firm_id ?? null;
+  const firmId = payload.firm_id ?? lead.firm_id ?? null;
   const result = await sendSms({
     to: phone,
     body: payload.body,

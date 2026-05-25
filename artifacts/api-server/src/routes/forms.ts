@@ -8,6 +8,7 @@ import { encryptLeadFields, decryptLeadFields, rebindLeadEncryptionAad } from ".
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
 import { runBackgroundCheck } from "../lib/background-check";
+import { searchPcl } from "../lib/pacer/pcl-client";
 import { runFullConflictCheck } from "../lib/conflict-engine";
 import { TORT_REGISTRY, validateTortClaim, getTortCategories } from "../lib/tort-engine";
 import { lookupNpiAndMatch } from "../lib/taxonomy-engine";
@@ -934,12 +935,7 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
     // Decision Engine — score every lead created via form submission.
     {
       const { computeAndPersistLeadScore } = await import("../lib/decision-engine-service");
-      computeAndPersistLeadScore(lead.id).catch((err) => {
-        // Mirror routes/leads.ts decision-engine site — failures must be
-        // visible in logs so a broken scorer doesn't silently leave every
-        // form-intake lead unscored and absent from the qualified queue.
-        req.log.error({ err, lead_id: lead.id }, "computeAndPersistLeadScore failed after form intake");
-      });
+      computeAndPersistLeadScore(lead.id).catch(() => {});
     }
 
     if (status === "review_required") {
@@ -1044,8 +1040,23 @@ router.post("/background-check", requirePermission(Permission.FORMS_BACKGROUND_C
   }
 
   try {
-    const result = await runBackgroundCheck({ first_name, last_name, state, date_of_birth });
-    res.json(result);
+    // Run CourtListener + OFAC and PACER PCL in parallel. PACER is opt-in
+    // (vault credentials required) and returns NOT_CONFIGURED when not set up,
+    // so it never blocks or fails the overall check. searchPcl() never throws.
+    const [courtResult, pacerOutcome] = await Promise.all([
+      runBackgroundCheck({ first_name, last_name, state, date_of_birth }),
+      searchPcl({ firstName: first_name, lastName: last_name, dateOfBirth: date_of_birth ?? null }),
+    ]);
+
+    // Translate the PCL discriminated union into the shape the OpenAPI spec
+    // declares for BackgroundCheckResult.pacer. Callers get null when PACER
+    // wasn't searched (no vault creds, auth failure, or network error) so the
+    // UI can distinguish "not configured" from "searched but 0 results".
+    const pacer = pacerOutcome.ok
+      ? { ok: true, cases: pacerOutcome.cases, truncated: pacerOutcome.truncated }
+      : { ok: false, reason: pacerOutcome.reason, message: "message" in pacerOutcome ? pacerOutcome.message : undefined };
+
+    res.json({ ...courtResult, pacer });
   } catch (err) {
     logger.error({ err }, "Background check failed");
     serverError(res, "Background check failed");
@@ -1147,12 +1158,6 @@ router.post(
         // leads table has no business_name column — claimants are people, not
         // entities. Hub will resolve to NOT_RUN for the business_entity lane.
         business_name: null,
-      }, {
-        // Tort-aware lane gating: bg-hub skips irrelevant lanes per the
-        // policy matrix in lib/bg-hub/tort-policy.ts. Child-safety torts
-        // (Roblox, Discord, …) skip business-entity + attorney; data-breach
-        // torts skip the medical-style lanes; etc.
-        tortSlug: (lead as any).tort_type ?? null,
       });
       // Persist a snapshot row (history ledger). Failure to persist is logged
       // but does not block the response — the hub result is still useful.

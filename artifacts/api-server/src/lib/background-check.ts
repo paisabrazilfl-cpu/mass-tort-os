@@ -1,6 +1,5 @@
 import { logger } from "./logger";
 import { getCourtsForState, getStateLabel, normalizeStateCode } from "./courtlistener-courts";
-import { isTreasurySdnEnabled, matchTreasurySdn } from "./ofac-treasury";
 
 export interface BackgroundCheckResult {
   status: "clean" | "flagged" | "not_found" | "error";
@@ -491,34 +490,11 @@ async function checkOFACList(person: {
   first_name: string;
   last_name: string;
 }): Promise<OFACOutcome> {
-  // Prefer the free Treasury SDN list. This eliminates the previous paid
-  // dependency on search.ofac-api.com and removes the OFAC_API_KEY
-  // requirement that was causing every fresh install to skip sanctions
-  // screening with a misleading "unconfigured" status. Operators who
-  // already pay for a third-party screener can set OFAC_USE_TREASURY=0
-  // to fall back to the legacy path below.
-  if (isTreasurySdnEnabled()) {
-    const result = await matchTreasurySdn(person);
-    if (result.status === "error") {
-      return {
-        status: "error",
-        note: result.note ?? "Treasury SDN list unavailable.",
-      };
-    }
-    const records: BackgroundRecord[] = result.matches.map((m) => ({
-      type: "OFAC_SANCTIONS",
-      description: `OFAC match: ${m.name} (SDN id ${m.sdn_id}; programs: ${m.programs.join(", ") || "N/A"}; via ${m.matched_via})`,
-      severity: "high",
-    }));
-    return { status: "ok", records };
-  }
-
-  // Legacy path. Only reachable when OFAC_USE_TREASURY=0 is set explicitly.
   const apiKey = process.env.OFAC_API_KEY;
   if (!apiKey) {
     return {
       status: "unconfigured",
-      note: "OFAC sanctions check skipped — no provider configured. Unset OFAC_USE_TREASURY=0 to use the free Treasury SDN list, or set OFAC_API_KEY to use the paid third-party provider.",
+      note: "OFAC sanctions check skipped — no provider configured (set OFAC_API_KEY).",
     };
   }
 

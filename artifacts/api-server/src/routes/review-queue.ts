@@ -1,30 +1,14 @@
 import { Router } from "express";
-import { db, reviewQueueTable, pool } from "@workspace/db";
+import { db, reviewQueueTable } from "@workspace/db";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { z } from "zod/v4";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { Permission, requirePermission, auditAction } from "../lib/rbac";
-import { badRequest, notFound, serverError } from "../lib/http-errors";
-import { requireFirmId } from "../lib/firm-scope";
+import { badRequest, notFound } from "../lib/http-errors";
 import { enqueueLeadFollowUpSms } from "../lib/workflow-engine";
 
 const router = Router();
-
-// Idempotent runtime repair: add firm_id to legacy deployments on first
-// request. Cheap on subsequent calls (cached boolean). Postgres' ADD COLUMN
-// IF NOT EXISTS guards re-runs.
-let _firmIdPatched = false;
-async function ensureFirmIdColumn(): Promise<void> {
-  if (_firmIdPatched) return;
-  try {
-    await pool.query("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS firm_id integer");
-    await pool.query("CREATE INDEX IF NOT EXISTS review_queue_firm_resolution_idx ON review_queue(firm_id, resolution, created_at)");
-  } catch (err) {
-    logger.warn({ err }, "review_queue firm_id schema repair partial — continuing");
-  }
-  _firmIdPatched = true;
-}
 
 // POST /api/review-queue — operator/automation enqueues an item for human
 // review. Documented in the admin event catalog and used by the day-one
@@ -61,16 +45,9 @@ router.post(
     const summary = body.summary ?? body.reason ?? `${body.entity_type}:${body.entity_id} routed for review`;
     const details = body.details ?? body.context ?? null;
 
-    await ensureFirmIdColumn();
-    // Stamp firm_id at insert time so the row is firm-owned from creation.
-    // Falls back to null when a system automation creates an item with no
-    // user context; those rows are intentionally visible to no firm until
-    // an admin reassigns them.
-    const insertFirmId = req.user?.firm_id ?? null;
     const [row] = await db
       .insert(reviewQueueTable)
       .values({
-        firm_id: insertFirmId,
         entity_type: body.entity_type,
         entity_id: body.entity_id,
         conflict_type: body.conflict_type,
@@ -95,37 +72,28 @@ router.post(
 );
 
 router.get("/", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req, res) => {
-  try {
-    await ensureFirmIdColumn();
-    const firmId = requireFirmId(req);
-    const { resolution, conflict_type, severity, entity_type, limit } = req.query as Record<string, string | undefined>;
+  const { resolution, conflict_type, severity, entity_type, limit } = req.query as Record<string, string | undefined>;
 
-    // Firm scope is the FIRST predicate — every other filter rides on top.
-    // Pre-fix, this list returned every firm's review items to any caller
-    // with REVIEW_QUEUE_VIEW.
-    const conditions = [eq(reviewQueueTable.firm_id, firmId)];
-    if (resolution) conditions.push(eq(reviewQueueTable.resolution, resolution));
-    if (conflict_type) conditions.push(eq(reviewQueueTable.conflict_type, conflict_type));
-    if (severity) conditions.push(eq(reviewQueueTable.severity, severity));
-    if (entity_type) conditions.push(eq(reviewQueueTable.entity_type, entity_type));
+  const conditions = [];
+  if (resolution) conditions.push(eq(reviewQueueTable.resolution, resolution));
+  if (conflict_type) conditions.push(eq(reviewQueueTable.conflict_type, conflict_type));
+  if (severity) conditions.push(eq(reviewQueueTable.severity, severity));
+  if (entity_type) conditions.push(eq(reviewQueueTable.entity_type, entity_type));
 
-    // Hard cap to keep this endpoint consistent with the other paginated lists
-    // (default 100, max 500) — without this an attacker could request
-    // ?limit=10000000 and force a massive scan. Strict integer parsing so
-    // values like "1.5" or "abc" fall back to the default rather than being
-    // silently coerced into surprising query plans.
-    const parsedLimit = limit === undefined ? NaN : parseInt(limit, 10);
-    const cappedLimit =
-      Number.isInteger(parsedLimit) && parsedLimit > 0
-        ? Math.min(parsedLimit, 500)
-        : 100;
+  // Hard cap to keep this endpoint consistent with the other paginated lists
+  // (default 100, max 500) — without this an attacker could request
+  // ?limit=10000000 and force a massive scan. Strict integer parsing so
+  // values like "1.5" or "abc" fall back to the default rather than being
+  // silently coerced into surprising query plans.
+  const parsedLimit = limit === undefined ? NaN : parseInt(limit, 10);
+  const cappedLimit =
+    Number.isInteger(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 500)
+      : 100;
 
-    const items = await db
-      .select()
-      .from(reviewQueueTable)
-      .where(and(...conditions))
-      .orderBy(desc(reviewQueueTable.created_at))
-      .limit(cappedLimit);
+  const items = conditions.length > 0
+    ? await db.select().from(reviewQueueTable).where(and(...conditions)).orderBy(desc(reviewQueueTable.created_at)).limit(cappedLimit)
+    : await db.select().from(reviewQueueTable).orderBy(desc(reviewQueueTable.created_at)).limit(cappedLimit);
 
   // Defensive: `details` is jsonb so a legacy or hand-edited row could store a
   // primitive (string/number) or an array instead of a plain object. The
@@ -147,11 +115,7 @@ router.get("/", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req, res
     return item;
   });
 
-    res.json(sanitized);
-  } catch (err: any) {
-    logger.error({ err: err?.message }, "review-queue GET / failed");
-    serverError(res, "Failed to list review items");
-  }
+  res.json(sanitized);
 });
 
 router.get("/stats", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req, res) => {
@@ -163,16 +127,6 @@ router.get("/stats", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req
   // "Resolved Today" — that label promises a daily figure, so the count must
   // be scoped to today's resolved_at timestamps, not "every non-pending row
   // since the table was created".
-  let firmId: number;
-  try {
-    await ensureFirmIdColumn();
-    firmId = requireFirmId(req);
-  } catch (err: any) {
-    logger.error({ err: err?.message }, "review-queue /stats: firm-scope check failed");
-    serverError(res, "Failed to load review stats");
-    return;
-  }
-  const firmScope = eq(reviewQueueTable.firm_id, firmId);
   const [byResolution, byConflictType, bySeverity, byFailsafe, pendingBySeverity, resolvedTodayRow] =
     await Promise.all([
       db
@@ -181,7 +135,6 @@ router.get("/stats", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req
           count: sql<number>`count(*)::int`,
         })
         .from(reviewQueueTable)
-        .where(firmScope)
         .groupBy(reviewQueueTable.resolution),
       db
         .select({
@@ -189,7 +142,6 @@ router.get("/stats", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req
           count: sql<number>`count(*)::int`,
         })
         .from(reviewQueueTable)
-        .where(firmScope)
         .groupBy(reviewQueueTable.conflict_type),
       db
         .select({
@@ -197,7 +149,6 @@ router.get("/stats", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req
           count: sql<number>`count(*)::int`,
         })
         .from(reviewQueueTable)
-        .where(firmScope)
         .groupBy(reviewQueueTable.severity),
       db
         .select({
@@ -205,7 +156,6 @@ router.get("/stats", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req
           count: sql<number>`count(*)::int`,
         })
         .from(reviewQueueTable)
-        .where(firmScope)
         .groupBy(reviewQueueTable.failsafe_mode),
       db
         .select({
@@ -213,13 +163,13 @@ router.get("/stats", requirePermission(Permission.REVIEW_QUEUE_VIEW), async (req
           count: sql<number>`count(*)::int`,
         })
         .from(reviewQueueTable)
-        .where(and(firmScope, eq(reviewQueueTable.resolution, "pending")))
+        .where(eq(reviewQueueTable.resolution, "pending"))
         .groupBy(reviewQueueTable.severity),
       db
         .select({ count: sql<number>`count(*)::int` })
         .from(reviewQueueTable)
         .where(
-          and(firmScope, sql`${reviewQueueTable.resolution} <> 'pending' AND ${reviewQueueTable.resolved_at} >= current_date`),
+          sql`${reviewQueueTable.resolution} <> 'pending' AND ${reviewQueueTable.resolved_at} >= current_date`,
         ),
     ]);
 
@@ -259,21 +209,7 @@ router.patch("/:id", requirePermission(Permission.REVIEW_QUEUE_RESOLVE), auditAc
     return;
   }
 
-  let firmId: number;
-  try {
-    await ensureFirmIdColumn();
-    firmId = requireFirmId(req);
-  } catch (err: any) {
-    logger.error({ err: err?.message, id }, "review-queue PATCH: firm-scope check failed");
-    serverError(res, "Failed to resolve review item");
-    return;
-  }
-  // Lookup AND update both gated by firm_id so an admin in firm A can't
-  // resolve firm B's item by guessing the integer id.
-  const [existing] = await db
-    .select()
-    .from(reviewQueueTable)
-    .where(and(eq(reviewQueueTable.id, id), eq(reviewQueueTable.firm_id, firmId)));
+  const [existing] = await db.select().from(reviewQueueTable).where(eq(reviewQueueTable.id, id));
   if (!existing) {
     notFound(res, "Review item not found");
     return;
@@ -287,7 +223,7 @@ router.patch("/:id", requirePermission(Permission.REVIEW_QUEUE_RESOLVE), auditAc
       resolved_by,
       resolved_at: new Date(),
     })
-    .where(and(eq(reviewQueueTable.id, id), eq(reviewQueueTable.firm_id, firmId)))
+    .where(eq(reviewQueueTable.id, id))
     .returning();
 
   // Optional SMS follow-up step (Task #51 T004): if the reviewer accepted a

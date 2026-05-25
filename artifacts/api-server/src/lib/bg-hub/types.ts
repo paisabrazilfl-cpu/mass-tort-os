@@ -17,7 +17,6 @@ export type BackgroundLane =
   | "address"
   | "email"
   | "phone"
-  | "phone_provenance"
   | "residency"
   | "criminal_court"
   | "incarceration"
@@ -54,47 +53,12 @@ export interface BackgroundLaneResult {
   checked_at: string;
   raw?: unknown;
   error?: string;
-  /**
-   * Optional smart-link(s) the operator can click to run the lookup
-   * manually when no automated adapter exists for this jurisdiction /
-   * source. Each entry is a prefilled URL pointing at the canonical
-   * public search form (NSOPW for sex-offender, BOP for federal
-   * inmate, state bar / SoS for attorney / business entity, etc).
-   *
-   * The lane status is NOT changed by the presence of this field —
-   * status still reflects "have we received evidence?" The UI uses
-   * these links to turn a 5-website manual workflow into a one-click
-   * jump. Adding a smart-link does NOT count as having run the check.
-   */
-  manual_action_urls?: Array<{
-    label: string;
-    url: string;
-    /** Free-text reason this fallback exists. Shown next to the button. */
-    note?: string;
-  }>;
 }
 
 export interface BackgroundHubResult {
   lead_id: number;
   version: string;
-  /**
-   * Whole-hub status: aggregates EVERY lane, including the 5 advisory
-   * stub lanes that intentionally always return REVIEW_REQUIRED until
-   * a live adapter is built. This is what a strict gate should consult
-   * — a lead is not "fully cleared" until those manual lookups are done.
-   */
   final_status: BackgroundStatus;
-  /**
-   * Live-lanes-only aggregate: same precedence (FAIL → REVIEW → NOT_RUN
-   * → PASS) but evaluated ONLY against lanes that have a live data
-   * adapter (see lib/bg-hub/escalation.ts → STUB_LANES). This is what
-   * the operator UI shows when reporting "all automated checks
-   * cleared" — it lets a buyer distinguish "the system actually found
-   * something" from "we haven't built adapters for these advisory
-   * lanes yet." A PASS here does NOT mean the lead is fully cleared;
-   * it means every adapter we shipped came back clean.
-   */
-  final_status_live_lanes_only: BackgroundStatus;
   overall_score: number;
   checked_at: string;
   summary: {
@@ -102,12 +66,6 @@ export interface BackgroundHubResult {
     review_required: number;
     fail: number;
     not_run: number;
-    // Same counts but restricted to live (non-stub) lanes.
-    live_lanes_total: number;
-    live_lanes_pass: number;
-    live_lanes_review: number;
-    live_lanes_fail: number;
-    live_lanes_not_run: number;
   };
   results: BackgroundLaneResult[];
 }

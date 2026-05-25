@@ -530,18 +530,16 @@ export const NODE_CATALOG: NodeDefinition[] = [
   // ──────────────── AI Agents (extended) ────────────────
   {
     type: "ai.agent", label: "AI Agent (Autonomous)", category: "ai",
-    description: "Run an autonomous AI agent that plans, calls automation nodes as tools, observes each result, and loops until the goal is met. Powered by Bitdeer AI.",
+    description: "Run an autonomous LLM agent with tool access (CRM, search, etc).",
     icon: "Bot", color: "bg-fuchsia-600",
     params: [
       { key: "goal", label: "Goal / instructions", type: "text", required: true, placeholder: "Qualify this lead, run a background check, and route to the right paralegal." },
-      { key: "tools", label: "Allowed tools (JSON array — blank = every reachable node)", type: "json", placeholder: '["crm.update_lead","comm.send_sms","io.sql_query"]', help: "Restrict the agent to these node types. Leave blank to grant the full reachable catalog. Triggers, logic nodes, End, and ai.agent itself are always excluded." },
-      { key: "maxSteps", label: "Max steps", type: "number", default: 10, help: "Hard cap on plan→act→observe iterations (clamped 1–25)." },
-      { key: "model", label: "Reasoning model", type: "select", default: "planner", options: [
-        { label: "Planner — Nemotron-3-Super (deep reasoning)", value: "planner" },
-        { label: "Chat — Devstral-2 (fast, general)", value: "chat" },
-        { label: "Code — Devstral-2 (tool / structured)", value: "code" },
+      { key: "tools", label: "Allowed tools (JSON array)", type: "json", placeholder: '["crm.update_lead","comm.send_sms","io.sql_query"]' },
+      { key: "maxSteps", label: "Max steps", type: "number", default: 10 },
+      { key: "model", label: "Model", type: "select", default: "gpt-4o", options: [
+        { label: "GPT-4o", value: "gpt-4o" }, { label: "GPT-4o mini", value: "gpt-4o-mini" },
+        { label: "Claude 3.5 Sonnet", value: "claude-3-5-sonnet" },
       ]},
-      { key: "dryRun", label: "Dry run (simulate write tools)", type: "boolean", default: false, help: "When on, write tools are simulated instead of executed — read/query tools still run so the agent plans against real data." },
     ], outputs: ["success", "max_steps", "error"],
   },
   {
@@ -699,16 +697,6 @@ export const NODE_CATALOG: NodeDefinition[] = [
     ],
   },
   {
-    type: "ai.rerank", label: "AI Rerank", category: "ai",
-    description: "Re-score candidate documents by relevance to a query (BAAI/bge-reranker-v2-m3). Keep the top-N that actually matter.",
-    icon: "ListOrdered", color: "bg-fuchsia-600",
-    params: [
-      { key: "query", label: "Query path/text", type: "string", required: true, placeholder: "input.question" },
-      { key: "documents", label: "Documents path (string array)", type: "string", required: true, placeholder: "input.candidates" },
-      { key: "topN", label: "Keep top-N", type: "number", default: 5 },
-    ],
-  },
-  {
     type: "ai.draft", label: "AI Draft Text", category: "ai",
     description: "Generate text from a prompt template.",
     icon: "Sparkles", color: "bg-fuchsia-600",
@@ -805,13 +793,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
     icon: "Square", color: "bg-slate-500",
     params: [
       { key: "output", label: "Return value (JSON)", type: "json", placeholder: '{"status":"done","lead_id":"input.lead.id"}' },
-    ],
-    // utility.end is a sink — no downstream edges are allowed. The handler
-    // emits the synthetic branch name "__end__" that the executor treats as
-    // a stop signal (see executor.ts → utility.end). Declaring the branch
-    // here pins the contract so the catalog↔handler parity test catches any
-    // future regression that adds a real outgoing edge to End.
-    outputs: ["__end__"],
+    ], outputs: 0,
   },
 ];
 

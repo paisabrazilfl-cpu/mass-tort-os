@@ -26,29 +26,14 @@ const LANE_LABEL: Record<string, string> = {
   address: "Address Verification",
   email: "Email Validation",
   phone: "Phone Validation",
-  phone_provenance: "Phone Provenance (Telnyx live carrier + burner-risk classification)",
-  residency: "Residency Cross-Check (manual property-records lookup; one-click smart-link)",
+  residency: "Residency Cross-Check",
   criminal_court: "Criminal / Court Records",
-  incarceration: "Incarceration Status (BOP + VINELink smart-links)",
-  sex_offender_nsopw: "Sex Offender Registry (NSOPW smart-link; TOS forbids automation)",
-  attorney: "Attorney Conflict Check (state bar smart-links)",
-  business_entity: "Business Entity Check (SEC EDGAR live + state SoS smart-links)",
+  incarceration: "Incarceration Status",
+  sex_offender_nsopw: "Sex Offender Registry (NSOPW)",
+  attorney: "Attorney Conflict Check",
+  business_entity: "Business Entity Check",
   pacer_federal: "PACER (Federal Courts)",
 };
-
-// Lanes that have no live data adapter today. UI surfaces them so the
-// operator gets the prompt to run the lookup manually, but they will
-// always resolve to REVIEW_REQUIRED — never to a green PASS — so a buyer
-// looking at the badge cluster can't misread "all green" as automated
-// clearance. Source of truth: lib/bg-hub/escalation.ts → STUB_LANES.
-// business_entity was demoted out of this set when the SEC EDGAR live
-// adapter shipped.
-const ADVISORY_MANUAL_LANES = new Set<string>([
-  "residency",
-  "incarceration",
-  "sex_offender_nsopw",
-  "attorney",
-]);
 
 function statusBadge(status: string) {
   switch (status) {
@@ -91,24 +76,6 @@ function finalStatusHeadline(result: BackgroundHubResult) {
     case BackgroundHubResultFinalStatus.NOT_RUN:
     default:
       return { Icon: ShieldQuestion, color: "text-muted-foreground", label: "NOT RUN" };
-  }
-}
-
-// Sub-headline reporting just the lanes that actually run an adapter.
-// Lets the operator see "automated checks cleared" without the headline
-// being dragged to REVIEW by the 5 advisory stub lanes. Keep this
-// strictly informational — the gating decision still uses `final_status`.
-function liveLanesHeadline(result: BackgroundHubResult) {
-  switch (result.final_status_live_lanes_only) {
-    case BackgroundHubResultFinalStatus.PASS:
-      return { color: "text-emerald-700", label: "Automated checks: PASS" };
-    case BackgroundHubResultFinalStatus.REVIEW_REQUIRED:
-      return { color: "text-amber-700", label: "Automated checks: REVIEW" };
-    case BackgroundHubResultFinalStatus.FAIL:
-      return { color: "text-red-700", label: "Automated checks: FAIL" };
-    case BackgroundHubResultFinalStatus.NOT_RUN:
-    default:
-      return { color: "text-muted-foreground", label: "Automated checks: NOT RUN" };
   }
 }
 
@@ -209,28 +176,6 @@ function LaneRow({ lane }: { lane: BackgroundHubLaneResult }) {
           ))}
         </ul>
       )}
-      {lane.manual_action_urls && lane.manual_action_urls.length > 0 && (
-        <div className="space-y-1.5 border-t pt-2">
-          <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">
-            One-click manual lookups
-          </div>
-          {lane.manual_action_urls.map((m, i) => (
-            <div key={i} className="flex items-start gap-2">
-              <a
-                href={m.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center text-xs font-medium text-blue-700 hover:text-blue-900 hover:underline"
-              >
-                {m.label} →
-              </a>
-              {m.note && (
-                <span className="text-[11px] text-muted-foreground italic">{m.note}</span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
       {pacerCases.length > 0 && (
         <PacerHitsTable cases={pacerCases} truncated={pacerTruncated} />
       )}
@@ -250,7 +195,6 @@ function LaneRow({ lane }: { lane: BackgroundHubLaneResult }) {
 
 function ResultBlock({ result }: { result: BackgroundHubResult }) {
   const headline = finalStatusHeadline(result);
-  const live = liveLanesHeadline(result);
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between border rounded-md p-3 bg-slate-50">
@@ -258,10 +202,6 @@ function ResultBlock({ result }: { result: BackgroundHubResult }) {
           <headline.Icon className={`h-5 w-5 ${headline.color}`} />
           <div>
             <div className={`font-semibold text-sm ${headline.color}`}>{headline.label}</div>
-            <div className={`text-xs ${live.color}`}>
-              {live.label}
-              {" "}({result.summary.live_lanes_pass}/{result.summary.live_lanes_total} live lanes)
-            </div>
             <div className="text-xs text-muted-foreground">
               Overall score: {result.overall_score} / 100 ·
               {" "}{result.summary.pass} pass · {result.summary.review_required} review ·

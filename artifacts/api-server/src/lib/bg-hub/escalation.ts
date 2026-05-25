@@ -2,23 +2,12 @@ import type { BackgroundLane, BackgroundStatus } from "./types";
 
 // Per-lane flag taxonomy. A lane's adapter emits flags from this vocabulary;
 // the arbiter (statusFromFlags) maps the observed set to PASS / FAIL /
-// REVIEW_REQUIRED / NOT_RUN. Keep this table small and explicit — drift
-// between adapter-emitted flags and rules causes the "unknown_hits"
-// branch to fire, which is REVIEW_REQUIRED on purpose so the operator
-// notices.
-//
-// Categories:
-//   fail   — hard adverse signal. Lane resolves FAIL immediately.
-//   review — non-decisive signal. Lane resolves REVIEW_REQUIRED.
-//   skip   — adapter deliberately skipped (e.g. sub-source not
-//            configured, irrelevant for this lead). If a lane emits
-//            ONLY skip flags, it resolves NOT_RUN so the UI distinguishes
-//            "we didn't run this" from "we ran it and it needs review."
-//            Skip flags combined with review/fail flags lose to the
-//            stronger signal.
+// REVIEW_REQUIRED. Keep this table small and explicit — drift between
+// adapter-emitted flags and rules causes the "unknown_hits" branch to fire,
+// which is REVIEW_REQUIRED on purpose so the operator notices.
 export const BACKGROUND_ESCALATION_RULES: Record<
   BackgroundLane,
-  { fail: readonly string[]; review: readonly string[]; skip?: readonly string[] }
+  { fail: readonly string[]; review: readonly string[] }
 > = {
   address: {
     fail: [
@@ -37,10 +26,6 @@ export const BACKGROUND_ESCALATION_RULES: Record<
   },
 
   email: {
-    // disposable_domain stays in the FAIL bucket — a throwaway address
-    // on a mass-tort intake is ~100% fraud. role_based_email is
-    // REVIEW because a real claimant can legitimately submit from a
-    // shared family mailbox (rare, but documented).
     fail: ["missing_email", "invalid_email_format", "no_mx_records", "disposable_domain"],
     review: ["email_not_checked", "role_based_email", "smtp_not_checked", "typo_suggestion"],
   },
@@ -48,33 +33,6 @@ export const BACKGROUND_ESCALATION_RULES: Record<
   phone: {
     fail: ["missing_phone", "invalid_phone_format", "number_disconnected"],
     review: ["phone_not_checked", "voip", "prepaid", "carrier_unknown"],
-  },
-
-  // Phone provenance is the live counterpart to the format-only `phone`
-  // lane. Telnyx returns line-type and carrier; we classify into a
-  // burner-risk verdict. High-risk verdicts (non-fixed-VOIP, known
-  // burner carriers) are review-worthy, not fail-worthy — false
-  // positives on phones are common (a real claimant on Google Voice
-  // is plausible), so the lane escalates to human eyes rather than
-  // auto-rejecting the lead.
-  phone_provenance: {
-    fail: [],
-    review: [
-      "phone_non_fixed_voip",
-      "phone_voip",
-      "phone_toll_free",
-      "phone_known_burner_carrier",
-      "phone_recently_ported",
-      "phone_carrier_unknown",
-      "phone_lookup_unreachable",
-      "phone_unparseable",
-    ],
-    skip: [
-      // No Telnyx integration configured. NOT_RUN, not REVIEW: the
-      // operator hasn't opted into this signal yet, and we shouldn't
-      // gate intake on a check they haven't enabled.
-      "phone_provenance_unconfigured",
-    ],
   },
 
   residency: {
@@ -95,20 +53,11 @@ export const BACKGROUND_ESCALATION_RULES: Record<
       "similar_name_match",
       "court_records_found_review",
       "court_source_unreachable",
-      // OFAC unreachable at run-time (network error, provider returned 5xx)
-      // → REVIEW: we tried, we got nothing, operator should look. This is
-      // distinct from `ofac_unconfigured` which routes to NOT_RUN below.
+      // OFAC sanctions check is a CONFIGURED source (gated on OFAC_API_KEY).
+      // When it's skipped or unreachable we MUST escalate to REVIEW — a
+      // configured source that wasn't actually checked must never resolve to
+      // a silent PASS. See adaptCriminalCourt.
       "ofac_unavailable",
-    ],
-    skip: [
-      // OFAC was deliberately skipped because the source isn't configured
-      // (legacy paid path with no OFAC_API_KEY AND Treasury disabled). Pre-
-      // flight signal — different from "we tried and failed." If the lane
-      // has NO other flags, this resolves NOT_RUN so the operator
-      // distinguishes a missing-key install from a genuinely-needs-review
-      // lead. With the Treasury free path enabled (default), this branch
-      // is essentially unreachable.
-      "ofac_unconfigured",
     ],
   },
 
@@ -118,17 +67,11 @@ export const BACKGROUND_ESCALATION_RULES: Record<
   },
 
   sex_offender_nsopw: {
-    // garbo_sex_offender_hit is the live-screen FAIL signal. NSOPW
-    // direct hits via smart-link don't reach here as flags (they're
-    // recorded as operator-edited notes), but when Garbo is configured
-    // a positive sex-offender registry match comes through as a hard
-    // fail.
-    fail: ["confirmed_registry_match", "garbo_sex_offender_hit"],
+    fail: ["confirmed_registry_match"],
     review: [
       "nsopw_manual_check_required",
       "possible_registry_match",
       "source_unavailable",
-      "garbo_unreachable",
     ],
   },
 
@@ -171,31 +114,10 @@ export interface FlagEvaluation {
   notes: string[];
 }
 
-// Lanes with no live data adapter today (lib/bg-hub/adapters.ts "honest stub"
-// markers). These can never return a clean PASS — even when their adapter
-// emits zero flags we force REVIEW_REQUIRED so a buyer cannot misread an
-// all-green badge cluster as automated clearance. If you add a real adapter
-// for one of these lanes, REMOVE its entry from this set and let the normal
-// flag taxonomy decide.
-//
-// business_entity is NOT in this set anymore: it has a live SEC EDGAR
-// adapter (lib/bg-hub/sec-edgar.ts). EDGAR covers public companies + large
-// LLCs + Reg-D filers (~10 K entities). When EDGAR returns a hit the
-// lane resolves PASS via the normal taxonomy. When EDGAR returns no hit
-// the adapter still emits `manual_entity_check_required` → REVIEW so
-// small unregistered entities aren't silently cleared.
-export const STUB_LANES: ReadonlySet<BackgroundLane> = new Set([
-  "residency",
-  "incarceration",
-  "sex_offender_nsopw",
-  "attorney",
-]);
-
 // Translate a set of observed flags into a status + score for one lane.
 // Precedence is: any FAIL flag → FAIL; otherwise any REVIEW flag → REVIEW;
 // otherwise any UNKNOWN flag → REVIEW (because we don't trust silent drift);
-// otherwise PASS — UNLESS the lane is in STUB_LANES, in which case the best
-// achievable status is REVIEW_REQUIRED.
+// otherwise PASS.
 export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEvaluation {
   const rules = BACKGROUND_ESCALATION_RULES[lane];
   if (!rules) {
@@ -205,13 +127,9 @@ export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEval
       notes: [`No escalation rule for lane "${lane}" — treated as review.`],
     };
   }
-  const skipList = rules.skip ?? [];
   const failHits = flags.filter((f) => rules.fail.includes(f));
   const reviewHits = flags.filter((f) => rules.review.includes(f));
-  const skipHits = flags.filter((f) => skipList.includes(f));
-  const unknownHits = flags.filter(
-    (f) => !rules.fail.includes(f) && !rules.review.includes(f) && !skipList.includes(f),
-  );
+  const unknownHits = flags.filter((f) => !rules.fail.includes(f) && !rules.review.includes(f));
 
   if (failHits.length > 0) {
     return {
@@ -232,27 +150,6 @@ export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEval
       status: "REVIEW_REQUIRED",
       score: 60,
       notes: [`Unknown flags require review: ${unknownHits.join(", ")}`],
-    };
-  }
-  if (skipHits.length > 0) {
-    // Only skip flags present — the lane's sub-source was deliberately
-    // not run. Report NOT_RUN so the operator can distinguish "config
-    // gap" from "needs review." Score reflects the gap, not a clean
-    // outcome.
-    return {
-      status: "NOT_RUN",
-      score: 40,
-      notes: [`Sub-source skipped: ${skipHits.join(", ")}`],
-    };
-  }
-  if (STUB_LANES.has(lane)) {
-    // Defense in depth. A stub-lane adapter that returned an empty flag
-    // array would otherwise resolve to PASS via the line below. Force
-    // REVIEW so the operator is always prompted to run the manual lookup.
-    return {
-      status: "REVIEW_REQUIRED",
-      score: 50,
-      notes: ["No live data adapter for this lane — manual operator lookup required."],
     };
   }
   return {

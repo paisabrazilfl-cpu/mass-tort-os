@@ -6,7 +6,6 @@ import {
   real,
   timestamp,
   index,
-  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -22,13 +21,6 @@ export const faxResultsTable = pgTable("fax_results", {
   lead_id: integer("lead_id"),
   source_file: text("source_file").notNull(),
   vault_path: text("vault_path").notNull(),
-  // Provider-namespaced external fax id ("<provider>:<id>") for INBOUND
-  // faxes. The unique index below makes a provider re-delivering the same
-  // inbound webhook unable to create a duplicate medical-record row, even
-  // under concurrent retries. NULL for outbound faxes and manual OCR
-  // uploads — Postgres unique indexes treat NULLs as distinct, so any
-  // number of NULL rows coexist.
-  external_fax_id: text("external_fax_id"),
   rx_number: text("rx_number").default("").notNull(),
   drug_name: text("drug_name").default("").notNull(),
   fill_date: text("fill_date").default("").notNull(),
@@ -43,7 +35,6 @@ export const faxResultsTable = pgTable("fax_results", {
   createdAtIdx: index("fax_results_created_at_idx").on(t.created_at),
   statusCreatedIdx: index("fax_results_status_created_at_idx").on(t.status, t.created_at),
   leadIdx: index("fax_results_lead_id_idx").on(t.lead_id),
-  externalFaxIdUnique: uniqueIndex("fax_results_external_fax_id_unique").on(t.external_fax_id),
 }));
 
 export const insertFaxResultSchema = createInsertSchema(faxResultsTable).omit({

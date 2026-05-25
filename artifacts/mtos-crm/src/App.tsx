@@ -8,7 +8,6 @@ import NotFound from "@/pages/not-found";
 import { Layout } from "@/components/layout/layout";
 import { RouteErrorBoundary } from "@/components/layout/route-error-boundary";
 import { RequireAuth } from "@/components/auth/require-auth";
-import { AdminGate } from "@/components/auth/admin-gate";
 import { AuthProvider } from "@/contexts/auth-context";
 import { ThemeProvider } from "@/contexts/theme-context";
 import { toast } from "@/hooks/use-toast";
@@ -18,7 +17,6 @@ import LoginPage from "@/pages/login";
 import LoginMfaPage from "@/pages/login-mfa";
 import RegisterPage from "@/pages/register";
 import VerifyEmailPage from "@/pages/verify-email";
-import MagicLinkPage from "@/pages/magic-link";
 import Dashboard from "@/pages/dashboard";
 import Pipeline from "@/pages/pipeline";
 import Leads from "@/pages/leads";
@@ -39,7 +37,6 @@ import Vendors from "@/pages/vendors";
 import Security from "@/pages/security";
 import FirmSettings from "@/pages/firm-settings";
 import Users from "@/pages/users";
-import CompanyTeams from "@/pages/company-teams";
 import DocReview from "@/pages/doc-review";
 import Timeline from "@/pages/timeline";
 import Drafting from "@/pages/drafting";
@@ -65,11 +62,12 @@ import AutomationEditorPage from "@/pages/automation-editor";
 import N8nSetupPage from "@/pages/n8n-setup";
 import FormsApiPage from "@/pages/forms-api";
 import SelfHealPage from "@/pages/self-heal";
-import AdminSnapshotsPage from "@/pages/admin-snapshots";
-import AdminPlatform from "@/pages/admin-platform";
 import CompetitiveIntelPage from "@/pages/competitive-intel";
 import UserManualPage from "@/pages/user-manual";
 import AdsLibrariesPage from "@/pages/ads-libraries";
+import AutomationDeliveriesPage from "@/pages/automation-deliveries";
+import AiAgentsPage from "@/pages/ai-agents";
+import AbbyPage from "@/pages/abby";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
 // 401s are handled separately by api-fetch's auth-failure callback.
@@ -123,31 +121,14 @@ function AuthedRoutes() {
           <Route path="/compliance" component={Compliance} />
           <Route path="/form-engine" component={FormEngine} />
           <Route path="/vendors" component={Vendors} />
-          <Route path="/security">
-            <AdminGate>
-              <Security />
-            </AdminGate>
-          </Route>
+          <Route path="/security" component={Security} />
           <Route path="/firm-settings" component={FirmSettings} />
-          <Route path="/users">
-            <AdminGate>
-              <Users />
-            </AdminGate>
-          </Route>
-          <Route path="/company-teams">
-            <AdminGate>
-              <CompanyTeams />
-            </AdminGate>
-          </Route>
+          <Route path="/users" component={Users} />
           <Route path="/doc-review" component={DocReview} />
           <Route path="/timeline" component={Timeline} />
           <Route path="/drafting" component={Drafting} />
           <Route path="/predictive" component={Predictive} />
-          <Route path="/integrations">
-            <AdminGate>
-              <IntegrationsPage />
-            </AdminGate>
-          </Route>
+          <Route path="/integrations" component={IntegrationsPage} />
           <Route path="/billing" component={BillingPage} />
           <Route path="/calls" component={CallsPage} />
           <Route path="/news" component={News} />
@@ -161,38 +142,19 @@ function AuthedRoutes() {
           <Route path="/workflow-settings" component={WorkflowSettingsPage} />
           <Route path="/web-forms" component={WebFormsPage} />
           <Route path="/job-queue" component={JobQueue} />
-          <Route path="/dark-room">
-            <AdminGate>
-              <DarkRoomPage />
-            </AdminGate>
-          </Route>
+          <Route path="/dark-room" component={DarkRoomPage} />
           <Route path="/automations" component={AutomationsPage} />
           <Route path="/automation-docs" component={AutomationDocsPage} />
           <Route path="/n8n-setup" component={N8nSetupPage} />
           <Route path="/forms-api" component={FormsApiPage} />
-          <Route path="/self-heal">
-            <AdminGate>
-              <SelfHealPage />
-            </AdminGate>
-          </Route>
-          <Route path="/admin/snapshots">
-            <AdminGate>
-              <AdminSnapshotsPage />
-            </AdminGate>
-          </Route>
-          <Route path="/admin/platform">
-            <AdminGate>
-              <AdminPlatform />
-            </AdminGate>
-          </Route>
-          <Route path="/competitive-intel">
-            <AdminGate>
-              <CompetitiveIntelPage />
-            </AdminGate>
-          </Route>
+          <Route path="/self-heal" component={SelfHealPage} />
+          <Route path="/competitive-intel" component={CompetitiveIntelPage} />
           <Route path="/user-manual" component={UserManualPage} />
           <Route path="/ads-libraries" component={AdsLibrariesPage} />
+          <Route path="/automation-deliveries" component={AutomationDeliveriesPage} />
           <Route path="/automations/:id" component={AutomationEditorPage} />
+          <Route path="/ai-agents" component={AiAgentsPage} />
+          <Route path="/abby" component={AbbyPage} />
           <Route component={NotFound} />
         </Switch>
       </RouteErrorBoundary>
@@ -207,7 +169,6 @@ function Router() {
       <Route path="/login/mfa" component={LoginMfaPage} />
       <Route path="/register" component={RegisterPage} />
       <Route path="/verify-email" component={VerifyEmailPage} />
-      <Route path="/auth/magic" component={MagicLinkPage} />
       <Route>
         <RequireAuth>
           <AuthedRoutes />

@@ -88,17 +88,6 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
     },
   ],
 
-  phone_provenance: [
-    {
-      name: "Telnyx Number Lookup",
-      url: "https://developers.telnyx.com/api/number-lookup",
-      source_type: "technical",
-      requires_api_key: true,
-      live_adapter_available: true,
-      notes: "Live carrier + line-type + portability lookup. Reuses the existing telnyx integration row's api_key.",
-    },
-  ],
-
   residency: [
     {
       name: "County Property Records Directory",

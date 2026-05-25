@@ -1453,6 +1453,42 @@ export const RunBackgroundCheckResponse = zod.object({
     .describe(
       "Operator-facing notes about source health, fallbacks, or limitations.",
     ),
+  pacer: zod
+    .object({
+      ok: zod.boolean().optional(),
+      reason: zod
+        .enum(["NOT_CONFIGURED", "AUTH_FAILED", "SOURCE_UNREACHABLE"])
+        .nullish()
+        .describe("Failure reason when `ok` is false."),
+      message: zod
+        .string()
+        .nullish()
+        .describe("Human-readable detail for the failure reason."),
+      cases: zod
+        .array(
+          zod.object({
+            caseNumberFull: zod.string().nullish(),
+            caseTitle: zod.string().nullish(),
+            caseYear: zod.number().nullish(),
+            courtId: zod.string().nullish(),
+            dateFiled: zod.string().nullish(),
+            jurisdictionType: zod.string().nullish(),
+            natureOfSuit: zod.string().nullish(),
+            docketUrl: zod.string().nullish(),
+          }),
+        )
+        .optional(),
+      truncated: zod
+        .boolean()
+        .optional()
+        .describe(
+          "True when PACER returned more results than the 25-case limit.",
+        ),
+    })
+    .nullish()
+    .describe(
+      'PACER Case Locator (PCL) search result. Included only when the\n\"pacer\" integration is configured in the vault. `null` means PACER\nwas not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).\nWhen `ok` is true, `cases` contains up to 25 party-search hits and\n`truncated` indicates more results exist beyond the first page.\nHits require manual operator review — PCL results never auto-fail\na lead because they do not include identity-confirming metadata.\n',
+    ),
 });
 
 /**
@@ -1497,6 +1533,42 @@ export const RunLeadBackgroundCheckResponse = zod.object({
     .array(zod.string())
     .describe(
       "Operator-facing notes about source health, fallbacks, or limitations.",
+    ),
+  pacer: zod
+    .object({
+      ok: zod.boolean().optional(),
+      reason: zod
+        .enum(["NOT_CONFIGURED", "AUTH_FAILED", "SOURCE_UNREACHABLE"])
+        .nullish()
+        .describe("Failure reason when `ok` is false."),
+      message: zod
+        .string()
+        .nullish()
+        .describe("Human-readable detail for the failure reason."),
+      cases: zod
+        .array(
+          zod.object({
+            caseNumberFull: zod.string().nullish(),
+            caseTitle: zod.string().nullish(),
+            caseYear: zod.number().nullish(),
+            courtId: zod.string().nullish(),
+            dateFiled: zod.string().nullish(),
+            jurisdictionType: zod.string().nullish(),
+            natureOfSuit: zod.string().nullish(),
+            docketUrl: zod.string().nullish(),
+          }),
+        )
+        .optional(),
+      truncated: zod
+        .boolean()
+        .optional()
+        .describe(
+          "True when PACER returned more results than the 25-case limit.",
+        ),
+    })
+    .nullish()
+    .describe(
+      'PACER Case Locator (PCL) search result. Included only when the\n\"pacer\" integration is configured in the vault. `null` means PACER\nwas not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).\nWhen `ok` is true, `cases` contains up to 25 party-search hits and\n`truncated` indicates more results exist beyond the first page.\nHits require manual operator review — PCL results never auto-fail\na lead because they do not include identity-confirming metadata.\n',
     ),
 });
 
@@ -2273,5 +2345,76 @@ export const SendLeadSmsResponse = zod.object({
     sms_message_id: zod.number(),
     telnyx_message_id: zod.string().nullish(),
     status: zod.string(),
+  }),
+});
+
+/**
+ * @summary List outbound webhook delivery attempts with filters
+ */
+export const listWebhookDeliveriesQueryPageDefault = 1;
+
+export const listWebhookDeliveriesQueryPageSizeDefault = 50;
+export const listWebhookDeliveriesQueryPageSizeMax = 200;
+
+export const ListWebhookDeliveriesQueryParams = zod.object({
+  integration_id: zod.coerce.number().optional(),
+  event: zod.coerce.string().optional(),
+  status: zod.enum(["success", "failure", "all"]).optional(),
+  since: zod.date().optional(),
+  until: zod.date().optional(),
+  page: zod.coerce
+    .number()
+    .min(1)
+    .default(listWebhookDeliveriesQueryPageDefault),
+  page_size: zod.coerce
+    .number()
+    .min(1)
+    .max(listWebhookDeliveriesQueryPageSizeMax)
+    .default(listWebhookDeliveriesQueryPageSizeDefault),
+});
+
+export const ListWebhookDeliveriesResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    rows: zod.array(
+      zod.object({
+        id: zod.number(),
+        integration_id: zod.number(),
+        event: zod.string(),
+        delivery_id: zod.string(),
+        status_code: zod.number().nullish(),
+        response_ms: zod.number().nullish(),
+        attempt: zod.number(),
+        last_error: zod.string().nullish(),
+        payload_hash: zod.string().nullish(),
+        is_test: zod.number(),
+        occurred_at: zod.string(),
+        integration_name: zod.string().nullish(),
+        integration_provider: zod.string().nullish(),
+      }),
+    ),
+    page: zod.number(),
+    page_size: zod.number(),
+    total: zod.number(),
+  }),
+});
+
+/**
+ * @summary Re-fire the stored payload of a delivery row with a fresh timestamp
+ */
+
+export const ResendWebhookDeliveryParams = zod.object({
+  id: zod.coerce.number().min(1),
+});
+
+export const ResendWebhookDeliveryResponse = zod.object({
+  status: zod.string(),
+  data: zod.object({
+    delivery_id: zod.string(),
+    response_status: zod.number(),
+    latency_ms: zod.number(),
+    signed: zod.boolean(),
+    success: zod.boolean(),
+    error: zod.string().nullish(),
   }),
 });

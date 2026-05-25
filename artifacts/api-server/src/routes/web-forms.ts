@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import rateLimit from "express-rate-limit";
-import { db, formConfigurationsTable, leadsTable } from "@workspace/db";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { db, formConfigurationsTable, leadsTable, workflowSettingsTable } from "@workspace/db";
 import type { WebFormConfig, WebFormField, EligibilityRule } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { getFormConfig } from "../lib/form-config-service";
@@ -29,10 +29,11 @@ const webFormsRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests" },
-  keyGenerator: (req) =>
-    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-    req.socket.remoteAddress ||
-    "unknown",
+  // Use ipKeyGenerator (honours trust proxy / req.ip) instead of reading
+  // X-Forwarded-For directly. A spoofed XFF header previously let an attacker
+  // rotate fake IPs and bypass this limit entirely — the same fix applied to
+  // auth.ts (and documented there) must be consistent here.
+  keyGenerator: (req) => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
 });
 
 router.use(webFormsRateLimit);
@@ -486,7 +487,7 @@ async function runWebFormPipeline(
     // straight to "input.lead.id" and have the doctor's-fax dispatch
     // happen automatically when the web form is submitted.
     const { dispatchTrigger } = await import("../lib/automations/dispatch");
-    dispatchTrigger("trigger.form_submitted", {
+    void dispatchTrigger("trigger.form_submitted", {
       input: {
         tort_id: tortId,
         tort_label: config.label,
@@ -510,8 +511,6 @@ async function runWebFormPipeline(
       // a multi-tenant risk in code review.)
       firmId: null,
       source: `web_form_${tortId}`,
-    }).catch((err) => {
-      logger.error({ err, leadId, tortId }, "web_form_submitted trigger failed");
     });
   }
 
@@ -570,12 +569,18 @@ async function runWebFormPipeline(
             },
           );
         } else {
-          const fromEmail =
-            (resolved.credentials as Record<string, unknown>).from_email as string | undefined ||
-            "noreply@example.com";
-          const fromName =
-            (resolved.credentials as Record<string, unknown>).from_name as string | undefined ||
-            "Mass Tort OS";
+          const globalSettings = await db
+            .select({ fromAddress: workflowSettingsTable.default_email_from_address, fromName: workflowSettingsTable.default_email_from_name })
+            .from(workflowSettingsTable)
+            .where(eq(workflowSettingsTable.scope, "global"))
+            .limit(1)
+            .then((r) => r[0] ?? null);
+          const fromEmail = resolved.credentials.from_email
+            || globalSettings?.fromAddress
+            || "noreply@example.com";
+          const fromName = resolved.credentials.from_name
+            || globalSettings?.fromName
+            || "Mass Tort OS";
           const html = renderTemplate(cfg.confirmation_body_html, body);
           const subject = renderTemplate(cfg.confirmation_subject, body);
           const result = await adapter.send(resolved.credentials, {

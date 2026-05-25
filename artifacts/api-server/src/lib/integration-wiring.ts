@@ -34,7 +34,7 @@
  *   - lib/fax/index.ts ADAPTERS      → srfax
  *   - lib/lead-webhook-dispatcher.ts → n8n, zapier, make (type=automation)
  *   - lib/ai-{extract,fields,ocr}.ts,
- *     lib/drafting-ai.ts             → bitdeer (single AI engine, vault api_key)
+ *     lib/drafting-ai.ts             → anthropic (live_no_vault — SDK auth)
  *
  * Local-only validators (address-validator, email-validator,
  * background-check via CourtListener) are NOT integration providers in
@@ -120,9 +120,16 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   fasten_connect: ["api_key", "client_id", "client_secret"],
   fasten_onprem: ["api_key"],
 
-  // AI / LLM — single consolidated engine. One Bitdeer inference key powers
-  // chat, reasoning, code, vision, embeddings, and reranking.
-  bitdeer: ["api_key"],
+  // AI / LLM (vault-consuming providers — anthropic/openai are env-managed)
+  google_gemini: ["api_key"],
+  openrouter: ["api_key"],
+  groq: ["api_key"],
+  deepseek: ["api_key"],
+  perplexity: ["api_key"],
+  mistral: ["api_key"],
+  cohere: ["api_key"],
+  xai_grok: ["api_key"],
+  fireworks_ai: ["api_key"],
 
   // Web Search
   serpapi: ["api_key"],
@@ -131,16 +138,6 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   // client_secret=PACER password (mapped this way so the existing preset
   // field taxonomy covers it without introducing new field names).
   pacer: ["api_key", "client_secret"],
-
-  // Premium Background Check — Garbo (FCRA-compliant). api_url is
-  // optional and overrides the default base URL (useful for sandbox
-  // environments or future endpoint migrations). api_key is the auth
-  // token used as a Bearer header on every call.
-  garbo: ["api_key", "api_url"],
-
-  // Phone Provenance via Telnyx Number Lookup intentionally does NOT
-  // have its own integration row — it reuses the existing `telnyx`
-  // integration's api_key. See lib/bg-hub/phone-provenance.ts.
 };
 
 export type WiringStatus = "live" | "live_no_vault" | "vault_only";
@@ -195,45 +192,16 @@ const REGISTRY: Record<string, WiringInfo> = {
     note: "Federal court searches via PACER PCL Search API (lib/pacer/pcl-client.ts). Powers the dedicated 'pacer_federal' lane in the Background Check Hub. Requires api_key=PACER username + client_secret=PACER password. Per-page billing applies on the PACER side.",
   },
 
-  // Premium Background Check — Garbo
-  garbo: {
-    status: "live",
-    note: "FCRA-compliant background check via Garbo's API (lib/bg-hub/garbo.ts). When configured, replaces the manual NSOPW smart-link with a live screen and augments the criminal-court lane with arrest + violence-related records. Falls back to smart-link path when api_key absent or API unreachable. Pay-per-lookup; sign up at https://garbo.io.",
-  },
-
-  // Ad Platforms (vault-only today — credentials store + decrypt cleanly,
-  // but no live adapter ships in this build that pulls lead data, posts
-  // conversions, or reads spend reports). To activate any of these, write
-  // a lib/ads/<provider>/index.ts adapter that reads the encrypted creds
-  // through getIntegrationCredentialsById(id, firmId) and register it
-  // here under status:"live" with a real `note`. The integrations test
-  // page already returns honest "adapter_wired: false" for vault-only.
-  google_ads: {
-    status: "vault_only",
-    note: "Credentials store correctly (OAuth2 client_id/secret, developer token via api_key, refresh token via access_password, login_customer_id via account_sid). No live adapter wired yet — saving creds here lets a future ads-puller / conversion-uploader job find them. Real API contract: https://developers.google.com/google-ads/api/docs/start.",
-  },
-  google_adsense: {
-    status: "vault_only",
-    note: "Credentials store correctly (OAuth2 client_id/secret, refresh token via access_password, account name via account_sid). No live adapter wired. Most plaintiff's firms don't need AdSense — Google Ads (advertiser) is the relevant one. Real API contract: https://developers.google.com/adsense/management/reference/rest.",
-  },
-  meta_marketing: {
-    status: "vault_only",
-    note: "Credentials store correctly (App ID/Secret + long-lived access token + Ad Account ID). No live adapter wired. When activated, the canonical use case is auto-importing Facebook/Instagram lead-form submissions into MTOS via the Marketing API leadgen webhook. Real API contract: https://developers.facebook.com/docs/marketing-apis/.",
-  },
-  tiktok_ads: {
-    status: "vault_only",
-    note: "Credentials store correctly (App ID/Secret + access token + Advertiser ID). No live adapter wired. Real API contract: https://business-api.tiktok.com/portal/docs.",
-  },
-  linkedin_ads: {
-    status: "vault_only",
-    note: "Credentials store correctly (OAuth2 client_id/secret + access token + Ad Account URN). No live adapter wired. Real API contract: https://learn.microsoft.com/linkedin/marketing/.",
-  },
-
-  // AI / LLM — single consolidated engine (Bitdeer AI Cloud).
-  bitdeer: {
-    status: "live",
-    note: "The MTOS AI engine. One Bitdeer inference key powers callLLM (extraction, fields, OCR, drafting, threat analysis, lead intelligence, automations assistant), POST /api/ai/rerank, and the ai.rerank automation node. Requires a vault api_key — or set BITDEER_API_KEY in the environment.",
-  },
+  // AI / LLM (vault-consuming providers)
+  google_gemini: { status: "live", note: "LLM completions via Gemini v1beta generateContent." },
+  openrouter: { status: "live", note: "LLM completions via OpenRouter unified chat completions API." },
+  groq: { status: "live", note: "LLM completions via Groq /openai/v1/chat/completions." },
+  deepseek: { status: "live", note: "LLM completions via DeepSeek v1 chat completions." },
+  perplexity: { status: "live", note: "LLM completions via Perplexity chat completions." },
+  mistral: { status: "live", note: "LLM completions via Mistral v1 chat completions." },
+  cohere: { status: "live", note: "LLM completions via Cohere v2 chat." },
+  xai_grok: { status: "live", note: "LLM completions via xAI Grok v1 chat completions." },
+  fireworks_ai: { status: "live", note: "LLM completions via Fireworks AI inference v1 chat completions." },
 
   // Medical Records — Fasten Health (patient-initiated FHIR aggregation).
   // Both backends ship as live adapters: lib/fasten/client.ts (hosted Connect API)
@@ -265,6 +233,16 @@ const REGISTRY: Record<string, WiringInfo> = {
     note: "Receives lead.created webhook events. Set api_key to enable HMAC-SHA256 signing.",
   },
 
+  // AI / LLM — env-managed via Replit AI Integrations SDK (auth from env, not vault).
+  // Vault credentials are accepted as overrides but the env client is used by default.
+  anthropic: {
+    status: "live_no_vault",
+    note: "Hard fallback LLM. Uses the Replit AI Integrations SDK by default (env auth); a vault api_key is accepted as an override but is optional.",
+  },
+  openai: {
+    status: "live_no_vault",
+    note: "Default LLM. Uses the Replit AI Integrations SDK by default (env auth); a vault api_key is accepted as an override but is optional.",
+  },
 };
 
 const DEFAULT_VAULT_ONLY: WiringInfo = {
@@ -347,9 +325,10 @@ export function assertWiringRegistryConsistency(): void {
     },
     {
       klass: "llm",
-      // Single consolidated AI engine — Bitdeer AI Cloud.
-      adapterProviders: listLlmProviders(),
-      expectInRegistry: ["bitdeer"],
+      // anthropic and openai are env-managed (live_no_vault) — they ship in
+      // the LLM ADAPTERS map but the REGISTRY entry stays "live_no_vault".
+      adapterProviders: listLlmProviders().filter((p) => p !== "anthropic" && p !== "openai"),
+      expectInRegistry: ["google_gemini", "openrouter", "groq", "deepseek", "perplexity", "mistral", "cohere", "xai_grok", "fireworks_ai"],
     },
     {
       klass: "search",

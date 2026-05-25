@@ -25,7 +25,7 @@ export async function auditLog(
   entity_id: string,
   action: string,
   details?: Record<string, unknown>,
-  meta?: { ip_address?: string; user_agent?: string; firm_id?: number | null }
+  meta?: { ip_address?: string; user_agent?: string }
 ) {
   if (AUDIT_DISABLED) return;
   try {
@@ -36,7 +36,6 @@ export async function auditLog(
       details: details ?? {},
       ip_address: meta?.ip_address ?? null,
       user_agent: meta?.user_agent ?? null,
-      firm_id: meta?.firm_id ?? null,
     });
   } catch (err) {
     logger.error({ err, entity_type, entity_id, action }, "Audit log write failed");

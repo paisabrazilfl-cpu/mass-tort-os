@@ -207,9 +207,10 @@ export async function computeAndPersistLeadScore(leadId: number): Promise<ScoreR
 }
 
 /**
- * Build the admin portfolio aggregation across all torts.
+ * Build the portfolio aggregation for a firm's leads across all torts.
+ * firmId scopes the leadsTable query to prevent cross-tenant data exposure.
  */
-export async function buildPortfolioSummary(): Promise<PortfolioSummary> {
+export async function buildPortfolioSummary(firmId?: number): Promise<PortfolioSummary> {
   const settings = await getEngineSettings();
 
   // All torts
@@ -236,7 +237,7 @@ export async function buildPortfolioSummary(): Promise<PortfolioSummary> {
     labelToId.set(row.label.toLowerCase(), row.id);
   }
 
-  // Aggregate leads by tort
+  // Aggregate leads by tort — scoped to the firm when firmId is provided.
   const aggRows = await db
     .select({
       tort_type: leadsTable.tort_type,
@@ -249,6 +250,7 @@ export async function buildPortfolioSummary(): Promise<PortfolioSummary> {
       concave_count: sql<number>`count(*) filter (where ${leadsTable.convexity_score} = 'concave')::int`,
     })
     .from(leadsTable)
+    .where(firmId != null ? eq(leadsTable.firm_id, firmId) : undefined)
     .groupBy(leadsTable.tort_type);
 
   const byTort = new Map<string, {
@@ -311,10 +313,14 @@ export async function buildPortfolioSummary(): Promise<PortfolioSummary> {
 }
 
 /**
- * Recompute scores for all leads (admin tool).
+ * Recompute scores for all leads belonging to a firm (admin tool).
+ * firmId scopes the scan so admins only rescore their own firm's leads.
  */
-export async function recomputeAllScores(): Promise<{ scanned: number; scored: number }> {
-  const all = await db.select({ id: leadsTable.id }).from(leadsTable);
+export async function recomputeAllScores(firmId?: number): Promise<{ scanned: number; scored: number }> {
+  const all = await db
+    .select({ id: leadsTable.id })
+    .from(leadsTable)
+    .where(firmId != null ? eq(leadsTable.firm_id, firmId) : undefined);
   let scored = 0;
   for (const { id } of all) {
     const r = await computeAndPersistLeadScore(id);

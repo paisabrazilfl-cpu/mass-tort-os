@@ -48,7 +48,7 @@ function rowsOf<T extends Record<string, unknown>>(result: unknown): T[] {
 const ACCESS_TOKEN_EXPIRY = "15m";
 const REFRESH_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
-export type UserRole = "super_admin" | "admin" | "attorney" | "paralegal" | "viewer";
+export type UserRole = "super_admin" | "admin" | "user_manager" | "attorney" | "paralegal" | "agent" | "viewer";
 
 export interface AuthUser {
   id: number;
@@ -80,38 +80,22 @@ declare global {
 }
 
 // Higher number = more privilege.
+// super_admin  — platform owner only (paisabrazilfl@gmail.com). Sees all firms, all data.
+// admin        — firm managing partner. Full control within their firm.
+// user_manager — office/team manager. Manages users, invites, roles. Read-only on cases/leads.
+// attorney     — full legal case authority.
+// paralegal    — manages leads, cases, and documents.
+// agent        — intake agent / call-center rep. Creates leads and works intake only.
+// viewer       — read-only. Default for self-serve signups.
 const ROLE_HIERARCHY: Record<UserRole, number> = {
-  super_admin: 200,
-  admin: 100,
-  attorney: 75,
-  paralegal: 50,
-  viewer: 25,
+  super_admin:  200,
+  admin:        100,
+  user_manager:  80,
+  attorney:      75,
+  paralegal:     50,
+  agent:         35,
+  viewer:        25,
 };
-
-/**
- * Capacity flattening. MTOS operates with a single privileged tier: every
- * authenticated user runs with admin capacity; super_admin is reserved for
- * the platform owner. elevateRole() normalizes any lower role to `admin` at
- * request time (applied where authMiddleware builds req.user), so
- * requireRole / requirePermission / hasPermission and every route-level
- * role branch see admin uniformly — no viewer / paralegal / attorney tier.
- *
- * On by default in production / staging. Override with FLATTEN_ROLES_TO_ADMIN:
- *   "1" forces it on anywhere; "0" restores the original five-role model
- *   (the RBAC test suites set "0" so they exercise the real hierarchy).
- */
-function shouldFlattenRoles(): boolean {
-  const flag = process.env["FLATTEN_ROLES_TO_ADMIN"];
-  if (flag === "0") return false;
-  if (flag === "1") return true;
-  const env = process.env["NODE_ENV"];
-  return env === "production" || env === "staging";
-}
-
-export function elevateRole(role: UserRole): UserRole {
-  if (!shouldFlattenRoles()) return role;
-  return role === "super_admin" ? "super_admin" : "admin";
-}
 
 // =============================================================================
 // Permission catalogue
@@ -191,10 +175,6 @@ export const Permission = {
   OCR_QUEUE_ADMIN: "ocr:queue_admin",
   OCR_AI_FIELDS: "ocr:ai_fields",
 
-  // AI reranker — relevance re-scoring of candidate documents.
-  // Additive capability; no existing flow depends on it.
-  AI_RERANK: "ai:rerank",
-
   // Drafting
   DRAFTING_TEMPLATES_VIEW: "drafting:templates_view",
   DRAFTING_GENERATE: "drafting:generate",
@@ -259,13 +239,6 @@ export const Permission = {
   // become coding-agent input that opens PRs against the repo.
   SELF_HEAL_MANAGE: "self_heal:manage",
 
-  // System Snapshots / Restore. Admin-only — snapshots are firm-scoped
-  // JSON dumps of operational config (workflow settings, integrations
-  // metadata, automation graphs, document templates). Restoring overwrites
-  // existing rows by natural key. Encrypted credentials NEVER leave the
-  // vault — snapshots store only references / hashes / userConfig.
-  SNAPSHOT_MANAGE: "snapshot:manage",
-
   // Competitive Intelligence (Google Ads Transparency Center via SerpAPI).
   // Admin-only — surfaces what other plaintiff firms are advertising for.
   COMPETITIVE_INTEL_MANAGE: "competitive_intel:manage",
@@ -275,10 +248,52 @@ export type Permission = (typeof Permission)[keyof typeof Permission];
 
 // Role → permission set. Admin gets every permission explicitly (no implicit
 // inheritance) so new permissions cannot land in admin's bag without an
-// explicit edit to this map.
+// explicit edit to this map. super_admin mirrors admin's full set and sits
+// one step above in the hierarchy so requireRole("admin") gates pass.
 export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
   super_admin: new Set<Permission>(Object.values(Permission)),
   admin: new Set<Permission>(Object.values(Permission)),
+
+  // ── user_manager ────────────────────────────────────────────────────────────
+  // Team / office manager. Core job: invite users, assign roles, manage access.
+  // Has read-only visibility into leads, cases, analytics, and compliance for
+  // oversight — but cannot create, modify, or delete case-related records.
+  user_manager: new Set<Permission>([
+    // User administration — primary function
+    Permission.USERS_LIST,
+    Permission.USERS_MANAGE,
+    Permission.INVITES_MANAGE,
+    // Read-only lead/case oversight
+    Permission.LEAD_VIEW_ANY,
+    Permission.CASE_VIEW_OWN,
+    // Paralegal roster (to assign leads)
+    Permission.PARALEGAL_VIEW,
+    // Forms oversight
+    Permission.FORMS_CONFIG_VIEW_PUBLIC,
+    Permission.FORMS_CONFIG_VIEW,
+    // Decision engine visibility
+    Permission.DECISION_ENGINE_VIEW,
+    // Reference data (read-only)
+    Permission.BUYERS_VIEW,
+    Permission.VENDORS_VIEW,
+    Permission.LEAD_SOURCES_VIEW,
+    Permission.TEMPLATES_VIEW,
+    Permission.WORKFLOW_SETTINGS_VIEW,
+    // Documents (read-only)
+    Permission.DOCUMENTS_VIEW,
+    // Compliance / audit trail oversight
+    Permission.COMPLIANCE_VIEW,
+    // Analytics and reporting
+    Permission.DASHBOARD_VIEW,
+    Permission.ANALYTICS_VIEW,
+    // News / timeline / review queue visibility
+    Permission.NEWS_VIEW,
+    Permission.TIMELINE_VIEW,
+    Permission.REVIEW_QUEUE_VIEW,
+    // Call monitoring (listen only)
+    Permission.CALLS_VIEW,
+  ]),
+
   attorney: new Set<Permission>([
     // Leads / lead-import
     Permission.LEAD_VIEW_ANY,
@@ -401,6 +416,38 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     Permission.MEDICAL_RECORDS_VIEW,
     Permission.MEDICAL_RECORDS_MANAGE,
   ]),
+  // ── agent ───────────────────────────────────────────────────────────────────
+  // Intake agent / call-center rep. Creates and works their own leads.
+  // Cannot see other agents' leads, cannot access cases beyond their own,
+  // cannot manage users or access admin functions.
+  agent: new Set<Permission>([
+    // Lead intake — primary function
+    Permission.LEAD_CREATE,
+    Permission.LEAD_VIEW_OWN,
+    Permission.LEAD_UPDATE,
+    // Forms / intake pipeline
+    Permission.FORMS_CONFIG_VIEW_PUBLIC,
+    Permission.FORMS_SUBMIT,
+    Permission.FORMS_BACKGROUND_CHECK,
+    Permission.FORMS_NPI_VERIFY,
+    Permission.FORMS_FRAUD_CHECK,
+    // Reference lookups
+    Permission.NPI_LOOKUP,
+    Permission.BUYERS_VIEW,
+    Permission.LEAD_SOURCES_VIEW,
+    // Own case visibility
+    Permission.CASE_VIEW_OWN,
+    // Documents on their own leads
+    Permission.DOCUMENTS_VIEW,
+    // Communication with leads
+    Permission.CALLS_VIEW,
+    Permission.SMS_SEND,
+    // Dashboard / news / timeline (own records)
+    Permission.DASHBOARD_VIEW,
+    Permission.NEWS_VIEW,
+    Permission.TIMELINE_VIEW,
+  ]),
+
   viewer: new Set<Permission>([
     Permission.LEAD_VIEW_OWN,
     Permission.CASE_VIEW_OWN,
@@ -432,7 +479,7 @@ export function hasPermission(user: AuthUser | undefined | null, permission: Per
 // they did not create or aren't assigned to). Bypass flows from role only.
 export function canBypassOwnership(user: AuthUser | undefined | null): boolean {
   if (!user) return false;
-  return user.role === "admin" || user.role === "attorney";
+  return user.role === "super_admin" || user.role === "admin" || user.role === "attorney";
 }
 
 // =============================================================================
@@ -472,8 +519,6 @@ export async function generateRefreshToken(userId: number): Promise<string> {
 export async function rotateRefreshToken(oldToken: string, userId: number): Promise<{ accessToken: string; refreshToken: string } | null> {
   const oldHash = crypto.createHash("sha256").update(oldToken).digest("hex");
 
-  // First, look up the row to detect expiry and to know whether to treat a
-  // miss as "token was never valid" vs "token already revoked (reuse)".
   const [existing] = await db.select().from(refreshTokensTable)
     .where(and(
       eq(refreshTokensTable.token_hash, oldHash),
@@ -484,52 +529,25 @@ export async function rotateRefreshToken(oldToken: string, userId: number): Prom
     return null;
   }
 
-  // Mint the new token BEFORE the atomic rotate so we can do the revoke and
-  // the replaced_by stamp in a single UPDATE. The replaced_by field gives
-  // a future forensic chain in case we ever need to trace which token
-  // replaced which.
-  const newToken = crypto.randomBytes(48).toString("hex");
-  const newHash = crypto.createHash("sha256").update(newToken).digest("hex");
-
-  // Atomic compare-and-swap. The WHERE-clause asserts `revoked = false` so
-  // only ONE concurrent rotate of the same token wins. RETURNING tells us
-  // which side we were on:
-  //   • 1 row returned → we won, proceed to insert the replacement.
-  //   • 0 rows returned → either someone else already rotated it (legitimate
-  //     race we lost) OR the token was already revoked (reuse → theft).
-  // The previous SELECT→check→UPDATE pattern had a TOCTOU window where two
-  // concurrent valid rotations both passed the `if (existing.revoked)`
-  // check and both issued new tokens — reuse never detected.
-  const rotated = await db
-    .update(refreshTokensTable)
-    .set({ revoked: true, replaced_by: newHash })
-    .where(and(
-      eq(refreshTokensTable.id, existing.id),
-      eq(refreshTokensTable.revoked, false),
-    ))
-    .returning({ id: refreshTokensTable.id });
-
-  if (rotated.length === 0) {
-    // We lost the CAS. Two scenarios are indistinguishable from a single
-    // SELECT, so we fail closed and treat it as theft: revoke every token
-    // for this user and bump token_version (invalidating all access tokens
-    // on next verify) so a stolen pair can't keep ratcheting. False
-    // positive on a legitimate "user double-clicked refresh" loses the
-    // session — recoverable by re-login. False negative would persist a
-    // compromised session indefinitely.
+  if (existing.revoked) {
     await db.update(refreshTokensTable)
       .set({ revoked: true })
       .where(eq(refreshTokensTable.user_id, userId));
     await db.execute(sql`
       UPDATE mtos_users SET token_version = token_version + 1 WHERE id = ${userId}
     `);
-    logger.warn({ userId, tokenId: existing.id }, "Refresh token rotate CAS lost — treating as reuse, revoking all sessions");
+    logger.warn({ userId }, "Refresh token reuse detected — revoking ALL tokens for user");
     const { dispatchCriticalAlert } = await import("./security-alerts");
-    dispatchCriticalAlert("critical", "Refresh token reuse detected", `User ${userId}: possible token theft — all sessions revoked`).catch((err) => {
-      logger.error({ err, userId }, "Failed to dispatch token-theft alert");
-    });
+    dispatchCriticalAlert("critical", "Refresh token reuse detected", `User ${userId}: possible token theft — all sessions revoked`).catch(() => {});
     return null;
   }
+
+  const newToken = crypto.randomBytes(48).toString("hex");
+  const newHash = crypto.createHash("sha256").update(newToken).digest("hex");
+
+  await db.update(refreshTokensTable)
+    .set({ revoked: true, replaced_by: newHash })
+    .where(eq(refreshTokensTable.id, existing.id));
 
   await db.insert(refreshTokensTable).values({
     user_id: userId,
@@ -633,7 +651,7 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
       id: apiKey.user_id,
       email: apiKey.user_email,
       name: `api-key:${apiKey.name}`,
-      role: elevateRole(apiKey.user_role),
+      role: apiKey.user_role,
       firm_id: apiKey.firm_id,
     };
     // Tag the request so downstream handlers (and the response audit hook
@@ -701,7 +719,7 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
     id: decoded.id,
     email: decoded.email,
     name: decoded.name,
-    role: elevateRole(decoded.role),
+    role: decoded.role,
     firm_id: firmId,
   };
   next();
@@ -799,10 +817,7 @@ function auditDenial(req: Request, reason: string, opts: AuditDenialOpts = {}): 
   }, {
     ip_address: ip,
     user_agent: req.headers["user-agent"],
-    firm_id: u?.firm_id ?? null,
-  }).catch((err) => {
-    logger.error({ err, reason, userId }, "Failed to write auditLog for denial");
-  });
+  }).catch(() => {});
 }
 
 /**
@@ -833,10 +848,7 @@ export function auditAction(action: string) {
       }, {
         ip_address: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
         user_agent: req.headers["user-agent"],
-        firm_id: user.firm_id,
-      }).catch((err) => {
-        logger.error({ err, action, userId: user.id }, "Failed to write auditLog for user action");
-      });
+      }).catch(() => {});
     }
     next();
   };
@@ -1099,8 +1111,8 @@ export async function cleanupExpiredTokens(): Promise<void> {
   try {
     await db.delete(refreshTokensTable)
       .where(lt(refreshTokensTable.expires_at, new Date()));
-  } catch (err) {
-    logger.error({ err }, "Refresh token cleanup failed");
+  } catch {
+    logger.warn("Refresh token cleanup failed");
   }
 }
 

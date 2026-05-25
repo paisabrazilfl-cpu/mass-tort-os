@@ -70,6 +70,7 @@ import type {
   ListLeadsParams,
   ListQueueJobsParams,
   ListReviewQueueParams,
+  ListWebhookDeliveriesParams,
   NpiProvider,
   NpiSearchResponse,
   NpiVerifyResult,
@@ -105,6 +106,8 @@ import type {
   ValidateEmailBody,
   Vendor,
   VerifyNpiBody,
+  WebhookDeliveriesEnvelope,
+  WebhookResendEnvelope,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -6393,4 +6396,194 @@ export const useSendLeadSms = <
   TContext
 > => {
   return useMutation(getSendLeadSmsMutationOptions(options));
+};
+
+/**
+ * @summary List outbound webhook delivery attempts with filters
+ */
+export const getListWebhookDeliveriesUrl = (
+  params?: ListWebhookDeliveriesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/webhook-deliveries?${stringifiedParams}`
+    : `/api/admin/webhook-deliveries`;
+};
+
+export const listWebhookDeliveries = async (
+  params?: ListWebhookDeliveriesParams,
+  options?: RequestInit,
+): Promise<WebhookDeliveriesEnvelope> => {
+  return customFetch<WebhookDeliveriesEnvelope>(
+    getListWebhookDeliveriesUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListWebhookDeliveriesQueryKey = (
+  params?: ListWebhookDeliveriesParams,
+) => {
+  return [
+    `/api/admin/webhook-deliveries`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListWebhookDeliveriesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listWebhookDeliveries>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListWebhookDeliveriesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listWebhookDeliveries>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListWebhookDeliveriesQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listWebhookDeliveries>>
+  > = ({ signal }) =>
+    listWebhookDeliveries(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listWebhookDeliveries>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListWebhookDeliveriesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listWebhookDeliveries>>
+>;
+export type ListWebhookDeliveriesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List outbound webhook delivery attempts with filters
+ */
+
+export function useListWebhookDeliveries<
+  TData = Awaited<ReturnType<typeof listWebhookDeliveries>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListWebhookDeliveriesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listWebhookDeliveries>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListWebhookDeliveriesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Re-fire the stored payload of a delivery row with a fresh timestamp
+ */
+export const getResendWebhookDeliveryUrl = (id: number) => {
+  return `/api/admin/webhook-deliveries/${id}/resend`;
+};
+
+export const resendWebhookDelivery = async (
+  id: number,
+  options?: RequestInit,
+): Promise<WebhookResendEnvelope> => {
+  return customFetch<WebhookResendEnvelope>(getResendWebhookDeliveryUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResendWebhookDeliveryMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resendWebhookDelivery>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resendWebhookDelivery>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["resendWebhookDelivery"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resendWebhookDelivery>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return resendWebhookDelivery(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResendWebhookDeliveryMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resendWebhookDelivery>>
+>;
+
+export type ResendWebhookDeliveryMutationError = ErrorType<void>;
+
+/**
+ * @summary Re-fire the stored payload of a delivery row with a fresh timestamp
+ */
+export const useResendWebhookDelivery = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resendWebhookDelivery>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resendWebhookDelivery>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getResendWebhookDeliveryMutationOptions(options));
 };

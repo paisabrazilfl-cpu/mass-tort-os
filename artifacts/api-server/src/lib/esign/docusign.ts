@@ -16,30 +16,7 @@ export const docusignAdapter: EsignAdapter = {
   async send(creds, req): Promise<EsignSendOutcome> {
     const accessToken = creds.api_key;
     const accountId = creds.account_sid;
-    // In production environments a missing api_url silently routes signers
-    // to demo.docusign.net, where they CAN sign — but the envelope never
-    // reaches the real account. Refuse to silently demo in production
-    // and warn loudly in dev so the misconfig is impossible to miss.
     const apiBase = creds.api_url || "https://demo.docusign.net/restapi";
-    const isDemo = /demo\.docusign\.net/i.test(apiBase);
-    if (isDemo) {
-      if (process.env["NODE_ENV"] === "production") {
-        logger.error(
-          { apiBase, fileName: req?.fileName, subject: req?.subject },
-          "DocuSign send refused: api_url is demo.docusign.net in production — set api_url to the real account's REST endpoint",
-        );
-        return {
-          ok: false,
-          retryable: false,
-          code: "demo_url_in_production",
-          message: "DocuSign integration is pointing at demo.docusign.net in a production environment. Refusing to send. Set api_url to https://na4.docusign.net/restapi (or your account's real base URL).",
-        };
-      }
-      logger.warn(
-        { apiBase, fileName: req?.fileName, subject: req?.subject },
-        "DocuSign: using demo.docusign.net — set creds.api_url before production",
-      );
-    }
 
     if (!accessToken) {
       return { ok: false, retryable: false, code: "no_access_token", message: "DocuSign access token missing (store as api_key)" };
@@ -91,10 +68,6 @@ export const docusignAdapter: EsignAdapter = {
 
     let response: Response;
     try {
-      // 20 s cap. Envelope creation is the heaviest DocuSign call (it
-      // accepts base64-embedded documents); even so it usually completes
-      // in <5 s. A hung call without this signal blocks the worker until
-      // the kernel TCP timeout fires (minutes).
       response = await fetch(url, {
         method: "POST",
         headers: {
@@ -102,7 +75,6 @@ export const docusignAdapter: EsignAdapter = {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(20_000),
       });
     } catch (err) {
       logger.error({ err, provider: "docusign" }, "Network error sending DocuSign envelope");
@@ -152,10 +124,7 @@ export const docusignAdapter: EsignAdapter = {
     if (!accessToken || !accountId) return null;
     const url = `${apiBase.replace(/\/$/, "")}/v2.1/accounts/${accountId}/envelopes/${externalEnvelopeId}/documents/combined`;
     try {
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        signal: AbortSignal.timeout(30_000),
-      });
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!res.ok) return null;
       const ab = await res.arrayBuffer();
       return Buffer.from(ab);

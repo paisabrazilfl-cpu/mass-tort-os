@@ -5,6 +5,7 @@
  * Mass Tort Operating System API
  * OpenAPI spec version: 0.1.0
  */
+import type { BackgroundCheckResultPacer } from "./backgroundCheckResultPacer";
 import type { BackgroundCheckResultRecordsItem } from "./backgroundCheckResultRecordsItem";
 import type { BackgroundCheckResultSearchScope } from "./backgroundCheckResultSearchScope";
 import type { BackgroundCheckResultStatus } from "./backgroundCheckResultStatus";
@@ -29,4 +30,13 @@ export interface BackgroundCheckResult {
   searched_courts: string[];
   /** Operator-facing notes about source health, fallbacks, or limitations. */
   notes: string[];
+  /** PACER Case Locator (PCL) search result. Included only when the
+"pacer" integration is configured in the vault. `null` means PACER
+was not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).
+When `ok` is true, `cases` contains up to 25 party-search hits and
+`truncated` indicates more results exist beyond the first page.
+Hits require manual operator review — PCL results never auto-fail
+a lead because they do not include identity-confirming metadata.
+ */
+  pacer?: BackgroundCheckResultPacer;
 }

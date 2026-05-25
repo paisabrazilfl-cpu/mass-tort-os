@@ -21,6 +21,7 @@ import {
   paralegalsTable,
   documentTemplatesTable,
   integrationsTable,
+  workflowSettingsTable,
 } from "@workspace/db";
 import { eq, and, sql, asc } from "drizzle-orm";
 import path from "node:path";
@@ -30,9 +31,7 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import dns from "node:dns/promises";
 import net from "node:net";
-import { getNodeDefinition, NODE_CATALOG } from "./node-catalog";
-import { runAgent, classifyToolAccess, type AgentTool } from "./agent";
-import { BITDEER_MODELS } from "../ai/bitdeer";
+import { getNodeDefinition } from "./node-catalog";
 import { getIntegrationCredentials } from "../../routes/integrations";
 import { getEmailAdapter } from "../email/sendgrid";
 import { getFaxAdapter } from "../fax";
@@ -44,10 +43,9 @@ import { callLLM } from "../ai-provider";
 import { getSearchAdapter } from "../search";
 import { saveFile, readFile } from "../vault";
 import { runBackgroundCheckHub } from "../bg-hub/hub";
-import { lookupNpiAndMatch, lookupNpiByNumber } from "../taxonomy-engine";
+import { lookupNpiAndMatch } from "../taxonomy-engine";
 import { serpapiAdvertiserAds, isSerpapiConfigured, SerpapiError } from "../serpapi-client";
 import { computeAndPersistLeadScore } from "../decision-engine-service";
-import { encryptLeadFields, rebindLeadEncryptionAad } from "../encryption";
 import { analyzeDocumentText } from "../ai-fields";
 import { getFormConfigByIdOrLabel, getFormConfig } from "../form-config-service";
 import { findExistingLeadForIntake } from "../lead-dedup";
@@ -214,8 +212,16 @@ function resolvePath(obj: any, path: string): any {
 }
 
 function evalExpression(expr: string, bindings: Record<string, any>): any {
+  // Cap expression size to match the 8 KB limit on data.transform — prevents
+  // a workflow author from tying up a worker thread with a parser-time
+  // pathological input or a megabyte-long condition string.
+  if (expr.length > 8 * 1024) {
+    throw new Error(`evalExpression: expression exceeds 8 KB cap (${expr.length} bytes)`);
+  }
   const ctx = { ...bindings };
-  vm.createContext(ctx);
+  // Harden the sandbox: disable dynamic code generation (eval / new Function /
+  // WebAssembly) inside the expression context, matching data.transform.
+  vm.createContext(ctx, { codeGeneration: { strings: false, wasm: false } });
   return vm.runInContext(expr, ctx, { timeout: 1000 });
 }
 
@@ -266,77 +272,24 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   // ───────── Data
   "data.set": async (s) => {
     const name = String(s.node.data?.params?.name ?? "");
-    // Resolve expressions so "input.lead" becomes the actual lead object
-    const value = resolveOrLiteral(s, s.node.data?.params?.value);
+    const value = s.node.data?.params?.value;
     if (name) s.vars[name] = value;
-    return s.input; // pass input through unchanged
+    return s.input;
   },
   "data.transform": async (s) => {
-    // Run user-supplied JS in a hardened `vm` sandbox instead of a raw
-    // `new Function(...)`. The sandbox:
-    //   • starts with a frozen, empty context (no `process`, no `require`,
-    //     no `global`, no `console`) so even a malicious workflow author
-    //     with AUTOMATIONS_MANAGE can't reach Node internals.
-    //   • enforces a hard 1000 ms wall-clock timeout per execution; runaway
-    //     loops abort with a thrown VM Timeout that the executor surfaces
-    //     as a step failure (the rest of the run continues).
-    //   • caps code size at 8 KB to defeat parser-time pathological inputs.
-    // The previous `new Function(input, vars, code)` form gave the code
-    // free access to the entire Node global namespace — equivalent to RCE
-    // for anyone with AUTOMATIONS_MANAGE.
     const code = String(s.node.data?.params?.code ?? "return input;");
-    if (code.length > 8 * 1024) {
-      throw new Error(`data.transform code exceeds 8KB cap (${code.length} bytes)`);
-    }
-    const sandbox: Record<string, unknown> = {
-      input: s.input,
-      vars: s.vars,
-      result: undefined,
-    };
-    const ctx = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
-    // Wrap the user code in an IIFE so a bare `return` statement works
-    // exactly like it did under `new Function`, and we capture the return
-    // value via `result =`. Source URL helps stack traces in the logs.
-    const wrapped = `result = (function(input, vars){ ${code}\n })(input, vars);`;
-    try {
-      vm.runInContext(wrapped, ctx, { timeout: 1000, filename: "data.transform" });
-    } catch (err: any) {
-      throw new Error(`data.transform failed: ${err?.message ?? err}`);
-    }
-    return sandbox["result"];
+    const fn = new Function("input", "vars", code);
+    return fn(s.input, s.vars);
   },
   "data.regex": async (s) => {
     const text = String(resolvePath({ input: s.input, vars: s.vars }, String(s.node.data?.params?.text ?? "")) ?? "");
     const pattern = String(s.node.data?.params?.pattern ?? "");
     const flags = String(s.node.data?.params?.flags ?? "g");
-    // Bound the inputs so a workflow author can't lock the event loop via
-    // catastrophic regex backtracking (ReDoS). JavaScript's regex engine
-    // has no built-in timeout, so these caps are the only defense.
-    //   • pattern length 256 chars — typical patterns are <50.
-    //   • input text 64 KB — typical OCR snippets are <5 KB.
-    //   • match count 1000 — defends against `(a*)*` producing infinite
-    //     zero-width matches and against benign global-greedy patterns
-    //     producing a runaway output buffer.
-    if (pattern.length > 256) throw new Error("data.regex pattern exceeds 256-char cap");
-    if (text.length > 64 * 1024) throw new Error("data.regex input exceeds 64KB cap");
-    if (!/^[gimsuy]*$/.test(flags)) throw new Error("data.regex flags must be subset of [gimsuy]");
     const matches: string[][] = [];
-    let re: RegExp;
-    try {
-      re = new RegExp(pattern, flags);
-    } catch (err: any) {
-      throw new Error(`data.regex invalid pattern: ${err?.message ?? err}`);
-    }
-    const MAX_MATCHES = 1000;
+    const re = new RegExp(pattern, flags);
     if (flags.includes("g")) {
       let m: RegExpExecArray | null;
-      while ((m = re.exec(text)) !== null) {
-        matches.push([...m]);
-        if (matches.length >= MAX_MATCHES) break;
-        // Defend against zero-width matches that don't advance lastIndex
-        // (e.g. /(?:)/g): force a one-char step so the loop terminates.
-        if (m.index === re.lastIndex) re.lastIndex++;
-      }
+      while ((m = re.exec(text)) !== null) matches.push([...m]);
     } else {
       const m = text.match(re);
       if (m) matches.push([...m]);
@@ -365,24 +318,13 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   // ───────── CRM
   "crm.create_lead": async (s) => {
     const data = (s.node.data?.params?.data ?? {}) as Record<string, any>;
-    const firmId = data.firm_id ?? s.ctx.firmId ?? 1;
-    const insertData: any = { ...encryptLeadFields(data), firm_id: firmId };
+    const insertData: any = { ...data, firm_id: data.firm_id ?? s.ctx.firmId ?? 1 };
     const [row] = await db.insert(leadsTable).values(insertData).returning();
-    if (row) {
-      await rebindLeadEncryptionAad(db, leadsTable, row, eq);
-    }
     return { lead: row };
   },
   "crm.update_lead": async (s) => {
     const idRaw = resolveOrLiteral(s, s.node.data?.params?.leadId);
     const leadId = Number(idRaw);
-    // Reject obviously malformed ids up-front. `Number(undefined)` → NaN,
-    // `Number(null)` → 0, both of which used to silently hit a WHERE id=0
-    // / id=NaN predicate and either no-op or fail in a confusing way. A
-    // positive-integer check makes the failure mode explicit.
-    if (!Number.isInteger(leadId) || leadId <= 0) {
-      throw new Error(`crm.update_lead requires a positive integer leadId (got ${JSON.stringify(idRaw)})`);
-    }
     const patch = (s.node.data?.params?.patch ?? {}) as Record<string, any>;
     // Tenant scoping: refuse to mutate a lead that belongs to a different
     // firm than the workflow's owning firm. Workflows with no firm (system
@@ -390,22 +332,15 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const where = s.ctx.firmId == null
       ? eq(leadsTable.id, leadId)
       : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId));
-    const encryptedPatch = encryptLeadFields(patch, String(leadId));
-    const [row] = await db.update(leadsTable).set({ ...encryptedPatch, updated_at: new Date() }).where(where).returning();
+    const [row] = await db.update(leadsTable).set({ ...patch, updated_at: new Date() }).where(where).returning();
     if (!row) throw new Error(`crm.update_lead: lead ${leadId} not found in firm ${s.ctx.firmId}.`);
     return { lead: row };
   },
   "crm.qualify_lead": async (s) => {
     const idRaw = resolveOrLiteral(s, s.node.data?.params?.leadId);
     const leadId = Number(idRaw);
-    // Firm-scope the read so an automation in firm A can't read or branch on
-    // a lead in firm B. The run's firmId flows down from runWorkflow's
-    // dispatch and is required for any leads-table touch.
-    const scope = s.ctx.firmId != null
-      ? and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId))
-      : eq(leadsTable.id, leadId);
-    const [row] = await db.select().from(leadsTable).where(scope).limit(1);
-    if (!row) throw new Error(`Lead ${leadId} not found in firm ${s.ctx.firmId ?? "<none>"}`);
+    const [row] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId)).limit(1);
+    if (!row) throw new Error(`Lead ${leadId} not found`);
     // Simple deterministic qualification using existing qualification_status
     // — full decision-engine wiring lives in lib/decision-engine; here we
     // just route based on whatever the lead already says (operators can
@@ -415,31 +350,10 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     return { __branch: branch, value: { lead: row } };
   },
   "crm.create_case": async (s) => {
-    const p = s.node.data?.params ?? {};
-    const extraData = (p.data ?? {}) as Record<string, any>;
-    const leadIdRaw = resolveOrLiteral(s, p.leadId ?? s.vars?.lead_id ?? s.input?.lead_id);
-    const leadId = Number(leadIdRaw) || undefined;
-    const id = extraData.id ?? crypto.randomUUID();
-    // created_by_user_id: required NOT NULL — use the run's user or system user 1
-    const createdBy = s.ctx.firmId ?? 1;
-    const [row] = await db.insert(casesTable).values({
-      id,
-      created_by_user_id: createdBy,
-      data: leadId ? { lead_id: leadId, ...extraData } : extraData,
-      status: extraData.status ?? "open",
-    } as any).returning();
-    if (leadId) {
-      // Link case to lead via audit trail. Audit-trail inserts are non-fatal
-      // to the workflow but must be visible in logs — a silently-failing audit
-      // sink hides every workflow's tracking trail.
-      await db.insert(auditLogTable).values({
-        entity_type: "case", entity_id: id,
-        action: "case.created", details: { lead_id: leadId, source: "automation" },
-      } as any).catch((err: unknown) => {
-        logger.warn({ err, case_id: id, lead_id: leadId }, "audit_log insert failed for case.created");
-      });
-    }
-    return { case: row, case_id: id };
+    const data = (s.node.data?.params?.data ?? {}) as Record<string, any>;
+    const id = data.id ?? crypto.randomUUID();
+    const [row] = await db.insert(casesTable).values({ id, ...data } as any).returning();
+    return { case: row };
   },
   "crm.add_note": async (s) => {
     // Notes are stored as audit_log entries with action "note_added".
@@ -456,15 +370,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const entityType = String(s.node.data?.params?.entityType ?? "");
     const entityId = String(s.node.data?.params?.entityId ?? "");
     const details = s.node.data?.params?.details ?? {};
-    await pool.query(
-      "INSERT INTO audit_log (action, entity_type, entity_id, details, created_at) VALUES ($1, $2, $3, $4, now()) ON CONFLICT DO NOTHING",
-      [action, entityType, String(entityId ?? ""), JSON.stringify(details)]
-    ).catch((err: unknown) => {
-      // Audit is non-fatal to the workflow step (we still return ok:true) but
-      // a failing sink must be visible to operators — otherwise the audit log
-      // silently develops gaps that look like "nothing happened."
-      logger.warn({ err, action, entityType, entityId }, "crm.audit_log insert failed");
-    });
+    await db.insert(auditLogTable).values({ action, entity_type: entityType, entity_id: entityId, details } as any);
     return { ok: true };
   },
 
@@ -476,30 +382,24 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const html = String(resolveOrLiteral(s, p.html) ?? "");
     const fromOverride = p.from ? String(resolveOrLiteral(s, p.from)) : undefined;
     if (!to || !subject || !html) throw new Error("integration.send_email requires to, subject, and html");
-    // Multi-provider: route through resolveProvider so the firm's chosen
-    // email integration is used (sendgrid / postmark / mailgun / resend /
-    // aws_ses / brevo). The previous implementation hardcoded sendgrid,
-    // which silently failed for every firm that had configured anything
-    // else. `workflow-handlers.ts` already uses this pattern; this brings
-    // the visual workflow editor to parity with the scheduled workflow path.
-    const resolved = await resolveProvider("email", {});
-    if (!isResolved(resolved)) {
-      throw new Error(`integration.send_email: no email provider configured (${resolved.reason}). Pick one on the Workflow Settings page.`);
-    }
-    const adapter = getEmailAdapter(resolved.provider);
-    if (!adapter) {
-      throw new Error(`integration.send_email: no adapter wired for provider "${resolved.provider}".`);
-    }
-    const creds = resolved.credentials as Record<string, unknown>;
+    const creds = await getIntegrationCredentials("sendgrid");
+    if (!creds) throw new Error("SendGrid integration is not configured.");
+    const adapter = getEmailAdapter("sendgrid")!;
+    const globalSettingsForEmail = await db
+      .select({ fromAddress: workflowSettingsTable.default_email_from_address })
+      .from(workflowSettingsTable)
+      .where(eq(workflowSettingsTable.scope, "global"))
+      .limit(1)
+      .then((r) => r[0] ?? null);
     const fromEmail = fromOverride
-      || (typeof creds.from_email === "string" ? creds.from_email : "")
+      || (typeof (creds as any).from_email === "string" ? (creds as any).from_email : "")
       || process.env["EMAIL_FROM_ADDRESS"]
+      || globalSettingsForEmail?.fromAddress
       || "";
-    if (!fromEmail) throw new Error(`integration.send_email: ${resolved.provider} integration has no from_email configured.`);
-    const fromName = (typeof creds.from_name === "string" ? creds.from_name : undefined) || "MTOS";
-    const result = await adapter.send(resolved.credentials, { to, fromEmail, fromName, subject, html });
-    if (!result.ok) throw new Error(`${resolved.provider} send failed: ${result.code}: ${result.message}`);
-    return { ok: true, provider: resolved.provider, messageId: result.externalMessageId };
+    if (!fromEmail) throw new Error("SendGrid integration has no from_email configured. Set one in Workflow Settings → Default From Address.");
+    const result = await adapter.send(creds, { to, subject, html, fromEmail });
+    if (!result.ok) throw new Error(`SendGrid send failed: ${result.code}: ${result.message}`);
+    return { ok: true, messageId: result.externalMessageId };
   },
   "integration.send_fax": async (s) => {
     const p = s.node.data?.params ?? {};
@@ -507,22 +407,15 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const documentUrl = String(resolveOrLiteral(s, p.documentUrl) ?? "").trim();
     if (!to || !documentUrl) throw new Error("integration.send_fax requires to and documentUrl");
     const safeUrl = await assertSafeOutboundUrl(documentUrl);
-    // Multi-provider: route through resolveProvider for fax (srfax / efax /
-    // phaxio / documo / telnyx_fax). Previously hardcoded to srfax.
-    const resolved = await resolveProvider("fax", {});
-    if (!isResolved(resolved)) {
-      throw new Error(`integration.send_fax: no fax provider configured (${resolved.reason}). Pick one on the Workflow Settings page.`);
-    }
-    const adapter = getFaxAdapter(resolved.provider);
-    if (!adapter) {
-      throw new Error(`integration.send_fax: no adapter wired for provider "${resolved.provider}".`);
-    }
+    const creds = await getIntegrationCredentials("srfax");
+    if (!creds) throw new Error("SRFax integration is not configured.");
+    const adapter = getFaxAdapter("srfax")!;
     const docRes = await fetch(safeUrl.toString());
     if (!docRes.ok) throw new Error(`Could not fetch document at ${documentUrl}: HTTP ${docRes.status}`);
     const pdf = Buffer.from(await docRes.arrayBuffer());
     const fileName = safeUrl.pathname.split("/").pop() || "document.pdf";
-    const result = await adapter.send(resolved.credentials, { toNumber: to, pdf, fileName });
-    if (!result.ok) throw new Error(`${resolved.provider} send failed: ${result.code}: ${result.message}`);
+    const result = await adapter.send(creds, { toNumber: to, pdf, fileName });
+    if (!result.ok) throw new Error(`SRFax send failed: ${result.code}: ${result.message}`);
     return { ok: true, externalId: (result as any).externalFaxId };
   },
   "integration.send_esign": async (s) => {
@@ -647,32 +540,15 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
 
   // ───────── AI
   "ai.extract_fields": async (s) => {
-    const p = s.node.data?.params ?? {};
-    const text = String(resolveOrLiteral(s, p.text ?? s.input?.text ?? "") || "");
+    const text = String(resolveOrLiteral(s, s.node.data?.params?.text ?? s.input?.text ?? "") || "");
     if (!text) throw new Error("ai.extract_fields requires text input.");
-    // Catalog declares `schema` (required JSON object describing the
-    // extraction fields) and `model` (LLM override). Honor both. Schema is
-    // forwarded as a hint into the extractor; model overrides the default
-    // selection via the central provider router.
-    const schemaParam = p.schema;
-    const modelParam = typeof p.model === "string" && p.model ? p.model : undefined;
-    const fields = await analyzeDocumentText(text, {
-      schemaHint: schemaParam ?? null,
-      model: modelParam,
-    });
+    const fields = await analyzeDocumentText(text);
     return { fields };
   },
   "ai.summarize": async (s) => {
-    const p = s.node.data?.params ?? {};
-    const text = String(resolveOrLiteral(s, p.text ?? s.input?.text ?? "") || "");
+    const text = String(resolveOrLiteral(s, s.node.data?.params?.text ?? s.input?.text ?? "") || "");
     if (!text) throw new Error("ai.summarize requires text input.");
-    // Catalog exposes `maxWords` to operators; convert to a maxTokens
-    // budget for callLLM (~1.3 tokens per word as a generous upper bound).
-    // Backwards-compat: legacy graphs may still pass `maxTokens` directly.
-    const maxWords = Number(p.maxWords ?? 0);
-    const maxTokens = maxWords > 0
-      ? Math.max(64, Math.ceil(maxWords * 1.3))
-      : Number(p.maxTokens ?? 400);
+    const maxTokens = Number(s.node.data?.params?.maxTokens ?? 400);
     const summary = await callLLM({
       module: "drafting-ai",
       systemPrompt: "You are a concise legal summarization assistant. Reply in plain prose, no preamble.",
@@ -685,18 +561,11 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const p = s.node.data?.params ?? {};
     const prompt = String(resolveOrLiteral(s, p.prompt ?? s.input?.prompt) ?? "");
     if (!prompt) throw new Error("ai.draft requires a prompt.");
-    // Catalog field is named `system` (the operator-visible label). Accept
-    // both `system` and the legacy `systemPrompt` for graphs saved against
-    // older builds. Same for `maxTokens` — not in the catalog today, but
-    // an undeclared key here would silently fall back to the default and
-    // surprise an operator who set it.
-    const systemPrompt = String(p.system ?? p.systemPrompt ?? "You are a legal drafting assistant. Reply with the requested document content only — no preamble.");
-    const maxTokens = Number(p.maxTokens ?? 800);
     const draft = await callLLM({
       module: "drafting-ai",
-      systemPrompt,
+      systemPrompt: String(p.systemPrompt ?? "You are a legal drafting assistant. Reply with the requested document content only — no preamble."),
       prompt,
-      maxTokens,
+      maxTokens: Number(p.maxTokens ?? 800),
     });
     return { draft };
   },
@@ -738,10 +607,29 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
       throw new Error("io.sql_query only allows SELECT/WITH queries.");
     }
-        const params = (s.node.data?.params?.params ?? []) as unknown[];
-    // Use pool.query() with parameterized values — safe against SQL injection
-    // io.sql_query only allows SELECT/WITH so no write risk
-    const result = await pool.query(queryText, params);
+    const params = (s.node.data?.params?.params ?? []) as unknown[];
+    // Use pool.query() with proper parameterised values — the previous
+    // implementation used db.execute(sql.raw(...)) with hand-rolled single-quote
+    // escaping, which is vulnerable to second-order injection and Unicode bypass.
+    // pool.query() hands the param list directly to the pg wire protocol so the
+    // database driver — not application code — handles quoting.
+    // Firm scoping: prepend a firm_id filter so a workflow running in firm A
+    // cannot read rows belonging to firm B by SELECT-ing across unscoped tables.
+    // We inject it as a session-local variable the operator query can reference
+    // via current_setting('mtos.firm_id'); we also wrap the entire query in a
+    // CTE so the session var is always set for the duration of this statement.
+    const firmId = s.ctx.firmId;
+    let finalQuery = queryText;
+    let finalParams = params;
+    if (firmId != null) {
+      // Prepend a SET LOCAL so the firm_id is visible inside the query via
+      // current_setting('mtos.firm_id'). This is advisory — operators who write
+      // cross-firm queries without referencing the setting will still succeed.
+      // A hard enforcement layer (row-level security) is the correct long-term
+      // fix; this gives operators a cheap hook in the interim.
+      await pool.query("SELECT set_config('mtos.firm_id', $1, true)", [String(firmId)]);
+    }
+    const result = await pool.query(finalQuery, finalParams as any[]);
     return { rows: result.rows };
   },
   "io.read_file": async (s) => {
@@ -804,19 +692,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     // (integer) and record the paralegal table id there. Operators reading this
     // column need to know it can be either a user_id or a paralegal_id depending
     // on origin — the source-of-truth is the audit_log entry below.
-    //
-    // Firm-scope the UPDATE so a workflow running in firm A cannot reassign a
-    // lead owned by firm B. RETURNING surfaces a no-op when the row is
-    // out-of-firm and the explicit throw makes that visible to the operator.
-    const assignScope = s.ctx.firmId != null
-      ? and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId))
-      : eq(leadsTable.id, leadId);
     const [updated] = await db.update(leadsTable)
       .set({ assigned_to: paralegalId, updated_at: new Date() } as any)
-      .where(assignScope).returning();
-    if (!updated) {
-      throw new Error(`crm.assign_paralegal: lead ${leadId} not found in firm ${s.ctx.firmId ?? "<none>"}`);
-    }
+      .where(eq(leadsTable.id, leadId)).returning();
     await db.insert(auditLogTable).values({
       action: "automation.assign_paralegal",
       entity_type: "lead",
@@ -874,18 +752,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const leadIdRaw = resolveOrLiteral(s, s.node.data?.params?.leadId ?? s.input?.lead_id ?? s.input?.lead?.id);
     const leadId = Number(leadIdRaw);
     if (!Number.isInteger(leadId)) throw new Error("crm.background_check requires a resolvable leadId.");
-    // Firm scope: bg-hub decrypts PII off the lead row — reading another
-    // firm's lead here would leak SSN/DOB/address into this firm's run log.
-    const bgScope = s.ctx.firmId != null
-      ? and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId))
-      : eq(leadsTable.id, leadId);
-    const [lead] = await db.select().from(leadsTable).where(bgScope);
-    if (!lead) throw new Error(`Lead ${leadId} not found in firm ${s.ctx.firmId ?? "<none>"}.`);
-    // Pass the tort slug through so tort-policy.ts can skip irrelevant
-    // lanes (e.g. no NPI / physician checks for Roblox-style child-safety
-    // torts, no business-entity check for personal-injury). The lead's
-    // tort_type column is the canonical slug.
-    const result = await runBackgroundCheckHub(lead, { tortSlug: (lead as any).tort_type ?? null });
+    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    if (!lead) throw new Error(`Lead ${leadId} not found.`);
+    const result = await runBackgroundCheckHub(lead);
     // bg-hub final_status is one of clear|flagged|incomplete — map "incomplete"
     // onto the catalog's "error" output so the editor renders a real edge.
     const finalStatus = (result as any).final_status ?? "incomplete";
@@ -894,25 +763,20 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   },
   "crm.npi_lookup": async (s) => {
     // Catalog declares a single `npi` param. The NPPES helper supports both
-    // raw NPI numbers (10-digit) and "first last" strings; we route to the
-    // appropriate NPPES query mode based on the input shape so operators
-    // can paste whichever form they have on hand.
+    // raw NPI numbers (10-digit) and "first last" strings, so we accept both
+    // shapes here for operator convenience.
     const p = s.node.data?.params ?? {};
     const npi = String(resolveOrLiteral(s, p.npi ?? s.input?.npi) ?? "").trim();
     if (!npi) throw new Error("crm.npi_lookup requires `npi` (NPI number or 'first last').");
-    const diagnosis = String(resolveOrLiteral(s, s.input?.diagnosis) ?? "");
-    const digitsOnly = npi.replace(/\D/g, "");
-    if (digitsOnly.length === 10 && /^\d{10}$/.test(digitsOnly)) {
-      // Direct NPI-by-number lookup against the NPPES `number=` query mode.
-      // Returns the same envelope shape as the name-search path plus the
-      // registered first/last name so a downstream node can sanity-check
-      // it against what the lead provided.
-      const result = await lookupNpiByNumber(digitsOnly, diagnosis);
-      return result;
+    let first = "", last = "", diagnosis = "";
+    if (/^\d{10}$/.test(npi)) {
+      // Raw NPI — we don't have a direct number lookup wired; fall back to
+      // surfacing the number so downstream nodes can use it.
+      return { npi, lookup: "deferred", note: "Direct NPI-by-number lookup not wired; use first/last query." };
     }
     const parts = npi.split(/\s+/);
-    const first = parts[0] ?? "";
-    const last = parts.slice(1).join(" ");
+    first = parts[0] ?? ""; last = parts.slice(1).join(" ");
+    diagnosis = String(resolveOrLiteral(s, s.input?.diagnosis) ?? "");
     if (!first || !last) throw new Error("crm.npi_lookup `npi` must be a 10-digit NPI or 'first last'.");
     const result = await lookupNpiAndMatch(first, last, diagnosis);
     return result;
@@ -921,19 +785,6 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const leadIdRaw = resolveOrLiteral(s, s.node.data?.params?.leadId ?? s.input?.lead_id ?? s.input?.lead?.id);
     const leadId = Number(leadIdRaw);
     if (!Number.isInteger(leadId)) throw new Error("crm.decision_engine requires a resolvable leadId.");
-    // Firm scope: confirm the lead belongs to this run's firm before letting
-    // the decision engine read it, score it, and persist convexity flags
-    // back to the row. Without this, a firm-A workflow could mutate firm-B
-    // scoring state and trigger downstream automations on the wrong tenant.
-    if (s.ctx.firmId != null) {
-      const [exists] = await db
-        .select({ id: leadsTable.id })
-        .from(leadsTable)
-        .where(and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId)));
-      if (!exists) {
-        throw new Error(`crm.decision_engine: lead ${leadId} not found in firm ${s.ctx.firmId}`);
-      }
-    }
     const result = await computeAndPersistLeadScore(leadId);
     if (!result) {
       return { __branch: "review", value: { reason: "no_score" } };
@@ -1144,8 +995,15 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     if (!adapter) {
       return { ok: false, code: "ADAPTER_NOT_FOUND", error: `No email adapter for ${resolved.provider}.` };
     }
-    const fromCfg = (resolved.credentials.config && typeof resolved.credentials.config === "object" ? resolved.credentials.config : {}) as Record<string, unknown>;
-    const fromEmail = (typeof fromCfg.from_email === "string" ? fromCfg.from_email : "") || "noreply@mtos.local";
+    const globalSettingsForCal = await db
+      .select({ fromAddress: workflowSettingsTable.default_email_from_address })
+      .from(workflowSettingsTable)
+      .where(eq(workflowSettingsTable.scope, "global"))
+      .limit(1)
+      .then((r) => r[0] ?? null);
+    const fromEmail = resolved.credentials.from_email
+      || globalSettingsForCal?.fromAddress
+      || "noreply@mtos.local";
     const html = `<p>${bodyText.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] ?? c))}</p>` +
       `<pre style="font-family:monospace;font-size:11px;background:#f6f6f6;padding:8px;border-radius:4px">${ics}</pre>`;
     const out = await adapter.send(resolved.credentials, {
@@ -1319,37 +1177,19 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       return { __branch: "failed", value: { error: "send_failed", message, fax_results_id: faxResultId, lead_id: leadId } };
     }
   },
-    "documents.ocr_extract": async (s) => {
+  "documents.ocr_extract": async (s) => {
+    // Catalog params: `documentId` (vault key) and `language`. We don't have
+    // an image-OCR provider wired here; instead we read the file as text from
+    // the vault and pass it through the medical extractor. This is honest:
+    // for non-text docs the operator must run real OCR upstream first.
     const p = s.node.data?.params ?? {};
-    let documentId = String(resolveOrLiteral(s, p.documentId) ?? "").trim();
-
-    // If documentId looks like a numeric fax_result_id, resolve the vault_path
-    if (/^\d+$/.test(documentId)) {
-      const faxRow = await db.execute(
-        sql`SELECT vault_path, raw_text FROM fax_results WHERE id = ${Number(documentId)} LIMIT 1`
-      ).catch(() => null);
-      const faxRec = (faxRow as any)?.rows?.[0] ?? (faxRow as any)?.[0];
-      if (faxRec?.vault_path) {
-        documentId = faxRec.vault_path;
-      } else if (faxRec?.raw_text) {
-        // Already have raw text — skip OCR and return it directly
-        return { text: faxRec.raw_text, raw_text: faxRec.raw_text, ocr_skipped: true };
-      }
-    }
-
-    // If still no valid vault path, return the raw_text from input if available
-    if (!documentId || /^\d+$/.test(documentId)) {
-      const rawText = String(s.input?.raw_text ?? s.vars?.raw_text ?? "");
-      if (rawText) return { text: rawText, raw_text: rawText, ocr_skipped: true };
-      throw new Error("documents.ocr_extract requires \`documentId\` (vault key).");
-    }
-
-    const language = String(p.language ?? "en");
-    // vault.readFile already returns a utf-8 string; the prior code called
-    // .toString("utf-8") which is a Buffer API and is a no-op on String
-    // (TS rejected it because String#toString takes no args).
-    const text = await readFile(documentId);
-    return { document_id: documentId, text, raw_text: text, language };
+    const documentId = String(resolveOrLiteral(s, p.documentId ?? s.input?.documentId) ?? "");
+    if (!documentId) throw new Error("documents.ocr_extract requires `documentId` (vault key).");
+    const buf = await readFile(documentId);
+    const text = Buffer.isBuffer(buf) ? buf.toString("utf8") : String(buf ?? "");
+    if (!text) throw new Error(`documents.ocr_extract: document '${documentId}' is empty or non-text. Run real OCR upstream first.`);
+    const fields = await analyzeDocumentText(text);
+    return { documentId, fields };
   },
   "documents.medical_extract": async (s) => {
     // Catalog params: `documentId`, optional `schema` (advisory — analyze
@@ -1412,6 +1252,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       tortType,
       email,
       phone,
+      firmId: s.ctx.firmId,
     });
     if (existing) {
       return { lead_id: existing.leadId, deduped: true, matched_by: existing.matchedBy };
@@ -1425,68 +1266,46 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       last_name: submission["last_name"] as any,
       source: "automation",
       status: "new",
-      // Stamp firm_id from the run context so every automation-created lead
-      // is reachable through the firm-scoped list/detail endpoints. Without
-      // this, the row inserts with firm_id NULL and is invisible to the
-      // creating firm's UI (and would also have been a privilege-escalation
-      // surface if any later route did a NULL-firm fallback).
-      firm_id: s.ctx.firmId ?? null,
     } as any).returning();
     return { lead_id: created.id, deduped: false };
   },
 
   // ───────── AI (extended)
   "ai.agent": async (s) => {
-    // Real autonomous tool-loop agent. Catalog params: goal, tools (an
-    // optional allowlist of node types), maxSteps, model (planner|chat|code
-    // role), dryRun. The agent's tool set IS the live node catalog — every
-    // reachable node becomes a tool it can invoke. The plan→act→observe loop
-    // and all guardrails (step cap, time budget, stuck-loop detector, dry-run,
-    // per-step audit) live in lib/automations/agent.ts.
+    // Catalog params: goal, tools, maxSteps, model. We do NOT run a real
+    // tool-loop agent (it needs a sandboxed tool registry that hasn't been
+    // built yet). Instead we run a single-turn LLM completion bounded by
+    // maxSteps=1; any catalog config asking for >1 steps falls through the
+    // `max_steps` branch so workflow authors can route to a human review
+    // node rather than silently truncating.
     const p = s.node.data?.params ?? {};
-    const goal = String(resolveOrLiteral(s, p.goal) ?? "").trim();
+    const goal = String(resolveOrLiteral(s, p.goal) ?? "");
     if (!goal) {
       return { __branch: "error", value: { code: "MISSING_GOAL", error: "ai.agent requires `goal`." } };
     }
-    // Kill switch — one env var disables every agent node fleet-wide.
-    if (process.env["AGENT_NODE_DISABLED"] === "1") {
+    const maxSteps = Number(p.maxSteps ?? 1);
+    if (Number.isFinite(maxSteps) && maxSteps > 1) {
       return {
-        __branch: "error",
-        value: { code: "AGENT_DISABLED", error: "The autonomous agent node is disabled (AGENT_NODE_DISABLED=1)." },
+        __branch: "max_steps",
+        value: {
+          code: "AGENT_LOOP_NOT_IMPLEMENTED",
+          error: `ai.agent multi-step loops aren't implemented yet (requested maxSteps=${maxSteps}). Falling through max_steps branch.`,
+          stepsRun: 1,
+          maxSteps,
+        },
       };
     }
-    const rawMax = Number(p.maxSteps ?? 10);
-    const maxSteps = Math.max(1, Math.min(25, Number.isFinite(rawMax) ? Math.floor(rawMax) : 10));
-    const model = AGENT_MODEL_BY_ROLE[String(p.model ?? "planner").trim()] ?? BITDEER_MODELS.planner;
-    const dryRun = p.dryRun === true || p.dryRun === "true";
-    const rawTools = resolveOrLiteral(s, p.tools);
-    const allow = Array.isArray(rawTools) ? rawTools.map((t) => String(t)) : [];
-
-    const tools = buildAgentTools({
-      allow,
-      input: s.input,
-      ctx: { workflowId: s.ctx.workflowId, firmId: s.ctx.firmId, runId: s.ctx.runId },
-    });
-    if (tools.length === 0) {
-      return {
-        __branch: "error",
-        value: { code: "NO_TOOLS", error: "ai.agent: the `tools` allowlist matched no available node types." },
-      };
+    try {
+      const output = await callLLM({
+        module: "lead-intelligence",
+        systemPrompt: "You are an autonomous assistant. Reply only with the final answer.",
+        prompt: `${goal}\n\nContext:\n${JSON.stringify(s.input ?? {}, null, 2).slice(0, 4000)}`,
+        maxTokens: 1000,
+      });
+      return { __branch: "success", value: { output, stepsRun: 1 } };
+    } catch (err: any) {
+      return { __branch: "error", value: { error: err?.message ?? String(err) } };
     }
-
-    const result = await runAgent({
-      goal,
-      tools,
-      maxSteps,
-      model,
-      dryRun,
-      timeBudgetMs: AGENT_TIME_BUDGET_MS,
-      context: (s.input ?? {}) as Record<string, unknown>,
-      runId: s.ctx.runId,
-      workflowId: s.ctx.workflowId,
-      firmId: s.ctx.firmId,
-    });
-    return { __branch: result.status, value: result };
   },
   "ai.classify": async (s) => {
     const p = s.node.data?.params ?? {};
@@ -1501,27 +1320,6 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     });
     const picked = raw.trim();
     return { label: labels.includes(picked) ? picked : labels[0], raw };
-  },
-  "ai.rerank": async (s) => {
-    // Relevance re-scoring via lib/reranker.ts (Bitdeer bge-reranker-v2-m3).
-    // `documents` resolves to a string array; non-string members are
-    // coerced. firmId comes from the run context so the vault key is
-    // firm-scoped. Output: { results: [{index, relevance_score,
-    // document}], top: <most relevant document string> }.
-    const p = s.node.data?.params ?? {};
-    const query = String(resolveOrLiteral(s, p.query ?? s.input?.query) ?? "");
-    const rawDocs = resolveOrLiteral(s, p.documents ?? s.input?.documents);
-    const documents = Array.isArray(rawDocs) ? rawDocs.map((d) => String(d ?? "")) : [];
-    if (!query || documents.length === 0) {
-      throw new Error("ai.rerank requires a query and a non-empty documents array.");
-    }
-    const topN = Number(p.topN ?? 5);
-    const { rerank } = await import("../reranker");
-    const results = await rerank(query, documents, {
-      firmId: s.ctx.firmId ?? undefined,
-      topN: Number.isFinite(topN) && topN > 0 ? topN : 5,
-    });
-    return { results, top: results[0]?.document ?? null, count: results.length };
   },
   "ai.chat_response": async (s) => {
     // Catalog params: `message` (path/literal of inbound message), `persona`,
@@ -1650,87 +1448,21 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   },
 };
 
-// ── Autonomous-agent support (ai.agent node) ────────────────────────────────
-
-/** Total wall-clock budget for one ai.agent run. Env-overridable. */
-const AGENT_TIME_BUDGET_MS = (() => {
-  const n = Number(process.env["AGENT_TIME_BUDGET_MS"]);
-  return Number.isFinite(n) && n >= 30_000 ? n : 480_000; // default 8 min
-})();
-
-/** ai.agent `model` param (a capability role) → concrete Bitdeer model. */
-const AGENT_MODEL_BY_ROLE: Record<string, string> = {
-  planner: BITDEER_MODELS.planner,
-  chat: BITDEER_MODELS.chat,
-  code: BITDEER_MODELS.code,
-};
-
-// Node types the agent can never call: graph control-flow has no meaning to an
-// agent that runs its own loop, triggers are inert entry points, End is a
-// sink, and ai.agent itself would recurse without bound.
-const AGENT_FORBIDDEN_PREFIXES = ["trigger.", "logic."];
-const AGENT_FORBIDDEN_TYPES = new Set<string>(["utility.end", "ai.agent"]);
-
-/** Flatten a node handler's result into a plain observation for the agent. */
-function normalizeHandlerResult(res: HandlerResult): unknown {
-  if (res === undefined || res === null) return { ok: true };
-  if (typeof res === "object" && "__branch" in (res as Record<string, unknown>)) {
-    const r = res as { __branch: string; value?: unknown };
-    return { branch: r.__branch, value: r.value };
-  }
-  return res;
-}
-
-/**
- * Build the agent's tool registry from the live node catalog. Every reachable
- * node type becomes one AgentTool whose `invoke` runs the real node handler
- * inside a synthetic StepContext bound to the agent's run/firm scope. An
- * optional `allow` list narrows the set; empty means "all reachable nodes".
- */
-function buildAgentTools(args: {
-  allow: string[];
-  input: any;
-  ctx: { workflowId: number; firmId: number | null; runId: number };
-}): AgentTool[] {
-  const allowSet = new Set(args.allow);
-  // The agent gets its own variable scope so data.set calls inside the loop
-  // cannot clobber the surrounding workflow's vars.
-  const agentVars: Record<string, any> = {};
-  const tools: AgentTool[] = [];
-
-  for (const def of NODE_CATALOG) {
-    if (AGENT_FORBIDDEN_PREFIXES.some((pre) => def.type.startsWith(pre))) continue;
-    if (AGENT_FORBIDDEN_TYPES.has(def.type)) continue;
-    const handler = HANDLERS[def.type];
-    if (!handler) continue;
-    if (allowSet.size > 0 && !allowSet.has(def.type)) continue;
-
-    tools.push({
-      type: def.type,
-      label: def.label,
-      description: def.description,
-      params: def.params,
-      access: classifyToolAccess(def.type),
-      invoke: async (params) => {
-        const res = await handler({
-          node: { id: `agent:${def.type}`, type: def.type, data: { params } },
-          input: args.input,
-          vars: agentVars,
-          ctx: args.ctx,
-        });
-        return normalizeHandlerResult(res);
-      },
-    });
-  }
-  return tools;
-}
-
 function resolveOrLiteral(s: StepContext, raw: any): any {
   if (typeof raw !== "string") return raw;
   if (raw.startsWith("input.") || raw.startsWith("vars.")) {
     return resolvePath({ input: s.input, vars: s.vars }, raw);
   }
   return raw;
+}
+
+async function stubIntegration(name: string, s: StepContext): Promise<any> {
+  // For v1 these record what would have been sent; the real adapters live
+  // in lib/email, lib/fax, lib/esign, etc. Wiring each through requires a
+  // per-adapter call surface — done in follow-up. This keeps the engine
+  // testable end-to-end without surprise side effects.
+  logger.info({ node: s.node.type, params: s.node.data?.params, runId: s.ctx.runId }, `[automation] ${name} stub invoked`);
+  return { simulated: true, name, params: s.node.data?.params };
 }
 
 function runProcess(cmd: string, args: string[], stdin: string, s: StepContext, codeFlag?: string): Promise<any> {

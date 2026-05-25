@@ -42,6 +42,8 @@ tags:
     description: Vapi voice intake call logs (operator read-only)
   - name: sms
     description: Outbound SMS via Telnyx (operator-triggered)
+  - name: webhook-deliveries
+    description: Outbound webhook delivery log — admin visibility into automation event dispatch history
 paths:
   /healthz:
     get:
@@ -1733,6 +1735,70 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SendLeadSmsEnvelope"
+
+  /admin/webhook-deliveries:
+    get:
+      operationId: listWebhookDeliveries
+      tags: [webhook-deliveries]
+      summary: List outbound webhook delivery attempts with filters
+      parameters:
+        - name: integration_id
+          in: query
+          required: false
+          schema: { type: integer }
+        - name: event
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [success, failure, all]
+        - name: since
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: until
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: page_size
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Paginated delivery log
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookDeliveriesEnvelope"
+
+  /admin/webhook-deliveries/{id}/resend:
+    post:
+      operationId: resendWebhookDelivery
+      tags: [webhook-deliveries]
+      summary: Re-fire the stored payload of a delivery row with a fresh timestamp
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Resend outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookResendEnvelope"
+        "404":
+          description: Delivery or integration not found
 
 components:
   schemas:
@@ -3670,6 +3736,61 @@ components:
           items:
             type: string
           description: Operator-facing notes about source health, fallbacks, or limitations.
+        pacer:
+          nullable: true
+          description: |
+            PACER Case Locator (PCL) search result. Included only when the
+            "pacer" integration is configured in the vault. `null` means PACER
+            was not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).
+            When `ok` is true, `cases` contains up to 25 party-search hits and
+            `truncated` indicates more results exist beyond the first page.
+            Hits require manual operator review — PCL results never auto-fail
+            a lead because they do not include identity-confirming metadata.
+          type: object
+          properties:
+            ok:
+              type: boolean
+            reason:
+              type: string
+              nullable: true
+              enum: [NOT_CONFIGURED, AUTH_FAILED, SOURCE_UNREACHABLE]
+              description: Failure reason when `ok` is false.
+            message:
+              type: string
+              nullable: true
+              description: Human-readable detail for the failure reason.
+            cases:
+              type: array
+              items:
+                type: object
+                properties:
+                  caseNumberFull:
+                    type: string
+                    nullable: true
+                  caseTitle:
+                    type: string
+                    nullable: true
+                  caseYear:
+                    type: integer
+                    nullable: true
+                  courtId:
+                    type: string
+                    nullable: true
+                  dateFiled:
+                    type: string
+                    nullable: true
+                  jurisdictionType:
+                    type: string
+                    nullable: true
+                  natureOfSuit:
+                    type: string
+                    nullable: true
+                  docketUrl:
+                    type: string
+                    nullable: true
+            truncated:
+              type: boolean
+              description: True when PACER returned more results than the 25-case limit.
       required:
         - status
         - source
@@ -3709,7 +3830,6 @@ components:
             - address
             - email
             - phone
-            - phone_provenance
             - residency
             - criminal_court
             - incarceration
@@ -3741,26 +3861,6 @@ components:
         error:
           type: string
           nullable: true
-        manual_action_urls:
-          type: array
-          description: >-
-            Smart-links to public-records search forms the operator can
-            click to run the lookup manually. Present on lanes that
-            require a human-in-the-loop check (NSOPW, state bar, SoS,
-            BOP, property records). Lane status reflects evidence
-            already received — adding a smart-link does NOT count as
-            having run the check.
-          items:
-            type: object
-            properties:
-              label:
-                type: string
-              url:
-                type: string
-              note:
-                type: string
-                nullable: true
-            required: [label, url]
       required: [lane, status, score, flags, notes, sources, checked_at]
 
     BackgroundHubResult:
@@ -3773,16 +3873,6 @@ components:
         final_status:
           type: string
           enum: [PASS, REVIEW_REQUIRED, FAIL, NOT_RUN]
-          description: >-
-            Whole-hub aggregate over EVERY lane, including advisory stub
-            lanes that always REVIEW. Strict gate.
-        final_status_live_lanes_only:
-          type: string
-          enum: [PASS, REVIEW_REQUIRED, FAIL, NOT_RUN]
-          description: >-
-            Aggregate restricted to lanes with a live data adapter. Lets
-            the UI render "all automated checks cleared" while still
-            showing manual-lookup lanes pending.
         overall_score:
           type: integer
         checked_at:
@@ -3798,26 +3888,7 @@ components:
               type: integer
             not_run:
               type: integer
-            live_lanes_total:
-              type: integer
-            live_lanes_pass:
-              type: integer
-            live_lanes_review:
-              type: integer
-            live_lanes_fail:
-              type: integer
-            live_lanes_not_run:
-              type: integer
-          required:
-            - pass
-            - review_required
-            - fail
-            - not_run
-            - live_lanes_total
-            - live_lanes_pass
-            - live_lanes_review
-            - live_lanes_fail
-            - live_lanes_not_run
+          required: [pass, review_required, fail, not_run]
         results:
           type: array
           items:
@@ -3826,7 +3897,6 @@ components:
         - lead_id
         - version
         - final_status
-        - final_status_live_lanes_only
         - overall_score
         - checked_at
         - summary
@@ -4067,4 +4137,58 @@ components:
       properties:
         status: { type: string }
         data: { $ref: "#/components/schemas/SendLeadSmsResult" }
+      required: [status, data]
+
+    WebhookDeliveryRow:
+      type: object
+      properties:
+        id: { type: integer }
+        integration_id: { type: integer }
+        event: { type: string }
+        delivery_id: { type: string }
+        status_code: { type: integer, nullable: true }
+        response_ms: { type: integer, nullable: true }
+        attempt: { type: integer }
+        last_error: { type: string, nullable: true }
+        payload_hash: { type: string, nullable: true }
+        is_test: { type: integer }
+        occurred_at: { type: string }
+        integration_name: { type: string, nullable: true }
+        integration_provider: { type: string, nullable: true }
+      required: [id, integration_id, event, delivery_id, attempt, is_test, occurred_at]
+
+    WebhookDeliveriesPayload:
+      type: object
+      properties:
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/WebhookDeliveryRow" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+      required: [rows, page, page_size, total]
+
+    WebhookDeliveriesEnvelope:
+      type: object
+      properties:
+        status: { type: string }
+        data: { $ref: "#/components/schemas/WebhookDeliveriesPayload" }
+      required: [status, data]
+
+    WebhookResendResult:
+      type: object
+      properties:
+        delivery_id: { type: string }
+        response_status: { type: integer }
+        latency_ms: { type: integer }
+        signed: { type: boolean }
+        success: { type: boolean }
+        error: { type: string, nullable: true }
+      required: [delivery_id, response_status, latency_ms, signed, success]
+
+    WebhookResendEnvelope:
+      type: object
+      properties:
+        status: { type: string }
+        data: { $ref: "#/components/schemas/WebhookResendResult" }
       required: [status, data]

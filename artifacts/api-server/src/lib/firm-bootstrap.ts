@@ -1,9 +1,8 @@
 import crypto from "crypto";
 import { db } from "@workspace/db";
-import { firmsTable, usersTable, apiKeysTable } from "@workspace/db";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { firmsTable, usersTable } from "@workspace/db";
+import { eq, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger";
-import { hashApiKey, API_KEY_PREFIX } from "./api-keys";
 
 async function hashPassword(password: string): Promise<string> {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -42,16 +41,7 @@ export async function seedDefaultFirm(): Promise<SeedDefaultFirmResult> {
       .values({
         name: DEFAULT_FIRM_NAME,
         slug: DEFAULT_FIRM_SLUG,
-        // The default firm is the owner's free-tier workspace. The
-        // subscriptionGateMiddleware in lib/subscription-gate.ts ALREADY
-        // bypasses gating when no stripe integration row exists, but the
-        // CRM's BillingBanner only checks the stored status — so an
-        // "inactive" seed shows a red banner on first login. Seed as
-        // "active" so the owner doesn't see a billing warning on a
-        // self-hosted deploy that has no Stripe set up. If Stripe is
-        // later configured and a real subscription created, the stripe
-        // webhook handler is the source of truth and will overwrite this.
-        subscription_status: "active",
+        subscription_status: "inactive",
       })
       .returning({ id: firmsTable.id });
     if (!row) {
@@ -60,14 +50,6 @@ export async function seedDefaultFirm(): Promise<SeedDefaultFirmResult> {
     firmId = row.id;
     inserted = true;
   }
-
-  // Idempotent: existing default-firm rows from an older seed (or other
-  // deploys that wrote "inactive") get flipped to "active" so the
-  // BillingBanner doesn't keep showing after this commit ships.
-  await db
-    .update(firmsTable)
-    .set({ subscription_status: "active" })
-    .where(and(eq(firmsTable.slug, DEFAULT_FIRM_SLUG), eq(firmsTable.subscription_status, "inactive")));
 
   const result = await db
     .update(usersTable)
@@ -188,137 +170,5 @@ export async function seedSuperAdmin(): Promise<{ skipped: boolean; created: boo
     })
     .where(eq(usersTable.email, email));
   logger.info({ email }, "seedSuperAdmin: updated existing user to super_admin");
-  return { skipped: false, created: false, updated: true };
-}
-
-const MASTER_KEY_NAME = "MASTER";
-
-/**
- * Master API key bootstrap.
- *
- * Runs on every startup; a no-op unless MTOS_MASTER_API_KEY is set. When set,
- * it upserts a single api_keys row whose SHA-256 hash matches that value,
- * carrying the wildcard scope "*" and owned by the super-admin user. Any
- * caller that sends `Authorization: Bearer <MTOS_MASTER_API_KEY>` then has
- * full programmatic access to every MTOS API route — this is the "API in"
- * master credential.
- *
- * The value MUST start with the `mtos_` prefix so the auth middleware routes
- * it down the API-key path. It flows through the SAME hashed-storage, scope-
- * check, per-request audit, and revoke machinery as any minted key — the only
- * difference is that the operator chooses the plaintext (and treats it as
- * permanent) instead of it being randomly minted and shown once.
- *
- * To retire the key: unset MTOS_MASTER_API_KEY and revoke the MASTER row in
- * the API Keys admin page (a still-set env var would otherwise re-seed it on
- * the next boot).
- */
-export async function seedMasterApiKey(): Promise<{ skipped: boolean; created: boolean; updated: boolean }> {
-  const masterKey = process.env["MTOS_MASTER_API_KEY"]?.trim();
-  if (!masterKey) {
-    return { skipped: true, created: false, updated: false };
-  }
-  if (!masterKey.startsWith(API_KEY_PREFIX)) {
-    logger.warn(
-      `seedMasterApiKey: MTOS_MASTER_API_KEY must start with "${API_KEY_PREFIX}" — skipping. The auth middleware only routes ${API_KEY_PREFIX}-prefixed bearer tokens to the API-key path.`,
-    );
-    return { skipped: true, created: false, updated: false };
-  }
-  if (masterKey.length < API_KEY_PREFIX.length + 24) {
-    logger.warn("seedMasterApiKey: MTOS_MASTER_API_KEY is too short — refusing to seed a weak master credential.");
-    return { skipped: true, created: false, updated: false };
-  }
-
-  // The master key is owned by — and inherits the permissions of — the
-  // super-admin. Pick the lowest-id super_admin so the choice is stable
-  // across reboots.
-  const [admin] = await db
-    .select({ id: usersTable.id, firm_id: usersTable.firm_id })
-    .from(usersTable)
-    .where(eq(usersTable.role, "super_admin"))
-    .orderBy(usersTable.id)
-    .limit(1);
-  if (!admin) {
-    logger.warn("seedMasterApiKey: no super_admin user found — skipping (set SEED_ADMIN_EMAIL/PASSWORD and reboot).");
-    return { skipped: true, created: false, updated: false };
-  }
-
-  const keyHash = hashApiKey(masterKey);
-  const body = masterKey.slice(API_KEY_PREFIX.length);
-  const keyPrefix = `${API_KEY_PREFIX}${body.slice(0, 8)}…`;
-
-  // api_keys.key_hash is globally UNIQUE. If MTOS_MASTER_API_KEY was already
-  // minted as an ordinary key (any name, any firm), the INSERT below would
-  // collide with that UNIQUE index and throw — the boot seed would then fail
-  // silently even though the key works. Resolve by hash first: the hash IS
-  // the key's identity; the row's name is cosmetic. If the key already
-  // exists, just guarantee it carries wildcard scope and is not revoked.
-  const [byHash] = await db
-    .select({
-      id: apiKeysTable.id,
-      name: apiKeysTable.name,
-      scopes: apiKeysTable.scopes,
-      revoked_at: apiKeysTable.revoked_at,
-    })
-    .from(apiKeysTable)
-    .where(eq(apiKeysTable.key_hash, keyHash))
-    .limit(1);
-
-  if (byHash) {
-    const hasWildcard = (byHash.scopes ?? []).includes("*");
-    const isRevoked = byHash.revoked_at != null;
-    if (!hasWildcard || isRevoked) {
-      await db
-        .update(apiKeysTable)
-        .set({ scopes: ["*"], revoked_at: null })
-        .where(eq(apiKeysTable.id, byHash.id));
-      logger.info(
-        { api_key_id: byHash.id, name: byHash.name },
-        "seedMasterApiKey: existing key matched MTOS_MASTER_API_KEY — restored wildcard scope",
-      );
-      return { skipped: false, created: false, updated: true };
-    }
-    logger.info(
-      { api_key_id: byHash.id, name: byHash.name },
-      "seedMasterApiKey: MTOS_MASTER_API_KEY already registered with wildcard scope — no change",
-    );
-    return { skipped: false, created: false, updated: false };
-  }
-
-  const [existing] = await db
-    .select({ id: apiKeysTable.id })
-    .from(apiKeysTable)
-    .where(and(eq(apiKeysTable.name, MASTER_KEY_NAME), eq(apiKeysTable.firm_id, admin.firm_id)))
-    .limit(1);
-
-  if (!existing) {
-    await db.insert(apiKeysTable).values({
-      name: MASTER_KEY_NAME,
-      key_hash: keyHash,
-      key_prefix: keyPrefix,
-      scopes: ["*"],
-      firm_id: admin.firm_id,
-      created_by_user_id: admin.id,
-    });
-    logger.info({ firm_id: admin.firm_id }, "seedMasterApiKey: created MASTER api key (scope=*)");
-    return { skipped: false, created: true, updated: false };
-  }
-
-  // Idempotent refresh: re-point the row at the current env value, restore
-  // the wildcard scope, and clear any prior revocation.
-  await db
-    .update(apiKeysTable)
-    .set({
-      key_hash: keyHash,
-      key_prefix: keyPrefix,
-      scopes: ["*"],
-      revoked_at: null,
-      created_by_user_id: admin.id,
-    })
-    .where(eq(apiKeysTable.id, existing.id));
-  logger.info(
-    { firm_id: admin.firm_id, api_key_id: existing.id },
-    "seedMasterApiKey: refreshed MASTER api key (scope=*)",
-  );
   return { skipped: false, created: false, updated: true };
 }

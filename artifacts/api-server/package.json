@@ -14,20 +14,17 @@
     "pretypecheck": "tsc -b ../../",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test --test-timeout=30000 src/lib/__tests__/*.test.ts",
-    "verify:search": "tsx src/scripts/verify-serpapi.ts",
-    "smoke": "tsx src/scripts/smoke.ts",
-    "smoke:http": "tsx src/scripts/smoke-http.ts",
-    "smoke:ai-helper": "tsx src/scripts/smoke-ai-helper.ts"
+    "verify:search": "tsx src/scripts/verify-serpapi.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
-    "@simplewebauthn/server": "^13.3.0",
     "@types/pdf-parse": "^1.1.5",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/integrations-anthropic-ai": "workspace:*",
     "@workspace/integrations-openai-ai-server": "workspace:*",
     "cors": "^2",
+    "croner": "^10.0.1",
     "drizzle-orm": "catalog:",
     "express": "^5",
     "express-rate-limit": "^8.3.2",

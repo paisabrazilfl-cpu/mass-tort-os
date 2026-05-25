@@ -1,24 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Upload,
-  FileSpreadsheet,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  Copy,
-  RefreshCw,
-  ArrowRight,
-  ChevronDown,
-  ChevronUp,
-  Download,
-} from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { useGetFormConfigs } from "@workspace/api-client-react";
+import { Upload, FileSpreadsheet, CheckCircle2, XCircle, AlertTriangle, Copy, RefreshCw, ArrowRight, ChevronDown, ChevronUp } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface ImportBatch {
@@ -71,81 +57,6 @@ export default function LeadImport() {
   const [loading, setLoading] = useState(false);
   const [expandedErrors, setExpandedErrors] = useState(false);
   const [expandedDupes, setExpandedDupes] = useState(false);
-
-  // Live valid options — used to pre-fill the downloadable CSV template
-  // with values the importer will actually accept, and to render the
-  // "Valid options" reference card below the uploader.
-  const { data: formConfigsResp } = useGetFormConfigs();
-  const tortTypes = (formConfigsResp?.tort_campaigns ?? [])
-    .filter((c) => c.active !== false)
-    .map((c) => ({ id: c.id, label: c.label }));
-  const { data: leadSources = [] } = useQuery<{ id: number; name: string }[]>({
-    queryKey: ["lead-sources"],
-    queryFn: async () => {
-      const res = await apiFetchRaw("/api/lead-sources");
-      if (!res.ok) return [];
-      return res.json();
-    },
-  });
-
-  /**
-   * Build a CSV template with column headers the backend importer
-   * recognises (see COLUMN_ALIASES in routes/lead-import.ts) and two
-   * fully-populated example rows. The example values are pulled live
-   * from the CRM so the user sees real tort_type IDs / source names —
-   * no copy that the importer will reject.
-   */
-  const downloadTemplate = () => {
-    const escape = (v: string) => (v === "" || /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
-    const headers = [
-      "First Name", "Last Name", "Email", "Phone",
-      "Tort Type", "Source", "Vendor", "Client ID", "Notes",
-      "Date of Birth", "Street Address", "City", "State", "Zip", "Last 4 SSN",
-      "Diagnosis", "Diagnosis Date",
-      "Physician First Name", "Physician Last Name",
-      "Hospital Name", "Hospital Fax", "Medications", "NPI Number",
-      "Exposure Start", "Exposure End", "Location Name", "Ad Spend",
-    ];
-    const tort1 = tortTypes[0]?.id ?? "camp_lejeune";
-    const tort2 = tortTypes[1]?.id ?? tort1;
-    const src1 = leadSources[0]?.name ?? "Inbound Call";
-    const src2 = leadSources[1]?.name ?? src1;
-    const row1: string[] = [
-      "John", "Smith", "john.smith@example.com", "(555) 555-0101",
-      tort1, src1, "Acme Marketing", "V-100234",
-      "Agent: Jane Doe — verified intake, qualified, ready to sign",
-      "1955-04-12", "123 Main St", "Charlotte", "NC", "28202", "1234",
-      "Kidney Cancer", "2019-08-15",
-      "Robert", "Johnson",
-      "Camp Lejeune Naval Hospital", "+19105550100", "Atorvastatin", "1234567890",
-      "1972-01-01", "1981-12-01", "Camp Lejeune Base", "250.00",
-    ];
-    const row2: string[] = [
-      "Maria", "Garcia", "maria.g@example.com", "(404) 555-0188",
-      tort2, src2, "Lead-Gen Partners LLC", "V-100235",
-      "Agent: Marcus Liu — qualified, awaiting medical records",
-      "1962-09-30", "4400 Peachtree Rd NE", "Atlanta", "GA", "30319", "5678",
-      "Parkinson's Disease", "2022-03-20",
-      "Linda", "Patel",
-      "Emory University Hospital", "+14045550199", "Levodopa", "9876543210",
-      "2005-04-01", "2018-10-15", "Farm Site B", "175.50",
-    ];
-    const csv =
-      [headers, row1, row2].map((r) => r.map(escape).join(",")).join("\r\n") + "\r\n";
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `mtos-lead-import-template-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toast({
-      title: "Template downloaded",
-      description: "Replace the two example rows with your data, then upload it here.",
-    });
-  };
 
   const fetchBatches = useCallback(async () => {
     try {
@@ -306,7 +217,6 @@ export default function LeadImport() {
       </div>
 
       {step === "upload" && (
-        <>
         <div className="grid gap-6 md:grid-cols-2">
           <Card>
             <CardHeader>
@@ -328,21 +238,11 @@ export default function LeadImport() {
                   className="hidden"
                   id="csv-upload"
                 />
-                <div className="flex flex-wrap items-center justify-center gap-2">
-                  <label htmlFor="csv-upload">
-                    <Button asChild variant="outline" disabled={loading}>
-                      <span>{loading ? "Analyzing..." : "Choose File"}</span>
-                    </Button>
-                  </label>
-                  <Button variant="outline" onClick={downloadTemplate}>
-                    <Download className="h-4 w-4 mr-2" />
-                    Download CSV Template
+                <label htmlFor="csv-upload">
+                  <Button asChild variant="outline" disabled={loading}>
+                    <span>{loading ? "Analyzing..." : "Choose File"}</span>
                   </Button>
-                </div>
-                <p className="mt-3 text-xs text-muted-foreground">
-                  New here? Download the template — it has the right column headers and two example
-                  rows pre-filled with valid options from your CRM.
-                </p>
+                </label>
               </div>
               <div className="mt-4 space-y-2 text-xs text-muted-foreground">
                 <p>Each lead is individually validated through the full pipeline:</p>
@@ -394,80 +294,6 @@ export default function LeadImport() {
             </CardContent>
           </Card>
         </div>
-
-        {/* Valid options reference — what your CSV cells should contain. */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Valid options for your CSV</CardTitle>
-            <CardDescription>
-              The importer normalises common header variants — match these values in your cells
-              and the data lands clean.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                Tort types — use the ID in the "Tort Type" column
-              </div>
-              {tortTypes.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  No tort configurations loaded — see Form Engine.
-                </p>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {tortTypes.map((t) => (
-                    <Badge key={t.id} variant="outline" className="font-mono">
-                      {t.id}
-                      <span className="ml-2 font-sans text-muted-foreground">{t.label}</span>
-                    </Badge>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                Lead sources — use the name in the "Source" column
-              </div>
-              {leadSources.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  No lead sources configured — see Decision Engine → Settings.
-                </p>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {leadSources.map((s) => (
-                    <Badge key={s.id} variant="secondary">{s.name}</Badge>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1.5">
-              <div>
-                <span className="font-semibold text-foreground">Vendor</span> — your marketing /
-                partner firm name. Free text; mapped to the importer's <code>law_firm</code> field.
-              </div>
-              <div>
-                <span className="font-semibold text-foreground">Agent / call-center rep</span> —
-                put their name in the <span className="font-semibold text-foreground">Notes</span>
-                {" "}column (e.g. "Agent: Jane Doe — qualified caller"). There is no separate
-                agent field on the lead, so Notes is the right home.
-              </div>
-              <div>
-                <span className="font-semibold text-foreground">Header aliases</span> the importer
-                accepts automatically: <code>tort</code> / <code>mass tort</code> → tort_type ·{" "}
-                <code>vendor</code> / <code>law firm</code> → law_firm ·{" "}
-                <code>cell phone</code> / <code>mobile</code> / <code>primary phone</code> →
-                phone_primary · plus the obvious ones (first name, last name, dob, ssn, address,
-                city, state, zip).
-              </div>
-              <div>
-                <span className="font-semibold text-foreground">Dates</span>: <code>YYYY-MM-DD</code>.{" "}
-                <span className="font-semibold text-foreground">Phones</span>: any common shape —
-                the importer normalises.
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        </>
       )}
 
       {step === "preview" && preview && (

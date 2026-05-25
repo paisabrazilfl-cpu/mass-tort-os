@@ -34,7 +34,6 @@ export const jobQueueTable = pgTable("job_queue", {
   // immediately" (the normal case for fresh jobs). Set to a future
   // timestamp on retry to implement exponential backoff.
   next_attempt_at: timestamp("next_attempt_at"),
-  firm_id: integer("firm_id"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   started_at: timestamp("started_at"),
   completed_at: timestamp("completed_at"),
@@ -46,7 +45,6 @@ export const jobQueueTable = pgTable("job_queue", {
   // Composite that matches the actual claim query: pending jobs whose
   // next_attempt_at is past, ordered by created_at.
   claimReadyIdx: index("job_queue_claim_ready_idx").on(t.status, t.next_attempt_at, t.created_at),
-  firmIdx: index("job_queue_firm_id_idx").on(t.firm_id),
 }));
 
 export const insertJobSchema = createInsertSchema(jobQueueTable).omit({

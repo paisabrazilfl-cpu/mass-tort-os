@@ -1,26 +1,15 @@
-import { pgTable, serial, varchar, text, timestamp, integer, boolean, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, varchar, text, timestamp, integer, boolean, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
 /**
- * Workflow settings — one row per `(firm_id, scope)` pair.
- * scope="global" is the firm-wide default; scope="buyer:<id>" overrides per buyer.
- * Per-buyer rows take precedence; missing fields fall through to that
- * firm's global row.
- *
- * firm_id NOT NULL on new rows: previous versions of this table had a
- * single global singleton row shared across every firm, which leaked
- * operational config (which esign / fax / LLM provider, default-from
- * address, etc.) across tenants. Legacy NULL-firm_id rows are accepted
- * by the schema (drizzle treats the column as nullable for backward
- * compatibility) but every route now requires a firm-scoped row and
- * `scripts/backfill-workflow-settings-firm-id.sql` migrates the
- * legacy singleton into per-firm copies.
+ * Singleton-style settings for the auto-document workflow.
+ * One row per "scope" — scope="global" is the default; scope="buyer:<id>" overrides per buyer.
+ * Buyer-level rows take precedence; missing fields fall through to global.
  */
 export const workflowSettingsTable = pgTable("workflow_settings", {
   id: serial("id").primaryKey(),
-  firm_id: integer("firm_id"),
-  scope: varchar("scope", { length: 100 }).notNull(),
+  scope: varchar("scope", { length: 100 }).notNull().unique(),
   esign_provider_integration_id: integer("esign_provider_integration_id"),
   fax_provider_integration_id: integer("fax_provider_integration_id"),
   email_provider_integration_id: integer("email_provider_integration_id"),
@@ -43,11 +32,7 @@ export const workflowSettingsTable = pgTable("workflow_settings", {
   updated_by_user_id: integer("updated_by_user_id"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
-}, (t) => ({
-  // `(firm_id, scope)` is the natural primary key for upserts.
-  firmScopeIdx: uniqueIndex("workflow_settings_firm_scope_idx").on(t.firm_id, t.scope),
-  firmIdx: index("workflow_settings_firm_idx").on(t.firm_id),
-}));
+});
 
 export const insertWorkflowSettingsSchema = createInsertSchema(workflowSettingsTable).omit({
   id: true,

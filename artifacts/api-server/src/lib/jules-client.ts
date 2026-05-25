@@ -171,28 +171,12 @@ export async function approvePlan(sessionId: string): Promise<void> {
 }
 
 /**
- * Best-effort cancel of an in-flight Jules session. Jules' public API
- * exposes a `:cancel` action that stops the agent and prevents any
- * pending PR write. Idempotent — calling on an already-terminal session
- * returns 200 (Jules treats it as a no-op). The route layer should still
- * mark the local row as `cancelled` regardless of what Jules returns,
- * since we can't always trust the upstream signal to land before the
- * operator clicks again.
- */
-export async function cancelSession(sessionId: string): Promise<void> {
-  await julesFetch(`/sessions/${encodeURIComponent(sessionId)}:cancel`, {
-    method: "POST",
-    body: {},
-  });
-}
-
-/**
  * Best-effort detection of `sources/github/owner/repo` from the local
  * git remote. Returns null if no github remote is configured. Used as a
  * default for new self-heal sessions; operators can always override.
  */
 let cachedSource: string | null | undefined;
-export async function getDefaultSourceName(): Promise<string | null> {
+export function getDefaultSourceName(): string | null {
   if (cachedSource !== undefined) return cachedSource;
   const fromEnv = process.env["JULES_DEFAULT_SOURCE"];
   if (fromEnv) {
@@ -200,11 +184,8 @@ export async function getDefaultSourceName(): Promise<string | null> {
     return cachedSource;
   }
   try {
-    // Lazy/sync read of .git/config to keep this dependency-free. We use
-    // require() rather than dynamic import for the sync fs APIs below.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // Lazy/sync read of .git/config to keep this dependency-free.
     const fs = require("node:fs") as typeof import("node:fs");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const path = require("node:path") as typeof import("node:path");
     let dir = process.cwd();
     for (let i = 0; i < 6; i++) {

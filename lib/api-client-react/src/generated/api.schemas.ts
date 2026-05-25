@@ -1059,6 +1059,51 @@ export const BackgroundCheckResultSearchScope = {
   "national-fallback": "national-fallback",
 } as const;
 
+/**
+ * Failure reason when `ok` is false.
+ */
+export type BackgroundCheckResultPacerReason =
+  | (typeof BackgroundCheckResultPacerReason)[keyof typeof BackgroundCheckResultPacerReason]
+  | null;
+
+export const BackgroundCheckResultPacerReason = {
+  NOT_CONFIGURED: "NOT_CONFIGURED",
+  AUTH_FAILED: "AUTH_FAILED",
+  SOURCE_UNREACHABLE: "SOURCE_UNREACHABLE",
+} as const;
+
+export type BackgroundCheckResultPacerCasesItem = {
+  caseNumberFull?: string | null;
+  caseTitle?: string | null;
+  caseYear?: number | null;
+  courtId?: string | null;
+  dateFiled?: string | null;
+  jurisdictionType?: string | null;
+  natureOfSuit?: string | null;
+  docketUrl?: string | null;
+};
+
+/**
+ * PACER Case Locator (PCL) search result. Included only when the
+"pacer" integration is configured in the vault. `null` means PACER
+was not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).
+When `ok` is true, `cases` contains up to 25 party-search hits and
+`truncated` indicates more results exist beyond the first page.
+Hits require manual operator review — PCL results never auto-fail
+a lead because they do not include identity-confirming metadata.
+
+ */
+export type BackgroundCheckResultPacer = {
+  ok?: boolean;
+  /** Failure reason when `ok` is false. */
+  reason?: BackgroundCheckResultPacerReason;
+  /** Human-readable detail for the failure reason. */
+  message?: string | null;
+  cases?: BackgroundCheckResultPacerCasesItem[];
+  /** True when PACER returned more results than the 25-case limit. */
+  truncated?: boolean;
+} | null;
+
 export interface BackgroundCheckResult {
   status: BackgroundCheckResultStatus;
   source: string;
@@ -1079,6 +1124,15 @@ export interface BackgroundCheckResult {
   searched_courts: string[];
   /** Operator-facing notes about source health, fallbacks, or limitations. */
   notes: string[];
+  /** PACER Case Locator (PCL) search result. Included only when the
+"pacer" integration is configured in the vault. `null` means PACER
+was not searched (NOT_CONFIGURED, AUTH_FAILED, or SOURCE_UNREACHABLE).
+When `ok` is true, `cases` contains up to 25 party-search hits and
+`truncated` indicates more results exist beyond the first page.
+Hits require manual operator review — PCL results never auto-fail
+a lead because they do not include identity-confirming metadata.
+ */
+  pacer?: BackgroundCheckResultPacer;
 }
 
 export type BackgroundHubSourceSourceType =
@@ -1110,7 +1164,6 @@ export const BackgroundHubLaneResultLane = {
   address: "address",
   email: "email",
   phone: "phone",
-  phone_provenance: "phone_provenance",
   residency: "residency",
   criminal_court: "criminal_court",
   incarceration: "incarceration",
@@ -1130,12 +1183,6 @@ export const BackgroundHubLaneResultStatus = {
   NOT_RUN: "NOT_RUN",
 } as const;
 
-export interface BackgroundHubLaneResultManualActionUrl {
-  label: string;
-  url: string;
-  note?: string | null;
-}
-
 export interface BackgroundHubLaneResult {
   lane: BackgroundHubLaneResultLane;
   status: BackgroundHubLaneResultStatus;
@@ -1147,12 +1194,6 @@ export interface BackgroundHubLaneResult {
   /** Adapter-specific evidence payload (shape varies by lane). */
   raw?: unknown;
   error?: string | null;
-  /**
-   * Smart-links to public-records search forms the operator can click
-   * to run the lookup manually. Present on lanes that require a
-   * human-in-the-loop check.
-   */
-  manual_action_urls?: BackgroundHubLaneResultManualActionUrl[];
 }
 
 export type BackgroundHubResultFinalStatus =
@@ -1170,24 +1211,12 @@ export type BackgroundHubResultSummary = {
   review_required: number;
   fail: number;
   not_run: number;
-  live_lanes_total: number;
-  live_lanes_pass: number;
-  live_lanes_review: number;
-  live_lanes_fail: number;
-  live_lanes_not_run: number;
 };
 
 export interface BackgroundHubResult {
   lead_id: number;
   version: string;
-  /** Whole-hub aggregate (includes advisory stub lanes). Strict gate. */
   final_status: BackgroundHubResultFinalStatus;
-  /**
-   * Aggregate restricted to lanes with a live data adapter. UI uses this
-   * to render "automated checks cleared" without falsely implying that
-   * the manual-lookup stub lanes have run.
-   */
-  final_status_live_lanes_only: BackgroundHubResultFinalStatus;
   overall_score: number;
   checked_at: string;
   summary: BackgroundHubResultSummary;
@@ -1366,6 +1395,48 @@ export interface SendLeadSmsResult {
 export interface SendLeadSmsEnvelope {
   status: string;
   data: SendLeadSmsResult;
+}
+
+export interface WebhookDeliveryRow {
+  id: number;
+  integration_id: number;
+  event: string;
+  delivery_id: string;
+  status_code?: number | null;
+  response_ms?: number | null;
+  attempt: number;
+  last_error?: string | null;
+  payload_hash?: string | null;
+  is_test: number;
+  occurred_at: string;
+  integration_name?: string | null;
+  integration_provider?: string | null;
+}
+
+export interface WebhookDeliveriesPayload {
+  rows: WebhookDeliveryRow[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface WebhookDeliveriesEnvelope {
+  status: string;
+  data: WebhookDeliveriesPayload;
+}
+
+export interface WebhookResendResult {
+  delivery_id: string;
+  response_status: number;
+  latency_ms: number;
+  signed: boolean;
+  success: boolean;
+  error?: string | null;
+}
+
+export interface WebhookResendEnvelope {
+  status: string;
+  data: WebhookResendResult;
 }
 
 export type ListLeadsParams = {
@@ -1552,4 +1623,30 @@ export const ListCallsStatus = {
   completed: "completed",
   failed: "failed",
   no_answer: "no_answer",
+} as const;
+
+export type ListWebhookDeliveriesParams = {
+  integration_id?: number;
+  event?: string;
+  status?: ListWebhookDeliveriesStatus;
+  since?: string;
+  until?: string;
+  /**
+   * @minimum 1
+   */
+  page?: number;
+  /**
+   * @minimum 1
+   * @maximum 200
+   */
+  page_size?: number;
+};
+
+export type ListWebhookDeliveriesStatus =
+  (typeof ListWebhookDeliveriesStatus)[keyof typeof ListWebhookDeliveriesStatus];
+
+export const ListWebhookDeliveriesStatus = {
+  success: "success",
+  failure: "failure",
+  all: "all",
 } as const;

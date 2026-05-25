@@ -2,9 +2,7 @@
 
 > **This manual is exhaustive and granular.** Every page, button, field, status enum, role, permission, API endpoint, automation node, error code, and audit event in the system is documented below. Cross-references use exact code paths so engineers and operators see the same source of truth.
 
-**Version 2026.05.16** • Built directly from source: `artifacts/api-server/src`, `artifacts/mtos-crm/src`, `lib/db/src/schema`.
-
-> **Owner-level account.** The platform owner is the seeded `super_admin` — the account whose email is set via the `SEED_ADMIN_EMAIL` deploy secret. As `super_admin` they see EVERY firm, lead, case, audit log, integration, and admin panel across the system — including the hidden **Boss-Omega Dark Room** (§13.2), which is invisible to every other role. The role hierarchy is `super_admin > admin > attorney > paralegal > viewer` (§2.1). The billing banner and subscription gate are bypassed for `super_admin` and for any deploy where Stripe is unconfigured.
+**Version 2026.05.09** • Built directly from source: `artifacts/api-server/src`, `artifacts/mtos-crm/src`, `lib/db/src/schema`.
 
 ---
 
@@ -14,37 +12,30 @@
 
 | Layer | Where it lives | What it does |
 |---|---|---|
-| CRM web app | `artifacts/mtos-crm` | React 19 + Vite 7 UI you click through. |
-| Static + proxy server | `artifacts/mtos-crm/server.mjs` | Production-only Node stdlib server that serves the SPA bundle and reverse-proxies `/api/*` + `/webhook/*` to the api-server (so the SPA's same-origin fetches work across two Railway services). |
-| API server | `artifacts/api-server` | Express 5 backend serving `/api/*`. Boot-time fail-closes on missing required env (DATABASE_URL, SESSION_SECRET, ENCRYPTION_KEY_V1) in production/staging. |
-| Worker | `artifacts/api-server` (`dev:worker`) or in-process via `INPROC_WORKER=1` | Polls the Postgres job queue and runs background jobs (OCR, e-sign, fax, AI extraction, Fasten sync). |
-| Database | PostgreSQL 16 | 49 tables managed by Drizzle ORM via `lib/db/src/schema`. |
-| Schema management | `drizzle-kit generate` + `drizzle-kit migrate` (or the in-repo `pnpm --filter @workspace/db run bootstrap`) | SQL files committed under `lib/db/drizzle/`; `migrate` is non-interactive and idempotent via `__drizzle_migrations`. The legacy `drizzle-kit push` is still available but hangs on column-rename prompts in non-TTY environments. |
+| CRM web app | `artifacts/mtos-crm` | The React + Vite UI you click through. |
+| API server | `artifacts/api-server` | Express 5 backend serving `/api/*`. |
+| Worker | `artifacts/api-server` (`dev:worker`) | Polls the Postgres job queue and runs background jobs (OCR, e-sign, fax, AI extraction). |
+| Database | PostgreSQL | 48 tables managed by Drizzle ORM via `lib/db/src/schema`. |
+| Schema management | `drizzle-kit push` | Schema-vs-database workflow — no migrations directory. |
 
-All `/api/*` calls go through `authMiddleware` then a `requirePermission(...)` or `requireRole(...)` gate. The boot-time route-protection validator (`lib/route-protection.ts`) refuses to start if any non-public route is missing a permission gate.
-
-### 1.1 Deployment topologies
-
-- **Railway (current).** Two services — `api-server` (Node, runs the worker in-process) and `mtos-crm` (static + proxy via `server.mjs`) — plus the Postgres plugin. Per-service config in `artifacts/<svc>/railway.json`; full setup in `RAILWAY.md`. Required env documented in `.env.example`.
-- **Replit (legacy).** Deprecated. Removed in commit `a44e86d`.
+All `/api/*` calls go through `authMiddleware` then a `requirePermission(...)` or `requireRole(...)` gate.
 
 ---
 
 ## 2. Identity, authentication, and sessions
 
-### 2.1 The five roles
+### 2.1 The four roles
 
 Defined in `artifacts/api-server/src/lib/rbac.ts` (`UserRole`), in declared order:
 
 | # | Role | Hierarchy weight | Typical user |
 |---|------|---|---|
-| 1 | `super_admin` | 200 | Platform operator across firms. Has every permission and bypasses firm-scope checks. |
-| 2 | `admin` | 100 | Firm owner / IT lead. Has every permission inside their firm. |
-| 3 | `attorney` | 75 | Licensed attorney handling cases. |
-| 4 | `paralegal` | 50 | Daily lead/case worker. |
-| 5 | `viewer` | 25 | Read-only observer (compliance, auditor). |
+| 1 | `admin` | 100 | Firm owner / IT lead. Has every permission. |
+| 2 | `attorney` | 75 | Licensed attorney handling cases. |
+| 3 | `paralegal` | 50 | Daily lead/case worker. |
+| 4 | `viewer` | 25 | Read-only observer (compliance, auditor). |
 
-The `requireRole(...)` middleware grants access if your role's weight ≥ the required role's weight, so `super_admin` and `admin` automatically pass any check.
+The `requireRole(...)` middleware grants access if your role's weight ≥ the required role's weight, so `admin` automatically passes any check.
 
 ### 2.2 Email verification gate
 
@@ -154,10 +145,9 @@ Every permission name in the system, in declared order from `rbac.ts:94-235`. Th
 - `self_heal:manage`
 - `competitive_intel:manage`
 
-### 3.7 Default role → permission map (`ROLE_PERMISSIONS`, `rbac.ts:243-381`)
+### 3.7 Default role → permission map (`ROLE_PERMISSIONS`, `rbac.ts:242-381`)
 
-- **super_admin** receives `Object.values(Permission)` — every permission, and additionally bypasses the per-firm scope check enforced by `lib/firm-scope.ts` so platform operators can support multiple tenants.
-- **admin** receives `Object.values(Permission)` — every permission, including any added later, scoped to their own firm.
+- **admin** receives `Object.values(Permission)` — every permission, including any added later.
 - **attorney** receives the union of: every `lead:*` (except `delete` is also granted), `case:view:any/create/upload/analyze`, `paralegal:view`, `forms:config:view*`, `forms:submit/background_check/npi_verify/fraud_check/escalate_fbi`, `decision_engine:view`, `buyers:view`, `vendors:view/manage`, `lead_sources:view`, `templates:view`, `workflow_settings:view`, all `documents:*` (incl. `delete`/`redact`), `ocr:upload/view/ai_fields`, `drafting:*`, `image_objects:view/manage`, `npi:lookup`, `news:view`, `timeline:view`, `review_queue:view/resolve`, `dashboard:view`, `analytics:view`, `analytics:predictive:lead`, `calls:view/manage`, `sms:send`, `medical_records:view/manage`.
 - **paralegal** receives: `lead:view:own/create/update/qualify`, `lead_import:preview`, `case:view:own/create/upload/analyze`, `forms:config:view:public`, `forms:submit/background_check/npi_verify/fraud_check`, `vendors:view`, `buyers:view`, `lead_sources:view`, `templates:view`, `workflow_settings:view`, `documents:view/create/update/redact`, `ocr:upload/view/ai_fields`, `drafting:*`, `image_objects:view/manage`, `npi:lookup`, `news:view`, `timeline:view`, `review_queue:view`, `dashboard:view`, `analytics:predictive:lead`, `calls:view`, `sms:send`, `medical_records:view/manage`.
 - **viewer** receives: `lead:view:own`, `case:view:own`, `forms:config:view:public`, `buyers:view`, `lead_sources:view`, `templates:view`, `workflow_settings:view`, `documents:view`, `news:view`, `dashboard:view`, `calls:view`. Read-only.
@@ -191,7 +181,7 @@ Defined in `artifacts/api-server/src/lib/http-errors.ts`. **Memorize these shape
 These show up everywhere; learn them once.
 
 ### 5.1 Firm tenancy
-Every business table (leads, cases, automation runs, self-heal sessions, …) carries a `firm_id` column. Every authenticated query is scoped by `req.user.firm_id` via the canonical helper `artifacts/api-server/src/lib/firm-scope.ts` (`requireFirmId(req)` reads the value, `leadFirmScope(req)` produces the Drizzle predicate). Cross-firm reads return **404** (never 403, to avoid leaking the row's existence). The legacy `cases` rows are backfilled by `scripts/backfill-cases-firm-id.sql`; new rows are stamped by the create-case worker.
+Every business table has a `firm_id`. Every authenticated query is scoped by `req.user.firm_id`. Cross-firm reads return **404** (never 403, to avoid leaking the row's existence).
 
 ### 5.2 Audit log
 `auditLog(entity_type, entity_id, action, details)` writes an immutable row to `audit_log`. Common action strings — see §13.10 for the exhaustive list.
@@ -203,9 +193,9 @@ Every business table (leads, cases, automation runs, self-heal sessions, …) ca
 - The vault enforces an **SSRF-safe path** check `assertWithinVault(targetPath)` (`artifacts/api-server/src/lib/vault.ts`).
 
 ### 5.4 Encryption at rest
-- AES-256-GCM. The active version is **V1**: `CURRENT_KEY_VERSION = 1` in `lib/encryption.ts:27`. V1 reads its key from `ENCRYPTION_KEY_V1` (or the legacy `ENCRYPTION_KEY` env var as a single backwards-compatible fallback). `ENCRYPTION_KEY_V2` is reserved for a future rotation; no row in the database is currently tagged `enc:v2:`.
-- AAD (Additional Authenticated Data) is `fieldName:entityId` for lead PII columns (so swapping a ciphertext from another row fails GCM verification), or just `fieldName` for legacy rows pre-Task #8 rebind. Vault-credential rows use the row id as AAD.
-- Writes always use `CURRENT_KEY_VERSION`; decrypts read the version embedded in the `enc:v<N>:<hasAAD>:<payload>` header and try the strict (field+entity) AAD first, then field-only, then no AAD, before logging `[DECRYPTION_ERROR]`. Bump `CURRENT_KEY_VERSION` and run `scripts/rotate-encryption-key.ts` to roll forward.
+- AES-256-GCM with `ENCRYPTION_KEY_V2` (active) and `ENCRYPTION_KEY_V1` (rotation/legacy).
+- AAD (Additional Authenticated Data) is the **field name** for encrypted columns (e.g. `email`, `phone`), and the **row id** for vault credential records.
+- Decrypts attempt V2 then V1; writes always use V2.
 
 ### 5.5 Recursive error fallback (planning surfaces only)
 `lib/automations/recursive-retry.ts` (`recursiveRetry({attempt, maxAttempts, maxTotalMs})`) wraps the AI Assistant in **Automations**:
@@ -224,33 +214,11 @@ Every business table (leads, cases, automation runs, self-heal sessions, …) ca
 ### 5.6 AI Constitution
 Single canonical document at `docs/AI_CONSTITUTION.md`. Loaded by `lib/ai-constitution.ts` and auto-injected into every AI helper's system prompt. Served at `GET /api/admin/ai-constitution` (`automations:view` permission; `?format=markdown` for raw text). Bright lines (the AI **never** does these unattended) are listed in §11.5.
 
-### 5.7 AI Resiliency v2 (opt-in)
-Layered on top of `recursiveRetry` (§5.5) when `AI_RESILIENCY_V2=1` is set. Default OFF — the wrapper falls back to plain `recursiveRetry` if anything in the resiliency layer throws unexpectedly, so the worst case is "no v2 benefit," never broken AI. Implementation in `lib/ai/`:
-
-| Module | Job |
-|---|---|
-| `circuit-breaker.ts` | Per-provider CLOSED/OPEN/HALF_OPEN state machine. OPEN fails fast without calling the inner attempt; HALF_OPEN admits exactly one probe; per-provider isolation (an Anthropic outage doesn't trip OpenAI's breaker). |
-| `error-classifier.ts` | `classifyError(err) → RETRYABLE | NON_RETRYABLE | BLOCK_UNSAFE | DEFER_EXTERNAL`. HTTP 401/403/400/422 → NON_RETRYABLE; 429/5xx → RETRYABLE; `PolicyViolationError` → BLOCK_UNSAFE; `ProviderUnavailableError` → DEFER_EXTERNAL. |
-| `observer.ts` | Emits one `emitAiStateTransition({callId, provider, fromState, toState, attempt, elapsedMs, errorClass, …})` per state change. Collapses rapid identical-state repeats inside a 100 ms window. PII redactor masks SSN, phone, email, DOB (with `-`, `.`, `/` separators), credit cards, and keyword-prefixed last-4 SSNs before they hit the log. 1024-entry LRU keeps memory bounded. |
-| `resilient-retry.ts` | The actual wrapper — composes the three above plus a per-attempt `AbortSignal.timeout` (default 30 s). Identical signature to `recursiveRetry` plus a required `provider` field and optional `attemptTimeoutMs` / `callId`. |
-
-### 5.8 Self-Heal (Jules) integration
-Wired through `lib/jules-client.ts` and exposed at `/api/admin/self-heal/*` (permission: `self_heal:manage`). Required env on the api-server: `JULES_API_KEY`. Optional: `JULES_DEFAULT_SOURCE` (e.g. `sources/github/<owner>/<repo>`) — set this once or pass `source_name` per request. The route refuses with `503 jules_not_configured` when `JULES_API_KEY` is absent. Sessions are firm-scoped via `requireFirmId`. Plans never auto-merge — the operator must `/:id/approve` (§9.7).
-
 ---
 
 # Part II — The CRM, page by page
 
 Each page is documented in the order it appears in the left sidebar. Every entry shows: route, required permission(s), every UI control, the API endpoints it calls, and notable behaviors.
-
-### Sidebar layout
-
-Top → bottom in the expanded sidebar:
-
-1. **Header strip** — logo + collapse toggle.
-2. **Route nav** (`components/layout/sidebar-nav.tsx`) — permission-filtered list of pages. Admin-only items (`Boss-Omega Dark Room`, `Self-Heal`, `Decision Engine`, `Competitive Intel`) only render when `user.role === "admin"` or `"super_admin"`.
-3. **Favorites panel** (`components/layout/favorites-panel.tsx`) — paste any `http(s)://` URL plus an optional label; click `+` to add, hover an item then click `×` to remove. Stored client-side in `localStorage["mtos.favorites"]` so it's per-device, not synced across logins. URLs are validated against an http/https whitelist before render so a pasted `javascript:` URL gets silently rejected. Items open in a new tab with `rel="noopener noreferrer"`.
-4. **User profile chip** — initials + name + role.
 
 ---
 
@@ -556,14 +524,11 @@ All four are converted into structured `AttemptOutcome`s and fed to `recursiveRe
   - **Action:** `execute`, `modify`, `reject`, `review`.
 - **AI verification step:** `lib/ai-extract.ts` runs an LLM check of clinical details against vault documents and emits "Reliability" + "Truthfulness" scores.
 
-### 11.4 Praxis Predictive Scoring — `/predictive`
+### 11.4 Praxis AI (Predictive) — `/predictive`
 - **Permission:** `analytics:predictive:lead`.
 - **Endpoints:** `GET /api/analytics/predictive/batch`, `GET /api/analytics/predictive/lead/:id`, `GET /api/analytics/predictive/model`.
-- **What it is:** a deterministic **weighted-feature scorer**, NOT a trained machine-learning model. The `total_training_samples` field name is a legacy misnomer kept for API stability — the actual value is "leads scored" (the front-end label was updated to reflect this; `lib/predictive-scoring.ts:14-15`). The `model_accuracy` field is an honest backtest against signed-vs-rejected outcomes, not an ML training metric.
-- **Output for a lead:** `conversion_probability` (0-100), `risk_score` (0-100), `quality_tier` ∈ {`platinum`, `gold`, `silver`, `bronze`, `unqualified`}, plus a positive/negative-impact factor list derived from the same feature weights that produced the score.
-- **Inputs used:** `leads` columns — fraud_score, npi_verified, diagnosis_confirmed, was_at_location, presence of email/phone/address, ad_spend, source.
-
-> **Marketing note.** Do not market this as "trained AI" or "machine-learning predictive model." It is a hand-tuned weighted scorer with backtest accuracy reporting. "Predictive scoring" / "lead-quality scoring" / "explainable scoring" are accurate; "trained on your data" / "ML model" are not.
+- **Output for a lead:** `conversion_probability` (0-100), `risk_score` (0-100), `quality_tier` ∈ {`platinum`, `gold`, `silver`, `bronze`, `unqualified`}, plus a positive/negative-impact factor list.
+- **Inputs used:** `leads` columns — medical history, age, location, tort type.
 
 ### 11.5 Bright lines (always require a human)
 The AI / system will **never** do the following unattended:
@@ -584,42 +549,21 @@ A human always confirms these. This is enforced via the AI Constitution (§5.6).
 - **UI:** searchable lead picker + chronological card list with Date · Title · Category badge · Source badge.
 
 ### 11.7 Background Check Hub
-Not its own page — appears as a button on every lead. Fans out across **eleven verification lanes** (`lib/bg-hub/hub.ts:31-43`), each reporting honestly **PASS / FAIL / REVIEW_REQUIRED / NOT_RUN**. The hub exposes two aggregate verdicts on the result so the UI can distinguish "all automated checks cleared" from "every lane, including manual-lookup lanes, cleared":
+Not its own page — appears as a button on every lead. Fans out across nine verification lanes (`lib/bg-hub/hub.ts`), each reporting honestly **pass / fail / unknown**:
 
-- `final_status` — strict aggregate over EVERY lane, including the 4 advisory stub lanes that always REVIEW. This is the gate to use for hard intake decisions.
-- `final_status_live_lanes_only` — aggregate restricted to lanes with a live data adapter. When this is PASS the operator can honestly say "the system actually screened and found nothing." See `lib/bg-hub/hub.ts:80-90`.
+| # | Lane (`lib/bg-hub/hub.ts`) | What it checks |
+|---|---|---|
+| 1 | `address` | Residency history + address consistency. |
+| 2 | `email` | Deliverability + breach exposure. |
+| 3 | `phone` | Phone ownership + carrier risk. |
+| 4 | `residency` | State / duration requirements for the specific tort (e.g. Camp Lejeune). |
+| 5 | `criminal_court` | CourtListener + OFAC sanctions. |
+| 6 | `incarceration` | Incarceration during exposure window. |
+| 7 | `sex_offender_nsopw` | National Sex Offender Public Website. |
+| 8 | `attorney` | Claimant is a licensed attorney (conflict). |
+| 9 | `business_entity` | Corporate filings / business interests. |
 
-Each lane result also carries an optional `manual_action_urls: [{label, url, note}]` array of **prefilled smart-links** (`lib/bg-hub/smart-links.ts`) so the operator can run any remaining manual lookups in one click rather than typing the name into five public-records portals.
-
-#### Lane inventory
-
-| # | Lane (`lib/bg-hub/hub.ts`) | Status | What it checks |
-|---|---|---|---|
-| 1 | `address` | **LIVE** | Internal validator (`lib/address-validator.ts`) — format + USPS-style + state-code normalization. |
-| 2 | `email` | **LIVE** | MX + format + curated 40-domain disposable list + role-based local-part detection (`lib/bg-hub/email-enrichment.ts`). |
-| 3 | `phone` | **LIVE** | Phone-format validation only. Carrier + line-type live in `phone_provenance` below. |
-| 4 | `phone_provenance` | **LIVE** (requires Telnyx) | Telnyx Number Lookup. Returns line type (mobile / fixed_voip / non_fixed_voip / toll_free), carrier, and a derived burner-risk verdict. Flags non-fixed-VOIP, known burner carriers (TextNow / Google Voice / Pinger / Bandwidth), and recently-ported numbers. Reuses the existing `telnyx` integration row's `api_key` — no separate signup. (`lib/bg-hub/phone-provenance.ts`) |
-| 5 | `residency` | **STUB + smart-link** | No live county-property-records adapter. The lane emits a smart-link to the lead's state/city property-records portal (FL / TX / CA deep-linked; other states fall through to a search-engine bang). Full automation requires a paid integration (Smarty / Lob NCOA / ATTOM). |
-| 6 | `criminal_court` | **LIVE** | CourtListener REST v4 (federal + state criminal records) + **free Treasury OFAC SDN screening** (`lib/ofac-treasury.ts`). The legacy paid `search.ofac-api.com` path is preserved behind `OFAC_USE_TREASURY=0`. |
-| 7 | `incarceration` | **STUB + smart-link** | Federal BOP has no public API. The lane emits smart-links to BOP's inmate locator and VINELink (~46 state DOCs). Full automation requires VINELink partner API. |
-| 8 | `sex_offender_nsopw` | **HYBRID** | When Garbo is configured (see below) the lane runs a live FCRA-compliant screen and emits `garbo_sex_offender_hit` (FAIL) or `garbo_unreachable` (REVIEW). When Garbo is NOT configured, the lane emits a prefilled NSOPW smart-link the operator clicks manually — NSOPW's TOS forbids server-side scraping but a human-clicked prefilled bookmark is compliant. |
-| 9 | `attorney` | **STUB + smart-link** | State bar lookups are state-by-state. Deep-links wired for CA, NY, TX, FL, IL, PA, OH, GA, NC, WA; other states fall through to a search-engine bang. Full automation requires Martindale-Hubbell (LexisNexis) or per-state bar API integrations. |
-| 10 | `business_entity` | **LIVE** (SEC EDGAR) | Live SEC EDGAR lookup against `data.sec.gov` company-tickers index (`lib/bg-hub/sec-edgar.ts`) — covers ~10K SEC-registered entities (public companies, large LLCs, Reg-D filers). Returns CIK / ticker / per-entry EDGAR URL. PASS on hit; small unregistered LLCs surface a state SoS smart-link for manual confirmation. |
-| 11 | `pacer_federal` | **LIVE** (requires PACER credentials) | PACER PCL Search API (`lib/pacer/pcl-client.ts`). Per-page billing applies on PACER's side. Hits never auto-FAIL — they surface as REVIEW with the docket URL because PCL returns party names without identity-confirming metadata. |
-
-#### Stub lanes (`lib/bg-hub/escalation.ts:STUB_LANES`)
-
-The four lanes pinned to `REVIEW_REQUIRED` regardless of adapter output: `residency`, `incarceration`, `sex_offender_nsopw` (when Garbo is not configured), and `attorney`. Adding a live adapter for one of these requires removing it from `STUB_LANES` so the flag taxonomy can let it resolve to PASS.
-
-#### Garbo integration (premium, replaces NSOPW stub)
-
-Garbo (https://garbo.io) is an API-first, FCRA-compliant background-check provider. When the operator pastes an API key into **Settings → Integrations → Garbo**, the `sex_offender_nsopw` lane switches from smart-link-only to a live screen on the next bg-hub run. See `lib/bg-hub/garbo.ts` for the adapter scaffold; three lines marked `OPERATOR-CONFIRM` need the actual endpoint + request shape from Garbo's developer docs.
-
-#### Tort-aware lane gating (`lib/bg-hub/tort-policy.ts`)
-
-Not every tort needs every lane. Roblox / Discord / Snap / Meta / Instagram / Character.ai / TikTok (`child_safety` category) skip `business_entity` and `attorney` and mark `incarceration` / `pacer_federal` / `residency` as advisory (run but never gate intake). Camp Lejeune / Roundup / talc / hair relaxer / PFAS / hernia mesh / Bard PowerPort (`medical_injury`) run every lane. Data-breach torts skip every medical-style lane. Securities torts skip identity lanes. The default for an unrecognized tort slug is **run everything** (safer than skipping).
-
-The hub signature is `runBackgroundCheckHub(lead, { tortSlug })`. Skipped lanes are **omitted** from the response entirely; advisory lanes run but their REVIEW/FAIL results are downgraded to NOT_RUN so they're informational only.
+Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surface depending on tort.
 
 ---
 
@@ -644,13 +588,10 @@ The hub signature is `runBackgroundCheckHub(lead, { tortSlug })`. Skipped lanes 
 
 ### 12.4 Integrations — `/integrations`
 - **Permission:** `integrations:manage`.
-- **Firm scope:** every integration row carries `firm_id`. CRUD is AND-scoped via `requireFirmId(req)` (`routes/integrations.ts`). Cross-firm reads return 404; admin in Firm A cannot read or rotate Firm B's keys.
-- **Categories in the vault:** `ai_llm`, `esignature`, `voice_ai`, `sms`, `email`, `fax`, `ocr`, `identity`, `payments`, `background_check`, `web_search`, `court_records`.
-- **Encryption:** AES-256-GCM at the active key version (currently V1 — see §5.4 for rotation policy). AAD = integration row id.
-- **Decrypt path:** `getIntegrationCredentialsById(id, firmId)` decrypts on demand. Plaintext is never persisted, never logged. Optional `firmId` argument scopes the lookup to that firm — passing `undefined` (legacy callers) logs a warning.
+- **Categories in the vault:** `ai_llm`, `esignature`, `voice_ai`, `sms`, `email`, `fax`, `ocr`, `identity`, `payments`.
+- **Encryption:** AES-256-GCM with `ENCRYPTION_KEY_V2`. AAD = row id.
+- **Decrypt path:** `getIntegrationCredentialsById(id)` decrypts on demand. Plaintext is never persisted, never logged.
 - **Workflow:** Add → Test connection → Mark active → choose in **Workflow Settings** for the categories where you want it used.
-- **Sync handler registry (`lib/integration-sync.ts`).** `POST /api/integrations/:id/sync` delegates to a per-provider registry. Providers without a registered handler return **HTTP 501** with `syncable_providers: [...]` so the UI can hide / disable the Sync button instead of running a no-op. Fasten is registered today (sync runs per-connection via `fasten_records_sync` jobs); other providers are event-driven and have no pull-style sync.
-- **Garbo (Background Check).** Paste `api_key` + optional `api_url` to enable the **`sex_offender_nsopw` lane to switch from smart-link manual workflow to a live FCRA-compliant screen** on the next bg-hub run (§11.7). See `lib/bg-hub/garbo.ts`.
 
 ### 12.5 Billing — `/billing`
 - **Permission:** `billing:manage`.
@@ -819,11 +760,11 @@ Generic inbound message receivers exist at `/webhooks/{email,fax,sms,voice}/:pro
 | Self-Heal stuck in `dispatched` | `JULES_API_KEY` missing or invalid. | Add `JULES_API_KEY` via Integrations. |
 | Competitive Intel returns `serpapi_auth` | `SERPAPI_API_KEY` missing or revoked. | Re-add at Integrations / set the secret. |
 
-### 13.7 Database tables (42 total) — high-signal ones
+### 13.7 Database tables (48 total) — high-signal ones
 
 Full list managed by `lib/db/src/schema/`. The frequently-touched ones are:
 
-`leads` (encrypted PII, see §7.2 columns) · `cases` (UUID PK, JSONB `data`, firm-scoped) · `documents` · `audit_log` · `paralegals` · `vendors` · `buyers` · `lead_sources` · `form_configurations` · `decision_engine_settings` · `users` (with `mfa_enabled`, `totp_secret`, `token_version`) · `firms` · `firm_invites` · `integrations` (firm-scoped) · `template_assignments` · `document_templates` · `document_envelopes` · `fax_results` · `automation_workflows` · `automation_runs` · `competitive_intel_advertisers` · `competitive_intel_snapshots` · `self_heal_sessions` · `api_keys` · `image_objects` · `processed_webhook_events` (idempotency ledger — see §13.11).
+`leads` (encrypted PII, see §7.2 columns) · `cases` (UUID PK, JSONB `data`) · `documents` · `audit_log` · `paralegals` · `vendors` · `buyers` · `lead_sources` · `form_configurations` · `decision_engine_settings` · `users` (with `mfa_enabled`, `totp_secret`, `token_version`) · `firms` · `firm_invites` · `integrations` · `template_assignments` · `document_templates` · `document_envelopes` · `fax_results` · `automation_workflows` · `automation_runs` · `competitive_intel_advertisers` · `competitive_intel_snapshots` · `self_heal_sessions` · `api_keys` · `image_objects`.
 
 ### 13.8 The full leads table schema
 
@@ -879,29 +820,6 @@ Emitted via `auditLog(entity_type, entity_id, action, details)`:
 - **`automation`:** `created`, `updated`, `enabled`, `disabled`, `executed`.
 - **`document`:** `created`, `signed`, `redacted`, `deleted`.
 - **General:** `export_leads`, `login_success`, `login_failed`.
-
-### 13.11 Inbound webhook idempotency
-
-Provider webhooks (Stripe, Telnyx, Vapi, Fasten, DocuSign, Dropbox Sign, generic email / SMS / fax / voice) are retried by the provider on any 5xx or timeout. Without dedup, a single physical delivery report would create N rows in `sms_messages` / `fax_events` / `email_events` and re-fire downstream automations.
-
-The `processed_webhook_events` table is the dedup ledger. The helper `markWebhookProcessed({ provider, externalEventId, firmId, integrationId, eventType })` in `artifacts/api-server/src/lib/webhook-idempotency.ts` is called before state-mutating handlers and atomically claims the `(provider, external_event_id)` pair via a unique index. Losers of the race ack 200 to the provider and skip the mutation.
-
-Failure mode: if the dedup write itself fails (DB blip), the helper fails **OPEN** — the event is processed normally — because dropping legitimate webhooks is worse than the occasional duplicate row during a DB outage.
-
-Retention: nothing auto-prunes the ledger today. A nightly `DELETE WHERE first_seen_at < now() - interval '30 days'` is safe once the provider's longest retry window has expired (3 days for Stripe, less elsewhere).
-
-### 13.12 Per-firm webhook URL variants
-
-Provider webhooks arrive without a firm-id in the URL by default, which is fine in the single-firm shell but ambiguous in multi-firm deployments. Each channel-level route accepts BOTH shapes:
-
-| Generic | Per-firm |
-|---|---|
-| `POST /api/webhooks/email/:provider` | `POST /api/webhooks/email/:provider/i/:integrationId` |
-| `POST /api/webhooks/sms/:provider` | `POST /api/webhooks/sms/:provider/i/:integrationId` |
-| `POST /api/webhooks/fax/:provider` | `POST /api/webhooks/fax/:provider/i/:integrationId` |
-| `POST /api/webhooks/voice/:provider` | `POST /api/webhooks/voice/:provider/i/:integrationId` |
-
-When the URL carries an explicit `:integrationId`, `loadProviderForWebhook` reads that row directly (with a refusal if the row's provider doesn't match the URL's `:provider`) — no cross-firm signature ambiguity. Operators in a multi-firm deployment should register the per-firm URL with each provider.
 
 ---
 

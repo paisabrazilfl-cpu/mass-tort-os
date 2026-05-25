@@ -38,18 +38,17 @@ import automationsRouter from "./automations";
 import adminAiConstitutionRouter from "./admin-ai-constitution";
 import adminApiKeysRouter from "./admin-api-keys";
 import adminSelfHealRouter from "./admin-self-heal";
-import adminSnapshotsRouter from "./admin-snapshots";
-import aiRerankRouter from "./ai-rerank";
 import adminCompetitiveIntelRouter from "./admin-competitive-intel";
 import adminEventCatalogRouter from "./admin-event-catalog";
+import adminWebhookDeliveriesRouter from "./admin-webhook-deliveries";
 import formsApiDirectoryRouter from "./forms-api-directory";
-import automationsWebhookRouter from "./automations-webhook";
-import adminPlatformRouter from "./admin-platform";
+import automationWebhookRouter from "./automation-webhook";
+import aiObserverRouter from "./ai-observer";
+import aiChatRouter from "./ai-chat";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
 import { subscriptionGateMiddleware } from "../lib/subscription-gate";
-import { requireAdminUnlock } from "../lib/admin-pin";
 
 // =============================================================================
 // Router registry — keep this list in declaration order so the boot validator
@@ -65,11 +64,10 @@ markPublic(healthRouter, "health");
 markPublic(formsPublicRouter, "forms-public");
 markPublic(webFormsRouter, "web-forms");
 markPublic(webhooksRouter, "webhooks");
-// Inbound automation webhook (n8n / Zapier / Make / custom) — HMAC-SHA256
-// signed against rawBody. Mounted at /api/automations BEFORE authMiddleware
-// so providers without a JWT can reach it; the authed automations router
-// below is mounted at the same prefix and only handles other paths.
-markPublic(automationsWebhookRouter, "automations-webhook");
+// Automation webhook triggers: slug+secret is the credential, no Bearer.
+// Already marked public inside automation-webhook.ts via markPublic().
+// Label alias kept for the route-matrix validator's label uniqueness check.
+labelRouter(automationWebhookRouter, "automation-webhook");
 // Vapi tool callbacks: PUBLIC because Vapi authenticates with a static
 // bearer token (the assistant's tool secret), not a session JWT. Each
 // handler verifies the bearer at request time against vault credentials.
@@ -113,12 +111,10 @@ labelRouter(automationsRouter, "automations");
 labelRouter(adminAiConstitutionRouter, "admin-ai-constitution");
 labelRouter(adminApiKeysRouter, "admin-api-keys");
 labelRouter(adminSelfHealRouter, "admin-self-heal");
-labelRouter(adminSnapshotsRouter, "admin-snapshots");
-labelRouter(aiRerankRouter, "ai-rerank");
 labelRouter(adminCompetitiveIntelRouter, "admin-competitive-intel");
 labelRouter(adminEventCatalogRouter, "admin-event-catalog");
+labelRouter(adminWebhookDeliveriesRouter, "admin-webhook-deliveries");
 labelRouter(formsApiDirectoryRouter, "forms-api-directory");
-labelRouter(adminPlatformRouter, "admin-platform");
 
 const router: IRouter = Router();
 
@@ -136,16 +132,14 @@ router.use("/web-forms", webFormsRouter);
 // Provider webhooks must be PUBLIC (callbacks have no Bearer token).
 // Each handler verifies provider signatures internally and always returns 200.
 router.use("/webhooks", webhooksRouter);
+// Automation webhook trigger receiver — PUBLIC, slug+secret = credential.
+// Mounted BEFORE authMiddleware so external systems don't need a JWT.
+router.use("/automations/webhook", automationWebhookRouter);
 // Vapi tool callbacks live at /vapi-tools (top-level so the dump-route-
 // matrix mount-regex parser, which only captures the first path segment,
 // reports the correct mount path). They are public — bearer-gated per
 // handler against the active vapi integration row.
 router.use("/vapi-tools", vapiToolsRouter);
-// Public inbound automation trigger (HMAC-signed). Must mount BEFORE
-// authMiddleware. Only exposes POST /automations/webhook/:slugOrId; every
-// other /api/automations/* path falls through to the protected router
-// mounted further down.
-router.use("/automations", automationsWebhookRouter);
 router.use(authMiddleware);
 // Firm context loads req.firm from the firm_id JWT claim stamped by the
 // auth middleware. Mounted before the subscription gate so the gate (and
@@ -170,10 +164,10 @@ router.use("/npi", npiRouter);
 router.use("/review-queue", reviewQueueRouter);
 router.use("/forms", formsRouter);
 router.use("/vendors", vendorsRouter);
-router.use("/security", requireAdminUnlock, securityRouter);
+router.use("/security", securityRouter);
 router.use("/timeline", timelineRouter);
 router.use("/drafting", draftingRouter);
-router.use("/integrations", requireAdminUnlock, integrationsRouter);
+router.use("/integrations", integrationsRouter);
 router.use("/fasten", fastenRouter);
 router.use("/news", newsRouter);
 router.use("/image-objects", imageObjectsRouter);
@@ -183,20 +177,17 @@ router.use("/lead-sources", leadSourcesRouter);
 router.use("/buyers", buyersRouter);
 router.use("/document-templates", documentTemplatesRouter);
 router.use("/workflow-settings", workflowSettingsRouter);
-router.use("/users", requireAdminUnlock, usersRouter);
-// /admin/* — every administrative tool is behind the PIN gate.
-router.use("/admin/dark-room", requireAdminUnlock, adminDarkRoomRouter);
-router.use("/admin/ai-constitution", requireAdminUnlock, adminAiConstitutionRouter);
-router.use("/admin/api-keys", requireAdminUnlock, adminApiKeysRouter);
-router.use("/admin/self-heal", requireAdminUnlock, adminSelfHealRouter);
-router.use("/admin/snapshots", requireAdminUnlock, adminSnapshotsRouter);
-router.use("/ai", aiRerankRouter);
-router.use("/admin/competitive-intel", requireAdminUnlock, adminCompetitiveIntelRouter);
-router.use("/admin/event-catalog", requireAdminUnlock, adminEventCatalogRouter);
-router.use("/admin/forms-api-directory", requireAdminUnlock, formsApiDirectoryRouter);
-// Platform admin — cross-firm view of users + firms. Vendor-firm-only check
-// is enforced per-route inside the router.
-router.use("/admin/platform", requireAdminUnlock, adminPlatformRouter);
+router.use("/users", usersRouter);
+router.use("/admin/dark-room", adminDarkRoomRouter);
+router.use("/admin/ai-constitution", adminAiConstitutionRouter);
+router.use("/admin/api-keys", adminApiKeysRouter);
+router.use("/admin/self-heal", adminSelfHealRouter);
+router.use("/admin/competitive-intel", adminCompetitiveIntelRouter);
+router.use("/admin/event-catalog", adminEventCatalogRouter);
+router.use("/admin/webhook-deliveries", adminWebhookDeliveriesRouter);
+router.use("/admin/forms-api-directory", formsApiDirectoryRouter);
 router.use("/automations", automationsRouter);
+router.use("/ai-observer", aiObserverRouter);
+router.use("/ai-chat", aiChatRouter);
 
 export default router;

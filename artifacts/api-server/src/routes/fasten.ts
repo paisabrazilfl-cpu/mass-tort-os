@@ -21,7 +21,6 @@ import { and, desc, eq } from "drizzle-orm";
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { requireFirmId } from "../lib/firm-scope";
 import { badRequest, notFound } from "../lib/http-errors";
 import { enqueueJob } from "../lib/queue";
 import {
@@ -109,11 +108,15 @@ router.post("/connect", requirePermission(Permission.MEDICAL_RECORDS_MANAGE), as
   }
 
   // Confirm the lead exists IN THE CALLER'S FIRM (cross-firm IDOR guard).
-  const firmId = requireFirmId(req);
+  const callerFirmId = req.user?.firm_id ?? null;
+  if (!callerFirmId) {
+    badRequest(res, "Caller has no firm context");
+    return;
+  }
   const [lead] = await db
     .select()
     .from(leadsTable)
-    .where(and(eq(leadsTable.id, lead_id), eq(leadsTable.firm_id, firmId)));
+    .where(and(eq(leadsTable.id, lead_id), eq(leadsTable.firm_id, callerFirmId)));
   if (!lead) {
     notFound(res, "Lead not found");
     return;
@@ -127,7 +130,7 @@ router.post("/connect", requirePermission(Permission.MEDICAL_RECORDS_MANAGE), as
   // External id we hand to Fasten so the webhook can correlate back.
   // Format: `mtos:<firm_id>:<lead_id>:<nonce>` — unique enough to dedupe and
   // structured so an ops engineer can read it in a Fasten support ticket.
-  const externalId = `mtos:${firmId}:${lead_id}:${Date.now().toString(36)}`;
+  const externalId = `mtos:${req.user?.firm_id ?? 0}:${lead_id}:${Date.now().toString(36)}`;
 
   let result;
   try {
@@ -149,7 +152,7 @@ router.post("/connect", requirePermission(Permission.MEDICAL_RECORDS_MANAGE), as
   await db
     .insert(fastenConnectionsTable)
     .values({
-      firm_id: firmId,
+      firm_id: callerFirmId,
       lead_id,
       backend: chosenBackend,
       portal_id: portalKey,
@@ -190,14 +193,18 @@ router.get(
   async (req, res) => {
     const leadId = parseId(res, req.params.leadId, "leadId");
     if (leadId === null) return;
-    const firmId = requireFirmId(req);
+    const callerFirmId = req.user?.firm_id ?? null;
+    if (!callerFirmId) {
+      badRequest(res, "Caller has no firm context");
+      return;
+    }
     const rows = await db
       .select()
       .from(fastenConnectionsTable)
       .where(
         and(
           eq(fastenConnectionsTable.lead_id, leadId),
-          eq(fastenConnectionsTable.firm_id, firmId),
+          eq(fastenConnectionsTable.firm_id, callerFirmId),
         ),
       )
       .orderBy(desc(fastenConnectionsTable.updated_at));
@@ -213,7 +220,11 @@ router.post(
   async (req, res) => {
     const connectionId = parseId(res, req.params.connectionId, "connectionId");
     if (connectionId === null) return;
-    const firmId = requireFirmId(req);
+    const callerFirmId = req.user?.firm_id ?? null;
+    if (!callerFirmId) {
+      badRequest(res, "Caller has no firm context");
+      return;
+    }
 
     const [conn] = await db
       .select()
@@ -221,7 +232,7 @@ router.post(
       .where(
         and(
           eq(fastenConnectionsTable.id, connectionId),
-          eq(fastenConnectionsTable.firm_id, firmId),
+          eq(fastenConnectionsTable.firm_id, callerFirmId),
         ),
       );
     if (!conn) {
@@ -293,7 +304,11 @@ router.post(
   async (req, res) => {
     const connectionId = parseId(res, req.params.connectionId, "connectionId");
     if (connectionId === null) return;
-    const firmId = requireFirmId(req);
+    const callerFirmId = req.user?.firm_id ?? null;
+    if (!callerFirmId) {
+      badRequest(res, "Caller has no firm context");
+      return;
+    }
     // Confirm caller's firm owns this connection before mutating.
     const [conn] = await db
       .select({ id: fastenConnectionsTable.id })
@@ -301,7 +316,7 @@ router.post(
       .where(
         and(
           eq(fastenConnectionsTable.id, connectionId),
-          eq(fastenConnectionsTable.firm_id, firmId),
+          eq(fastenConnectionsTable.firm_id, callerFirmId),
         ),
       );
     if (!conn) {
@@ -338,11 +353,15 @@ router.get(
 
     // Find the pending connection by saved state value, scoped to the
     // caller's firm so a stolen state from another tenant can't be claimed.
-    const firmId = requireFirmId(req);
+    const callerFirmId = req.user?.firm_id ?? null;
+    if (!callerFirmId) {
+      badRequest(res, "Caller has no firm context");
+      return;
+    }
     const rows = await db
       .select()
       .from(fastenConnectionsTable)
-      .where(eq(fastenConnectionsTable.firm_id, firmId));
+      .where(eq(fastenConnectionsTable.firm_id, callerFirmId));
     const conn = rows.find(
       (r) => (r.metadata as { state?: string } | null)?.state === state,
     );

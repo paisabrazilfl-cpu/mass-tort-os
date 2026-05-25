@@ -13,7 +13,7 @@ import {
   FormConfig,
   CustomField
 } from "@workspace/api-client-react";
-import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw } from "lucide-react";
+import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw, ExternalLink, Scale, Lock, ShieldCheck, FileCheck2, UserCheck2, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -95,6 +95,117 @@ function getSeverityBadge(severity: string | undefined) {
   }
 }
 
+// ── PACER Federal Courts result block ──────────────────────────────────────
+// Rendered inside the Manual Background Check card result block. Handles all
+// four PCL outcomes: not configured, auth failed, source unreachable, and
+// successful (0 or more cases).
+
+interface PacerCase {
+  caseNumberFull?: string | null;
+  caseTitle?: string | null;
+  caseYear?: number | null;
+  courtId?: string | null;
+  dateFiled?: string | null;
+  jurisdictionType?: string | null;
+  natureOfSuit?: string | null;
+  docketUrl?: string | null;
+}
+
+interface PacerOutcome {
+  ok: boolean;
+  reason?: string | null;
+  message?: string | null;
+  cases?: PacerCase[];
+  truncated?: boolean;
+}
+
+function PacerResultSection({ pacer }: { pacer?: PacerOutcome | null }) {
+  if (pacer == null) return null;
+
+  const headerClass = "flex items-center gap-2 px-4 py-2.5 border-t bg-slate-50 text-sm font-medium";
+
+  if (!pacer.ok) {
+    if (pacer.reason === "NOT_CONFIGURED") {
+      return (
+        <div className={`${headerClass} text-muted-foreground`}>
+          <Scale className="h-4 w-4 shrink-0" />
+          <span>
+            PACER Federal Courts —{" "}
+            <span className="font-normal">
+              Not configured. Add PACER credentials in{" "}
+              <span className="font-medium">Settings → Integrations</span> to enable
+              federal court searches (per-page billing applies).
+            </span>
+          </span>
+        </div>
+      );
+    }
+    const label = pacer.reason === "AUTH_FAILED" ? "Credentials rejected" : "Service unreachable";
+    return (
+      <div className={`${headerClass} text-amber-700 bg-amber-50`}>
+        <AlertTriangle className="h-4 w-4 shrink-0" />
+        <span>PACER Federal Courts — {label}{pacer.message ? `: ${pacer.message}` : ""}. Lane was not searched.</span>
+      </div>
+    );
+  }
+
+  const cases = pacer.cases ?? [];
+
+  if (cases.length === 0) {
+    return (
+      <div className={`${headerClass} text-emerald-700 bg-emerald-50`}>
+        <Scale className="h-4 w-4 shrink-0" />
+        <span>PACER Federal Courts — No cases found for this name.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t">
+      <div className={`${headerClass} text-amber-800 bg-amber-50`}>
+        <Scale className="h-4 w-4 shrink-0" />
+        <span>
+          PACER Federal Courts —{" "}
+          <span className="font-semibold">{cases.length}{pacer.truncated ? "+" : ""} case{cases.length !== 1 ? "s" : ""} found</span>.{" "}
+          Operator must confirm identity before treating as a match.
+        </span>
+      </div>
+      <div className="divide-y">
+        {cases.map((c, i) => (
+          <div key={i} className="px-4 py-2.5 bg-white text-xs flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="font-medium truncate text-amber-900" title={c.caseTitle ?? ""}>
+                {c.caseTitle || "(untitled case)"}
+              </div>
+              <div className="font-mono text-muted-foreground mt-0.5">
+                {c.caseNumberFull ?? "—"}
+              </div>
+              <div className="text-muted-foreground mt-0.5">
+                {[
+                  c.courtId ? `Court: ${c.courtId}` : null,
+                  c.jurisdictionType ?? null,
+                  c.dateFiled ? `Filed: ${c.dateFiled}` : null,
+                  c.natureOfSuit ? `Nature: ${c.natureOfSuit}` : null,
+                ].filter(Boolean).join(" · ")}
+              </div>
+            </div>
+            {c.docketUrl && (
+              <a
+                href={c.docketUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 inline-flex items-center gap-1 text-blue-700 hover:underline font-medium"
+              >
+                Docket <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function FormEngine() {
   const { toast } = useToast();
   
@@ -125,6 +236,112 @@ export default function FormEngine() {
   const [leadBgCheckResult, setLeadBgCheckResult] = useState<any>(null);
 
   // Handlers
+  const handleDownloadEmbedKit = () => {
+    const origin = window.location.origin;
+    const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+
+    const sections = configs.map((config: FormConfig) => {
+      const embedCode = `<script src="${origin}/api/forms-public/embed/${config.id}"></script>\n<div id="mtos-form"></div>`;
+      const standaloneHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${config.label} — Intake Form</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem 1rem; }
+    .wrapper { width: 100%; max-width: 620px; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    ${embedCode}
+  </div>
+</body>
+</html>`;
+
+      return { config, embedCode, standaloneHtml };
+    });
+
+    const indexHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MTOS Intake Form Embed Kit</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #1e293b; padding: 2rem; max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: .25rem; }
+    .meta { color: #64748b; font-size: .875rem; margin-bottom: 2rem; }
+    .badge-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 2.5rem; }
+    .badge { display: inline-flex; align-items: center; gap: .375rem; border-radius: 9999px; border: 1px solid; padding: .25rem .75rem; font-size: .75rem; font-weight: 500; }
+    .badge-green { border-color: #86efac; background: #f0fdf4; color: #15803d; }
+    .badge-blue  { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
+    .badge-purple{ border-color: #c4b5fd; background: #f5f3ff; color: #6d28d9; }
+    .badge-amber { border-color: #fcd34d; background: #fffbeb; color: #92400e; }
+    .form-section { background: #fff; border: 1px solid #e2e8f0; border-radius: .75rem; padding: 1.5rem; margin-bottom: 1.5rem; }
+    .form-title { font-size: 1.125rem; font-weight: 600; margin-bottom: .25rem; }
+    .form-id { font-family: monospace; font-size: .75rem; color: #94a3b8; margin-bottom: 1rem; }
+    .label { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #64748b; margin-bottom: .5rem; }
+    pre { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: .5rem; padding: 1rem; font-size: .8rem; white-space: pre-wrap; word-break: break-all; margin-bottom: 1rem; }
+    details { margin-top: .75rem; }
+    summary { cursor: pointer; font-size: .8rem; color: #3b82f6; font-weight: 500; }
+    .instructions { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: .5rem; padding: 1rem; font-size: .8rem; color: #1d4ed8; margin-top: .5rem; line-height: 1.6; }
+    h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>MTOS Intake Form Embed Kit</h1>
+  <p class="meta">Generated ${date} · ${origin} · ${sections.length} form${sections.length !== 1 ? "s" : ""}</p>
+
+  <div class="badge-row">
+    <span class="badge badge-green">✓ HIPAA Safe</span>
+    <span class="badge badge-blue">🔒 End-to-End Encrypted</span>
+    <span class="badge badge-purple">✓ TCPA Compliant</span>
+    <span class="badge badge-amber">✓ TrustedForm Certified</span>
+  </div>
+
+  <h2>How to use on a Replit site</h2>
+  <div class="instructions" style="margin-bottom:2rem">
+    1. Pick a form below and copy the <strong>Embed Snippet</strong>.<br/>
+    2. In your Replit site, open the HTML file you want the form to appear on.<br/>
+    3. Paste the snippet where you want the form rendered — inside a <code>&lt;div&gt;</code> or anywhere in <code>&lt;body&gt;</code>.<br/>
+    4. The form loads automatically. Submissions go directly into your MTOS lead pipeline.<br/>
+    <br/>
+    Or use the <strong>Standalone Page HTML</strong> to create a brand-new Replit site for a single form — just create an <code>index.html</code> and paste it in.
+  </div>
+
+  ${sections.map(({ config, embedCode, standaloneHtml }) => `
+  <div class="form-section">
+    <div class="form-title">${config.label}</div>
+    <div class="form-id">${config.id}</div>
+
+    <div class="label">Embed Snippet (paste into any existing page)</div>
+    <pre>${embedCode.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
+
+    <details>
+      <summary>▸ Show standalone page HTML (new Replit site)</summary>
+      <pre style="margin-top:.75rem">${standaloneHtml.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
+    </details>
+  </div>`).join("")}
+</body>
+</html>`;
+
+    const blob = new Blob([indexHtml], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mtos-intake-embed-kit.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    toast({ title: "Embed kit downloaded", description: `${configs.length} form${configs.length !== 1 ? "s" : ""} · open the HTML file to see all snippets.` });
+  };
+
   const handleCopyEmbed = (configId: string) => {
     // Embed JS is served by the public router (forms-public.ts) — the
     // auth-gated /api/forms/* router intentionally does NOT mount
@@ -186,21 +403,53 @@ export default function FormEngine() {
     <div className="flex-1 space-y-8 p-8 pt-6 max-w-7xl mx-auto w-full">
       <div className="flex items-center justify-between">
         <div className="space-y-1">
-          <h2 className="text-3xl font-bold tracking-tight">Form Engine</h2>
+          <h2 className="text-3xl font-bold tracking-tight">Intake Form</h2>
           <p className="text-muted-foreground">
-            Generate and manage embeddable intake forms with TCPA + TrustedForm compliance.
+            Build and manage claimant-facing qualifying intake forms — every question is designed to drill down and determine true case eligibility.
           </p>
+        </div>
+      </div>
+
+      {/* Security trust strip */}
+      <div className="flex flex-wrap gap-2">
+        <div className="flex items-center gap-1.5 rounded-full border border-green-500/30 bg-green-500/8 px-3 py-1 text-xs font-medium text-green-700 dark:text-green-400">
+          <ShieldCheck className="h-3.5 w-3.5" /> HIPAA Safe
+        </div>
+        <div className="flex items-center gap-1.5 rounded-full border border-blue-500/30 bg-blue-500/8 px-3 py-1 text-xs font-medium text-blue-700 dark:text-blue-400">
+          <Lock className="h-3.5 w-3.5" /> End-to-End Encrypted
+        </div>
+        <div className="flex items-center gap-1.5 rounded-full border border-purple-500/30 bg-purple-500/8 px-3 py-1 text-xs font-medium text-purple-700 dark:text-purple-400">
+          <FileCheck2 className="h-3.5 w-3.5" /> TCPA Compliant
+        </div>
+        <div className="flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/8 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+          <Shield className="h-3.5 w-3.5" /> TrustedForm Certified
+        </div>
+        <div className="flex items-center gap-1.5 rounded-full border border-slate-400/30 bg-slate-500/8 px-3 py-1 text-xs font-medium text-slate-600 dark:text-slate-400">
+          <UserCheck2 className="h-3.5 w-3.5" /> Claimant Qualification Engine
         </div>
       </div>
 
       <Tabs defaultValue="builder" className="w-full">
         <TabsList className="grid w-full grid-cols-3 mb-8 max-w-2xl">
-          <TabsTrigger value="builder">Form Builder</TabsTrigger>
-          <TabsTrigger value="validation">Validation Tools</TabsTrigger>
+          <TabsTrigger value="builder">Intake Builder</TabsTrigger>
+          <TabsTrigger value="validation">Claimant Validation</TabsTrigger>
           <TabsTrigger value="background">Background Check</TabsTrigger>
         </TabsList>
 
         <TabsContent value="builder" className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">
+                {configs.length > 0 ? `${configs.length} intake form${configs.length !== 1 ? "s" : ""} configured` : "No forms configured yet"}
+              </p>
+            </div>
+            {configs.length > 0 && (
+              <Button variant="outline" onClick={handleDownloadEmbedKit} className="gap-2">
+                <Download className="h-4 w-4" />
+                Download All Embed Codes
+              </Button>
+            )}
+          </div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {isLoadingConfigs ? (
               Array.from({ length: 6 }).map((_, i) => (
@@ -529,6 +778,9 @@ export default function FormEngine() {
                         </TableBody>
                       </Table>
                     )}
+
+                    {/* ── PACER Federal Courts section ── */}
+                    <PacerResultSection pacer={bgCheckResult.pacer} />
                   </div>
                 )}
               </CardContent>

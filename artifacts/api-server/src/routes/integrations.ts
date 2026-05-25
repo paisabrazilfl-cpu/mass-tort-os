@@ -1,6 +1,6 @@
 import { Router, Response } from "express";
 import { db, integrationsTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { PRESET_INTEGRATIONS } from "../lib/integration-presets";
@@ -9,8 +9,6 @@ import { encrypt, decrypt } from "../lib/encryption";
 import { logger } from "../lib/logger";
 import { pingLeadWebhook } from "../lib/lead-webhook-dispatcher";
 import { badRequest } from "../lib/http-errors";
-import { requireFirmId } from "../lib/firm-scope";
-import { getSyncHandler, listSyncableProviders } from "../lib/integration-sync";
 import crypto from "crypto";
 
 const router = Router();
@@ -28,7 +26,7 @@ function parseIntegrationId(res: Response, raw: unknown): number | null {
 
 // Credential field names that we treat as secrets (encrypted at rest).
 // `api_url` and `webhook_url` are NOT secrets — they are stored plaintext.
-const SECRET_FIELDS = ["api_key", "client_id", "client_secret", "account_sid", "access_id", "access_password", "fax_number", "sender_email"] as const;
+const SECRET_FIELDS = ["api_key", "client_id", "client_secret", "account_sid", "access_id", "access_password", "fax_number", "sender_email", "from_email", "from_name"] as const;
 type SecretField = (typeof SECRET_FIELDS)[number];
 
 // AAD scope is the integration row id, not the provider, so two rows that
@@ -53,6 +51,7 @@ function maskCredentials(creds: Record<string, any> | undefined | null): Record<
 export interface DecryptedCredentials {
   api_key?: string; client_id?: string; client_secret?: string; account_sid?: string;
   access_id?: string; access_password?: string; fax_number?: string; sender_email?: string;
+  from_email?: string; from_name?: string;
   api_url?: string | null; webhook_url?: string | null; config?: any;
   _decryption_errors?: SecretField[];
 }
@@ -86,24 +85,9 @@ function decryptRowCredentials(row: any): DecryptedCredentials {
 /**
  * Look up credentials by integration id. Use this when a workflow knows
  * the specific integration row it wants to call (preferred).
- *
- * `firmId` MUST be supplied by any caller that has request context (HTTP
- * routes, automation runs, workers acting on a specific firm). It is
- * intentionally OPTIONAL only for inbound webhook handlers that receive
- * callbacks from external providers without a firm context — those callers
- * MUST verify the signature matches before trusting the row. A `firmId`
- * argument scopes the lookup to that firm so a forged id cannot cross
- * tenants; passing `undefined` keeps the old global-lookup behavior but
- * logs a warning.
  */
-export async function getIntegrationCredentialsById(id: number, firmId?: number): Promise<DecryptedCredentials | null> {
-  const conditions = firmId === undefined
-    ? [eq(integrationsTable.id, id)]
-    : [eq(integrationsTable.id, id), eq(integrationsTable.firm_id, firmId)];
-  if (firmId === undefined) {
-    logger.warn({ id }, "getIntegrationCredentialsById called without firmId — cross-tenant scope is NOT enforced; only safe inside a signature-verified webhook handler");
-  }
-  const [row] = await db.select().from(integrationsTable).where(and(...conditions));
+export async function getIntegrationCredentialsById(id: number): Promise<DecryptedCredentials | null> {
+  const [row] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!row || row.status !== "active") return null;
   return decryptRowCredentials(row);
 }
@@ -112,25 +96,17 @@ export async function getIntegrationCredentialsById(id: number, firmId?: number)
  * Convenience helper for cases where only the provider key is known.
  * Returns the most recent active integration for that provider; logs a warning
  * if multiple are present so the caller can switch to id-based lookup.
- *
- * Same firm-scoping contract as `getIntegrationCredentialsById`.
  */
-export async function getIntegrationCredentials(provider: string, firmId?: number): Promise<DecryptedCredentials | null> {
-  const conditions = firmId === undefined
-    ? [eq(integrationsTable.provider, provider)]
-    : [eq(integrationsTable.provider, provider), eq(integrationsTable.firm_id, firmId)];
-  if (firmId === undefined) {
-    logger.warn({ provider }, "getIntegrationCredentials called without firmId — cross-tenant scope is NOT enforced");
-  }
+export async function getIntegrationCredentials(provider: string): Promise<DecryptedCredentials | null> {
   const rows = await db
     .select()
     .from(integrationsTable)
-    .where(and(...conditions))
+    .where(eq(integrationsTable.provider, provider))
     .orderBy(desc(integrationsTable.created_at));
   const active = rows.filter(r => r.status === "active");
   if (active.length === 0) return null;
   if (active.length > 1) {
-    logger.warn({ provider, firm_id: firmId ?? null, count: active.length }, "Multiple active integrations share this provider — using most recent. Prefer getIntegrationCredentialsById().");
+    logger.warn({ provider, count: active.length }, "Multiple active integrations share this provider — using most recent. Prefer getIntegrationCredentialsById().");
   }
   return decryptRowCredentials(active[0]);
 }
@@ -161,28 +137,14 @@ function maskRow(row: any) {
   };
 }
 
-// Drizzle predicate: integrations row belongs to the caller's firm. Every
-// CRUD handler ANDs this against the row id so an admin in firm A cannot
-// read or rotate firm B's API keys via the integrations surface.
-function integrationFirmScope(req: import("express").Request) {
-  return eq(integrationsTable.firm_id, requireFirmId(req));
-}
-
-router.get("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
-  const rows = await db
-    .select()
-    .from(integrationsTable)
-    .where(integrationFirmScope(req))
-    .orderBy(desc(integrationsTable.created_at));
+router.get("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (_req, res) => {
+  const rows = await db.select().from(integrationsTable).orderBy(desc(integrationsTable.created_at));
   res.json(rows.map(maskRow));
 });
 
 router.get("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseIntegrationId(res, req.params.id); if (id === null) return;
-  const [row] = await db
-    .select()
-    .from(integrationsTable)
-    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
+  const [row] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!row) { res.status(404).json({ error: "Integration not found" }); return; }
   res.json(maskRow(row));
 });
@@ -196,119 +158,39 @@ router.post("/", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, 
   // Keep a short non-reversible reference for audit/UI display continuity.
   const apiKeyRef = api_key ? crypto.createHash("sha256").update(String(api_key)).digest("hex").slice(0, 16) : null;
 
-  const firmId = requireFirmId(req);
+  // Two-step insert: we need the row id before we can encrypt creds with id-scoped AAD.
+  const [created] = await db.insert(integrationsTable).values({
+    name,
+    type,
+    provider,
+    status: "active",
+    api_url: api_url || null,
+    api_key_hash: apiKeyRef,
+    webhook_url: webhook_url || null,
+    config: { ...(config && typeof config === "object" ? { userConfig: config } : {}), credentials: {} },
+    sync_direction: sync_direction || "bidirectional",
+    field_mapping: field_mapping || null,
+  }).returning();
 
-  // Upsert by (firm_id, provider). The Integrations Hub previously created
-  // a new row every time the operator clicked Save, accumulating duplicates
-  // ("OpenRouter x21" in the visible bug report). Match-by-provider so a
-  // repeat Save updates the existing row instead. The DB also enforces this
-  // via UNIQUE INDEX integrations_firm_provider_unique (set by
-  // runSchemaRepair) so even races collide cleanly.
-  const [existing] = await db
-    .select()
-    .from(integrationsTable)
-    .where(and(eq(integrationsTable.firm_id, firmId), eq(integrationsTable.provider, provider)))
-    .limit(1);
-
-  // Reject saves that leave the row in a "looks active, no credentials"
-  // state. If the preset declares api_key (or another secret) as a
-  // required field AND no value is in the body AND no existing
-  // encryption is in the row, the operator probably clicked Connect
-  // without pasting — return 400 so they see the modal validation error
-  // instead of a green "Active" badge on a broken integration.
-  const preset = PRESET_INTEGRATIONS.find((p) => p.provider === provider);
-  if (preset?.fields?.length) {
-    const required = preset.fields.filter((f): f is SecretField => (SECRET_FIELDS as readonly string[]).includes(f));
-    const existingCreds = ((existing?.config as Record<string, unknown> | null)?.credentials as Record<string, string> | null) ?? {};
-    const missing = required.filter((f) => {
-      const incoming = req.body?.[f];
-      if (typeof incoming === "string" && incoming.trim().length > 0) return false;
-      if (existingCreds[f]) return false;
-      return true;
-    });
-    if (missing.length > 0) {
-      res.status(400).json({
-        status: "error",
-        code: "missing_required_secret",
-        message: `Provider "${provider}" requires ${missing.join(", ")}. Paste the value(s) before clicking Connect.`,
-        missing_fields: missing,
-      });
-      return;
-    }
-  }
-
-  let targetId: number;
-  let createdNew = false;
-
-  if (existing) {
-    targetId = existing.id;
-  } else {
-    // Two-step insert: we need the row id before we can encrypt creds with id-scoped AAD.
-    const [created] = await db.insert(integrationsTable).values({
-      name,
-      type,
-      provider,
-      firm_id: firmId,
-      status: "active",
-      api_url: api_url || null,
-      api_key_hash: apiKeyRef,
-      webhook_url: webhook_url || null,
-      config: { ...(config && typeof config === "object" ? { userConfig: config } : {}), credentials: {} },
-      sync_direction: sync_direction || "bidirectional",
-      field_mapping: field_mapping || null,
-    }).returning();
-    targetId = created.id;
-    createdNew = true;
-  }
-
-  // Re-encrypt credentials against the resolved id (whether brand-new or
-  // pre-existing). Merge over any existing credentials so a re-save that
-  // only changes one secret doesn't blank the others.
-  const newCreds = buildEncryptedCredentials(targetId, req.body);
-  const existingConfig = (existing?.config as any) || {};
-  const existingCreds = existingConfig.credentials || {};
+  const credentials = buildEncryptedCredentials(created.id, req.body);
   const finalConfig = {
-    ...(config && typeof config === "object"
-      ? { userConfig: config }
-      : (existingConfig.userConfig ? { userConfig: existingConfig.userConfig } : {})),
-    credentials: { ...existingCreds, ...newCreds },
+    ...(config && typeof config === "object" ? { userConfig: config } : {}),
+    credentials,
   };
-
-  const updates: Record<string, any> = {
-    config: finalConfig,
-    updated_at: new Date(),
-  };
-  // Only overwrite the visible fields on a re-save when the caller supplied a
-  // value; an empty string still wins, which is how the operator clears it.
-  if (name !== undefined) updates.name = name;
-  if (type !== undefined) updates.type = type;
-  if (api_url !== undefined) updates.api_url = api_url || null;
-  if (webhook_url !== undefined) updates.webhook_url = webhook_url || null;
-  if (apiKeyRef !== null) updates.api_key_hash = apiKeyRef;
-  if (sync_direction !== undefined) updates.sync_direction = sync_direction || "bidirectional";
-  if (field_mapping !== undefined) updates.field_mapping = field_mapping || null;
-  if (createdNew) updates.status = "active";
-
   const [row] = await db.update(integrationsTable)
-    .set(updates)
-    .where(and(eq(integrationsTable.id, targetId), eq(integrationsTable.firm_id, firmId)))
+    .set({ config: finalConfig })
+    .where(eq(integrationsTable.id, created.id))
     .returning();
 
-  await auditLog(
-    "integration",
-    String(req.user?.id || 0),
-    createdNew ? "integration_created" : "integration_updated",
-    { provider, name, type, firm_id: firmId, id: targetId, credential_keys: Object.keys(newCreds) },
-  );
-  res.status(createdNew ? 201 : 200).json(maskRow(row));
+  await auditLog("integration", String(req.user?.id || 0), "integration_created", {
+    provider, name, type, credential_keys: Object.keys(credentials),
+  });
+  res.status(201).json(maskRow(row));
 });
 
 router.patch("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseIntegrationId(res, req.params.id); if (id === null) return;
-  const [existing] = await db
-    .select()
-    .from(integrationsTable)
-    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
+  const [existing] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
 
   const { name, status, api_url, webhook_url, config, sync_direction, field_mapping, api_key } = req.body;
@@ -334,21 +216,14 @@ router.patch("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (r
     };
   }
 
-  const [updated] = await db
-    .update(integrationsTable)
-    .set(updates)
-    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)))
-    .returning();
+  const [updated] = await db.update(integrationsTable).set(updates).where(eq(integrationsTable.id, id)).returning();
   await auditLog("integration", String(req.user?.id || 0), "integration_updated", { id, changes: Object.keys(updates) });
   res.json(maskRow(updated));
 });
 
 router.delete("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseIntegrationId(res, req.params.id); if (id === null) return;
-  const [deleted] = await db
-    .delete(integrationsTable)
-    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)))
-    .returning();
+  const [deleted] = await db.delete(integrationsTable).where(eq(integrationsTable.id, id)).returning();
   if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
   await auditLog("integration", String(req.user?.id || 0), "integration_deleted", { id, provider: deleted.provider });
   res.json({ success: true });
@@ -356,10 +231,7 @@ router.delete("/:id", requirePermission(Permission.INTEGRATIONS_MANAGE), async (
 
 router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseIntegrationId(res, req.params.id); if (id === null) return;
-  const [row] = await db
-    .select()
-    .from(integrationsTable)
-    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
+  const [row] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
 
   // Verify credential decryption works end-to-end. Only secret fields count —
@@ -388,7 +260,7 @@ router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
       const missing = expectedSecretFields.filter(f => !creds[f] || String(creds[f]).length === 0);
       if (missing.length > 0) {
         credentialCheck = "missing_required_secret";
-        decryptionErrors = missing;
+        decryptionErrors = missing as SecretField[];
       }
     }
   }
@@ -510,83 +382,27 @@ router.post("/:id/test", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
 
 router.post("/:id/sync", requirePermission(Permission.INTEGRATIONS_MANAGE), async (req, res) => {
   const id = parseIntegrationId(res, req.params.id); if (id === null) return;
-  const [integration] = await db
-    .select()
-    .from(integrationsTable)
-    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
+  const [integration] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!integration) { res.status(404).json({ error: "Not found" }); return; }
 
-  // Resolve the per-provider sync handler from the registry. If none is
-  // registered the provider is event-driven (Stripe / Telnyx / Vapi /
-  // DocuSign / Dropbox Sign / etc.) or simply doesn't support a
-  // pull-style sync yet. Return 501 with a machine-readable envelope and
-  // the canonical list of providers that DO support sync so the UI can
-  // hide the button instead of misleading the operator.
-  const handler = getSyncHandler(integration.provider);
-  if (!handler) {
-    await auditLog("integration", String(req.user?.id || 0), "integration_sync_unsupported", {
-      id,
-      provider: integration.provider,
-      syncable_providers: listSyncableProviders(),
-    });
-    res.status(501).json({
-      status: "error",
-      code: "sync_not_supported",
-      success: false,
-      implemented: false,
-      provider: integration.provider,
-      syncable_providers: listSyncableProviders(),
-      message: `${integration.provider} is event-driven (or no sync handler is registered). The UI should disable the Sync button for this provider. Currently syncable: ${listSyncableProviders().join(", ") || "(none)"}.`,
-      timestamp: new Date().toISOString(),
-    });
-    return;
-  }
-
-  let outcome;
-  try {
-    outcome = await handler(integration as any);
-  } catch (err) {
-    logger.error({ err, provider: integration.provider, id }, "integration sync handler threw");
-    await auditLog("integration", String(req.user?.id || 0), "integration_sync_failed", {
-      id,
-      provider: integration.provider,
-      err: String((err as Error)?.message ?? err).slice(0, 500),
-    });
-    res.status(500).json({
-      status: "error",
-      code: "sync_failed",
-      success: false,
-      implemented: true,
-      provider: integration.provider,
-      message: String((err as Error)?.message ?? err).slice(0, 500),
-      timestamp: new Date().toISOString(),
-    });
-    return;
-  }
-
-  // Real sync ran (even if it found nothing to do). Bump last_sync_at on
-  // the row so the UI's "last synced" timestamp reflects the actual call.
-  await db
-    .update(integrationsTable)
-    .set({ last_sync_at: new Date() })
-    .where(and(eq(integrationsTable.id, id), integrationFirmScope(req)));
-
-  await auditLog("integration", String(req.user?.id || 0), "integration_sync_ran", {
+  // Honest stub: there is no per-provider sync handler in this codebase yet,
+  // so we don't pretend to have synced records and we don't bump
+  // `last_sync_at` (that column is meant to reflect a real sync). We still
+  // emit the audit row so a future implementation has a clear hook and so
+  // operators can see who clicked Sync. Records-synced is 0, not a random
+  // number, and `implemented: false` lets the UI render an honest message.
+  await auditLog("integration", String(req.user?.id || 0), "integration_sync_requested", {
     id,
     provider: integration.provider,
-    ok: outcome.ok,
-    records_synced: outcome.records_synced,
+    handler_implemented: false,
   });
 
   res.json({
-    status: outcome.ok ? "ok" : "error",
-    success: outcome.ok,
-    implemented: true,
-    records_synced: outcome.records_synced,
-    direction: outcome.direction,
-    details: outcome.details ?? null,
-    error: outcome.error ?? null,
-    provider: integration.provider,
+    success: false,
+    implemented: false,
+    records_synced: 0,
+    direction: integration.sync_direction,
+    message: `Sync handler for ${integration.provider} is not yet implemented. The credential vault is wired up — once a provider-specific sync worker is added, this button will run it.`,
     timestamp: new Date().toISOString(),
   });
 });

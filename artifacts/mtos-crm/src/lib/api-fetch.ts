@@ -12,23 +12,6 @@ import {
   getStoredUserId,
   setTokens,
 } from "./auth-store";
-import { getAdminUnlockToken, setAdminUnlockToken } from "./admin-unlock-store";
-
-/**
- * A 401 with `code: "admin_locked"` is the PIN gate (super_admin needs to
- * re-enter their admin PIN), NOT a dead session. Token refresh cannot fix
- * it. Clones the response so the caller can still read the body.
- */
-async function isAdminLocked401(res: Response): Promise<boolean> {
-  if (res.status !== 401) return false;
-  try {
-    const clone = res.clone();
-    const body = (await clone.json()) as { code?: string };
-    return body?.code === "admin_locked";
-  } catch {
-    return false;
-  }
-}
 
 export type RefreshResult = { token: string; expiresIn: number } | null;
 
@@ -168,37 +151,17 @@ export async function apiFetchRaw(
   if (token && !initialHeaders.has("authorization")) {
     initialHeaders.set("authorization", `Bearer ${token}`);
   }
-  // Auto-attach the admin-unlock "sudo mode" token so every authed API
-  // call to a PIN-gated admin route succeeds while the unlock is fresh.
-  const adminUnlock = getAdminUnlockToken();
-  if (adminUnlock && !initialHeaders.has("x-admin-unlock")) {
-    initialHeaders.set("x-admin-unlock", adminUnlock);
-  }
 
   let res = await fetch(input, { ...init, headers: initialHeaders });
 
   if (res.status !== 401) return res;
 
-  // PIN-gated route, not a dead session — clear the stale unlock token
-  // and return so the caller (AdminGate) re-prompts. Refreshing access
-  // tokens would not help: the missing thing is the admin-unlock JWT.
-  if (await isAdminLocked401(res)) {
-    setAdminUnlockToken(null);
-    return res;
-  }
-
   const result = await refreshAccessToken();
   if (result) {
     const retryHeaders = new Headers(init.headers);
     retryHeaders.set("authorization", `Bearer ${result.token}`);
-    if (adminUnlock) retryHeaders.set("x-admin-unlock", adminUnlock);
     res = await fetch(input, { ...init, headers: retryHeaders });
     if (res.status !== 401) return res;
-    // Same protection on the post-refresh response.
-    if (await isAdminLocked401(res)) {
-      setAdminUnlockToken(null);
-      return res;
-    }
   }
 
   clearTokens();

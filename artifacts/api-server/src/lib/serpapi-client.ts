@@ -59,52 +59,28 @@ export interface SerpapiAdvertiserSearchResponse {
   error?: string;
 }
 
-/**
- * Resolve the SerpAPI key. Vault-first (per-firm integration row),
- * env-fallback. Returns null if neither path has a key — caller turns
- * that into a 503 via `isSerpapiConfigured()`.
- *
- * Firm scope: when `firmId` is provided we only consider the vault row
- * stamped with that firm_id. The route layer in admin-competitive-intel.ts
- * passes `requireFirmId(req)` so cross-tenant key leakage is impossible.
- * When `firmId` is omitted (e.g. a system-level caller before firm
- * context exists) we skip the vault and use env only.
- */
-async function resolveApiKey(firmId?: number): Promise<string | null> {
-  if (firmId !== undefined) {
-    // Lazy import to avoid a circular dependency between serpapi-client
-    // and routes/integrations (integrations route imports the client
-    // indirectly via provider-router).
-    const { getIntegrationCredentials } = await import("../routes/integrations");
-    const creds = await getIntegrationCredentials("serpapi", firmId);
-    if (creds?.api_key) return creds.api_key;
-  }
-  return process.env["SERPAPI_API_KEY"] ?? null;
-}
-
-class _SerpapiNotConfigured extends SerpapiError {
-  constructor() {
-    super(
-      "SerpAPI is not configured. Add it in the Integrations Hub (or set the SERPAPI_API_KEY env var as a fallback).",
+function getApiKey(): string {
+  const key = process.env["SERPAPI_API_KEY"];
+  if (!key) {
+    throw new SerpapiError(
+      "SERPAPI_API_KEY is not configured. Add it in Secrets to enable Competitive Intelligence.",
       503,
     );
   }
+  return key;
 }
 
-export async function isSerpapiConfigured(firmId?: number): Promise<boolean> {
-  return (await resolveApiKey(firmId)) !== null;
+export function isSerpapiConfigured(): boolean {
+  return !!process.env["SERPAPI_API_KEY"];
 }
 
-async function serpapiFetch<T>(params: Record<string, string>, opts?: { firmId?: number; timeoutMs?: number }): Promise<T> {
-  const key = await resolveApiKey(opts?.firmId);
-  if (!key) throw new _SerpapiNotConfigured();
-
+async function serpapiFetch<T>(params: Record<string, string>, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
   const url = new URL(SERPAPI_BASE);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  url.searchParams.set("api_key", key);
+  url.searchParams.set("api_key", getApiKey());
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url.toString(), { signal: ctrl.signal });
     const text = await res.text();
@@ -121,15 +97,28 @@ async function serpapiFetch<T>(params: Record<string, string>, opts?: { firmId?:
         `SerpAPI ${res.status}`;
       throw new SerpapiError(msg as string, res.status, body);
     }
-    // SerpAPI returns 200 with `error` field on logical errors (bad advertiser id, etc).
-    if (typeof body === "object" && body && "error" in body && (body as { error?: string }).error) {
-      throw new SerpapiError((body as { error: string }).error, 422, body);
+    // SerpAPI returns 200 with `error` field for two distinct cases:
+    //   a) "No results" — the advertiser exists but has no active ads, or the
+    //      name search matched nothing. Treat as empty payload, not an error.
+    //   b) Real logical errors (invalid advertiser id format, bad params, etc.)
+    //      — throw so the caller surfaces a useful message.
+    if (typeof body === "object" && body && "error" in body) {
+      const msg = (body as { error?: string }).error ?? "";
+      const isNoResults =
+        /hasn't returned any results/i.test(msg) ||
+        /no results/i.test(msg) ||
+        /no ads/i.test(msg);
+      if (!isNoResults) {
+        throw new SerpapiError(msg, 422, body);
+      }
+      // "No results" — return body as-is so callers get empty ad_creatives /
+      // advertisers arrays rather than an exception.
     }
     return body as T;
   } catch (err) {
     if (err instanceof SerpapiError) throw err;
     if ((err as { name?: string }).name === "AbortError") {
-      throw new SerpapiError(`SerpAPI timeout after ${opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms`, 504);
+      throw new SerpapiError(`SerpAPI timeout after ${timeoutMs}ms`, 504);
     }
     throw new SerpapiError(`SerpAPI network error: ${(err as Error).message}`, 502);
   } finally {
@@ -141,25 +130,25 @@ async function serpapiFetch<T>(params: Record<string, string>, opts?: { firmId?:
  * Look up the active ad creatives for a Google Ads Transparency
  * advertiser id. Advertiser ids look like `AR12345...`.
  */
-export async function serpapiAdvertiserAds(advertiserId: string, firmId?: number): Promise<SerpapiAdvertiserAdsResponse> {
+export async function serpapiAdvertiserAds(advertiserId: string): Promise<SerpapiAdvertiserAdsResponse> {
   const id = String(advertiserId || "").trim();
   if (!id) throw new SerpapiError("advertiserId is required", 400);
   return serpapiFetch<SerpapiAdvertiserAdsResponse>({
     engine: "google_ads_transparency_center",
     advertiser_id: id,
-  }, { firmId });
+  });
 }
 
 /**
  * Search the Transparency Center for advertisers by name.
  * Returns a small list the operator can pick from to add to their
- * watchlist by id. firm_id resolves the SerpAPI key from the vault.
+ * watchlist by id.
  */
-export async function serpapiSearchAdvertisers(query: string, firmId?: number): Promise<SerpapiAdvertiserSearchResponse> {
+export async function serpapiSearchAdvertisers(query: string): Promise<SerpapiAdvertiserSearchResponse> {
   const q = String(query || "").trim();
   if (!q) throw new SerpapiError("query is required", 400);
   return serpapiFetch<SerpapiAdvertiserSearchResponse>({
     engine: "google_ads_transparency_center",
     text: q,
-  }, { firmId });
+  });
 }

@@ -88,23 +88,6 @@ const AUTH_ROUTE_EXCEPTIONS = new Set([
   // to render the firm name + email prefill. The token in the query
   // string is the credential; the response carries no token / hash.
   "GET /invite-info",
-  // Magic-link (passwordless email) sign-in. Both routes bootstrap a
-  // session for a user who has none — request mints + emails a token,
-  // verify exchanges it for a JWT pair. The single-use, short-lived,
-  // SHA-256-hashed token is the credential.
-  "POST /magic-link/request",
-  "POST /magic-link/verify",
-  // Passkey (WebAuthn) sign-in. login/options issues a challenge and
-  // login/verify exchanges a signed assertion for a session — both for a
-  // user who has no session yet. The signed WebAuthn assertion, bound to a
-  // single-use server challenge, is the credential.
-  "POST /passkey/login/options",
-  "POST /passkey/login/verify",
-  // SMS one-time-code sign-in. sms/request texts a code, sms/verify
-  // exchanges it for a session — both for a user with no session yet. The
-  // single-use, attempt-capped, short-lived code is the credential.
-  "POST /sms/request",
-  "POST /sms/verify",
 ]);
 
 // Authenticated routes that legitimately do not need a role gate (caller's
@@ -117,22 +100,6 @@ const AUTH_ONLY_ROUTES = new Set([
   "auth POST /mfa/verify",
   "auth POST /mfa/disable",
   "auth GET /me",
-  // Passkey self-management — any signed-in user enrols / lists / removes
-  // their OWN passkeys. The handlers scope every query by req.user.id, so a
-  // role gate would add nothing. (The passkey LOGIN routes are public and
-  // live in AUTH_ROUTE_EXCEPTIONS above.)
-  "auth POST /passkey/register/options",
-  "auth POST /passkey/register/verify",
-  "auth GET /passkey/credentials",
-  "auth DELETE /passkey/credentials/:id",
-  // Phone-number self-management for SMS-code sign-in — a user enrols,
-  // verifies, reads, and removes their OWN number; handlers scope by
-  // req.user.id, so a role gate would add nothing. (sms/* login routes
-  // are public and live in AUTH_ROUTE_EXCEPTIONS above.)
-  "auth POST /phone/request",
-  "auth POST /phone/verify",
-  "auth GET /phone",
-  "auth DELETE /phone",
   // forms router — pure stateless utilities. config GETs are role-gated.
   "forms GET /categories",
   "forms POST /validate/email",

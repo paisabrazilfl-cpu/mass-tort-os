@@ -42,7 +42,7 @@ import { useAuth } from "@/contexts/auth-context";
 // Kept narrow on purpose — the server already excludes secrets, but we
 // also avoid carrying anything we don't render so the UI is impossible
 // to use as an exfil vector for fields added later.
-type Role = "super_admin" | "admin" | "attorney" | "paralegal" | "viewer";
+type Role = "super_admin" | "admin" | "user_manager" | "attorney" | "paralegal" | "agent" | "viewer";
 type UserRow = {
   id: number;
   email: string;
@@ -55,24 +55,26 @@ type UserRow = {
   created_at: string;
 };
 
-// Admin is deliberately omitted — it cannot be assigned through this
-// page. The backend rejects role="admin" on PATCH. Promoting a user to
-// admin is a higher-trust operation handled out-of-band so a compromised
-// admin token can't mint more admins. Existing admins still display in
-// the table (with the red badge) but their role select is unreachable
-// (we disable the action button for admin rows).
-const ROLE_OPTIONS: { value: Exclude<Role, "admin">; label: string; description: string }[] = [
-  { value: "viewer", label: "Viewer", description: "Read-only access. Default for self-serve signups." },
-  { value: "paralegal", label: "Paralegal", description: "Can manage leads, cases, and documents." },
-  { value: "attorney", label: "Attorney", description: "Full case authority including approvals." },
+// super_admin and admin are not assignable through this UI.
+// super_admin is the singleton owner — set directly in the DB.
+// admin promotion is handled out-of-band to prevent privilege escalation.
+// All other roles are assignable by any user holding USERS_MANAGE.
+const ROLE_OPTIONS: { value: Exclude<Role, "super_admin" | "admin">; label: string; description: string }[] = [
+  { value: "user_manager", label: "User Manager", description: "Manages team access, invites, and role assignments. Read-only on leads and cases." },
+  { value: "attorney",     label: "Attorney",     description: "Full case authority including lead qualification and approvals." },
+  { value: "paralegal",    label: "Paralegal",    description: "Manages leads, cases, and documents day-to-day." },
+  { value: "agent",        label: "Agent",        description: "Intake agent. Creates and works their own leads only." },
+  { value: "viewer",       label: "Viewer",       description: "Read-only access. Default for self-serve signups." },
 ];
 
 const ROLE_BADGE: Record<Role, string> = {
-  super_admin: "bg-violet-100 text-violet-800",
-  admin: "bg-red-100 text-red-800",
-  attorney: "bg-purple-100 text-purple-800",
-  paralegal: "bg-blue-100 text-blue-800",
-  viewer: "bg-muted text-muted-foreground",
+  super_admin:  "bg-yellow-100 text-yellow-900 font-bold",
+  admin:        "bg-red-100 text-red-800",
+  user_manager: "bg-orange-100 text-orange-800",
+  attorney:     "bg-purple-100 text-purple-800",
+  paralegal:    "bg-blue-100 text-blue-800",
+  agent:        "bg-green-100 text-green-800",
+  viewer:       "bg-muted text-muted-foreground",
 };
 
 function formatTs(value: string | null): string {
@@ -87,8 +89,7 @@ function formatTs(value: string | null): string {
 export default function Users() {
   const { user } = useAuth();
   const { toast } = useToast();
-  // super_admin is strictly above admin — treat both as admin for this page.
-  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const canManageUsers = ["super_admin", "admin", "user_manager"].includes(user?.role ?? "");
 
   const [rows, setRows] = useState<UserRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -106,7 +107,7 @@ export default function Users() {
       const res = await apiFetchRaw("/api/users");
       if (!res.ok) {
         if (res.status === 403) {
-          setLoadError("You need an admin role to manage users.");
+          setLoadError("You need admin or user manager access to manage users.");
           setRows([]);
           return;
         }
@@ -121,12 +122,12 @@ export default function Users() {
   }, []);
 
   useEffect(() => {
-    if (!isAdmin) {
+    if (!canManageUsers) {
       setRows([]);
       return;
     }
     void load();
-  }, [isAdmin, load]);
+  }, [canManageUsers, load]);
 
   const openEdit = (row: UserRow) => {
     setEditing(row);
@@ -178,17 +179,17 @@ export default function Users() {
     }
   };
 
-  if (!isAdmin) {
+  if (!canManageUsers) {
     return (
       <div className="container max-w-3xl py-10">
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
               <ShieldAlert className="h-5 w-5 text-amber-600" />
-              <CardTitle>Admin only</CardTitle>
+              <CardTitle>Access restricted</CardTitle>
             </div>
             <CardDescription>
-              You need an admin role to manage users in your firm.
+              You need admin or user manager access to manage users in your firm.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -296,15 +297,15 @@ export default function Users() {
                           <Button
                             variant="outline"
                             size="sm"
-                            disabled={
-                              isSelf || row.role === "admin" || row.role === "super_admin"
-                            }
+                            disabled={isSelf || row.role === "super_admin" || row.role === "admin"}
                             title={
                               isSelf
                                 ? "You can't change your own role."
-                                : row.role === "admin" || row.role === "super_admin"
-                                  ? "Admin / super-admin roles can't be changed from this page."
-                                  : "Change role"
+                                : row.role === "super_admin"
+                                  ? "Platform owner role can't be changed."
+                                  : row.role === "admin"
+                                    ? "Admin role can't be changed from this page."
+                                    : "Change role"
                             }
                             onClick={() => openEdit(row)}
                           >

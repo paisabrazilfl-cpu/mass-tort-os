@@ -65,29 +65,12 @@ export async function extractMedicalFields(
   }
 }
 
-export async function analyzeDocumentText(
-  text: string,
-  opts: { schemaHint?: unknown; model?: string } = {},
-): Promise<MedicalRecordFields> {
+export async function analyzeDocumentText(text: string): Promise<MedicalRecordFields> {
   try {
-    // When the automation catalog's `ai.extract_fields` node passes a
-    // schemaHint, prepend it to the system prompt so the LLM steers its
-    // JSON output toward the operator's desired field shape. The base
-    // AIFIELDS_PROMPT remains authoritative for the canonical medical-record
-    // schema — the hint is advisory.
-    const schemaPrefix =
-      opts.schemaHint !== undefined && opts.schemaHint !== null
-        ? `Caller-supplied field hint (advisory, do NOT drop the canonical schema):\n${
-            typeof opts.schemaHint === "string"
-              ? opts.schemaHint
-              : JSON.stringify(opts.schemaHint).slice(0, 2000)
-          }\n\n`
-        : "";
     const raw = await callLLM({
       module: "ai-fields",
-      prompt: `${schemaPrefix}${AIFIELDS_PROMPT}\n\nDocument text:\n${text.slice(0, 8000)}`,
+      prompt: `${AIFIELDS_PROMPT}\n\nDocument text:\n${text.slice(0, 8000)}`,
       maxTokens: 4096,
-      model: opts.model,
     });
 
     const jsonMatch = raw.trim().match(/\{[\s\S]*\}/);
