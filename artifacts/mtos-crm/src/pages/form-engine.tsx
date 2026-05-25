@@ -31,6 +31,20 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
+// Shape of `web_form_stats` returned by GET /api/forms/config. Locally typed
+// because the public field is new and not yet present in the api-client
+// codegen output — runtime payload is what matters here.
+interface WebFormStats {
+  total_fields: number;
+  eligibility_count: number;
+  contact_count: number;
+  story_count: number;
+  required_count: number;
+  anti_fraud_count: number;
+  eligibility_rules_count: number;
+  enabled: boolean;
+}
+
 const US_STATES = [
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", 
   "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", 
@@ -466,17 +480,46 @@ export default function FormEngine() {
                 <p>No campaign configurations found.</p>
               </div>
             ) : (
-              configs.map((config: FormConfig) => (
+              configs.map((config: FormConfig) => {
+                const stats = (config as FormConfig & { web_form_stats?: WebFormStats | null }).web_form_stats ?? null;
+                return (
                 <Card key={config.id} className="flex flex-col border-border/50 shadow-sm transition-all hover:shadow-md">
                   <CardHeader className="pb-4">
-                    <div className="flex items-start justify-between">
+                    <div className="flex items-start justify-between gap-2">
                       <CardTitle className="text-xl">{config.label}</CardTitle>
+                      {stats?.enabled && (
+                        <Badge className="bg-green-500/10 text-green-600 border-green-500/30 text-xs shrink-0">
+                          <CheckCircle2 className="h-3 w-3 mr-1" /> Live
+                        </Badge>
+                      )}
                     </div>
                     <CardDescription className="flex items-center gap-2 mt-2">
                       <Badge variant="secondary" className="font-mono text-xs">{config.id}</Badge>
+                      {config.category && (
+                        <Badge variant="outline" className="text-xs capitalize">
+                          {config.category.replace(/_/g, " ")}
+                        </Badge>
+                      )}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="flex-1 space-y-4">
+                    {stats && stats.total_fields > 0 && (
+                      <div className="grid grid-cols-2 gap-2 rounded-md border bg-muted/20 p-3 text-center">
+                        <div>
+                          <div className="text-2xl font-bold text-primary">{stats.total_fields}</div>
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-0.5">Total Questions</div>
+                        </div>
+                        <div>
+                          <div className="text-2xl font-bold text-amber-600">{stats.anti_fraud_count}</div>
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-0.5">Anti-Fraud Checks</div>
+                        </div>
+                        <div className="col-span-2 flex justify-around pt-2 border-t text-xs text-muted-foreground">
+                          <span><strong className="text-foreground">{stats.eligibility_count}</strong> eligibility</span>
+                          <span><strong className="text-foreground">{stats.contact_count}</strong> contact</span>
+                          <span><strong className="text-foreground">{stats.story_count}</strong> story</span>
+                        </div>
+                      </div>
+                    )}
                     {config.fields && config.fields.length > 0 && (
                       <div className="space-y-2">
                         <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Extra Fields</Label>
@@ -489,12 +532,19 @@ export default function FormEngine() {
                     )}
                     {config.rules && config.rules.length > 0 && (
                       <div className="space-y-2">
-                        <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Validation Rules</Label>
-                        <ul className="text-sm space-y-1 text-muted-foreground">
+                        <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                          Validation Rules
+                          {stats && stats.eligibility_rules_count > 0 && (
+                            <span className="ml-1 normal-case font-normal text-muted-foreground">
+                              · {stats.eligibility_rules_count} live rule{stats.eligibility_rules_count !== 1 ? "s" : ""}
+                            </span>
+                          )}
+                        </Label>
+                        <ul className="text-xs space-y-1 text-muted-foreground max-h-32 overflow-y-auto pr-1">
                           {config.rules.map((rule, idx) => (
                             <li key={idx} className="flex items-start gap-2">
-                              <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 text-primary/60 shrink-0" />
-                              <span className="leading-tight">{rule}</span>
+                              <CheckCircle2 className="h-3 w-3 mt-0.5 text-primary/60 shrink-0" />
+                              <span className="leading-tight font-mono">{rule}</span>
                             </li>
                           ))}
                         </ul>
@@ -503,8 +553,13 @@ export default function FormEngine() {
                   </CardContent>
                   {config.custom_fields && config.custom_fields.length > 0 && (
                     <div className="px-6 pb-2">
-                      <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Custom Fields</Label>
-                      <div className="flex flex-wrap gap-1 mt-2">
+                      <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                        Operator Custom Fields
+                        <span className="ml-1 normal-case font-normal text-muted-foreground">
+                          · {config.custom_fields.length}
+                        </span>
+                      </Label>
+                      <div className="flex flex-wrap gap-1 mt-2 max-h-28 overflow-y-auto">
                         {config.custom_fields.map(cf => (
                           <Badge key={cf.key} variant="outline" className="bg-blue-500/5 text-blue-600 border-blue-500/30 text-xs font-normal">
                             {cf.label}{cf.required ? "*" : ""}
@@ -523,7 +578,7 @@ export default function FormEngine() {
                     <FormEditDialog config={config} />
                   </CardFooter>
                 </Card>
-              ))
+              );})
             )}
           </div>
         </TabsContent>

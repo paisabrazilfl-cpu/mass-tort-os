@@ -3,6 +3,7 @@ import { formConfigurationsTable } from "@workspace/db";
 import type { CustomField, FormConfiguration, WebFormConfig } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { TORT_REGISTRY, TortDefinition } from "./tort-engine";
+import { getComprehensiveTortForm } from "./comprehensive-tort-forms";
 import { logger } from "./logger";
 
 export type { CustomField } from "@workspace/db";
@@ -38,8 +39,15 @@ export async function seedFormConfigurations(): Promise<void> {
 
     let inserted = 0;
     let refreshed = 0;
+    let webFormsFilled = 0;
+    let customFieldsFilled = 0;
     for (const [id, def] of Object.entries(TORT_REGISTRY) as [string, TortDefinition][]) {
       const row = existingById.get(id);
+      const comp = getComprehensiveTortForm(id);
+      // Merge registry rules + comprehensive universal rules + tort-specific.
+      const mergedRules = comp ? comp.rules : def.rules;
+      const mergedExtraFields = comp ? comp.extra_fields : def.extra_fields;
+
       if (!row) {
         await db.insert(formConfigurationsTable).values({
           id,
@@ -47,37 +55,67 @@ export async function seedFormConfigurations(): Promise<void> {
           category: def.category,
           valid_diagnoses: def.valid_diagnoses,
           exposure_fields: def.exposure_fields,
-          extra_fields: def.extra_fields,
-          custom_fields: [] as CustomField[],
-          rules: def.rules,
+          extra_fields: mergedExtraFields,
+          custom_fields: (comp?.custom_fields ?? []) as CustomField[],
+          rules: mergedRules,
           rejection_conditions: def.rejection_conditions,
           required_exposure: def.required_exposure,
+          intro_text: comp?.intro_text ?? null,
           active: true,
+          web_form_config: comp?.web_form_config ?? null,
         });
         inserted++;
       } else if (row.updated_by === null) {
         // Row has never been hand-edited via the admin UI. Refresh registry-managed
-        // fields so 2026/MDL updates to TORT_REGISTRY flow through automatically.
-        // Custom fields and intro_text are user-curated and never overwritten.
+        // fields so 2026/MDL updates flow through automatically. We DO push the
+        // comprehensive custom_fields / web_form_config / rules when the slots
+        // are empty or untouched — admin-edited rows (updated_by != null) are
+        // never overwritten.
+        const patch: Record<string, unknown> = {
+          label: def.label,
+          category: def.category,
+          valid_diagnoses: def.valid_diagnoses,
+          exposure_fields: def.exposure_fields,
+          extra_fields: mergedExtraFields,
+          rules: mergedRules,
+          rejection_conditions: def.rejection_conditions,
+          required_exposure: def.required_exposure,
+          updated_at: new Date(),
+        };
+        if (comp) {
+          if (!row.web_form_config) {
+            patch["web_form_config"] = comp.web_form_config;
+            webFormsFilled++;
+          }
+          if (!row.custom_fields || row.custom_fields.length === 0) {
+            patch["custom_fields"] = comp.custom_fields;
+            customFieldsFilled++;
+          }
+          if (!row.intro_text) {
+            patch["intro_text"] = comp.intro_text;
+          }
+        }
         await db
           .update(formConfigurationsTable)
-          .set({
-            label: def.label,
-            category: def.category,
-            valid_diagnoses: def.valid_diagnoses,
-            exposure_fields: def.exposure_fields,
-            extra_fields: def.extra_fields,
-            rules: def.rules,
-            rejection_conditions: def.rejection_conditions,
-            required_exposure: def.required_exposure,
-            updated_at: new Date(),
-          })
+          .set(patch)
           .where(eq(formConfigurationsTable.id, id));
         refreshed++;
+      } else {
+        // Admin-edited row. Only fill web_form_config if it's still null —
+        // never overwrite admin-edited operator fields.
+        if (comp && !row.web_form_config) {
+          await db
+            .update(formConfigurationsTable)
+            .set({ web_form_config: comp.web_form_config, updated_at: new Date() })
+            .where(eq(formConfigurationsTable.id, id));
+          webFormsFilled++;
+        }
       }
     }
-    if (inserted > 0 || refreshed > 0) {
-      logger.info(`Form config seed: inserted=${inserted}, refreshed=${refreshed}`);
+    if (inserted > 0 || refreshed > 0 || webFormsFilled > 0 || customFieldsFilled > 0) {
+      logger.info(
+        `Form config seed: inserted=${inserted}, refreshed=${refreshed}, web_forms_filled=${webFormsFilled}, custom_fields_filled=${customFieldsFilled}`,
+      );
     }
     seeded = true;
   } catch (e) {
@@ -133,25 +171,26 @@ export async function getFormConfig(tortId: string): Promise<FormConfigPublic | 
     // Fallback to in-memory registry if DB row doesn't exist (defense-in-depth).
     const def = TORT_REGISTRY[tortId];
     if (!def) return null;
+    const comp = getComprehensiveTortForm(tortId);
     return {
       id: tortId,
       label: def.label,
       category: def.category,
       valid_diagnoses: def.valid_diagnoses,
       exposure_fields: def.exposure_fields,
-      extra_fields: def.extra_fields,
-      custom_fields: [],
-      rules: def.rules,
+      extra_fields: comp?.extra_fields ?? def.extra_fields,
+      custom_fields: comp?.custom_fields ?? [],
+      rules: comp?.rules ?? def.rules,
       rejection_conditions: def.rejection_conditions,
       required_exposure: def.required_exposure,
-      intro_text: null,
+      intro_text: comp?.intro_text ?? null,
       active: true,
       avg_settlement_low: null,
       avg_settlement_high: null,
       mdl_status: null,
       sol_months: null,
       updated_at: new Date().toISOString(),
-      web_form_config: null,
+      web_form_config: comp?.web_form_config ?? null,
     };
   }
   return toPublic(rows[0]);

@@ -31,6 +31,7 @@ import { findExistingLeadForIntake } from "../lib/lead-dedup";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { updateWebFormConfig } from "./web-forms";
 import { buildDefaultWebFormConfig } from "../lib/web-form-defaults";
+import { summarizeWebForm } from "../lib/comprehensive-tort-forms";
 import type { Request, Response } from "express";
 
 // Unified error envelope helpers — keep responses identical in shape to the
@@ -88,6 +89,7 @@ router.get("/config", authMiddleware, requirePermission(Permission.FORMS_CONFIG_
       mdl_status: c.mdl_status,
       sol_months: c.sol_months,
       updated_at: c.updated_at,
+      web_form_stats: summarizeWebForm(c.web_form_config),
     }));
     res.json({ tort_campaigns: configs });
   } catch (err) {
@@ -119,6 +121,7 @@ router.get("/config/:tortId", authMiddleware, requirePermission(Permission.FORMS
       mdl_status: config.mdl_status,
       sol_months: config.sol_months,
       updated_at: config.updated_at,
+      web_form_stats: summarizeWebForm(config.web_form_config),
     });
   } catch (err) {
     logger.error({ err }, "Failed to load form config");
