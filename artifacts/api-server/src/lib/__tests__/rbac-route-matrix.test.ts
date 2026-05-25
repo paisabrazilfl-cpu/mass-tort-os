@@ -186,6 +186,7 @@ describe("public allowlist (validateRouteTable policy)", () => {
       "vapi-tools",
       "spa",
       "automation-webhook",
+      "vendor-portal",
     ]);
     for (const r of publicRouters) {
       assert.ok(expected.has(r), `unexpected public router: ${r}`);
@@ -230,8 +231,10 @@ describe("public allowlist (validateRouteTable policy)", () => {
     // Cross-check the auth-only allowlist against the policy report.
     const authOnly = booted.policy.filter((p) => p.status === "auth-only").map((p) => `${p.router} ${p.method} ${p.path}`).sort();
     const expectedAuthOnly = [
+      "auth GET /firm-invites",
       "auth GET /me",
       "auth POST /change-password",
+      "auth POST /firm-invites",
       "auth POST /logout",
       "auth POST /mfa/disable",
       "auth POST /mfa/setup",
@@ -401,6 +404,8 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       "vapi-tools": "/api/vapi-tools",
       // Automation webhook trigger: slug+HMAC-secret is the credential.
       "automation-webhook": "/api/automations/webhook",
+      // Vendor portal: opaque portal_token in the URL path IS the credential.
+      "vendor-portal": "/api/vendor-portal",
       // SPA fallback: serves the React shell (index.html) for any non-/api GET
       // when the CRM static bundle is present. No PII, no auth required.
       spa: "",
@@ -413,6 +418,7 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       "/api/webhooks/",
       "/api/vapi-tools/",
       "/api/automations/webhook/",
+      "/api/vendor-portal/",
     ];
     for (const p of booted.policy) {
       if (p.status !== "public") continue;
