@@ -6,7 +6,6 @@ import {
   Copy,
   Loader2,
   Mail,
-  ShieldAlert,
   UserPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -75,8 +74,6 @@ export default function FirmSettings() {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  const isAdmin = user?.role === "admin";
-
   const [invites, setInvites] = useState<InviteRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -109,16 +106,11 @@ export default function FirmSettings() {
   }, []);
 
   useEffect(() => {
-    if (!isAdmin) {
-      setInvites([]);
-      return;
-    }
     void loadInvites();
-  }, [isAdmin, loadInvites]);
+  }, [loadInvites]);
 
   const onCreate = async (e: FormEvent) => {
     e.preventDefault();
-    if (!isAdmin) return;
     setCreating(true);
     setCopied(false);
     try {
@@ -204,23 +196,7 @@ export default function FirmSettings() {
         </p>
       </header>
 
-      {!isAdmin && (
-        <Card data-testid="firm-settings-not-admin">
-          <CardContent className="flex items-start gap-3 p-4 text-sm">
-            <ShieldAlert className="mt-0.5 h-4 w-4 text-amber-600" aria-hidden="true" />
-            <div>
-              <p className="font-medium">Admin only</p>
-              <p className="text-muted-foreground">
-                You need an admin role to mint or view firm invite links.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {isAdmin && (
-        <>
-          <Card>
+      <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <UserPlus className="h-4 w-4" aria-hidden="true" />
@@ -397,8 +373,6 @@ export default function FirmSettings() {
               )}
             </CardContent>
           </Card>
-        </>
-      )}
     </div>
   );
 }
