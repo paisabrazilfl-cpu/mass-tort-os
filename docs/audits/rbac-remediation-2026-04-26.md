@@ -579,7 +579,7 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **263 checked / 42 public / 221 protected / 0 unprotected.**
+Boot-time count: **265 checked / 44 public / 221 protected / 0 unprotected.**
 
 **Column legend (4th-pass code-review fix — full per-route policy):**
 
@@ -647,8 +647,8 @@ Boot-time count: **263 checked / 42 public / 221 protected / 0 unprotected.**
 | analytics | GET | `/api/analytics/predictive/model` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | analytics | GET | `/api/analytics/tort-breakdown` | ✓ | ✓ |  |  |  | — | `analytics:view` | ✓ |
 | auth | POST | `/api/auth/change-password` | ✓ |  |  | ✓ |  | — | — | ✓ |
-| auth | GET | `/api/auth/firm-invites` | ✓ | ✓ |  |  |  | — | `invites:manage` | ✓ |
-| auth | POST | `/api/auth/firm-invites` | ✓ | ✓ |  |  |  | — | `invites:manage` | ✓ |
+| auth | GET | `/api/auth/firm-invites` | ✓ |  |  | ✓ |  | — | — | ✓ |
+| auth | POST | `/api/auth/firm-invites` | ✓ |  |  | ✓ |  | — | — | ✓ |
 | auth | GET | `/api/auth/invite-info` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | POST | `/api/auth/login` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | POST | `/api/auth/logout` | ✓ |  |  | ✓ |  | — | — | ✓ |
@@ -838,6 +838,8 @@ Boot-time count: **263 checked / 42 public / 221 protected / 0 unprotected.**
 | vapi-tools | POST | `/api/vapi-tools/create-lead` |  |  | ✓ |  |  | — | — | — |
 | vapi-tools | POST | `/api/vapi-tools/escalate-to-human` |  |  | ✓ |  |  | — | — | — |
 | vapi-tools | POST | `/api/vapi-tools/lookup-lead` |  |  | ✓ |  |  | — | — | — |
+| vendor-portal | GET | `/api/vendor-portal/:token/submissions` |  |  | ✓ |  |  | — | — | — |
+| vendor-portal | GET | `/api/vendor-portal/:token` |  |  | ✓ |  |  | — | — | — |
 | vendors | DELETE | `/api/vendors/:id` | ✓ | ✓ |  |  |  | — | `vendors:delete` | ✓ |
 | vendors | GET | `/api/vendors/:id` | ✓ | ✓ |  |  |  | — | `vendors:view` | ✓ |
 | vendors | PATCH | `/api/vendors/:id` | ✓ | ✓ |  |  |  | — | `vendors:manage` | ✓ |
