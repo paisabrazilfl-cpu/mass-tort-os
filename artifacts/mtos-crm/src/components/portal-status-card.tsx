@@ -8,7 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import {
   ShieldCheck, ShieldAlert, ShieldOff, RefreshCw, Send,
-  CheckCircle, XCircle, Clock
+  CheckCircle, XCircle, Clock, Eye
 } from "lucide-react";
 
 interface PortalUser {
@@ -97,6 +97,7 @@ export function PortalStatusCard({ leadId }: Props) {
   const [status, setStatus] = useState<PortalStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [resending, setResending] = useState(false);
+  const [impersonating, setImpersonating] = useState(false);
 
   async function loadStatus() {
     setLoading(true);
@@ -115,13 +116,32 @@ export function PortalStatusCard({ leadId }: Props) {
 
   useEffect(() => { void loadStatus(); }, [leadId]);
 
+  async function handleImpersonate() {
+    setImpersonating(true);
+    try {
+      const res = await apiFetchRaw(`/api/leads/${leadId}/portal-impersonate`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json() as { portal_url: string; portal_user: { name: string } };
+        window.open(data.portal_url, "_blank", "noopener,noreferrer");
+        toast({ title: `Viewing portal as ${data.portal_user.name}`, description: "Session expires in 10 minutes. All activity is audited." });
+      } else {
+        const err = await res.json().catch(() => ({ message: "Impersonation failed" })) as { message?: string };
+        toast({ title: err.message || "Failed to open portal view", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to open portal view", variant: "destructive" });
+    } finally {
+      setImpersonating(false);
+    }
+  }
+
   async function handleResend() {
     setResending(true);
     try {
       const res = await apiFetchRaw(`/api/leads/${leadId}/resend-portal-invite`, { method: "POST" });
       if (res.ok) {
         toast({ title: "Portal invite sent", description: "The client will receive an email with their signup link." });
-        // Reload to pick up the new invite_sent audit entry.
+        // Reload to pick up the new invite_sent audit entry after a short delay.
         setTimeout(() => void loadStatus(), 1500);
       } else {
         toast({ title: "Failed to send invite", variant: "destructive" });
@@ -219,17 +239,30 @@ export function PortalStatusCard({ leadId }: Props) {
               </div>
             )}
 
-            {/* Resend invite */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full gap-2"
-              onClick={() => void handleResend()}
-              disabled={resending}
-            >
-              <Send className="h-3.5 w-3.5" />
-              {resending ? "Sending…" : "Resend Portal Invite"}
-            </Button>
+            {/* Admin actions */}
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 gap-2"
+                onClick={() => void handleImpersonate()}
+                disabled={impersonating}
+                title="Open the portal as this client (10-min session, fully audited)"
+              >
+                <Eye className="h-3.5 w-3.5" />
+                {impersonating ? "Opening…" : "View as Client"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 gap-2"
+                onClick={() => void handleResend()}
+                disabled={resending}
+              >
+                <Send className="h-3.5 w-3.5" />
+                {resending ? "Sending…" : "Resend Invite"}
+              </Button>
+            </div>
           </>
         ) : (
           <div className="text-center py-2">

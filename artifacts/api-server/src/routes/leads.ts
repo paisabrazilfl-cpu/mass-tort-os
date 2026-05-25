@@ -4,6 +4,13 @@ import { eq, ilike, and, or, sql, gte, lte, desc } from "drizzle-orm";
 import { badRequest as httpBadRequest, serverError } from "../lib/http-errors";
 import { provisionPortalInvite } from "../lib/portal-invite";
 import {
+  generateImpersonationPortalToken,
+  writePortalAudit,
+  getClientIp,
+  tortTypeToSlug,
+  getPortalBaseUrl,
+} from "../lib/portal-auth";
+import {
   ListLeadsQueryParams,
   CreateLeadBody,
   UpdateLeadBody,
@@ -1094,6 +1101,104 @@ router.post(
       data: {
         sms_message_id: result.smsMessageId,
         telnyx_message_id: result.externalMessageId,
+      },
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/leads/:id/portal-impersonate
+// Generates a short-lived (10 min) impersonation portal JWT so a CRM admin
+// can view the client portal exactly as the client sees it. No refresh token
+// is issued — the session ends when the token expires.
+// Restricted to admin and super_admin roles. Full audit trail in both
+// portal_audit_log (via writePortalAudit) and the CRM audit log (auditAction).
+// ---------------------------------------------------------------------------
+router.post(
+  "/:id/portal-impersonate",
+  requirePermission(Permission.LEAD_VIEW_ANY),
+  auditAction("portal_admin_impersonate"),
+  async (req, res) => {
+    const leadId = Number(req.params.id);
+    if (!Number.isFinite(leadId)) {
+      httpBadRequest(res, "Invalid lead identifier");
+      return;
+    }
+
+    const adminUser = req.user!;
+
+    // Only super_admin and admin may impersonate — not attorneys, paralegals, etc.
+    if (!["super_admin", "admin"].includes(adminUser.role)) {
+      res.status(403).json({
+        status: "error",
+        code: "FORBIDDEN",
+        message: "Portal impersonation requires admin access",
+      });
+      return;
+    }
+
+    // Look up the portal user for this lead.
+    const [portalUser] = await db
+      .select({
+        id: portalUsersTable.id,
+        lead_id: portalUsersTable.lead_id,
+        firm_id: portalUsersTable.firm_id,
+        email: portalUsersTable.email,
+        name: portalUsersTable.name,
+        token_version: portalUsersTable.token_version,
+      })
+      .from(portalUsersTable)
+      .where(eq(portalUsersTable.lead_id, leadId));
+
+    if (!portalUser) {
+      notFound(res, "No portal account exists for this lead — send an invite first");
+      return;
+    }
+
+    // Look up tort_type to build the portal URL slug.
+    const [lead] = await db
+      .select({ tort_type: leadsTable.tort_type })
+      .from(leadsTable)
+      .where(eq(leadsTable.id, leadId));
+
+    const slug = tortTypeToSlug(lead?.tort_type ?? "portal");
+    const token = generateImpersonationPortalToken(
+      {
+        id: portalUser.id,
+        lead_id: portalUser.lead_id,
+        firm_id: portalUser.firm_id,
+        email: portalUser.email,
+        name: portalUser.name,
+        tv: portalUser.token_version,
+      },
+      adminUser.id,
+    );
+
+    const portalUrl = `${getPortalBaseUrl()}/${slug}/impersonate?token=${token}`;
+
+    await writePortalAudit({
+      portal_user_id: portalUser.id,
+      admin_user_id: adminUser.id,
+      lead_id: leadId,
+      firm_id: portalUser.firm_id,
+      action: "portal.admin_impersonate_start",
+      ip: getClientIp(req),
+      user_agent: req.headers["user-agent"] as string | undefined,
+      metadata: {
+        admin_email: adminUser.email,
+        admin_role: adminUser.role,
+        expires_in_seconds: 600,
+      },
+    });
+
+    res.json({
+      token,
+      expires_in: 600,
+      portal_url: portalUrl,
+      portal_user: {
+        id: portalUser.id,
+        email: portalUser.email,
+        name: portalUser.name,
       },
     });
   },

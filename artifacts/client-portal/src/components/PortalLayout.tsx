@@ -1,7 +1,7 @@
 import { type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { usePortalAuth } from "../contexts/PortalAuthContext";
-import { ShieldCheck, FileText, Stethoscope, LayoutDashboard, LogOut } from "lucide-react";
+import { ShieldCheck, FileText, Stethoscope, LayoutDashboard, LogOut, Eye } from "lucide-react";
 import { cn } from "../lib/cn";
 
 interface Props {
@@ -9,7 +9,7 @@ interface Props {
 }
 
 export function PortalLayout({ children }: Props) {
-  const { me, logout, tortSlug } = usePortalAuth();
+  const { me, logout, tortSlug, isImpersonating } = usePortalAuth();
   const [location] = useLocation();
 
   const base = `/${tortSlug}`;
@@ -22,6 +22,17 @@ export function PortalLayout({ children }: Props) {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
+      {/* Admin impersonation banner */}
+      {isImpersonating && (
+        <div className="bg-amber-500 text-amber-950 px-4 py-2 flex items-center justify-center gap-2 text-sm font-medium">
+          <Eye className="h-4 w-4 flex-shrink-0" />
+          <span>
+            Admin view — you are viewing this portal as <strong>{me?.name || me?.email}</strong>.
+            This session expires in 10 minutes and is fully audited.
+          </span>
+        </div>
+      )}
+
       {/* Top bar */}
       <header className="bg-[#1e3a5f] text-white shadow-md">
         <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">

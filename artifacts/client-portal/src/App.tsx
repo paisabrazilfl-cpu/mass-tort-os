@@ -6,6 +6,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { SignupPage } from "./pages/SignupPage";
 import { VerifyEmailPage } from "./pages/VerifyEmailPage";
 import { MfaSetupPage } from "./pages/MfaSetupPage";
+import { ImpersonatePage } from "./pages/ImpersonatePage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DocumentsPage } from "./pages/DocumentsPage";
 import { RecordsPage } from "./pages/RecordsPage";
@@ -26,6 +27,9 @@ function PortalRoutes() {
         <Route path="/login" component={LoginPage} />
         <Route path="/signup" component={SignupPage} />
         <Route path="/verify-email" component={VerifyEmailPage} />
+
+        {/* Admin impersonation — fully public, token carries its own auth */}
+        <Route path="/impersonate" component={ImpersonatePage} />
 
         {/* MFA setup — requires auth but not MFA yet */}
         <Route path="/mfa-setup">

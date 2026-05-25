@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
-import { getAccessToken, getRefreshToken, setTokens, clearTokens, subscribe } from "../lib/auth-store";
+import { getAccessToken, getRefreshToken, setTokens, setAccessToken, clearTokens, subscribe } from "../lib/auth-store";
 import { refreshAccessToken, setOnAuthFailure, portalFetch } from "../lib/api";
 
 export interface PortalMe {
@@ -15,10 +15,14 @@ export interface PortalMe {
 interface PortalAuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
+  // True when this is an admin impersonation session (no refresh token, 10-min expiry).
+  isImpersonating: boolean;
   me: PortalMe | null;
   tortSlug: string;
   // Stores tokens + fetches /me. Redirecting after login is the caller's responsibility.
   login: (tokens: { token: string; refresh_token: string }, userId: number) => Promise<PortalMe | null>;
+  // Sets an access token in memory only (no localStorage). Used for admin impersonation sessions.
+  loginWithToken: (token: string) => Promise<PortalMe | null>;
   logout: () => Promise<void>;
   refreshMe: () => Promise<void>;
 }
@@ -41,6 +45,8 @@ export function PortalAuthProvider({ children, tortSlug }: Props) {
   const [isLoading, setIsLoading] = useState(true);
 
   const isAuthenticated = !!getAccessToken() && !!me;
+  // Impersonation: access token in memory but no refresh token in localStorage.
+  const isImpersonating = isAuthenticated && !getRefreshToken();
 
   const fetchMe = useCallback(async (): Promise<PortalMe | null> => {
     try {
@@ -95,6 +101,14 @@ export function PortalAuthProvider({ children, tortSlug }: Props) {
     return user;
   }, [fetchMe]);
 
+  // Memory-only token — no localStorage write. Used for admin impersonation.
+  const loginWithToken = useCallback(async (token: string): Promise<PortalMe | null> => {
+    setAccessToken(token);
+    const user = await fetchMe();
+    setMe(user);
+    return user;
+  }, [fetchMe]);
+
   const logout = useCallback(async () => {
     try {
       await portalFetch("/api/portal/auth/logout", { method: "POST" });
@@ -109,7 +123,7 @@ export function PortalAuthProvider({ children, tortSlug }: Props) {
   }, [fetchMe]);
 
   return (
-    <PortalAuthContext.Provider value={{ isAuthenticated, isLoading, me, tortSlug, login, logout, refreshMe }}>
+    <PortalAuthContext.Provider value={{ isAuthenticated, isLoading, isImpersonating, me, tortSlug, login, loginWithToken, logout, refreshMe }}>
       {children}
     </PortalAuthContext.Provider>
   );

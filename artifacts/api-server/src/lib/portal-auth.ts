@@ -66,6 +66,25 @@ export function generatePortalToken(user: PortalAuthUser): string {
   );
 }
 
+// Short-lived token (10 min) for admin impersonation. No refresh token is
+// ever issued for these sessions — the session ends when the token expires.
+export function generateImpersonationPortalToken(user: PortalAuthUser, adminId: number): string {
+  return jwt.sign(
+    {
+      id: user.id,
+      lead_id: user.lead_id,
+      firm_id: user.firm_id,
+      email: user.email,
+      name: user.name,
+      tv: user.tv,
+      impersonation: true,
+      admin_id: adminId,
+    },
+    PORTAL_JWT_SECRET,
+    { expiresIn: "10m" },
+  );
+}
+
 function decodePortalToken(token: string): (PortalAuthUser & { tv: number }) | null {
   try {
     return jwt.verify(token, PORTAL_JWT_SECRET, { algorithms: ["HS256"] }) as PortalAuthUser & {
@@ -137,6 +156,7 @@ export async function portalAuthMiddleware(
 // requirePortalMfa gates routes that need MFA to be fully set up.
 // Mount after portalAuthMiddleware; reads the DB to get the live mfa_verified flag
 // rather than embedding it in the JWT (avoids stale state during setup flow).
+// Impersonation sessions bypass this check — the admin's own MFA is the gate.
 export async function requirePortalMfa(
   req: Request,
   res: Response,
@@ -147,6 +167,15 @@ export async function requirePortalMfa(
     sendUnauthorized(res, "Portal authentication required");
     return;
   }
+
+  // Impersonation: admin has already authenticated via CRM JWT + their own MFA.
+  // Bypassing the client MFA gate lets admins view the portal even when the
+  // client has not yet completed MFA setup — useful for diagnosing stuck flows.
+  if (pu.impersonation) {
+    next();
+    return;
+  }
+
   const [user] = await db
     .select({ mfa_verified: portalUsersTable.mfa_verified })
     .from(portalUsersTable)
