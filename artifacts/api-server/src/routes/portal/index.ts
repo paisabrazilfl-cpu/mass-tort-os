@@ -3,6 +3,7 @@ import authRouter from "./auth";
 import caseRouter from "./case";
 import documentsRouter from "./documents";
 import recordsRouter from "./records";
+import fastenRouter from "./fasten";
 
 // Portal router — mounted at /portal in routes/index.ts.
 // Marked public at the CRM level (the portal manages its own JWT layer via
@@ -18,8 +19,9 @@ router.use("/case", caseRouter);
 router.use("/documents", documentsRouter);
 router.use("/records", recordsRouter);
 
-// Future sub-routers (added per plan step):
-// Step 8:  router.use("/admin",  adminRouter);
-// Step 9:  router.use("/fasten", fastenRouter);
+// Fasten Health FHIR provider connections. Auth is applied per-route inside
+// fastenRouter — the /callback endpoint is intentionally public (state-based
+// validation only) so the patient's browser can complete the OAuth redirect.
+router.use("/fasten", fastenRouter);
 
 export default router;
