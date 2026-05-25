@@ -192,7 +192,7 @@ export async function cancelSession(sessionId: string): Promise<void> {
  * default for new self-heal sessions; operators can always override.
  */
 let cachedSource: string | null | undefined;
-export function getDefaultSourceName(): string | null {
+export async function getDefaultSourceName(): Promise<string | null> {
   if (cachedSource !== undefined) return cachedSource;
   const fromEnv = process.env["JULES_DEFAULT_SOURCE"];
   if (fromEnv) {
@@ -200,11 +200,8 @@ export function getDefaultSourceName(): string | null {
     return cachedSource;
   }
   try {
-    // Lazy/sync read of .git/config to keep this dependency-free. Use
-    // require() rather than dynamic import because getDefaultSourceName is
-    // a SYNCHRONOUS function (the route module reads it with no await);
-    // dynamic-import returns a promise and would yield a syntax error inside
-    // a non-async function.
+    // Lazy/sync read of .git/config to keep this dependency-free. We use
+    // require() rather than dynamic import for the sync fs APIs below.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require("node:fs") as typeof import("node:fs");
     // eslint-disable-next-line @typescript-eslint/no-require-imports
