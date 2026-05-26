@@ -549,7 +549,15 @@ export default function LeadDetail() {
 
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Building2 className="h-4 w-4" />Hospital / Treatment Facility</CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2"><Building2 className="h-4 w-4" />Hospital / Treatment Facility</CardTitle>
+                  <a
+                    href={`/npi-lookup?lead_id=${leadId}`}
+                    className="text-xs text-primary hover:underline font-medium"
+                  >
+                    Find Provider →
+                  </a>
+                </div>
               </CardHeader>
               <CardContent className="space-y-0">
                 <FieldRow label="Facility Name" value={lead.hospital_name} />

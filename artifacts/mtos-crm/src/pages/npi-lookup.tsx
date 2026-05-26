@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import {
   useSearchNpi,
@@ -8,6 +8,7 @@ import {
   NpiProvider,
   useVerifyProviderMatch,
   NpiVerifyRichResult,
+  useUpdateLead,
 } from "@workspace/api-client-react";
 import {
   Search,
@@ -25,6 +26,8 @@ import {
   AlertTriangle,
   Copy,
   Database,
+  ArrowLeft,
+  CheckCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -435,7 +438,17 @@ function fmtPhone(raw: string | null | undefined): string {
   return raw;
 }
 
-function LocalProviderRow({ provider, onCopyFax }: { provider: LocalProvider; onCopyFax: (fax: string) => void }) {
+function LocalProviderRow({
+  provider,
+  onCopyFax,
+  onUseProvider,
+  usedNpi,
+}: {
+  provider: LocalProvider;
+  onCopyFax: (fax: string) => void;
+  onUseProvider?: (p: LocalProvider) => void;
+  usedNpi?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const fax = provider.practice_fax || provider.mail_fax;
   const isDeactivated = !!provider.deactivation_date;
@@ -492,7 +505,22 @@ function LocalProviderRow({ provider, onCopyFax }: { provider: LocalProvider; on
           )}
         </TableCell>
         <TableCell className="text-right">
-          {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground inline" /> : <ChevronDown className="h-4 w-4 text-muted-foreground inline" />}
+          <div className="flex items-center justify-end gap-1">
+            {onUseProvider && (
+              <Button
+                size="sm"
+                variant={usedNpi === provider.npi ? "default" : "outline"}
+                className="h-7 text-xs gap-1"
+                onClick={(e) => { e.stopPropagation(); onUseProvider(provider); }}
+                title="Set as provider for this lead"
+              >
+                {usedNpi === provider.npi
+                  ? <><CheckCheck className="h-3 w-3" /> Selected</>
+                  : "Use this"}
+              </Button>
+            )}
+            {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+          </div>
         </TableCell>
       </TableRow>
       {expanded && (
@@ -558,12 +586,16 @@ function LocalProviderRow({ provider, onCopyFax }: { provider: LocalProvider; on
 
 const EMPTY_LOCAL_SEARCH: LocalSearchParams = { search: "", state: "", entity_type: "", has_fax: false };
 
-function LocalDbTab() {
+function LocalDbTab({ leadId }: { leadId: number | null }) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [form, setForm] = useState<LocalSearchParams>(EMPTY_LOCAL_SEARCH);
   const [activeParams, setActiveParams] = useState<LocalSearchParams | null>(null);
   const [page, setPage] = useState(1);
+  const [selectedNpi, setSelectedNpi] = useState<string | null>(null);
   const PAGE_SIZE = 25;
+
+  const updateLead = useUpdateLead();
 
   const queryParams = activeParams
     ? {
@@ -604,10 +636,47 @@ function LocalDbTab() {
     });
   };
 
+  const handleUseProvider = async (p: LocalProvider) => {
+    if (!leadId) return;
+    const fax = p.practice_fax || p.mail_fax;
+    if (!fax) {
+      toast({ variant: "destructive", title: "No fax number", description: "This provider has no fax on file." });
+      return;
+    }
+    try {
+      await updateLead.mutateAsync({
+        id: leadId,
+        data: {
+          hospital_name: p.display_name || p.org_name || undefined,
+          hospital_fax: fax,
+        },
+      });
+      setSelectedNpi(p.npi);
+      toast({
+        title: "Provider set",
+        description: `${p.display_name || p.org_name || p.npi} — fax ${fmtPhone(fax)} saved to lead.`,
+      });
+    } catch {
+      toast({ variant: "destructive", title: "Failed to update lead", description: "Please try again." });
+    }
+  };
+
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
 
   return (
     <div className="space-y-4">
+      {leadId && (
+        <div className="flex items-center justify-between rounded-md border border-primary/30 bg-primary/5 px-4 py-2.5 text-sm">
+          <span>
+            <span className="font-medium">Selecting provider for Lead #{leadId}</span>
+            <span className="text-muted-foreground ml-2">— click "Use this" on a row to set the hospital fax.</span>
+          </span>
+          <Button variant="ghost" size="sm" className="gap-1.5 h-7" onClick={() => navigate(`/leads/${leadId}`)}>
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Back to lead
+          </Button>
+        </div>
+      )}
       <Card className="border-border/50 shadow-sm">
         <form onSubmit={handleSearch}>
           <CardContent className="pt-6">
@@ -746,7 +815,13 @@ function LocalDbTab() {
                 </TableRow>
               )}
               {data && data.results.map((p) => (
-                <LocalProviderRow key={p.npi} provider={p} onCopyFax={handleCopyFax} />
+                <LocalProviderRow
+                  key={p.npi}
+                  provider={p}
+                  onCopyFax={handleCopyFax}
+                  onUseProvider={leadId ? handleUseProvider : undefined}
+                  usedNpi={selectedNpi ?? undefined}
+                />
               ))}
             </TableBody>
           </Table>
@@ -777,6 +852,10 @@ function LocalDbTab() {
 }
 
 export default function NpiLookup() {
+  // Read optional ?lead_id=123 from URL — set by the lead detail page "Find Provider" link.
+  const leadIdParam = new URLSearchParams(window.location.search).get("lead_id");
+  const contextLeadId = leadIdParam ? parseInt(leadIdParam, 10) || null : null;
+
   const [formValues, setFormValues] = useState<SearchNpiParams>({
     npi_number: "",
     first_name: "",
@@ -880,7 +959,7 @@ export default function NpiLookup() {
         </TabsList>
 
         <TabsContent value="local" className="mt-4">
-          <LocalDbTab />
+          <LocalDbTab leadId={contextLeadId} />
         </TabsContent>
 
         <TabsContent value="search" className="space-y-4 mt-4">
