@@ -50,7 +50,7 @@ export const portalAuditLogTable = pgTable(
     //   portal.password_set       portal.password_change
     //   portal.admin_impersonate  portal.signup_complete
 
-    // Optional resource being acted upon (document, fasten_connection, etc.).
+    // Optional resource being acted upon (document, etc.).
     resource_type: varchar("resource_type", { length: 50 }),
     resource_id: integer("resource_id"),
 

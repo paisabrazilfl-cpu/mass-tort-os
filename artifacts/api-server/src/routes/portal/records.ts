@@ -16,9 +16,9 @@ const MED_REC_TYPES = [
 
 // ---------------------------------------------------------------------------
 // GET /portal/records
-// Medical records status: records received via fax/upload, and FHIR provider
-// connections via Fasten. No raw file content or URLs are returned — the
-// client sees status and metadata only.
+// Medical records status: records received via fax/upload.
+// No raw file content or URLs are returned — the client sees status and
+// metadata only.
 // ---------------------------------------------------------------------------
 router.get("/", async (req, res) => {
   const pu = req.portalUser!;

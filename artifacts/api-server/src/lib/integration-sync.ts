@@ -11,8 +11,7 @@
  * an action that's guaranteed to do nothing.
  *
  * Add a new sync handler:
- *   1. Implement `(integration) => Promise<SyncOutcome>` in the relevant
- *      lib (e.g. lib/fasten/sync.ts).
+ *   1. Implement `(integration) => Promise<SyncOutcome>` in the relevant lib.
  *   2. Register it below.
  *   3. The /integrations/categories endpoint and the wiring map in
  *      lib/integration-wiring.ts already track which providers are wired;
