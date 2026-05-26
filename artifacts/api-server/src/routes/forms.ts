@@ -1536,20 +1536,40 @@ if(WEB_FORM_FIELDS && WEB_FORM_FIELDS.length > 0){
   };
   var groups = {};
   var order = [];
+  function renderRadioGroup(f){
+    var wrap = el("div",{style:{marginBottom:"12px"}});
+    wrap.appendChild(el("label",{style:{display:"block",fontWeight:"600",marginBottom:"6px",fontSize:"14px"}}, f.label + (f.required ? " *" : "")));
+    (f.options || []).forEach(function(o){
+      var val = (typeof o === "object") ? o.value : o;
+      var lab = (typeof o === "object") ? o.label : o;
+      var row = el("label",{style:{display:"flex",alignItems:"center",gap:"8px",fontSize:"14px",marginBottom:"4px",cursor:"pointer"}});
+      var inp = el("input",{type:"radio",name:f.key,value:String(val)});
+      if(f.required) inp.required = true;
+      row.appendChild(inp);
+      row.appendChild(el("span",null,String(lab)));
+      wrap.appendChild(row);
+    });
+    return wrap;
+  }
   WEB_FORM_FIELDS.forEach(function(f){
     var sec = f.section || "story";
     if(!groups[sec]){ groups[sec] = []; order.push(sec); }
-    var opts = { optional: !f.required };
-    if(f.placeholder) opts.placeholder = f.placeholder;
-    if(f.options) opts.options = f.options;
     var t = f.type;
-    if(t === "select_one") t = "select";
-    if(t === "boolean" || t === "checkbox" || t === "consent") {
-      t = "checkbox";
-      opts.checkLabel = f.label;
+    var node;
+    if(t === "radio"){
+      node = renderRadioGroup(f);
+    } else {
+      var opts = { optional: !f.required };
+      if(f.placeholder) opts.placeholder = f.placeholder;
+      if(f.options) opts.options = f.options;
+      if(t === "select_one") t = "select";
+      if(t === "boolean" || t === "checkbox" || t === "consent") {
+        t = "checkbox";
+        opts.checkLabel = f.label;
+      }
+      if(t === "long_text") t = "textarea";
+      node = input(f.key, f.label, t, opts);
     }
-    if(t === "long_text") t = "textarea";
-    var node = input(f.key, f.label, t, opts);
     if(f.help_text){
       var help = el("p",{style:{fontSize:"12px",color:"#6b7280",marginTop:"-6px",marginBottom:"8px"}}, f.help_text);
       node.appendChild(help);
