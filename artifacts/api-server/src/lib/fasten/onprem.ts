@@ -10,7 +10,11 @@
  * Reads credentials from the integrations vault row whose `provider="fasten_onprem"`.
  * Required fields:
  *   - api_url        plaintext, e.g. https://fasten.your-domain.com
- *   - api_key        vault: an admin API token issued by the fasten-onprem instance
+ *   - api_key        vault: admin password for the fasten-onprem instance
+ *   - client_id      vault: admin username (defaults to "admin" if omitted)
+ *
+ * The client signs in automatically before each API call, caching the JWT
+ * in memory and refreshing it 5 minutes before expiry.
  *
  * Use FASTEN_BACKEND=onprem (or set the per-integration backend) to route
  * connections through this adapter instead of the hosted Connect API.
@@ -24,7 +28,7 @@ export class FastenOnpremNotConfiguredError extends Error {
   readonly code = "FASTEN_ONPREM_NOT_CONFIGURED" as const;
   constructor() {
     super(
-      "Fasten on-prem integration is not configured. Add a 'fasten_onprem' integration in Settings → Integrations with api_url and an admin api_key.",
+      "Fasten on-prem integration is not configured. Add a 'fasten_onprem' integration in Settings → Integrations with api_url and api_key (admin password).",
     );
     this.name = "FastenOnpremNotConfiguredError";
   }
@@ -40,8 +44,13 @@ export class FastenOnpremApiError extends Error {
 
 interface OnpremCreds {
   baseUrl: string;
-  apiKey: string;
+  username: string;
+  password: string;
 }
+
+// In-memory JWT cache — keyed by baseUrl so it survives across requests
+// within the same process lifetime without re-authenticating on every call.
+const jwtCache = new Map<string, { token: string; exp: number }>();
 
 async function loadOnpremCredentials(): Promise<OnpremCreds> {
   const creds: DecryptedCredentials | null = await getIntegrationCredentials(PROVIDER_KEY);
@@ -50,8 +59,48 @@ async function loadOnpremCredentials(): Promise<OnpremCreds> {
   }
   return {
     baseUrl: creds.api_url.replace(/\/+$/, ""),
-    apiKey: creds.api_key,
+    username: creds.client_id || "admin",
+    password: creds.api_key,
   };
+}
+
+/** Get a valid JWT, signing in if the cached one is missing or near expiry. */
+async function getJwt(creds: OnpremCreds): Promise<string> {
+  const cached = jwtCache.get(creds.baseUrl);
+  const now = Math.floor(Date.now() / 1000);
+  // Refresh if missing or expiring within 5 minutes
+  if (cached && cached.exp > now + 300) {
+    return cached.token;
+  }
+
+  const res = await fetch(`${creds.baseUrl}/api/auth/signin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ username: creds.username, password: creds.password }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as any;
+    throw new FastenOnpremApiError(
+      `fasten-onprem signin failed (${res.status}): ${body?.error || "unknown"}`,
+      res.status,
+    );
+  }
+
+  const data = await res.json() as { data?: string; success?: boolean };
+  const token = data.data;
+  if (!token) throw new FastenOnpremApiError("fasten-onprem signin returned no token", 500);
+
+  // Decode expiry from JWT payload (no verification needed — server just issued it)
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
+    jwtCache.set(creds.baseUrl, { token, exp: payload.exp ?? now + 3600 });
+  } catch {
+    jwtCache.set(creds.baseUrl, { token, exp: now + 3500 });
+  }
+
+  logger.info({ baseUrl: creds.baseUrl }, "fasten-onprem: refreshed admin JWT");
+  return token;
 }
 
 export async function isFastenOnpremConfigured(): Promise<boolean> {
@@ -64,18 +113,21 @@ export async function isFastenOnpremConfigured(): Promise<boolean> {
 }
 
 async function onpremRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const c = await loadOnpremCredentials();
-  const url = `${c.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  const creds = await loadOnpremCredentials();
+  const jwt = await getJwt(creds);
+  const url = `${creds.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
   const res = await fetch(url, {
     ...init,
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      Authorization: `Bearer ${c.apiKey}`,
+      Authorization: `Bearer ${jwt}`,
       ...(init.headers || {}),
     },
   });
   if (!res.ok) {
+    // If the token was just refreshed and still 401, clear cache and throw
+    if (res.status === 401) jwtCache.delete(creds.baseUrl);
     logger.warn({ url, status: res.status }, "fasten-onprem API non-2xx");
     throw new FastenOnpremApiError(`fasten-onprem ${res.status} on ${path}`, res.status);
   }
