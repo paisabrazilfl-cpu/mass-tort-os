@@ -45,3 +45,4 @@ export * from "./firm_portal_configs";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";
 export * from "./nppes_providers";
+export * from "./medical_records_requests";

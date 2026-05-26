@@ -25,8 +25,8 @@
  * The pure classification + download logic lives in inbound-classify.ts
  * (no DB import) so it stays unit-testable without a database.
  */
-import { db, pool, faxResultsTable, documentsTable, jobQueueTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, pool, faxResultsTable, documentsTable, jobQueueTable, medicalRecordsRequestsTable } from "@workspace/db";
+import { eq, and, inArray, desc } from "drizzle-orm";
 import { saveFile } from "../vault";
 import { logger } from "../logger";
 import { auditLog } from "../audit";
@@ -241,6 +241,39 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
         })
         .returning({ id: documentsTable.id });
       documentId = doc?.id;
+    }
+
+    // Mark the most recent outstanding MRR request for this lead as fulfilled.
+    // Uses the same "most-recent-wins" heuristic as correlateLead's tie-break.
+    if (leadId) {
+      try {
+        const [openRequest] = await db
+          .select({ id: medicalRecordsRequestsTable.id })
+          .from(medicalRecordsRequestsTable)
+          .where(
+            and(
+              eq(medicalRecordsRequestsTable.lead_id, leadId),
+              inArray(medicalRecordsRequestsTable.status, ["sent", "pending"]),
+            ),
+          )
+          .orderBy(desc(medicalRecordsRequestsTable.created_at))
+          .limit(1);
+
+        if (openRequest) {
+          await db
+            .update(medicalRecordsRequestsTable)
+            .set({
+              status: "fulfilled",
+              fulfilled_at: new Date(),
+              response_fax_result_id: faxRow.id,
+              updated_at: new Date(),
+            })
+            .where(eq(medicalRecordsRequestsTable.id, openRequest.id));
+        }
+      } catch (err) {
+        // Non-fatal: don't let MRR update failure break the inbound fax pipeline.
+        logger.warn({ err, leadId }, "inbound fax: failed to mark MRR request fulfilled");
+      }
     }
 
     await auditLog("fax", String(faxRow.id), "inbound_received", {

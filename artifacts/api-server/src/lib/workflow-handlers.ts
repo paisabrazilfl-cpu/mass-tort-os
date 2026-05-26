@@ -8,7 +8,7 @@
  *  - Persist a row in document_envelopes / fax_results so admin can audit
  *  - Use structured error returns from adapters; throw with a clear message on terminal errors
  */
-import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable, workflowSettingsTable } from "@workspace/db";
+import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable, workflowSettingsTable, medicalRecordsRequestsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
@@ -593,6 +593,23 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
       processed_at: new Date(),
     })
     .where(eq(faxResultsTable.id, faxRow.id));
+
+  // Record the outbound request in the MRR tracking table so operators can
+  // monitor outstanding requests and the inbound handler can mark it fulfilled.
+  const now = new Date();
+  const expectedBy = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000); // 14-day SLA
+  await db.insert(medicalRecordsRequestsTable).values({
+    lead_id,
+    firm_id: lead.firm_id ?? null,
+    hospital_name: lead.hospital_name ?? null,
+    fax_number: targetFax,
+    envelope_id: envelope_id ?? null,
+    fax_result_id: faxRow.id,
+    status: "sent",
+    sent_at: now,
+    expected_by: expectedBy,
+    last_attempt_at: now,
+  }).onConflictDoNothing();
 
   await auditLog("fax", String(faxRow.id), "sent", {
     lead_id,
