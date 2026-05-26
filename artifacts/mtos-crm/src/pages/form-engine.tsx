@@ -13,7 +13,7 @@ import {
   FormConfig,
   CustomField
 } from "@workspace/api-client-react";
-import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw, ExternalLink, Scale, Lock, ShieldCheck, FileCheck2, UserCheck2, Download, Loader2, Sparkles } from "lucide-react";
+import { Copy, Mail, MapPin, Search, Shield, CheckCircle2, XCircle, AlertTriangle, Info, Play, Pencil, Plus, Trash2, RefreshCw, ExternalLink, Scale, Lock, ShieldCheck, FileCheck2, UserCheck2, Download, Loader2, Sparkles, Archive, FileDown } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
@@ -239,6 +239,166 @@ export default function FormEngine() {
   // States: Background Check (Lead)
   const [leadIdInput, setLeadIdInput] = useState("");
   const [leadBgCheckResult, setLeadBgCheckResult] = useState<any>(null);
+
+  // ─── Replit drop-in helpers ─────────────────────────────────────────────
+  // Build a standalone, single-file HTML page for one tort. Drop into a
+  // Replit static site as `index.html` and the form renders end-to-end.
+  function buildStandaloneHtml(config: FormConfig, origin: string): string {
+    const safeLabel = String(config.label).replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${safeLabel} — Claim Intake</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; min-height: 100vh; padding: 2rem 1rem; color: #0f172a; }
+    .wrapper { max-width: 680px; margin: 0 auto; background: #fff; padding: 2rem; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+    .footer-note { max-width: 680px; margin: 1rem auto; font-size: 12px; color: #64748b; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <script src="${origin}/api/forms-public/embed/${config.id}"></script>
+    <div id="mtos-form"></div>
+  </div>
+  <p class="footer-note">Secured by MTOS · HIPAA-safe · TCPA compliant · TrustedForm certified</p>
+</body>
+</html>`;
+  }
+
+  // Minimal pure-JS ZIP (store, no compression). HTML compresses well but
+  // store-mode keeps this dependency-free and works in every browser /
+  // Replit's unzipper. Each tort gets its own folder so the user can pick
+  // one and drop the contents into a fresh Repl.
+  function makeZip(files: { name: string; content: string }[]): Blob {
+    const enc = new TextEncoder();
+    function crc32(data: Uint8Array): number {
+      let crc = 0xFFFFFFFF;
+      for (let i = 0; i < data.length; i++) {
+        crc = crc ^ data[i]!;
+        for (let j = 0; j < 8; j++) {
+          crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+        }
+      }
+      return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+    const parts: Uint8Array[] = [];
+    const central: Uint8Array[] = [];
+    let offset = 0;
+    for (const f of files) {
+      const nameBytes = enc.encode(f.name);
+      const contentBytes = enc.encode(f.content);
+      const crc = crc32(contentBytes);
+      const local = new Uint8Array(30 + nameBytes.length + contentBytes.length);
+      const lv = new DataView(local.buffer);
+      lv.setUint32(0, 0x04034b50, true);
+      lv.setUint16(4, 20, true);
+      lv.setUint16(6, 0, true);
+      lv.setUint16(8, 0, true);
+      lv.setUint16(10, 0, true);
+      lv.setUint16(12, 0x21, true);
+      lv.setUint32(14, crc, true);
+      lv.setUint32(18, contentBytes.length, true);
+      lv.setUint32(22, contentBytes.length, true);
+      lv.setUint16(26, nameBytes.length, true);
+      lv.setUint16(28, 0, true);
+      local.set(nameBytes, 30);
+      local.set(contentBytes, 30 + nameBytes.length);
+      parts.push(local);
+
+      const dir = new Uint8Array(46 + nameBytes.length);
+      const dv = new DataView(dir.buffer);
+      dv.setUint32(0, 0x02014b50, true);
+      dv.setUint16(4, 20, true);
+      dv.setUint16(6, 20, true);
+      dv.setUint16(10, 0, true);
+      dv.setUint16(12, 0x21, true);
+      dv.setUint32(16, crc, true);
+      dv.setUint32(20, contentBytes.length, true);
+      dv.setUint32(24, contentBytes.length, true);
+      dv.setUint16(28, nameBytes.length, true);
+      dv.setUint32(42, offset, true);
+      dir.set(nameBytes, 46);
+      central.push(dir);
+
+      offset += local.length;
+    }
+    const centralSize = central.reduce((s, h) => s + h.length, 0);
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(8, files.length, true);
+    ev.setUint16(10, files.length, true);
+    ev.setUint32(12, centralSize, true);
+    ev.setUint32(16, offset, true);
+    return new Blob([...parts, ...central, eocd], { type: "application/zip" });
+  }
+
+  function triggerDownload(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Download a single tort's standalone HTML — drop into Replit as index.html
+  const handleDownloadOne = (config: FormConfig) => {
+    const html = buildStandaloneHtml(config, window.location.origin);
+    triggerDownload(new Blob([html], { type: "text/html" }), `${config.id}.html`);
+    toast({ title: "Downloaded", description: `${config.label} → ${config.id}.html` });
+  };
+
+  // Download all 31 standalone pages as one ZIP, ready to extract into Replit
+  const handleDownloadAllZip = () => {
+    const origin = window.location.origin;
+    const files: { name: string; content: string }[] = [];
+    const indexLines: string[] = [
+      "# MTOS Intake Forms — Replit Drop-In Kit",
+      "",
+      `Generated: ${new Date().toISOString()}`,
+      `Origin: ${origin}`,
+      `Total forms: ${configs.length}`,
+      "",
+      "## How to use",
+      "",
+      "Each folder is a self-contained static page. Drop any folder's `index.html` into a Replit static site (or copy the contents to your own host) and the form is live — submissions flow straight into your MTOS lead pipeline.",
+      "",
+      "## Forms included",
+      "",
+    ];
+    for (const config of configs) {
+      files.push({
+        name: `${config.id}/index.html`,
+        content: buildStandaloneHtml(config, origin),
+      });
+      indexLines.push(`- **${config.label}** → \`${config.id}/index.html\``);
+    }
+    files.push({ name: "README.md", content: indexLines.join("\n") + "\n" });
+    triggerDownload(makeZip(files), "mtos-intake-forms.zip");
+    toast({
+      title: "ZIP downloaded",
+      description: `${configs.length} standalone HTML pages, ready to drop into Replit.`,
+    });
+  };
+
+  // Copy every form's embed snippet to clipboard, joined by separators
+  const handleCopyAllEmbeds = () => {
+    const origin = window.location.origin;
+    const lines = configs.map((c: FormConfig) =>
+      `<!-- ${c.label} (${c.id}) -->\n<script src="${origin}/api/forms-public/embed/${c.id}"></script>\n<div id="mtos-form"></div>`
+    );
+    navigator.clipboard.writeText(lines.join("\n\n"));
+    toast({
+      title: "All embed codes copied",
+      description: `${configs.length} snippets — paste into your editor.`,
+    });
+  };
 
   // Handlers
   const handleDownloadEmbedKit = () => {
@@ -483,10 +643,37 @@ export default function FormEngine() {
                 }
               </Button>
               {configs.length > 0 && (
-                <Button variant="outline" onClick={handleDownloadEmbedKit} className="gap-2">
-                  <Download className="h-4 w-4" />
-                  Download All Embed Codes
-                </Button>
+                <>
+                  <Button
+                    variant="default"
+                    onClick={handleDownloadAllZip}
+                    className="gap-2"
+                    title="Download all 31 forms as a ZIP — one folder per tort, ready to drop into Replit"
+                    data-testid="button-download-all-zip"
+                  >
+                    <Archive className="h-4 w-4" />
+                    Download All (ZIP)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleCopyAllEmbeds}
+                    className="gap-2"
+                    title="Copy every form's embed snippet to clipboard"
+                    data-testid="button-copy-all-embeds"
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copy All Embeds
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleDownloadEmbedKit}
+                    className="gap-2"
+                    title="Download a single HTML reference page listing every form's embed code"
+                  >
+                    <Download className="h-4 w-4" />
+                    Reference Sheet
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -556,8 +743,17 @@ export default function FormEngine() {
                   <CardFooter className="bg-muted/20 border-t p-4 flex flex-col gap-2">
                     <div className="flex gap-2 w-full">
                       <FormPreviewDialog config={config} />
-                      <Button variant="default" className="flex-1" size="sm" onClick={() => handleCopyEmbed(config.id)}>
-                        <Copy className="h-4 w-4 mr-2" /> Embed
+                      <Button variant="default" className="flex-1" size="sm" onClick={() => handleCopyEmbed(config.id)} data-testid={`button-copy-embed-${config.id}`}>
+                        <Copy className="h-4 w-4 mr-2" /> Copy Embed
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDownloadOne(config)}
+                        title="Download this form as a standalone HTML — drop into Replit as index.html"
+                        data-testid={`button-download-${config.id}`}
+                      >
+                        <FileDown className="h-4 w-4" />
                       </Button>
                     </div>
                     <FormEditDialog config={config} />
