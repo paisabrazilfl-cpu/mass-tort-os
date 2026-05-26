@@ -7,6 +7,7 @@ COPY artifacts/api-server/dist ./artifacts/api-server/dist
 COPY artifacts/api-server/package.json ./artifacts/api-server/
 COPY docs ./docs
 COPY package.json ./
+COPY lib/db ./lib/db
 
 EXPOSE 8080
 CMD ["node", "--enable-source-maps", "artifacts/api-server/dist/server/index.mjs"]
