@@ -10,4 +10,6 @@ COPY package.json ./
 COPY lib/db ./lib/db
 
 EXPOSE 8080
+# Default CMD for the "app" process group (API server).
+# The "worker" process group overrides this via fly.toml [processes].
 CMD ["node", "--enable-source-maps", "artifacts/api-server/dist/server/index.mjs"]

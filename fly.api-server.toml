@@ -4,9 +4,17 @@ primary_region = "iad"
 [build]
   dockerfile = "Dockerfile.api-server"
 
+# Process groups: "app" serves HTTP, "worker" drains the job queue.
+# Both run the same Docker image; the worker detects itself via argv.
+# INPROC_WORKER=0 prevents the API server from spawning a second worker loop.
+[processes]
+  app    = "node --enable-source-maps artifacts/api-server/dist/server/index.mjs"
+  worker = "node --enable-source-maps artifacts/api-server/dist/worker/worker.mjs"
+
 [env]
   NODE_ENV = "production"
   PORT = "8080"
+  INPROC_WORKER = "0"
 
 [http_service]
   internal_port = 8080
@@ -23,7 +31,16 @@ primary_region = "iad"
     timeout = "5s"
     path = "/api/healthz"
 
+# API server: 1 vCPU, 1 GB — handles HTTP + Postgres queries
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
   memory_mb = 1024
+  processes = ["app"]
+
+# Worker: 1 vCPU, 512 MB — job queue only, no HTTP listener
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+  processes = ["worker"]
