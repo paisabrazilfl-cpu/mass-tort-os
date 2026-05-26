@@ -248,7 +248,10 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
     if (leadId) {
       try {
         const [openRequest] = await db
-          .select({ id: medicalRecordsRequestsTable.id })
+          .select({
+            id: medicalRecordsRequestsTable.id,
+            fax_result_id: medicalRecordsRequestsTable.fax_result_id,
+          })
           .from(medicalRecordsRequestsTable)
           .where(
             and(
@@ -269,6 +272,15 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
               updated_at: new Date(),
             })
             .where(eq(medicalRecordsRequestsTable.id, openRequest.id));
+
+          // Also mark the outbound fax as delivered so the poller stops and
+          // the lead's fax timeline shows the confirmed-received status.
+          if (openRequest.fax_result_id) {
+            await db
+              .update(faxResultsTable)
+              .set({ delivery_status: "delivered", delivery_checked_at: new Date() })
+              .where(eq(faxResultsTable.id, openRequest.fax_result_id));
+          }
         }
       } catch (err) {
         // Non-fatal: don't let MRR update failure break the inbound fax pipeline.

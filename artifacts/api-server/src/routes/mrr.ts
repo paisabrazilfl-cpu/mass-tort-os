@@ -15,6 +15,7 @@ import { requirePermission, Permission } from "../lib/rbac";
 import { badRequest, notFound } from "../lib/http-errors";
 import { getFirmIdForUser } from "../lib/subscription-gate";
 import { auditLog } from "../lib/audit";
+import { enqueueJob } from "../lib/queue";
 
 const router = Router();
 
@@ -130,6 +131,55 @@ router.patch("/:id/cancel", requirePermission(Permission.MEDICAL_RECORDS_MANAGE)
 
   await auditLog("medical_records_request", String(id), "cancelled", { user_id: req.user!.id });
   res.json(updated);
+});
+
+// POST /api/mrr/:id/resend — manually re-enqueue the fax job for a sent/failed request
+router.post("/:id/resend", requirePermission(Permission.MEDICAL_RECORDS_MANAGE), async (req, res) => {
+  const id = parseInt(req.params["id"] as string, 10);
+  if (isNaN(id)) { badRequest(res, "invalid id"); return; }
+
+  const firmId = await resolveFirm(req.user!.id);
+
+  const conditions = [eq(medicalRecordsRequestsTable.id, id)];
+  if (firmId != null) conditions.push(eq(medicalRecordsRequestsTable.firm_id, firmId));
+
+  const [row] = await db
+    .select()
+    .from(medicalRecordsRequestsTable)
+    .where(and(...(conditions as [typeof conditions[0], ...typeof conditions])))
+    .limit(1);
+
+  if (!row) { notFound(res, "request not found"); return; }
+  if (!row.envelope_id || !row.lead_id) {
+    res.status(422).json({ status: "error", message: "Request has no envelope — cannot resend" });
+    return;
+  }
+
+  const now = new Date();
+  const expectedBy = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+  await db.update(medicalRecordsRequestsTable)
+    .set({
+      status: "sent",
+      attempt_count: (row.attempt_count ?? 1) + 1,
+      last_attempt_at: now,
+      expected_by: expectedBy,
+      updated_at: now,
+    })
+    .where(eq(medicalRecordsRequestsTable.id, id));
+
+  const jobId = await enqueueJob("fax_med_records_request", {
+    lead_id: row.lead_id,
+    envelope_id: row.envelope_id,
+  });
+
+  await auditLog("medical_records_request", String(id), "manual_resend", {
+    user_id: req.user!.id,
+    attempt_count: (row.attempt_count ?? 1) + 1,
+    job_id: jobId,
+  });
+
+  res.json({ ok: true, job_id: jobId });
 });
 
 export default router;

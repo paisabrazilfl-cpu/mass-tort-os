@@ -9,7 +9,7 @@
  *  - Use structured error returns from adapters; throw with a clear message on terminal errors
  */
 import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable, workflowSettingsTable, medicalRecordsRequestsTable } from "@workspace/db";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, desc } from "drizzle-orm";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
 import { resolveProvider, isResolved } from "./provider-router";
@@ -17,6 +17,7 @@ import { getEsignAdapter } from "./esign";
 import { getFaxAdapter } from "./fax";
 import { getEmailAdapter } from "./email/sendgrid";
 import { downloadTemplate } from "./template-storage";
+import { readFile } from "./vault";
 import { decryptLeadFields } from "./encryption";
 import { FAX_SOURCE_FILE_TEMPLATE } from "./fax-results-matcher";
 import { enqueueJob } from "./queue";
@@ -147,6 +148,25 @@ async function buildMedRecordsCoverLetter(lead: typeof leadsTable.$inferSelect, 
 
   const bytes = await pdf.save();
   return Buffer.from(bytes);
+}
+
+/**
+ * Merge two PDFs into one using pdf-lib. Returns the combined buffer.
+ * Falls back to just returning `first` if the second PDF is malformed.
+ */
+async function mergePdfs(first: Buffer, second: Buffer): Promise<Buffer> {
+  const { PDFDocument } = await loadPdfLib();
+  const merged = await PDFDocument.create();
+  for (const src of [first, second]) {
+    try {
+      const doc = await PDFDocument.load(src);
+      const pages = await merged.copyPages(doc, doc.getPageIndices());
+      pages.forEach(p => merged.addPage(p));
+    } catch (err) {
+      logger.warn({ err }, "mergePdfs: failed to load one source PDF — skipping it");
+    }
+  }
+  return Buffer.from(await merged.save());
 }
 
 /**
@@ -515,6 +535,26 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
 
   const coverPdf = await buildMedRecordsCoverLetter(lead, envelope_id);
 
+  // Attempt to attach the signed HIPAA authorization PDF so hospitals receive
+  // it as page 2+ of the same fax. Non-fatal — missing or corrupt signed PDF
+  // just sends the cover letter alone.
+  let faxPdf = coverPdf;
+  try {
+    const [signedEnvelope] = await db
+      .select({ signed_pdf_path: documentEnvelopesTable.signed_pdf_path })
+      .from(documentEnvelopesTable)
+      .where(and(eq(documentEnvelopesTable.id, envelope_id), eq(documentEnvelopesTable.lead_id, lead_id)))
+      .limit(1);
+    if (signedEnvelope?.signed_pdf_path) {
+      const rawBase64 = await readFile(signedEnvelope.signed_pdf_path);
+      const signedBuf = Buffer.from(rawBase64, "base64");
+      faxPdf = await mergePdfs(coverPdf, signedBuf);
+      logger.info({ lead_id, envelope_id }, "HIPAA auth PDF appended to MRR fax");
+    }
+  } catch (err) {
+    logger.warn({ err, lead_id, envelope_id }, "Could not attach signed HIPAA PDF — sending cover letter only");
+  }
+
   // Pre-insert a pending fax_results row so admins see the attempt even if the call fails.
   const [faxRow] = await db
     .insert(faxResultsTable)
@@ -531,7 +571,7 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
   let outcome;
   try {
     outcome = await adapter.send(resolved.credentials, {
-      pdf: coverPdf,
+      pdf: faxPdf,
       fileName: `med_records_request_${envelope_id}.pdf`,
       toNumber: targetFax,
       metadata: {

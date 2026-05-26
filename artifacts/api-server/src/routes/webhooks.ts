@@ -23,6 +23,7 @@ import {
   leadDispositionsTable,
   emailEventsTable,
   faxEventsTable,
+  faxResultsTable,
 } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import crypto from "crypto";
@@ -792,6 +793,18 @@ router.post("/_test/envelope-signed", async (req, res) => {
 
 const EMAIL_EVENT_PROVIDERS = new Set(["sendgrid", "postmark", "resend", "mailgun", "aws_ses", "brevo"]);
 const FAX_EVENT_PROVIDERS = new Set(["srfax", "efax", "phaxio", "documo", "telnyx_fax"]);
+
+function normalizeWebhookFaxStatus(provider: string, rawStatus: string | undefined): string | null {
+  if (!rawStatus) return null;
+  const s = rawStatus.toLowerCase();
+  // Delivered / success
+  if (["delivered", "success", "sent", "completed"].includes(s)) return "delivered";
+  // Failed
+  if (["failed", "error", "declined", "busy", "no_answer", "cancelled"].includes(s)) return "failed";
+  // Pending / in transit
+  if (["queued", "processing", "sending", "pending", "in_progress"].includes(s)) return "pending";
+  return null; // don't overwrite with unknown on unrecognized status
+}
 const SMS_EVENT_PROVIDERS = new Set(["bandwidth", "plivo", "messagebird", "sinch"]);
 const VOICE_EVENT_PROVIDERS = new Set(["retell_ai", "bland_ai", "elevenlabs", "synthflow"]);
 
@@ -926,7 +939,7 @@ router.post("/fax/:provider", async (req, res) => {
   try {
     await db.insert(faxEventsTable).values({
       integration_id: integrationId,
-      firm_id: null,   // fax correlation requires an outbound fax_messages table; not yet shipped
+      firm_id: null,
       lead_id: null,
       provider,
       external_fax_id: externalId,
@@ -939,6 +952,24 @@ router.post("/fax/:provider", async (req, res) => {
   } catch (err) {
     logger.warn({ err, provider }, "fax_events insert failed");
   }
+
+  // Correlate the event to an outbound fax_results row and update delivery_status.
+  // This gives instant confirmation rather than waiting for the next poll job.
+  if (externalId) {
+    const normalizedStatus = normalizeWebhookFaxStatus(provider, status);
+    if (normalizedStatus) {
+      try {
+        await db
+          .update(faxResultsTable)
+          .set({ delivery_status: normalizedStatus, delivery_checked_at: new Date() })
+          .where(eq(faxResultsTable.external_fax_id, externalId));
+        logger.info({ provider, external_fax_id: externalId, delivery_status: normalizedStatus }, "fax delivery_status updated via webhook");
+      } catch (err) {
+        logger.warn({ err, provider, externalId }, "fax delivery_status webhook update failed");
+      }
+    }
+  }
+
   res.json({ ok: true, signature_status: signatureStatus });
 });
 
