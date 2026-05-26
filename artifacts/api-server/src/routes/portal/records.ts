@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, documentsTable, faxResultsTable, fastenConnectionsTable } from "@workspace/db";
+import { db, documentsTable, faxResultsTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { portalAuthMiddleware, requirePortalMfa, writePortalAudit, getClientIp } from "../../lib/portal-auth";
 
@@ -54,24 +54,6 @@ router.get("/", async (req, res) => {
     .where(eq(faxResultsTable.lead_id, pu.lead_id))
     .orderBy(faxResultsTable.created_at);
 
-  // Fasten Health provider connections for this lead.
-  // These are patient-initiated FHIR connections — the client can see which
-  // providers are connected and the last sync status.
-  const fastenConnections = await db
-    .select({
-      id: fastenConnectionsTable.id,
-      portal_name: fastenConnectionsTable.portal_name,
-      portal_id: fastenConnectionsTable.portal_id,
-      status: fastenConnectionsTable.status,
-      last_synced_at: fastenConnectionsTable.last_synced_at,
-      last_resource_count: fastenConnectionsTable.last_resource_count,
-      last_error: fastenConnectionsTable.last_error,
-      created_at: fastenConnectionsTable.created_at,
-    })
-    .from(fastenConnectionsTable)
-    .where(eq(fastenConnectionsTable.lead_id, pu.lead_id))
-    .orderBy(fastenConnectionsTable.created_at);
-
   await writePortalAudit({
     portal_user_id: pu.id,
     admin_user_id: pu.impersonation ? pu.admin_id : null,
@@ -85,7 +67,6 @@ router.get("/", async (req, res) => {
   const totalReceived = medDocs.length + faxRecords.filter(f => f.status !== "error").length;
 
   res.json({
-    // Traditional fax / uploaded medical records
     records: {
       documents: medDocs.map(d => ({
         id: d.id,
@@ -104,23 +85,11 @@ router.get("/", async (req, res) => {
       })),
       total_received: totalReceived,
     },
-    // FHIR provider connections (Fasten Health)
-    providers: fastenConnections.map(c => ({
-      id: c.id,
-      name: c.portal_name ?? c.portal_id ?? "Healthcare Provider",
-      status: c.status,
-      status_label: friendlyConnectionStatus(c.status),
-      // Only show last_error when the connection is in error state —
-      // no internal error details that could confuse the client.
-      needs_attention: ["reauth", "error"].includes(c.status),
-      last_synced_at: c.last_synced_at,
-      records_count: c.last_resource_count ?? 0,
-      connected_at: c.created_at,
-    })),
+    providers: [],
     summary: {
       records_received: totalReceived,
-      providers_connected: fastenConnections.filter(c => c.status === "active" || c.status === "synced").length,
-      providers_needing_attention: fastenConnections.filter(c => ["reauth", "error"].includes(c.status)).length,
+      providers_connected: 0,
+      providers_needing_attention: 0,
     },
   });
 });
@@ -138,19 +107,6 @@ function friendlyRecordType(type: string): string {
     fax_return: "Faxed Record",
   };
   return map[type] ?? "Medical Record";
-}
-
-function friendlyConnectionStatus(status: string): string {
-  const map: Record<string, string> = {
-    pending: "Connecting",
-    active: "Connected",
-    syncing: "Syncing Records",
-    synced: "Records Retrieved",
-    reauth: "Reconnection Required",
-    revoked: "Disconnected",
-    error: "Connection Error",
-  };
-  return map[status] ?? status;
 }
 
 export default router;

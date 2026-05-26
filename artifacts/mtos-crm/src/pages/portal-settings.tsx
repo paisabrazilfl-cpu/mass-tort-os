@@ -4,15 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Globe, Wifi, Loader2, Settings2, Search, Zap,
-  CheckCircle2, AlertCircle, Key, Radio,
+  Globe, Loader2, Settings2, Search, Zap, Radio,
 } from "lucide-react";
 
 interface PortalConfig {
@@ -22,10 +20,6 @@ interface PortalConfig {
   brand_name: string | null;
   brand_color: string | null;
   logo_url: string | null;
-  fasten_enabled: boolean;
-  fasten_backend: string | null;
-  fasten_api_url: string | null;
-  has_fasten_api_key: boolean;
   updated_at: string;
 }
 
@@ -39,10 +33,6 @@ interface DraftConfig {
   brand_name: string;
   brand_color: string;
   logo_url: string;
-  fasten_enabled: boolean;
-  fasten_backend: "onprem" | "connect";
-  fasten_api_url: string;
-  fasten_api_key: string;
 }
 
 function toLabel(tortType: string) {
@@ -57,10 +47,6 @@ function emptyDraft(cfg?: PortalConfig, tortType?: string): DraftConfig {
     brand_name: cfg?.brand_name ?? (tortType ? toLabel(tortType) + " Claims" : ""),
     brand_color: cfg?.brand_color ?? "#1e3a5f",
     logo_url: cfg?.logo_url ?? "",
-    fasten_enabled: cfg?.fasten_enabled ?? false,
-    fasten_backend: (cfg?.fasten_backend as "onprem" | "connect") ?? "onprem",
-    fasten_api_url: cfg?.fasten_api_url ?? "",
-    fasten_api_key: "",
   };
 }
 
@@ -102,11 +88,7 @@ function EditDialog({ tortType, config, open, onClose, onSaved }: EditDialogProp
         brand_name: draft.brand_name || null,
         brand_color: draft.brand_color || null,
         logo_url: draft.logo_url || null,
-        fasten_enabled: draft.fasten_enabled,
-        fasten_backend: draft.fasten_backend,
-        fasten_api_url: draft.fasten_api_url || null,
       };
-      if (draft.fasten_api_key) body.fasten_api_key = draft.fasten_api_key;
 
       const res = await apiFetchRaw(`/api/portal-settings/${encodeURIComponent(tortType)}`, {
         method: "PUT",
@@ -121,7 +103,6 @@ function EditDialog({ tortType, config, open, onClose, onSaved }: EditDialogProp
 
       const saved = await res.json() as PortalConfig;
       onSaved(saved);
-      setDraft(d => ({ ...d, fasten_api_key: "" }));
       toast({ title: "Saved!", description: `${toLabel(tortType)} portal updated.` });
       onClose();
     } catch (err) {
@@ -215,79 +196,6 @@ function EditDialog({ tortType, config, open, onClose, onSaved }: EditDialogProp
             </div>
           </div>
 
-          {/* Medical Records */}
-          <div className="space-y-3">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-              <Wifi className="h-3.5 w-3.5" /> Medical Records Access
-            </p>
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div>
-                <p className="text-sm font-medium">Enable Fasten Health</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Claimants can link their patient portal and pull medical records automatically.
-                </p>
-              </div>
-              <Switch
-                checked={draft.fasten_enabled}
-                onCheckedChange={v => set("fasten_enabled", v)}
-              />
-            </div>
-
-            {draft.fasten_enabled && (
-              <div className="space-y-3 pl-3 border-l-2 border-blue-200">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Connection type</Label>
-                  <Select
-                    value={draft.fasten_backend}
-                    onValueChange={v => set("fasten_backend", v as "onprem" | "connect")}
-                  >
-                    <SelectTrigger className="h-8 text-sm">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="onprem">Self-hosted (your own server)</SelectItem>
-                      <SelectItem value="connect">Fasten Connect (cloud)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {draft.fasten_backend === "onprem" && (
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Fasten server URL</Label>
-                    <Input
-                      value={draft.fasten_api_url}
-                      onChange={e => set("fasten_api_url", e.target.value)}
-                      placeholder="https://fasten.yourdomain.com"
-                      className="h-8 text-sm"
-                    />
-                  </div>
-                )}
-
-                <div className="space-y-1.5">
-                  <Label className="text-xs flex items-center gap-1.5">
-                    <Key className="h-3 w-3" /> API key
-                    {config?.has_fasten_api_key ? (
-                      <span className="text-green-600 flex items-center gap-0.5 font-normal">
-                        <CheckCircle2 className="h-3 w-3" /> Saved
-                      </span>
-                    ) : (
-                      <span className="text-amber-500 flex items-center gap-0.5 font-normal">
-                        <AlertCircle className="h-3 w-3" /> Not set
-                      </span>
-                    )}
-                  </Label>
-                  <Input
-                    type="password"
-                    value={draft.fasten_api_key}
-                    onChange={e => set("fasten_api_key", e.target.value)}
-                    placeholder={config?.has_fasten_api_key ? "Leave blank to keep existing key" : "Paste API key…"}
-                    className="h-8 text-sm font-mono"
-                    autoComplete="new-password"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
         </div>
 
         <DialogFooter>
@@ -346,9 +254,6 @@ export default function PortalSettingsPage() {
         brand_name: existing?.brand_name ?? toLabel(tortType) + " Claims",
         brand_color: existing?.brand_color ?? "#1e3a5f",
         logo_url: existing?.logo_url ?? null,
-        fasten_enabled: existing?.fasten_enabled ?? false,
-        fasten_backend: existing?.fasten_backend ?? "onprem",
-        fasten_api_url: existing?.fasten_api_url ?? null,
       };
       const res = await apiFetchRaw(`/api/portal-settings/${encodeURIComponent(tortType)}`, {
         method: "PUT",

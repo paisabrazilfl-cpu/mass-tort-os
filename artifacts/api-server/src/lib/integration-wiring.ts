@@ -113,13 +113,6 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   elevenlabs: ["api_key", "client_secret"],
   synthflow: ["api_key", "client_secret"],
 
-  // Medical Records — Fasten Health (patient-initiated FHIR aggregation).
-  // The Connect adapter reads all three secret fields: client_id (public id),
-  // api_key (private key), client_secret (webhook signing secret). The on-prem
-  // adapter only needs api_key (the admin token for your self-hosted instance).
-  fasten_connect: ["api_key", "client_id", "client_secret"],
-  fasten_onprem: ["api_key"],
-
   // AI / LLM (vault-consuming providers — anthropic/openai are env-managed)
   google_gemini: ["api_key"],
   openrouter: ["api_key"],
@@ -202,22 +195,6 @@ const REGISTRY: Record<string, WiringInfo> = {
   cohere: { status: "live", note: "LLM completions via Cohere v2 chat." },
   xai_grok: { status: "live", note: "LLM completions via xAI Grok v1 chat completions." },
   fireworks_ai: { status: "live", note: "LLM completions via Fireworks AI inference v1 chat completions." },
-
-  // Medical Records — Fasten Health (patient-initiated FHIR aggregation).
-  // Both backends ship as live adapters: lib/fasten/client.ts (hosted Connect API)
-  // and lib/fasten/onprem.ts (self-hosted GPL build). They are NOT registered
-  // in any of the email/esign/fax/sms/voice/llm ADAPTERS maps, so the cross-
-  // check loop in assertWiringRegistryConsistency does not validate them — but
-  // they are real, vault-consuming adapters wired into routes/fasten.ts and
-  // the fasten_records_sync worker job.
-  fasten_connect: {
-    status: "live",
-    note: "Patient-initiated FHIR aggregation via Fasten Connect API. Requires client_id (public id), api_key (private key), and client_secret (webhook signing secret).",
-  },
-  fasten_onprem: {
-    status: "live",
-    note: "Self-hosted fasten-onprem GPL build. Requires api_url pointing at your instance and an admin api_key.",
-  },
 
   // Automation — receive lead.created events
   n8n: {

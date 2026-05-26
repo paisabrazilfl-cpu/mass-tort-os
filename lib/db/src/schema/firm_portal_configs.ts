@@ -14,16 +14,9 @@ import { z } from "zod/v4";
 import { firmsTable } from "./firms";
 
 // One row per (firm, tort_type) pair — controls whether the client portal is
-// enabled for a given tort campaign and carries the per-tort branding and
-// Fasten configuration. tort_type values match leads.tort_type exactly so
-// portal config lookup is a single equality join with no translation layer.
-//
-// Fasten fields:
-//   fasten_backend  "onprem"  → self-hosted instance (free, GPL)
-//                  "connect" → hosted Fasten Connect SaaS
-//   fasten_api_key_hash  SHA-256 of the plaintext admin API token.
-//                        Plaintext is never persisted — stored in env or
-//                        passed at connection-initiation time only.
+// enabled for a given tort campaign and carries the per-tort branding.
+// tort_type values match leads.tort_type exactly so portal config lookup is
+// a single equality join with no translation layer.
 export const firmPortalConfigsTable = pgTable(
   "firm_portal_configs",
   {
@@ -45,15 +38,6 @@ export const firmPortalConfigsTable = pgTable(
     brand_name: varchar("brand_name", { length: 255 }),
     brand_color: varchar("brand_color", { length: 7 }),  // CSS hex, e.g. "#1a56db"
     logo_url: text("logo_url"),
-
-    // Fasten Health integration — optional per tort.
-    // Some torts (no med recs required) leave this off entirely.
-    fasten_enabled: boolean("fasten_enabled").notNull().default(false),
-    fasten_backend: varchar("fasten_backend", { length: 16 }).default("onprem"),
-    // Base URL of the fasten-onprem instance, e.g. https://fasten.yourdomain.com
-    fasten_api_url: text("fasten_api_url"),
-    // SHA-256 hash of the admin API token. Never store plaintext.
-    fasten_api_key_hash: text("fasten_api_key_hash"),
 
     created_at: timestamp("created_at").defaultNow().notNull(),
     updated_at: timestamp("updated_at").defaultNow().notNull(),

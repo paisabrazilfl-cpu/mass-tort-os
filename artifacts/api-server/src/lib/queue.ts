@@ -10,8 +10,7 @@ export type JobType =
   | "send_esign_packet"
   | "fax_med_records_request"
   | "send_workflow_email"
-  | "send_workflow_sms"
-  | "fasten_records_sync";
+  | "send_workflow_sms";
 
 export interface JobPayload {
   create_case: { case_id: string; data: Record<string, unknown>; created_by_user_id?: number | null };
@@ -48,23 +47,6 @@ export interface JobPayload {
     body: string;
     firm_id?: number | null;
     source?: string;
-  };
-  fasten_records_sync: {
-    connection_id: number;
-    lead_id: number;
-    case_id: string;
-    backend: "connect" | "onprem";
-    org_connection_id: string;
-    /** When polling a Fasten Connect bulk export, the task_id we're waiting on. */
-    task_id?: string;
-    /** Number of poll attempts so far — guards against infinite re-enqueue. */
-    poll_attempt?: number;
-    /**
-     * Task #72: when true, skip startBulkExport and only re-download the
-     * file_ids saved to metadata.failed_files from the prior partial run.
-     * Triggered from /api/fasten/sync with `mode=retry-failed`.
-     */
-    retry_failed_only?: boolean;
   };
 }
 

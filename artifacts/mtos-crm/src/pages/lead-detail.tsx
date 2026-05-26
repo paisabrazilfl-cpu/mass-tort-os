@@ -20,7 +20,6 @@ import {
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { EnvelopeTimeline } from "@/components/envelope-timeline";
 import { BackgroundCheckHubCard } from "@/components/background-check-hub-card";
-import { FastenConnectCard } from "@/components/fasten-connect-card";
 import { PortalStatusCard } from "@/components/portal-status-card";
 import { SendSmsButton } from "@/components/send-sms-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -111,7 +110,6 @@ export default function LeadDetail() {
   const [lensScore, setLensScore] = useState<LensScore | null>(null);
   const [lensLoading, setLensLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("profile");
-  const [docSourceFilter, setDocSourceFilter] = useState<"all" | "fasten">("all");
   const autoTriggered = useRef(false);
 
   const { data: lead, isLoading, isError, error } = useGetLead(leadId, {
@@ -751,13 +749,6 @@ export default function LeadDetail() {
             })()}
 
             <BackgroundCheckHubCard leadId={leadId} />
-            <FastenConnectCard
-              leadId={leadId}
-              onViewDocuments={() => {
-                setDocSourceFilter("fasten");
-                setActiveTab("documents");
-              }}
-            />
             <PortalStatusCard leadId={leadId} />
           </div>
         </TabsContent>
@@ -769,47 +760,16 @@ export default function LeadDetail() {
                 <CardTitle>Associated Documents</CardTitle>
                 <CardDescription>All documents, agreements, and records linked to this claimant</CardDescription>
               </div>
-              <div className="flex gap-2">
-                <Button
-                  variant={docSourceFilter === "all" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setDocSourceFilter("all")}
-                  data-testid="filter-docs-all"
-                >
-                  All
-                </Button>
-                <Button
-                  variant={docSourceFilter === "fasten" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setDocSourceFilter("fasten")}
-                  data-testid="filter-docs-fasten"
-                >
-                  <Stethoscope className="h-3 w-3 mr-1" />Fasten medical records
-                </Button>
-              </div>
             </CardHeader>
             <CardContent>
               {(() => {
-                const visible = (documents ?? []).filter((d) =>
-                  docSourceFilter === "all"
-                    ? true
-                    : (d.notes ?? "").startsWith("fasten_"),
-                );
+                const visible = documents ?? [];
                 if (docsLoading) return <Skeleton className="h-24 w-full" />;
                 if (!documents || documents.length === 0) {
                   return (
                     <div className="text-center py-8 text-muted-foreground">
                       <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
                       <p className="text-sm">No documents have been associated with this claimant record.</p>
-                    </div>
-                  );
-                }
-                if (visible.length === 0) {
-                  return (
-                    <div className="text-center py-8 text-muted-foreground">
-                      <Stethoscope className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                      <p className="text-sm">No Fasten medical records have been ingested yet.</p>
-                      <Button variant="link" size="sm" onClick={() => setDocSourceFilter("all")}>Show all documents</Button>
                     </div>
                   );
                 }
