@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { db, documentsTable, faxResultsTable } from "@workspace/db";
-import { eq, and, inArray } from "drizzle-orm";
+import { db, documentsTable, faxResultsTable, medicalRecordsRequestsTable } from "@workspace/db";
+import { eq, and, inArray, ne } from "drizzle-orm";
 import { portalAuthMiddleware, requirePortalMfa, writePortalAudit, getClientIp } from "../../lib/portal-auth";
 
 const router = Router();
@@ -40,6 +40,27 @@ router.get("/", async (req, res) => {
     )
     .orderBy(documentsTable.created_at);
 
+  // Outbound MRR requests sent on behalf of this lead.
+  const mrrRequests = await db
+    .select({
+      id: medicalRecordsRequestsTable.id,
+      hospital_name: medicalRecordsRequestsTable.hospital_name,
+      fax_number: medicalRecordsRequestsTable.fax_number,
+      status: medicalRecordsRequestsTable.status,
+      sent_at: medicalRecordsRequestsTable.sent_at,
+      expected_by: medicalRecordsRequestsTable.expected_by,
+      fulfilled_at: medicalRecordsRequestsTable.fulfilled_at,
+      attempt_count: medicalRecordsRequestsTable.attempt_count,
+    })
+    .from(medicalRecordsRequestsTable)
+    .where(
+      and(
+        eq(medicalRecordsRequestsTable.lead_id, pu.lead_id),
+        ne(medicalRecordsRequestsTable.status, "cancelled"),
+      ),
+    )
+    .orderBy(medicalRecordsRequestsTable.created_at);
+
   // Fax results matched to this lead (OCR-processed inbound faxes).
   const faxRecords = await db
     .select({
@@ -66,6 +87,10 @@ router.get("/", async (req, res) => {
 
   const totalReceived = medDocs.length + faxRecords.filter(f => f.status !== "error").length;
 
+  const now = new Date();
+  const pendingRequests = mrrRequests.filter(r => r.status === "pending" || r.status === "sent");
+  const overdueRequests = pendingRequests.filter(r => r.expected_by && new Date(r.expected_by) < now);
+
   res.json({
     records: {
       documents: medDocs.map(d => ({
@@ -85,11 +110,19 @@ router.get("/", async (req, res) => {
       })),
       total_received: totalReceived,
     },
-    providers: [],
+    requests: mrrRequests.map(r => ({
+      id: r.id,
+      hospital_name: r.hospital_name || "Medical Provider",
+      status: r.status,
+      sent_at: r.sent_at,
+      expected_by: r.expected_by,
+      fulfilled_at: r.fulfilled_at,
+      overdue: r.status === "sent" && !!r.expected_by && new Date(r.expected_by) < now,
+    })),
     summary: {
       records_received: totalReceived,
-      providers_connected: 0,
-      providers_needing_attention: 0,
+      requests_pending: pendingRequests.length,
+      requests_overdue: overdueRequests.length,
     },
   });
 });

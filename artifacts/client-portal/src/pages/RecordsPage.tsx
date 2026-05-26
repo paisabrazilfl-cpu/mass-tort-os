@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { portalFetch, describeError, ApiError } from "../lib/api";
-import { CheckCircle2, Clock, Stethoscope, FileText } from "lucide-react";
+import { CheckCircle2, Clock, Stethoscope, FileText, Send, AlertCircle } from "lucide-react";
 
 interface MedDoc {
   id: string;
@@ -19,17 +19,65 @@ interface FaxResult {
   processed_at: string | null;
 }
 
+interface MrrRequest {
+  id: number;
+  hospital_name: string;
+  status: string;
+  sent_at: string | null;
+  expected_by: string | null;
+  fulfilled_at: string | null;
+  overdue: boolean;
+}
+
 interface RecordsResponse {
   records: {
     documents: MedDoc[];
     fax_results: FaxResult[];
     total_received: number;
   };
+  requests?: MrrRequest[];
+  summary?: {
+    records_received: number;
+    requests_pending: number;
+    requests_overdue: number;
+  };
 }
 
-function formatDate(d: string | null): string {
+function formatDate(d: string | null | undefined): string {
   if (!d) return "";
   return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function RequestStatusBadge({ req }: { req: MrrRequest }) {
+  if (req.status === "fulfilled") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
+        <CheckCircle2 className="h-3 w-3" /> Received
+      </span>
+    );
+  }
+  if (req.overdue) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+        <AlertCircle className="h-3 w-3" /> Delayed
+      </span>
+    );
+  }
+  if (req.status === "sent" || req.status === "pending") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full">
+        <Clock className="h-3 w-3" /> Awaiting response
+      </span>
+    );
+  }
+  if (req.status === "failed") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-red-700 bg-red-50 px-2 py-0.5 rounded-full">
+        <AlertCircle className="h-3 w-3" /> Contact us
+      </span>
+    );
+  }
+  return null;
 }
 
 export function RecordsPage() {
@@ -68,26 +116,61 @@ export function RecordsPage() {
     );
   }
 
-  const { records } = data;
+  const { records, requests = [], summary } = data;
   const hasRecords = records.total_received > 0;
+  const pendingRequests = requests.filter(r => r.status === "sent" || r.status === "pending");
+  const fulfilledRequests = requests.filter(r => r.status === "fulfilled");
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-bold text-slate-900">Medical Records</h1>
-        <p className="text-sm text-slate-500 mt-0.5">Records received by your legal team.</p>
+        <p className="text-sm text-slate-500 mt-0.5">Status of your records requests and received documents.</p>
       </div>
 
-      {/* Summary */}
-      <div className="grid grid-cols-1 gap-3">
+      {/* Summary row */}
+      <div className="grid grid-cols-2 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 px-3 py-3 text-center shadow-sm">
           <p className="text-2xl font-bold text-slate-900">{records.total_received}</p>
           <p className="text-xs text-slate-500 mt-0.5">Records received</p>
         </div>
+        <div className="bg-white rounded-xl border border-slate-200 px-3 py-3 text-center shadow-sm">
+          <p className="text-2xl font-bold text-slate-900">{pendingRequests.length}</p>
+          <p className="text-xs text-slate-500 mt-0.5">Awaiting response</p>
+        </div>
       </div>
 
-      {/* HIPAA request status */}
-      {!hasRecords && (
+      {/* Outbound requests tracker */}
+      {requests.length > 0 && (
+        <div>
+          <h2 className="text-sm font-semibold text-slate-700 mb-2">Requests Sent</h2>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm divide-y divide-slate-100">
+            {requests.map(req => (
+              <div key={req.id} className="px-4 py-3 flex items-start gap-3">
+                <div className={`p-1.5 rounded-lg mt-0.5 ${req.status === "fulfilled" ? "bg-green-50" : req.overdue ? "bg-amber-50" : "bg-blue-50"}`}>
+                  <Send className={`h-4 w-4 ${req.status === "fulfilled" ? "text-green-600" : req.overdue ? "text-amber-600" : "text-blue-500"}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-slate-800 truncate">{req.hospital_name}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {req.sent_at ? `Requested ${formatDate(req.sent_at)}` : "Request pending"}
+                    {req.fulfilled_at && ` · Received ${formatDate(req.fulfilled_at)}`}
+                    {!req.fulfilled_at && req.expected_by && req.status !== "failed" && (
+                      req.overdue
+                        ? ` · Expected ${formatDate(req.expected_by)} — following up`
+                        : ` · Expected by ${formatDate(req.expected_by)}`
+                    )}
+                  </p>
+                </div>
+                <RequestStatusBadge req={req} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* No requests yet — generic guidance */}
+      {requests.length === 0 && !hasRecords && (
         <div className="rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 flex items-start gap-3">
           <Clock className="h-5 w-5 text-blue-400 flex-shrink-0 mt-0.5" />
           <div>
@@ -100,7 +183,7 @@ export function RecordsPage() {
         </div>
       )}
 
-      {/* Faxed / uploaded records */}
+      {/* Received records */}
       {(records.documents.length > 0 || records.fax_results.length > 0) && (
         <div>
           <h2 className="text-sm font-semibold text-slate-700 mb-2">Received Records</h2>
@@ -140,7 +223,7 @@ export function RecordsPage() {
       )}
 
       {/* Empty state */}
-      {!hasRecords && (
+      {!hasRecords && fulfilledRequests.length === 0 && requests.length === 0 && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 py-10 text-center">
           <Stethoscope className="h-8 w-8 text-slate-300 mx-auto mb-2" />
           <p className="text-sm text-slate-500">No records yet</p>
