@@ -564,6 +564,7 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
       // `buildFaxResultsLikePattern`, so producer/consumer can never drift.
       source_file: FAX_SOURCE_FILE_TEMPLATE(lead_id, envelope_id),
       vault_path: "outbound:med_records_request",
+      lead_id,
       status: "processing",
     })
     .returning();
@@ -782,6 +783,17 @@ interface PollFaxDeliveryPayload {
 
 export async function handlePollFaxDelivery(payload: PollFaxDeliveryPayload): Promise<void> {
   const { fax_result_id, external_fax_id, provider, integration_id, poll_count } = payload;
+
+  // Skip if already resolved by a webhook or inbound-fax correlation.
+  const [existing] = await db
+    .select({ delivery_status: faxResultsTable.delivery_status })
+    .from(faxResultsTable)
+    .where(eq(faxResultsTable.id, fax_result_id))
+    .limit(1);
+  if (existing?.delivery_status === "delivered" || existing?.delivery_status === "failed") {
+    logger.info({ fax_result_id, delivery_status: existing.delivery_status }, "poll_fax_delivery: already resolved — skipping poll");
+    return;
+  }
 
   // Resolve credentials for this specific integration.
   const resolved = await resolveProvider("fax", { explicitIntegrationId: integration_id });

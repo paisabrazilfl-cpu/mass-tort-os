@@ -9,13 +9,13 @@
  */
 import { Router } from "express";
 import { z } from "zod/v4";
-import { db, medicalRecordsRequestsTable, leadsTable } from "@workspace/db";
+import { db, medicalRecordsRequestsTable, leadsTable, faxResultsTable } from "@workspace/db";
 import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { requirePermission, Permission } from "../lib/rbac";
 import { badRequest, notFound } from "../lib/http-errors";
 import { getFirmIdForUser } from "../lib/subscription-gate";
 import { auditLog } from "../lib/audit";
-import { enqueueJob } from "../lib/queue";
+import { enqueueJob, getFaxPollStats } from "../lib/queue";
 
 const router = Router();
 
@@ -29,6 +29,12 @@ const ListQuerySchema = z.object({
   status: z.enum(["pending", "sent", "failed", "fulfilled", "cancelled"]).optional(),
   page: z.coerce.number().int().min(1).default(1),
   page_size: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+// GET /api/mrr/poll-stats — delivery poll job health (pending/dead_letter counts)
+router.get("/poll-stats", requirePermission(Permission.MEDICAL_RECORDS_VIEW), async (_req, res) => {
+  const stats = await getFaxPollStats();
+  res.json(stats);
 });
 
 // GET /api/mrr — list requests for the firm (optionally filtered by lead or status)
@@ -71,9 +77,13 @@ router.get("/", requirePermission(Permission.MEDICAL_RECORDS_VIEW), async (req, 
         response_fax_result_id: medicalRecordsRequestsTable.response_fax_result_id,
         notes: medicalRecordsRequestsTable.notes,
         created_at: medicalRecordsRequestsTable.created_at,
+        // Fax-level delivery status from the outbound fax_results row.
+        fax_delivery_status: faxResultsTable.delivery_status,
+        fax_delivery_checked_at: faxResultsTable.delivery_checked_at,
       })
       .from(medicalRecordsRequestsTable)
       .leftJoin(leadsTable, eq(leadsTable.id, medicalRecordsRequestsTable.lead_id))
+      .leftJoin(faxResultsTable, eq(faxResultsTable.id, medicalRecordsRequestsTable.fax_result_id))
       .where(where)
       .orderBy(desc(medicalRecordsRequestsTable.created_at))
       .limit(page_size)

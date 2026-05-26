@@ -266,3 +266,26 @@ export async function getQueueStats() {
   }
   return stats;
 }
+
+export async function getFaxPollStats() {
+  const rows = await db
+    .select({
+      status: jobQueueTable.status,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(jobQueueTable)
+    .where(eq(jobQueueTable.job_type, "poll_fax_delivery"))
+    .groupBy(jobQueueTable.status);
+
+  const byStatus: Record<string, number> = {};
+  for (const row of rows) {
+    byStatus[row.status] = row.count;
+  }
+  return {
+    pending: byStatus["pending"] ?? 0,
+    processing: byStatus["processing"] ?? 0,
+    done: byStatus["done"] ?? 0,
+    dead_letter: byStatus["dead_letter"] ?? 0,
+    total: Object.values(byStatus).reduce((a, b) => a + b, 0),
+  };
+}

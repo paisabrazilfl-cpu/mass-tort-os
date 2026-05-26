@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { format } from "date-fns";
 import {
   Stethoscope, Clock, CheckCircle2, AlertCircle, XCircle,
-  RefreshCw, RotateCcw, ChevronLeft, ChevronRight, ExternalLink,
+  RefreshCw, RotateCcw, ChevronLeft, ChevronRight, ExternalLink, Signal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +27,8 @@ interface MrrRow {
   last_attempt_at: string | null;
   notes: string | null;
   envelope_id: number | null;
+  fax_delivery_status: string | null;
+  fax_delivery_checked_at: string | null;
 }
 
 interface MrrPage {
@@ -73,6 +75,27 @@ function StatusBadge({ row }: { row: MrrRow }) {
   return <Badge variant="outline">{row.status}</Badge>;
 }
 
+function FaxDeliveryBadge({ status }: { status: string | null }) {
+  if (!status || status === "pending") {
+    return <span className="text-xs text-amber-600 flex items-center gap-1"><Signal className="h-3 w-3" />In transit</span>;
+  }
+  if (status === "delivered") {
+    return <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />Delivered</span>;
+  }
+  if (status === "failed") {
+    return <span className="text-xs text-red-600 flex items-center gap-1"><XCircle className="h-3 w-3" />Not delivered</span>;
+  }
+  return <span className="text-xs text-slate-400">Unknown</span>;
+}
+
+interface PollStats {
+  pending: number;
+  processing: number;
+  done: number;
+  dead_letter: number;
+  total: number;
+}
+
 export default function MedicalRecordsPage() {
   const [data, setData] = useState<MrrPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,6 +103,7 @@ export default function MedicalRecordsPage() {
   const [page, setPage] = useState(1);
   const [resending, setResending] = useState<number | null>(null);
   const [cancelling, setCancelling] = useState<number | null>(null);
+  const [pollStats, setPollStats] = useState<PollStats | null>(null);
   const { toast } = useToast();
 
   const load = useCallback(async () => {
@@ -87,8 +111,12 @@ export default function MedicalRecordsPage() {
     try {
       const params = new URLSearchParams({ page: String(page), page_size: "25" });
       if (statusFilter !== "all") params.set("status", statusFilter);
-      const d = await apiFetch<MrrPage>(`/api/mrr?${params}`);
+      const [d, ps] = await Promise.all([
+        apiFetch<MrrPage>(`/api/mrr?${params}`),
+        apiFetch<PollStats>("/api/mrr/poll-stats").catch(() => null),
+      ]);
       setData(d);
+      if (ps) setPollStats(ps);
     } catch {
       toast({ title: "Failed to load records", variant: "destructive" });
     } finally {
@@ -137,6 +165,23 @@ export default function MedicalRecordsPage() {
         </Button>
       </div>
 
+      {/* Delivery poll health strip */}
+      {pollStats && pollStats.total > 0 && (
+        <div className="grid grid-cols-4 gap-3">
+          {[
+            { label: "Polls pending", value: pollStats.pending, color: "text-blue-600" },
+            { label: "Processing", value: pollStats.processing, color: "text-amber-600" },
+            { label: "Completed", value: pollStats.done, color: "text-emerald-600" },
+            { label: "Dead-lettered", value: pollStats.dead_letter, color: pollStats.dead_letter > 0 ? "text-red-600 font-semibold" : "text-slate-400" },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-center shadow-sm">
+              <p className={`text-2xl font-bold ${color}`}>{value}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
           <div>
@@ -180,6 +225,7 @@ export default function MedicalRecordsPage() {
                     <th className="text-left py-2 pr-4 font-medium">Facility</th>
                     <th className="text-left py-2 pr-4 font-medium">Fax #</th>
                     <th className="text-left py-2 pr-4 font-medium">Status</th>
+                    <th className="text-left py-2 pr-4 font-medium">Fax delivery</th>
                     <th className="text-left py-2 pr-4 font-medium">Sent</th>
                     <th className="text-left py-2 pr-4 font-medium">Expected by</th>
                     <th className="text-left py-2 pr-4 font-medium">Attempts</th>
@@ -200,6 +246,11 @@ export default function MedicalRecordsPage() {
                         <td className="py-3 pr-4 text-slate-700">{row.hospital_name || "—"}</td>
                         <td className="py-3 pr-4 font-mono text-xs text-slate-600">{row.fax_number}</td>
                         <td className="py-3 pr-4"><StatusBadge row={row} /></td>
+                        <td className="py-3 pr-4">
+                          {row.status !== "fulfilled" && row.status !== "cancelled"
+                            ? <FaxDeliveryBadge status={row.fax_delivery_status} />
+                            : <span className="text-xs text-slate-400">—</span>}
+                        </td>
                         <td className="py-3 pr-4 text-slate-500 whitespace-nowrap">
                           {row.sent_at ? format(new Date(row.sent_at), "MMM d, yyyy") : "—"}
                         </td>
