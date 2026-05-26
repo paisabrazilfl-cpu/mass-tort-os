@@ -44,3 +44,4 @@ export * from "./portal_audit_log";
 export * from "./firm_portal_configs";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";
+export * from "./nppes_providers";
