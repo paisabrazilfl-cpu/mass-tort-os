@@ -366,14 +366,6 @@ export default function PortalSettingsPage() {
 
   return (
     <div className="max-w-3xl mx-auto py-8 px-4 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Portal Settings</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Configure the client-facing portal for each tort campaign — branding, access control,
-          and Fasten Health FHIR integration.
-        </p>
-      </div>
-
       <div className="space-y-3">
         {tort_types.length === 0 && (
           <Card>
@@ -429,6 +421,14 @@ export default function PortalSettingsPage() {
           </CardContent>
         )}
       </Card>
+
+      <div className="pt-4 border-t">
+        <h1 className="text-2xl font-bold">Portal Settings</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Configure the client-facing portal for each tort campaign — branding, access control,
+          and Fasten Health FHIR integration.
+        </p>
+      </div>
     </div>
   );
 }

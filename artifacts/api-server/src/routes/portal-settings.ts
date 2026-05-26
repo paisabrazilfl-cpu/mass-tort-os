@@ -5,6 +5,7 @@ import { eq, asc } from "drizzle-orm";
 import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
 import { z } from "zod/v4";
 import { badRequest } from "../lib/http-errors";
+import { TORT_REGISTRY } from "../lib/tort-engine";
 
 const router = Router();
 router.use(authMiddleware);
@@ -47,9 +48,11 @@ router.get("/", requirePermission(Permission.WORKFLOW_SETTINGS_VIEW), async (req
 
   const fromLeads = tortRows.map(r => r.tort_type).filter(Boolean) as string[];
   const fromConfigs = configs.map(c => c.tort_type);
+  const fromRegistry = Object.values(TORT_REGISTRY).map(t => t.label);
 
-  // Union of both sources, de-duped and sorted.
-  const allTypes = [...new Set([...fromLeads, ...fromConfigs])].sort();
+  // Union of all three sources, de-duped and sorted. Registry ensures all 31
+  // supported torts appear in the UI even before any leads land.
+  const allTypes = [...new Set([...fromRegistry, ...fromLeads, ...fromConfigs])].sort();
 
   res.json({
     tort_types: allTypes,

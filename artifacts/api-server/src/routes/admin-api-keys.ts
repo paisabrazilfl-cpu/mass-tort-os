@@ -34,6 +34,9 @@ const ScopeSchema = z.string().refine((s) => KnownScopeSet.has(s), {
 const CreateBody = z.object({
   name: z.string().trim().min(1).max(100),
   scopes: z.array(ScopeSchema).min(1).max(20),
+  description: z.string().trim().max(500).nullish(),
+  // Number of days until the key auto-expires. Null = never. Clamped 1..3650.
+  expires_in_days: z.number().int().min(1).max(3650).nullish(),
 });
 
 const IdParam = z.object({ id: z.coerce.number().int().positive() });
