@@ -1446,6 +1446,7 @@ function input(name,label,type,opts){
   } else if(type==="checkbox"){
     var cw=el("div",{style:{display:"flex",alignItems:"flex-start",gap:"8px"}});
     inp=el("input",{type:"checkbox",name:name,style:{marginTop:"3px"}});
+    if(!opts.optional)inp.setAttribute("required","");
     cw.appendChild(inp);
     cw.appendChild(el("span",{style:{fontSize:"13px",lineHeight:"1.4"}},opts.checkLabel||label));
     wrap.appendChild(cw);
@@ -1673,9 +1674,9 @@ form.appendChild(section("Hospital Information",[
 
 }  // end fallback (no WEB_FORM_FIELDS)
 
-var compSection=section("Compliance",[
-  input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:"I consent to being contacted via phone, SMS, and email regarding my legal claim. I understand that this is not a condition of service."}),
-],{accent:"#2563eb"});
+var _hasTcpa=WEB_FORM_FIELDS.some(function(f){return f.key==="tcpa_consent";});
+var _compChildren=_hasTcpa?[]:[ input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:"I consent to being contacted via phone, SMS, and email regarding my legal claim. I understand that this is not a condition of service."}) ];
+var compSection=section("Compliance",_compChildren,{accent:"#2563eb"});
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormCertUrl",id:"xxTrustedFormCertUrl_0",value:""}));
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormPingUrl",id:"xxTrustedFormPingUrl_0",value:""}));
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormCertToken",id:"xxTrustedFormCertToken_0",value:""}));
@@ -1701,9 +1702,9 @@ form.addEventListener("submit",function(e){
   var fd=new FormData(form);
   var payload={};
   fd.forEach(function(v,k){payload[k]=v;});
-  payload.tcpa_consent=!!form.querySelector('[name=tcpa_consent]').checked;
-  payload.diagnosis_confirmed=!!form.querySelector('[name=diagnosis_confirmed]').checked;
-  payload.was_at_location=!!form.querySelector('[name=was_at_location]').checked;
+  var _t=form.querySelector('[name=tcpa_consent]');payload.tcpa_consent=_t?!!_t.checked:false;
+  var _d=form.querySelector('[name=diagnosis_confirmed]');if(_d)payload.diagnosis_confirmed=!!_d.checked;
+  var _w=form.querySelector('[name=was_at_location]');if(_w)payload.was_at_location=!!_w.checked;
 
   var tfCert=document.getElementById("xxTrustedFormCertUrl_0");
   if(tfCert&&tfCert.value)payload.trustedform_cert_url=tfCert.value;
