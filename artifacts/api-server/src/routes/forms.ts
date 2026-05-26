@@ -1375,6 +1375,19 @@ interface EmbedConfig {
   exposure_fields: string[];
   intro_text: string | null;
   custom_fields: CustomField[];
+  // When the admin has seeded a comprehensive WebFormConfig, pass its
+  // fields here so the public embed renders the per-tort question set
+  // instead of falling back to the hard-coded three sections.
+  web_form_fields?: Array<{
+    key: string;
+    label: string;
+    type: string;
+    section?: string;
+    required?: boolean;
+    options?: Array<string | { value: string; label: string }>;
+    placeholder?: string;
+    help_text?: string;
+  }>;
 }
 
 export function escapeJs(s: string): string {
@@ -1386,6 +1399,7 @@ export function generateEmbedScript(tortId: string, config: EmbedConfig, baseUrl
   const extraFields = [...config.extra_fields, ...config.exposure_fields];
   const customFieldsJson = JSON.stringify(config.custom_fields ?? []);
   const introText = config.intro_text ? escapeJs(config.intro_text) : "Complete all required fields to submit your claim for review.";
+  const webFormFieldsJson = JSON.stringify(config.web_form_fields ?? []);
 
   // Embed runs on third-party host sites with no CRM session. It MUST hit the
   // public surface only — both submit and pre-submit validators live under
@@ -1399,6 +1413,7 @@ var TORT_LABEL="${escapeJs(config.label)}";
 var TORT_INTRO="${introText}";
 var EXTRA_FIELDS=${JSON.stringify(extraFields)};
 var CUSTOM_FIELDS=${customFieldsJson};
+var WEB_FORM_FIELDS=${webFormFieldsJson};
 
 function el(tag,attrs,children){
   var e=document.createElement(tag);
@@ -1506,6 +1521,46 @@ var form=el("form",{id:"mtos-intake-form",style:{maxWidth:"700px",fontFamily:"-a
 form.appendChild(el("h2",{style:{fontSize:"22px",fontWeight:"700",marginBottom:"4px"}},"Claim Intake: "+TORT_LABEL));
 form.appendChild(el("p",{style:{fontSize:"14px",color:"#6b7280",marginBottom:"20px"}},"Complete all required fields to submit your claim for review."));
 
+// Dynamic per-tort fields from the admin-managed WebFormConfig. When the
+// admin has seeded a comprehensive form for this tort we render those
+// questions and skip the hard-coded fallback sections below.
+if(WEB_FORM_FIELDS && WEB_FORM_FIELDS.length > 0){
+  var SECTION_TITLES = {
+    eligibility: "Eligibility",
+    contact: "Contact Information",
+    story: "About Your Claim",
+    treatment: "Treatment",
+    damages: "Damages",
+    description: "Additional Details",
+    consent: "Consent",
+  };
+  var groups = {};
+  var order = [];
+  WEB_FORM_FIELDS.forEach(function(f){
+    var sec = f.section || "story";
+    if(!groups[sec]){ groups[sec] = []; order.push(sec); }
+    var opts = { optional: !f.required };
+    if(f.placeholder) opts.placeholder = f.placeholder;
+    if(f.options) opts.options = f.options;
+    var t = f.type;
+    if(t === "select_one") t = "select";
+    if(t === "boolean" || t === "checkbox" || t === "consent") {
+      t = "checkbox";
+      opts.checkLabel = f.label;
+    }
+    if(t === "long_text") t = "textarea";
+    var node = input(f.key, f.label, t, opts);
+    if(f.help_text){
+      var help = el("p",{style:{fontSize:"12px",color:"#6b7280",marginTop:"-6px",marginBottom:"8px"}}, f.help_text);
+      node.appendChild(help);
+    }
+    groups[sec].push(node);
+  });
+  order.forEach(function(sec){
+    form.appendChild(section(SECTION_TITLES[sec] || sec.replace(/_/g," ").replace(/\\b\\w/g,function(c){return c.toUpperCase();}), groups[sec]));
+  });
+} else {
+
 form.appendChild(section("Personal Information",[
   input("first_name","First Name"),
   input("last_name","Last Name"),
@@ -1563,7 +1618,7 @@ form.appendChild(section("Physician Information",[
 
 form.appendChild(section("Hospital Information",[
   input("hospital_name","Hospital Name"),
-  (function(){
+  (function _hospitalFaxField(){
     var node=input("hospital_fax","Hospital Fax","tel",{placeholder:"555-555-0100",optional:true});
     var inp=node.querySelector('input[name="hospital_fax"]');
     if(inp){
@@ -1595,6 +1650,8 @@ form.appendChild(section("Hospital Information",[
   })(),
   input("hospital_contact_info","Hospital Contact","text",{placeholder:"Phone, email, or contact person"}),
 ],{accent:"#dc2626",note:"All hospital fields are mandatory. Leads without complete hospital information will be rejected."}));
+
+}  // end fallback (no WEB_FORM_FIELDS)
 
 var compSection=section("Compliance",[
   input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:"I consent to being contacted via phone, SMS, and email regarding my legal claim. I understand that this is not a condition of service."}),

@@ -311,6 +311,7 @@ router.get("/embed/:tortId", async (req, res) => {
         exposure_fields: config.exposure_fields,
         intro_text: config.intro_text,
         custom_fields: config.custom_fields,
+        web_form_fields: config.web_form_config?.fields ?? [],
       },
       baseUrl,
     );
