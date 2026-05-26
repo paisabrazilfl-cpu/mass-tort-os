@@ -10,7 +10,8 @@ export type JobType =
   | "send_esign_packet"
   | "fax_med_records_request"
   | "send_workflow_email"
-  | "send_workflow_sms";
+  | "send_workflow_sms"
+  | "poll_fax_delivery";
 
 export interface JobPayload {
   create_case: { case_id: string; data: Record<string, unknown>; created_by_user_id?: number | null };
@@ -48,6 +49,13 @@ export interface JobPayload {
     firm_id?: number | null;
     source?: string;
   };
+  poll_fax_delivery: {
+    fax_result_id: number;
+    external_fax_id: string;
+    provider: string;
+    integration_id: number;
+    poll_count: number;
+  };
 }
 
 /**
@@ -70,7 +78,8 @@ function backoffUntil(retryCount: number): Date {
 
 export async function enqueueJob<T extends JobType>(
   job_type: T,
-  payload: JobPayload[T]
+  payload: JobPayload[T],
+  opts: { nextAttemptAt?: Date } = {},
 ): Promise<number> {
   const [job] = await db
     .insert(jobQueueTable)
@@ -78,6 +87,7 @@ export async function enqueueJob<T extends JobType>(
       job_type,
       payload: payload as Record<string, unknown>,
       status: "pending",
+      next_attempt_at: opts.nextAttemptAt ?? null,
     })
     .returning({ id: jobQueueTable.id });
   logger.info({ job_id: job.id, job_type }, "Job enqueued");

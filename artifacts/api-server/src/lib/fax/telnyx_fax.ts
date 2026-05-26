@@ -1,6 +1,12 @@
 import type { FaxAdapter, FaxSendOutcome } from "./types";
 import { logger } from "../logger";
 
+function normalizeTelnyxStatus(s: string): string {
+  if (s === "delivered") return "delivered";
+  if (s === "failed" || s === "declined" || s === "busy" || s === "no_answer") return "failed";
+  return "pending"; // queued, processing, sending
+}
+
 /**
  * Telnyx Programmable Fax v2. https://developers.telnyx.com/docs/programmable-fax
  * Auth: Bearer api_key. config.connection_id required.
@@ -55,5 +61,20 @@ export const telnyxFaxAdapter: FaxAdapter = {
       };
     }
     return { ok: true, externalFaxId: String(json.data.id), rawResponse: json };
+  },
+
+  async getStatus(creds, externalFaxId): Promise<string> {
+    const apiKey = creds.api_key?.trim();
+    if (!apiKey) return "unknown";
+    try {
+      const resp = await fetch(`https://api.telnyx.com/v2/faxes/${externalFaxId}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!resp.ok) return "unknown";
+      const json: any = await resp.json().catch(() => ({}));
+      return normalizeTelnyxStatus(json?.data?.status ?? "");
+    } catch {
+      return "unknown";
+    }
   },
 };

@@ -6,6 +6,7 @@ import {
   real,
   timestamp,
   index,
+  varchar,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -31,10 +32,26 @@ export const faxResultsTable = pgTable("fax_results", {
   error: text("error"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   processed_at: timestamp("processed_at"),
+
+  // Delivery-confirmation fields (populated for outbound MRR faxes).
+  // external_fax_id is the provider's opaque fax reference used for polling.
+  external_fax_id: text("external_fax_id"),
+  // Which fax adapter sent this (srfax | phaxio | telnyx_fax | efax | documo).
+  provider: varchar("provider", { length: 64 }),
+  // The integrations.id row whose credentials should be used when polling.
+  integration_id: integer("integration_id"),
+  // Normalized delivery status: pending | delivered | failed | unknown.
+  // "pending" = fax is in transit; updated by poll_fax_delivery jobs.
+  delivery_status: varchar("delivery_status", { length: 32 }).default("pending"),
+  // When delivery_status was last checked via the polling job.
+  delivery_checked_at: timestamp("delivery_checked_at"),
 }, (t) => ({
   createdAtIdx: index("fax_results_created_at_idx").on(t.created_at),
   statusCreatedIdx: index("fax_results_status_created_at_idx").on(t.status, t.created_at),
   leadIdx: index("fax_results_lead_id_idx").on(t.lead_id),
+  // Unique index used for inbound-fax idempotency in inbound.ts.
+  externalFaxIdIdx: index("fax_results_external_fax_id_idx").on(t.external_fax_id),
+  deliveryStatusIdx: index("fax_results_delivery_status_idx").on(t.delivery_status),
 }));
 
 export const insertFaxResultSchema = createInsertSchema(faxResultsTable).omit({

@@ -1,6 +1,13 @@
 import type { FaxAdapter, FaxSendOutcome } from "./types";
 import { logger } from "../logger";
 
+function normalizeDocumoStatus(s: string): string {
+  const lower = s.toLowerCase();
+  if (lower === "success" || lower === "sent" || lower === "delivered") return "delivered";
+  if (lower === "failed" || lower === "error" || lower === "cancelled") return "failed";
+  return "pending";
+}
+
 /**
  * Documo (mFax) fax adapter. https://docs.documo.com
  * Auth: Bearer api_key.
@@ -40,5 +47,20 @@ export const documoAdapter: FaxAdapter = {
       };
     }
     return { ok: true, externalFaxId: String(json.id), rawResponse: json };
+  },
+
+  async getStatus(creds, externalFaxId): Promise<string> {
+    const apiKey = creds.api_key?.trim();
+    if (!apiKey) return "unknown";
+    try {
+      const resp = await fetch(`https://api.documo.com/v1/faxes/${externalFaxId}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!resp.ok) return "unknown";
+      const json: any = await resp.json().catch(() => ({}));
+      return normalizeDocumoStatus(json?.status ?? "");
+    } catch {
+      return "unknown";
+    }
   },
 };

@@ -19,6 +19,7 @@ import { getEmailAdapter } from "./email/sendgrid";
 import { downloadTemplate } from "./template-storage";
 import { decryptLeadFields } from "./encryption";
 import { FAX_SOURCE_FILE_TEMPLATE } from "./fax-results-matcher";
+import { enqueueJob } from "./queue";
 
 // pdf-lib is heavy (~830 KB with transitives) and only needed when
 // buildTemplatePdf or buildMedRecordsCoverLetter actually run a job that
@@ -591,8 +592,24 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
       status: "done",
       raw_text: `Sent to ${targetFax} via ${resolved.provider} — external_id=${outcome.externalFaxId}`,
       processed_at: new Date(),
+      external_fax_id: outcome.externalFaxId ?? null,
+      provider: resolved.provider,
+      integration_id: resolved.integration_id,
+      delivery_status: "pending",
     })
     .where(eq(faxResultsTable.id, faxRow.id));
+
+  // Schedule delivery confirmation polling (5 min after send, then backoff).
+  if (outcome.externalFaxId) {
+    const firstPollAt = new Date(Date.now() + 5 * 60 * 1000);
+    await enqueueJob("poll_fax_delivery", {
+      fax_result_id: faxRow.id,
+      external_fax_id: outcome.externalFaxId,
+      provider: resolved.provider,
+      integration_id: resolved.integration_id,
+      poll_count: 0,
+    }, { nextAttemptAt: firstPollAt });
+  }
 
   // Record the outbound request in the MRR tracking table so operators can
   // monitor outstanding requests and the inbound handler can mark it fulfilled.
@@ -697,6 +714,83 @@ export async function handleSendWorkflowEmail(payload: SendWorkflowEmailPayload)
   }
 
   logger.info({ to, subject, provider: resolved.provider, external_id: outcome.externalMessageId }, "Workflow email sent");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// HANDLER: poll_fax_delivery
+// ────────────────────────────────────────────────────────────────────────────
+
+// Delays (ms) between successive polls. poll_count is the index used when
+// *scheduling* the next poll — so poll_count=0 job already ran after 5min,
+// and schedules the next at +30min, etc.
+const POLL_DELAYS_MS = [
+  30 * 60 * 1000,   // poll_count 0 → next in 30 min
+  2 * 60 * 60 * 1000,  // poll_count 1 → next in 2 h
+  8 * 60 * 60 * 1000,  // poll_count 2 → next in 8 h
+  24 * 60 * 60 * 1000, // poll_count 3 → next in 24 h
+  // poll_count 4 is the final poll — no reschedule
+];
+const MAX_POLL_COUNT = POLL_DELAYS_MS.length; // 4 — final run at index 4
+
+interface PollFaxDeliveryPayload {
+  fax_result_id: number;
+  external_fax_id: string;
+  provider: string;
+  integration_id: number;
+  poll_count: number;
+}
+
+export async function handlePollFaxDelivery(payload: PollFaxDeliveryPayload): Promise<void> {
+  const { fax_result_id, external_fax_id, provider, integration_id, poll_count } = payload;
+
+  // Resolve credentials for this specific integration.
+  const resolved = await resolveProvider("fax", { explicitIntegrationId: integration_id });
+  if (!isResolved(resolved)) {
+    logger.warn({ fax_result_id, integration_id }, "poll_fax_delivery: integration not found, marking unknown");
+    await db.update(faxResultsTable)
+      .set({ delivery_status: "unknown", delivery_checked_at: new Date() })
+      .where(eq(faxResultsTable.id, fax_result_id));
+    return;
+  }
+
+  const adapter = getFaxAdapter(resolved.provider);
+  if (!adapter?.getStatus) {
+    logger.warn({ fax_result_id, provider: resolved.provider }, "poll_fax_delivery: adapter has no getStatus");
+    await db.update(faxResultsTable)
+      .set({ delivery_status: "unknown", delivery_checked_at: new Date() })
+      .where(eq(faxResultsTable.id, fax_result_id));
+    return;
+  }
+
+  const status = await adapter.getStatus(resolved.credentials, external_fax_id);
+  const now = new Date();
+
+  await db.update(faxResultsTable)
+    .set({ delivery_status: status, delivery_checked_at: now })
+    .where(eq(faxResultsTable.id, fax_result_id));
+
+  await auditLog("fax", String(fax_result_id), "delivery_polled", {
+    provider,
+    external_fax_id,
+    delivery_status: status,
+    poll_count,
+  });
+
+  logger.info({ fax_result_id, external_fax_id, provider, delivery_status: status, poll_count }, "Fax delivery status polled");
+
+  // Schedule next poll if still in transit and haven't exhausted the schedule.
+  if (status === "pending" && poll_count < MAX_POLL_COUNT) {
+    const nextDelay = POLL_DELAYS_MS[poll_count]!;
+    const nextAt = new Date(now.getTime() + nextDelay);
+    await enqueueJob("poll_fax_delivery", {
+      fax_result_id,
+      external_fax_id,
+      provider,
+      integration_id,
+      poll_count: poll_count + 1,
+    }, { nextAttemptAt: nextAt });
+    logger.info({ fax_result_id, poll_count: poll_count + 1, next_at: nextAt }, "Next delivery poll scheduled");
+  }
 }
 
 // =============================================================================
