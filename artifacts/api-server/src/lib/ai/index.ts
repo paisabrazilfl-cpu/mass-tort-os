@@ -3,6 +3,7 @@ import { anthropicAdapter } from "./anthropic";
 import { openaiAdapter } from "./openai";
 import { googleGeminiAdapter } from "./google_gemini";
 import { openrouterAdapter } from "./openrouter";
+import { bitdeerAdapter } from "./bitdeer";
 import { groqAdapter } from "./groq";
 import { deepseekAdapter } from "./deepseek";
 import { perplexityAdapter } from "./perplexity";
@@ -18,6 +19,7 @@ let _registry: Record<string, LlmAdapter> | null = null;
 function getRegistry(): Record<string, LlmAdapter> {
   if (_registry) return _registry;
   _registry = {
+    [bitdeerAdapter.provider]: bitdeerAdapter,
     [anthropicAdapter.provider]: anthropicAdapter,
     [openaiAdapter.provider]: openaiAdapter,
     [googleGeminiAdapter.provider]: googleGeminiAdapter,

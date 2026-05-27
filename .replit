@@ -141,3 +141,7 @@ timeoutMs = 180000
 [userenv.production]
 SEED_ADMIN_EMAIL = "paisabrazilfl@gmail.com"
 SEED_ADMIN_PASSWORD = "1Giselle!"
+
+[userenv.shared]
+BITDEER_API_KEY = "uHDWsXw9iLP3HsF4NoaJ"
+AI_PROVIDER = "bitdeer"

@@ -193,6 +193,7 @@ const REGISTRY: Record<string, WiringInfo> = {
   },
 
   // AI / LLM (vault-consuming providers)
+  bitdeer: { status: "live", note: "LLM completions, vision, embeddings, and image generation via Bitdeer AI Cloud OpenAI-compatible API (api-inference.bitdeer.ai/v1). Primary LLM provider for MTOS." },
   google_gemini: { status: "live", note: "LLM completions via Gemini v1beta generateContent." },
   openrouter: { status: "live", note: "LLM completions via OpenRouter unified chat completions API." },
   groq: { status: "live", note: "LLM completions via Groq /openai/v1/chat/completions." },
