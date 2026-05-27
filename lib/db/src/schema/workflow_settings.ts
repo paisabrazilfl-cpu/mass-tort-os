@@ -6,11 +6,9 @@ import { z } from "zod/v4";
  * Singleton-style settings for the auto-document workflow.
  * One row per "scope" — scope="global" is the default; scope="buyer:<id>" overrides per buyer.
  * Buyer-level rows take precedence; missing fields fall through to global.
- * firm_id is nullable for backward compat; NULL means this row is global/shared.
  */
 export const workflowSettingsTable = pgTable("workflow_settings", {
   id: serial("id").primaryKey(),
-  firm_id: integer("firm_id"),
   scope: varchar("scope", { length: 100 }).notNull().unique(),
   esign_provider_integration_id: integer("esign_provider_integration_id"),
   fax_provider_integration_id: integer("fax_provider_integration_id"),
@@ -32,6 +30,7 @@ export const workflowSettingsTable = pgTable("workflow_settings", {
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   notes: text("notes"),
   updated_by_user_id: integer("updated_by_user_id"),
+  firm_id: integer("firm_id"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });
