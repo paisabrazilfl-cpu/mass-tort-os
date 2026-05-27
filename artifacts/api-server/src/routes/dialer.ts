@@ -11,6 +11,7 @@
 import { Router } from "express";
 import { z } from "zod/v4";
 import { db } from "@workspace/db";
+import { enqueueJob } from "../lib/queue";
 import {
   dialerCampaignsTable,
   dialerCampaignLeadsTable,
@@ -241,7 +242,59 @@ router.post(
       .returning();
     if (!row) { notFound(res, "Campaign"); return; }
     logger.info({ campaignId: id }, "dialer campaign started");
+    await enqueueJob("dialer_campaign_run", { campaign_id: id });
     res.json({ campaign: row });
+  },
+);
+
+router.get(
+  "/campaigns/:id/progress",
+  requirePermission(Permission.CALLS_VIEW),
+  async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
+    const firmId = await getFirmId(req.user!.id);
+    const [campaign] = await db
+      .select()
+      .from(dialerCampaignsTable)
+      .where(
+        and(
+          eq(dialerCampaignsTable.id, id),
+          firmId != null ? eq(dialerCampaignsTable.firm_id, firmId) : sql`true`,
+        ),
+      );
+    if (!campaign) { notFound(res, "Campaign"); return; }
+
+    const [leadStats] = await db
+      .select({
+        total: sql<number>`count(*)`.mapWith(Number),
+        pending: sql<number>`count(*) filter (where status = 'pending')`.mapWith(Number),
+        dialing: sql<number>`count(*) filter (where status = 'dialing')`.mapWith(Number),
+        called: sql<number>`count(*) filter (where status = 'called')`.mapWith(Number),
+        connected: sql<number>`count(*) filter (where status = 'connected')`.mapWith(Number),
+        failed: sql<number>`count(*) filter (where status = 'failed')`.mapWith(Number),
+        dnc: sql<number>`count(*) filter (where status = 'dnc')`.mapWith(Number),
+        voicemail: sql<number>`count(*) filter (where status = 'voicemail')`.mapWith(Number),
+      })
+      .from(dialerCampaignLeadsTable)
+      .where(eq(dialerCampaignLeadsTable.campaign_id, id));
+
+    const dialed = (leadStats?.called ?? 0) + (leadStats?.connected ?? 0) + (leadStats?.failed ?? 0) + (leadStats?.voicemail ?? 0) + (leadStats?.dnc ?? 0);
+    const total = leadStats?.total ?? 0;
+    const pct = total > 0 ? Math.round((dialed / total) * 100) : 0;
+
+    res.json({
+      campaign_id: id,
+      status: campaign.status,
+      progress_pct: pct,
+      leads: leadStats ?? {},
+      counters: {
+        total_leads: campaign.total_leads,
+        dialed_count: campaign.dialed_count,
+        connected_count: campaign.connected_count,
+        converted_count: campaign.converted_count,
+      },
+    });
   },
 );
 
@@ -904,6 +957,34 @@ router.put(
 
     if (!row) { notFound(res); return; }
     res.json({ call_log_id: row.id, status: "completed" });
+  },
+);
+
+// ─── VAPI PHONE NUMBERS ───────────────────────────────────────────────────────
+
+router.get(
+  "/vapi-phones",
+  requirePermission(Permission.CALLS_VIEW),
+  async (_req, res) => {
+    const resolved = await resolveProvider("voice");
+    if (!isResolved(resolved) || resolved.provider !== "vapi") {
+      res.json({ phone_numbers: [] });
+      return;
+    }
+    const creds = resolved.credentials as Record<string, unknown>;
+    const apiKey = typeof creds.api_key === "string" ? creds.api_key.trim() : "";
+    if (!apiKey) { res.json({ phone_numbers: [] }); return; }
+
+    try {
+      const resp = await fetch("https://api.vapi.ai/phone-number", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!resp.ok) { res.json({ phone_numbers: [] }); return; }
+      const json = await resp.json() as unknown[];
+      res.json({ phone_numbers: Array.isArray(json) ? json : [] });
+    } catch {
+      res.json({ phone_numbers: [] });
+    }
   },
 );
 

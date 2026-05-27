@@ -23,6 +23,8 @@ export const dialerCampaignsTable = pgTable(
     dialed_count: integer("dialed_count").notNull().default(0),
     connected_count: integer("connected_count").notNull().default(0),
     converted_count: integer("converted_count").notNull().default(0),
+    vapi_assistant_id: varchar("vapi_assistant_id", { length: 100 }),
+    vapi_phone_number_id: varchar("vapi_phone_number_id", { length: 100 }),
     notes: text("notes"),
     created_by: integer("created_by"),
     created_at: timestamp("created_at").defaultNow().notNull(),

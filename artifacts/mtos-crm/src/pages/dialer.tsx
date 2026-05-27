@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import Vapi from "@vapi-ai/web";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -22,8 +22,9 @@ import {
   BarChart3, Users, FileText, ShieldOff, Mic, MicOff, Volume2,
   Plus, Trash2, Edit, Download, Upload, RefreshCw, CheckCircle,
   XCircle, Clock, TrendingUp, AlertTriangle, Headphones, Loader2,
-  Delete, Hash, Star,
+  Delete, Hash, Star, Bot, Link2, Settings, Zap,
 } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
 
@@ -100,11 +101,137 @@ function StatsTab() {
               <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
               Auto-refreshes every 15s
             </span>
-            <span>•</span>
-            <span>Connect Telnyx or Vapi in Integrations to enable live dialing</span>
           </div>
         </CardContent>
       </Card>
+
+      <VapiSetupCard />
+    </div>
+  );
+}
+
+// ─── VAPI SETUP WIZARD ────────────────────────────────────────────────────────
+
+function VapiSetupCard() {
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["dialer-vapi-config"],
+    queryFn: () => apiFetch<any>("/vapi-config"),
+    retry: false,
+  });
+
+  const hasApiKey = !!data?.public_key || data?.assistants !== undefined;
+  const hasPublicKey = !!data?.public_key;
+  const hasAssistant = Array.isArray(data?.assistants) && data.assistants.length > 0;
+  const allDone = hasApiKey && hasPublicKey && hasAssistant;
+
+  const createMut = useMutation({
+    mutationFn: () => apiFetch<any>("/vapi-assistant", {
+      method: "POST",
+      body: JSON.stringify({ name: "MTOS Campaign Assistant", first_message: "Hello, I'm calling from a law firm regarding a potential legal claim. Is now a good time to speak?" }),
+    }),
+    onSuccess: () => { refetch(); },
+  });
+
+  if (isLoading) return null;
+
+  const step = (done: boolean, label: string, sub: string, action?: React.ReactNode) => (
+    <div className="flex items-start gap-3">
+      <div className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${done ? "bg-green-500" : "bg-gray-200"}`}>
+        {done ? <CheckCircle className="h-3 w-3 text-white" /> : <span className="text-xs text-gray-500 font-bold">!</span>}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className={`text-sm font-medium ${done ? "text-gray-700 line-through decoration-gray-400" : "text-gray-900"}`}>{label}</p>
+        <p className="text-xs text-muted-foreground">{sub}</p>
+        {!done && action && <div className="mt-1.5">{action}</div>}
+      </div>
+    </div>
+  );
+
+  if (allDone) {
+    return (
+      <Card className="border-green-200 bg-green-50">
+        <CardContent className="pt-4 pb-3">
+          <div className="flex items-center gap-2 text-green-700">
+            <Zap className="h-4 w-4" />
+            <span className="text-sm font-semibold">Vapi is fully configured</span>
+            <span className="text-xs text-green-600 ml-1">— {data.assistants.length} assistant{data.assistants.length !== 1 ? "s" : ""} ready</span>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="border-blue-200">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <Bot className="h-4 w-4 text-blue-600" />
+          <CardTitle className="text-sm font-semibold text-blue-800">Vapi Setup</CardTitle>
+          <span className="text-xs text-muted-foreground ml-auto">Complete all steps to enable auto-dialing</span>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3 pb-4">
+        {step(
+          hasApiKey,
+          "Add Vapi API key",
+          "Go to Integrations → Voice AI → Vapi and paste your private API key.",
+          <a href="/integrations" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline font-medium">
+            <Settings className="h-3 w-3" /> Open Integrations
+          </a>,
+        )}
+        {step(
+          hasPublicKey,
+          "Add Vapi public key (Web SDK)",
+          "Also add the public key from Vapi dashboard → API Keys → 'Web' — required for browser calls.",
+          <a href="/integrations" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline font-medium">
+            <Link2 className="h-3 w-3" /> Open Integrations
+          </a>,
+        )}
+        {step(
+          hasAssistant,
+          "Create a Vapi assistant",
+          "An AI assistant handles the conversation on each call. Click to auto-create one with the MTOS defaults.",
+          <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!hasApiKey || createMut.isPending} onClick={() => createMut.mutate()}>
+            {createMut.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Bot className="h-3 w-3 mr-1" />}
+            Auto-create assistant
+          </Button>,
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── CAMPAIGN PROGRESS BAR ────────────────────────────────────────────────────
+
+function CampaignProgressBar({ campaignId, totalLeads }: { campaignId: number; totalLeads: number }) {
+  const { data } = useQuery({
+    queryKey: ["campaign-progress", campaignId],
+    queryFn: () => apiFetch<any>(`/campaigns/${campaignId}/progress`),
+    refetchInterval: 4000,
+  });
+
+  const pct = data?.progress_pct ?? 0;
+  const leads = data?.leads ?? {};
+  const dialed = (leads.called ?? 0) + (leads.connected ?? 0) + (leads.failed ?? 0) + (leads.voicemail ?? 0) + (leads.dnc ?? 0);
+  const dialing = leads.dialing ?? 0;
+
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex-1">
+        <Progress value={pct} className="h-1.5" />
+      </div>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground whitespace-nowrap">
+        <span>{dialed}/{totalLeads} dialed</span>
+        {dialing > 0 && (
+          <span className="inline-flex items-center gap-1 text-green-600 font-medium">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+            {dialing} live
+          </span>
+        )}
+        <span className="text-green-700 font-medium">{pct}%</span>
+        {leads.connected > 0 && <span className="text-blue-600">{leads.connected} connected</span>}
+        {leads.dnc > 0 && <span className="text-red-500">{leads.dnc} DNC</span>}
+      </div>
     </div>
   );
 }
@@ -129,12 +256,36 @@ function CampaignsTab() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name: "", type: "preview", caller_id: "", retry_attempts: 3, max_concurrent_calls: 1, call_window_start: "09:00", call_window_end: "20:00", timezone: "America/New_York", notes: "" });
+  const [form, setForm] = useState({
+    name: "", type: "preview", caller_id: "", retry_attempts: 3,
+    max_concurrent_calls: 1, call_window_start: "09:00", call_window_end: "20:00",
+    timezone: "America/New_York", notes: "",
+    vapi_assistant_id: "", vapi_phone_number_id: "",
+  });
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, refetch: refetchCampaigns } = useQuery({
     queryKey: ["dialer-campaigns"],
     queryFn: () => apiFetch<any>("/campaigns"),
+    refetchInterval: (query) => {
+      const campaigns: any[] = query.state.data?.campaigns ?? [];
+      return campaigns.some((c: any) => c.status === "active") ? 5000 : false;
+    },
   });
+
+  const { data: vapiCfg } = useQuery({
+    queryKey: ["dialer-vapi-config"],
+    queryFn: () => apiFetch<any>("/vapi-config"),
+    retry: false,
+  });
+
+  const { data: vapiPhones } = useQuery({
+    queryKey: ["dialer-vapi-phones"],
+    queryFn: () => apiFetch<any>("/vapi-phones"),
+    retry: false,
+  });
+
+  const assistants: any[] = vapiCfg?.assistants ?? [];
+  const phoneNumbers: any[] = vapiPhones?.phone_numbers ?? [];
 
   const createMut = useMutation({
     mutationFn: (body: typeof form) => apiFetch("/campaigns", { method: "POST", body: JSON.stringify(body) }),
@@ -191,32 +342,46 @@ function CampaignsTab() {
             </TableHeader>
             <TableBody>
               {campaigns.map((c: any) => (
-                <TableRow key={c.id}>
-                  <TableCell className="font-medium">{c.name}</TableCell>
-                  <TableCell><Badge variant="outline" className="capitalize">{c.type}</Badge></TableCell>
-                  <TableCell>{statusBadge(c.status)}</TableCell>
-                  <TableCell className="text-right">{c.total_leads}</TableCell>
-                  <TableCell className="text-right">{c.dialed_count}</TableCell>
-                  <TableCell className="text-right">{c.connected_count}</TableCell>
-                  <TableCell className="text-right">{c.converted_count}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1">
-                      {c.status !== "active" && (
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-green-600" onClick={() => startMut.mutate(c.id)}>
-                          <Play className="h-3.5 w-3.5" />
+                <>
+                  <TableRow key={c.id}>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-1.5">
+                        {c.status === "active" && <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse flex-shrink-0" />}
+                        {c.name}
+                      </div>
+                    </TableCell>
+                    <TableCell><Badge variant="outline" className="capitalize">{c.type}</Badge></TableCell>
+                    <TableCell>{statusBadge(c.status)}</TableCell>
+                    <TableCell className="text-right">{c.total_leads}</TableCell>
+                    <TableCell className="text-right">{c.dialed_count}</TableCell>
+                    <TableCell className="text-right">{c.connected_count}</TableCell>
+                    <TableCell className="text-right">{c.converted_count}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        {c.status !== "active" && (
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-green-600" title="Start campaign" onClick={() => startMut.mutate(c.id)}>
+                            <Play className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        {c.status === "active" && (
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-yellow-600" title="Pause campaign" onClick={() => pauseMut.mutate(c.id)}>
+                            <Pause className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500" title="Delete campaign" onClick={() => { if (confirm("Delete campaign?")) deleteMut.mutate(c.id); }}>
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
-                      )}
-                      {c.status === "active" && (
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-yellow-600" onClick={() => pauseMut.mutate(c.id)}>
-                          <Pause className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500" onClick={() => { if (confirm("Delete campaign?")) deleteMut.mutate(c.id); }}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                  {c.status === "active" && (
+                    <TableRow key={`${c.id}-progress`} className="bg-green-50/50 hover:bg-green-50/50">
+                      <TableCell colSpan={8} className="py-1.5 px-4">
+                        <CampaignProgressBar campaignId={c.id} totalLeads={c.total_leads} />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </>
               ))}
             </TableBody>
           </Table>
@@ -278,6 +443,39 @@ function CampaignsTab() {
               <div>
                 <Label>Call Window End</Label>
                 <Input type="time" value={form.call_window_end} onChange={(e) => setForm((f) => ({ ...f, call_window_end: e.target.value }))} />
+              </div>
+            </div>
+            <div className="border-t pt-3">
+              <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Vapi Auto-Dialing</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Vapi Assistant</Label>
+                  <Select value={form.vapi_assistant_id} onValueChange={(v) => setForm((f) => ({ ...f, vapi_assistant_id: v }))}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={assistants.length === 0 ? "No assistants yet" : "Select assistant"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {assistants.map((a: any) => (
+                        <SelectItem key={a.id} value={a.id}>{a.name ?? a.id}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-0.5">Required for predictive/power/preview auto-dial</p>
+                </div>
+                <div>
+                  <Label>Vapi Phone Number</Label>
+                  <Select value={form.vapi_phone_number_id} onValueChange={(v) => setForm((f) => ({ ...f, vapi_phone_number_id: v }))}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={phoneNumbers.length === 0 ? "None (use caller ID)" : "Select number"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {phoneNumbers.map((p: any) => (
+                        <SelectItem key={p.id} value={p.id}>{p.number ?? p.id}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-0.5">Optional — defaults to Caller ID above</p>
+                </div>
               </div>
             </div>
             <div>

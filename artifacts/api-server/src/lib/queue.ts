@@ -11,7 +11,8 @@ export type JobType =
   | "fax_med_records_request"
   | "send_workflow_email"
   | "send_workflow_sms"
-  | "fasten_records_sync";
+  | "fasten_records_sync"
+  | "dialer_campaign_run";
 
 export interface JobPayload {
   create_case: { case_id: string; data: Record<string, unknown>; created_by_user_id?: number | null };
@@ -66,6 +67,10 @@ export interface JobPayload {
      */
     retry_failed_only?: boolean;
   };
+  /** Processes one batch of an active outbound dialing campaign. Self-re-enqueues until complete or paused. */
+  dialer_campaign_run: {
+    campaign_id: number;
+  };
 }
 
 /**
@@ -88,17 +93,23 @@ function backoffUntil(retryCount: number): Date {
 
 export async function enqueueJob<T extends JobType>(
   job_type: T,
-  payload: JobPayload[T]
+  payload: JobPayload[T],
+  opts?: { delaySeconds?: number },
 ): Promise<number> {
+  const nextAttemptAt =
+    opts?.delaySeconds && opts.delaySeconds > 0
+      ? new Date(Date.now() + opts.delaySeconds * 1000)
+      : undefined;
   const [job] = await db
     .insert(jobQueueTable)
     .values({
       job_type,
       payload: payload as Record<string, unknown>,
       status: "pending",
+      ...(nextAttemptAt ? { next_attempt_at: nextAttemptAt } : {}),
     })
     .returning({ id: jobQueueTable.id });
-  logger.info({ job_id: job.id, job_type }, "Job enqueued");
+  logger.info({ job_id: job.id, job_type, delay_seconds: opts?.delaySeconds }, "Job enqueued");
   return job.id;
 }
 
