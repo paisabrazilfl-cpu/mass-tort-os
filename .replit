@@ -145,3 +145,4 @@ SEED_ADMIN_PASSWORD = "1Giselle!"
 [userenv.shared]
 BITDEER_API_KEY = "uHDWsXw9iLP3HsF4NoaJ"
 AI_PROVIDER = "bitdeer"
+AI_PROVIDER_LEAD_INTELLIGENCE = "bitdeer"
