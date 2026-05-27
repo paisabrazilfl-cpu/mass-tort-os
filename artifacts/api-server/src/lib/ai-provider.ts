@@ -72,15 +72,14 @@ export async function callLLM({
 
   logger.debug({ module, provider: adapter.provider, hasImage: !!imageBase64 }, "callLLM dispatching");
 
-  const out = await adapter.complete(creds, {
-    prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model,
-  });
+  const reqWithModule = { prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model, module } as any;
+  const out = await adapter.complete(creds, reqWithModule);
 
   if (out.ok) return (out as LlmCompletionResult).text;
 
   if (out.retryable) {
     logger.warn({ module, provider: adapter.provider, code: out.code }, "LLM retryable error — single retry");
-    const retry = await adapter.complete(creds, { prompt, maxTokens, systemPrompt, imageBase64, imageMimeType, model });
+    const retry = await adapter.complete(creds, reqWithModule);
     if (retry.ok) return (retry as LlmCompletionResult).text;
   }
 
