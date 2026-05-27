@@ -56,6 +56,7 @@ import WorkflowSettingsPage from "@/pages/workflow-settings";
 import WebFormsPage from "@/pages/web-forms";
 import JobQueue from "@/pages/job-queue";
 import CallsPage from "@/pages/calls";
+import DialerPage from "@/pages/dialer";
 import DarkRoomPage from "@/pages/dark-room";
 import AutomationsPage from "@/pages/automations";
 import AutomationDocsPage from "@/pages/automation-docs";
@@ -132,6 +133,7 @@ function AuthedRoutes() {
           <Route path="/integrations" component={IntegrationsPage} />
           <Route path="/billing" component={BillingPage} />
           <Route path="/calls" component={CallsPage} />
+          <Route path="/dialer" component={DialerPage} />
           <Route path="/news" component={News} />
           <Route path="/financial-news" component={FinancialNews} />
           <Route path="/lead-import" component={LeadImport} />

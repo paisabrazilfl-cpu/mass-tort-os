@@ -5,7 +5,7 @@ import {
   Building2, ShieldCheck, FileSearch, Clock, Wand2, Brain, Plug, Newspaper,
   TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings,
   Activity, CreditCard, Phone, Workflow, Eye, BookOpen, Library,
-  Webhook, Wrench, Search, ListChecks, Bot, Skull, Sparkles,
+  Webhook, Wrench, Search, ListChecks, Bot, Skull, Sparkles, PhoneCall,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -36,6 +36,15 @@ export const navigation: NavSection[] = [
       { name: "Import Leads", href: "/lead-import", icon: FileUp     },
       { name: "Cases",        href: "/cases",       icon: Briefcase  },
       { name: "Calls",        href: "/calls",       icon: Phone      },
+    ],
+  },
+
+  // ── 2b. DIALER ─────────────────────────────────────────────────────────────
+  // Enterprise internal call center — campaigns, DNC, scripts, reports.
+  {
+    section: "Dialer",
+    items: [
+      { name: "Dialer",       href: "/dialer",      icon: PhoneCall  },
     ],
   },
 

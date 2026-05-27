@@ -579,31 +579,8 @@ applies. A route is healthy iff one of the following is true:
   the route is a per-user identity action that must not be further
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
-Boot-time count: **265 checked / 44 public / 221 protected / 0 unprotected.**
 
-**Column legend (4th-pass code-review fix — full per-route policy):**
-
-- **Auth** / **Gate** — symbol stamps the validator detected on the layer
-  chain. `Gate` includes both `requireRole` and `requirePermission`.
-- **Public allowlist?** — route is mounted under a router stamped
-  `markPublic(...)`. No auth required.
-- **Auth-only allowlist?** — route is on the `AUTH_ONLY_ROUTES` allow-list
-  in `route-protection.ts` (self-service / pure utility endpoints).
-- **Login-exception** — route is on `AUTH_ROUTE_EXCEPTIONS` (login /
-  refresh / register on the auth router).
-- **Required role** — the LOWEST role label that satisfies every
-  `requireRole(...)` gate in the chain (hierarchy semantics: a gate of
-  `requireRole("paralegal")` shows `paralegal` and admits paralegal,
-  attorney, admin). Read directly from the gate's metadata stamp; the
-  same value the runtime check enforces.
-- **Required permission(s)** — the union of every `requirePermission(...)`
-  gate's permission list. Within one gate the semantics are "any of"; if
-  multiple gates appear on a route, all must be satisfied.
-- **Audited on denial?** — `✓` for any non-public route. The denial
-  audit hook lives in both `requireRole` and `requirePermission` (see
-  `auditDenial` in `lib/rbac.ts`); public routes never reach an auth or
-  gate middleware so cannot produce a denial event.
-
+Boot-time count: **288 checked / 44 public / 244 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | GET | `/api/navigation` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -704,6 +681,29 @@ Boot-time count: **265 checked / 44 public / 221 protected / 0 unprotected.**
 | decision-engine | POST | `/api/decision-engine/recompute-all` | ✓ | ✓ |  |  |  | — | `decision_engine:manage` | ✓ |
 | decision-engine | GET | `/api/decision-engine/settings` | ✓ | ✓ |  |  |  | — | `decision_engine:view` | ✓ |
 | decision-engine | PUT | `/api/decision-engine/settings` | ✓ | ✓ |  |  |  | — | `decision_engine:manage` | ✓ |
+| dialer | POST | `/api/dialer/call` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/campaigns/:id/leads` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | POST | `/api/dialer/campaigns/:id/leads` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | POST | `/api/dialer/campaigns/:id/pause` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | POST | `/api/dialer/campaigns/:id/start` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | DELETE | `/api/dialer/campaigns/:id` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/campaigns/:id` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | PATCH | `/api/dialer/campaigns/:id` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/campaigns` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | POST | `/api/dialer/campaigns` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | DELETE | `/api/dialer/dnc/:id` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | POST | `/api/dialer/dnc/bulk` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | POST | `/api/dialer/dnc/check` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | GET | `/api/dialer/dnc` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | POST | `/api/dialer/dnc` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/recordings` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | GET | `/api/dialer/reports` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | DELETE | `/api/dialer/scripts/:id` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/scripts/:id` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | PATCH | `/api/dialer/scripts/:id` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/scripts` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | POST | `/api/dialer/scripts` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/stats` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | document-templates | GET | `/api/document-templates/:id/preview` | ✓ | ✓ |  |  |  | — | `templates:view` | ✓ |
 | document-templates | DELETE | `/api/document-templates/:id` | ✓ | ✓ |  |  |  | — | `templates:manage` | ✓ |
 | document-templates | GET | `/api/document-templates/:id` | ✓ | ✓ |  |  |  | — | `templates:view` | ✓ |

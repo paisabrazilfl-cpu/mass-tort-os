@@ -1,0 +1,939 @@
+import { useState, useRef, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Phone, PhoneCall, PhoneOff, PhoneMissed, Play, Pause, StopCircle,
+  BarChart3, Users, FileText, ShieldOff, Mic, MicOff, Volume2,
+  Plus, Trash2, Edit, Download, Upload, RefreshCw, CheckCircle,
+  XCircle, Clock, TrendingUp, AlertTriangle, Headphones, Loader2,
+  Delete, Hash, Star,
+} from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/auth-context";
+
+const API = (path: string) => `/api/dialer${path}`;
+
+async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
+  const token = localStorage.getItem("mtos:token");
+  const res = await fetch(API(path), {
+    ...opts,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts?.headers ?? {}),
+    },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }));
+    throw new Error(err.message ?? "Request failed");
+  }
+  return res.json() as Promise<T>;
+}
+
+// ─── STATS CARDS ─────────────────────────────────────────────────────────────
+
+function StatsTab() {
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["dialer-stats"],
+    queryFn: () => apiFetch<any>("/stats"),
+    refetchInterval: 15000,
+  });
+
+  if (isLoading) return <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>;
+
+  const t = data?.today ?? {};
+  const c = data?.campaigns ?? {};
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {[
+          { label: "Calls Today", value: t.total_calls ?? 0, icon: Phone, color: "text-blue-600" },
+          { label: "Connected", value: t.connected ?? 0, icon: CheckCircle, color: "text-green-600" },
+          { label: "In Progress", value: t.in_progress ?? 0, icon: PhoneCall, color: "text-yellow-600" },
+          { label: "Connect Rate", value: `${t.connect_rate ?? 0}%`, icon: TrendingUp, color: "text-purple-600" },
+          { label: "Active Campaigns", value: c.active ?? 0, icon: Play, color: "text-green-600" },
+          { label: "Paused", value: c.paused ?? 0, icon: Pause, color: "text-orange-500" },
+          { label: "Total Campaigns", value: c.total ?? 0, icon: BarChart3, color: "text-blue-600" },
+          { label: "DNC Entries", value: data?.dnc_count ?? 0, icon: ShieldOff, color: "text-red-500" },
+        ].map((s) => (
+          <Card key={s.label}>
+            <CardContent className="pt-4 pb-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-muted-foreground">{s.label}</span>
+                <s.icon className={`h-4 w-4 ${s.color}`} />
+              </div>
+              <div className={`text-2xl font-bold ${s.color}`}>{s.value}</div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold">Live Status</CardTitle>
+            <Button size="sm" variant="ghost" onClick={() => refetch()}>
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              Auto-refreshes every 15s
+            </span>
+            <span>•</span>
+            <span>Connect Telnyx or Vapi in Integrations to enable live dialing</span>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ─── CAMPAIGNS ────────────────────────────────────────────────────────────────
+
+const CAMPAIGN_TYPES = ["predictive", "preview", "power", "manual"] as const;
+const CAMPAIGN_STATUSES = ["draft", "active", "paused", "completed", "archived"] as const;
+
+function statusBadge(status: string) {
+  const map: Record<string, string> = {
+    active: "bg-green-100 text-green-800",
+    paused: "bg-yellow-100 text-yellow-800",
+    draft: "bg-gray-100 text-gray-700",
+    completed: "bg-blue-100 text-blue-800",
+    archived: "bg-red-100 text-red-700",
+  };
+  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${map[status] ?? "bg-gray-100"}`}>{status}</span>;
+}
+
+function CampaignsTab() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ name: "", type: "preview", caller_id: "", retry_attempts: 3, max_concurrent_calls: 1, call_window_start: "09:00", call_window_end: "20:00", timezone: "America/New_York", notes: "" });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["dialer-campaigns"],
+    queryFn: () => apiFetch<any>("/campaigns"),
+  });
+
+  const createMut = useMutation({
+    mutationFn: (body: typeof form) => apiFetch("/campaigns", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["dialer-campaigns"] }); setShowCreate(false); toast({ title: "Campaign created" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const startMut = useMutation({
+    mutationFn: (id: number) => apiFetch(`/campaigns/${id}/start`, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["dialer-campaigns"] }),
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const pauseMut = useMutation({
+    mutationFn: (id: number) => apiFetch(`/campaigns/${id}/pause`, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["dialer-campaigns"] }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => apiFetch(`/campaigns/${id}`, { method: "DELETE" }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["dialer-campaigns"] }); toast({ title: "Campaign deleted" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const campaigns: any[] = data?.campaigns ?? [];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">{campaigns.length} campaign{campaigns.length !== 1 ? "s" : ""}</p>
+        <Button size="sm" onClick={() => setShowCreate(true)}>
+          <Plus className="h-3.5 w-3.5 mr-1" /> New Campaign
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+      ) : campaigns.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-muted-foreground text-sm">No campaigns yet. Create one to start dialing.</CardContent></Card>
+      ) : (
+        <Card>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Leads</TableHead>
+                <TableHead className="text-right">Dialed</TableHead>
+                <TableHead className="text-right">Connected</TableHead>
+                <TableHead className="text-right">Conv.</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {campaigns.map((c: any) => (
+                <TableRow key={c.id}>
+                  <TableCell className="font-medium">{c.name}</TableCell>
+                  <TableCell><Badge variant="outline" className="capitalize">{c.type}</Badge></TableCell>
+                  <TableCell>{statusBadge(c.status)}</TableCell>
+                  <TableCell className="text-right">{c.total_leads}</TableCell>
+                  <TableCell className="text-right">{c.dialed_count}</TableCell>
+                  <TableCell className="text-right">{c.connected_count}</TableCell>
+                  <TableCell className="text-right">{c.converted_count}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      {c.status !== "active" && (
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-green-600" onClick={() => startMut.mutate(c.id)}>
+                          <Play className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {c.status === "active" && (
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-yellow-600" onClick={() => pauseMut.mutate(c.id)}>
+                          <Pause className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500" onClick={() => { if (confirm("Delete campaign?")) deleteMut.mutate(c.id); }}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
+
+      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>New Dialing Campaign</DialogTitle>
+            <DialogDescription>Configure an outbound dialing campaign.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Campaign Name *</Label>
+              <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Q3 Mass Tort Outreach" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Dialer Type</Label>
+                <Select value={form.type} onValueChange={(v) => setForm((f) => ({ ...f, type: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {CAMPAIGN_TYPES.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Caller ID</Label>
+                <Input value={form.caller_id} onChange={(e) => setForm((f) => ({ ...f, caller_id: e.target.value }))} placeholder="+15551234567" />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label>Concurrent Calls</Label>
+                <Input type="number" min={1} max={50} value={form.max_concurrent_calls} onChange={(e) => setForm((f) => ({ ...f, max_concurrent_calls: parseInt(e.target.value) || 1 }))} />
+              </div>
+              <div>
+                <Label>Retry Attempts</Label>
+                <Input type="number" min={0} max={10} value={form.retry_attempts} onChange={(e) => setForm((f) => ({ ...f, retry_attempts: parseInt(e.target.value) || 0 }))} />
+              </div>
+              <div>
+                <Label>Timezone</Label>
+                <Select value={form.timezone} onValueChange={(v) => setForm((f) => ({ ...f, timezone: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Phoenix"].map((tz) => (
+                      <SelectItem key={tz} value={tz}>{tz.replace("America/", "")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Call Window Start</Label>
+                <Input type="time" value={form.call_window_start} onChange={(e) => setForm((f) => ({ ...f, call_window_start: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Call Window End</Label>
+                <Input type="time" value={form.call_window_end} onChange={(e) => setForm((f) => ({ ...f, call_window_end: e.target.value }))} />
+              </div>
+            </div>
+            <div>
+              <Label>Notes</Label>
+              <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
+            <Button disabled={!form.name || createMut.isPending} onClick={() => createMut.mutate(form)}>
+              {createMut.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              Create Campaign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ─── MANUAL DIAL ─────────────────────────────────────────────────────────────
+
+function ManualDialTab() {
+  const { toast } = useToast();
+  const [number, setNumber] = useState("");
+  const [calling, setCalling] = useState(false);
+  const [callResult, setCallResult] = useState<any>(null);
+  const [muted, setMuted] = useState(false);
+
+  const appendDigit = (d: string) => setNumber((n) => n + d);
+  const backspace = () => setNumber((n) => n.slice(0, -1));
+
+  const dialMut = useMutation({
+    mutationFn: () => apiFetch<any>("/call", { method: "POST", body: JSON.stringify({ to_number: number }) }),
+    onSuccess: (r) => {
+      setCalling(true);
+      setCallResult(r);
+      if (r.provider_status === "no_provider") {
+        toast({ title: "No Voice Provider", description: r.message });
+        setCalling(false);
+      } else {
+        toast({ title: "Call initiated", description: `Call ID: ${r.call_log_id}` });
+      }
+    },
+    onError: (e: Error) => toast({ title: "Call failed", description: e.message, variant: "destructive" }),
+  });
+
+  const KEYS = [
+    ["1", ""],["2", "ABC"],["3", "DEF"],
+    ["4", "GHI"],["5", "JKL"],["6", "MNO"],
+    ["7", "PQRS"],["8", "TUV"],["9", "WXYZ"],
+    ["*", ""],["0", "+"],["#", ""],
+  ];
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Dialpad</CardTitle>
+          <CardDescription className="text-xs">Click-to-call or enter a number manually</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Input
+            value={number}
+            onChange={(e) => setNumber(e.target.value)}
+            placeholder="+1 (555) 000-0000"
+            className="text-center text-lg font-mono tracking-widest"
+          />
+          <div className="grid grid-cols-3 gap-2">
+            {KEYS.map(([digit, sub]) => (
+              <button
+                key={digit}
+                onClick={() => appendDigit(digit)}
+                className="flex flex-col items-center justify-center h-14 rounded-lg border border-border bg-muted/40 hover:bg-muted/80 transition-colors active:scale-95"
+              >
+                <span className="text-lg font-semibold leading-none">{digit}</span>
+                <span className="text-[9px] text-muted-foreground tracking-widest mt-0.5">{sub}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={backspace}>
+              <Delete className="h-4 w-4" />
+            </Button>
+            {!calling ? (
+              <Button
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                disabled={number.length < 7 || dialMut.isPending}
+                onClick={() => dialMut.mutate()}
+              >
+                {dialMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Phone className="h-4 w-4" />}
+              </Button>
+            ) : (
+              <Button
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                onClick={() => { setCalling(false); setCallResult(null); }}
+              >
+                <PhoneOff className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+
+          {calling && (
+            <div className="border rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-2 text-sm font-medium text-green-700">
+                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                Call Active — {number}
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant={muted ? "destructive" : "outline"} onClick={() => setMuted(!muted)}>
+                  {muted ? <MicOff className="h-3.5 w-3.5 mr-1" /> : <Mic className="h-3.5 w-3.5 mr-1" />}
+                  {muted ? "Unmute" : "Mute"}
+                </Button>
+                <Button size="sm" variant="outline">
+                  <Headphones className="h-3.5 w-3.5 mr-1" /> Hold
+                </Button>
+                <Button size="sm" variant="outline">
+                  <Hash className="h-3.5 w-3.5 mr-1" /> DTMF
+                </Button>
+              </div>
+              {callResult && (
+                <p className="text-xs text-muted-foreground">Log ID: {callResult.call_log_id} · Provider: {callResult.provider ?? "–"}</p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Quick Lead Dial</CardTitle>
+          <CardDescription className="text-xs">Search leads and dial directly</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground py-6 text-center">
+            Open a lead record and click the phone icon to pre-populate the dialpad.
+            <br /><br />
+            <a href="/leads" className="text-primary underline text-xs">Browse Leads →</a>
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ─── DNC ─────────────────────────────────────────────────────────────────────
+
+function DncTab() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [addNumber, setAddNumber] = useState("");
+  const [addReason, setAddReason] = useState("");
+  const [bulkText, setBulkText] = useState("");
+  const [showBulk, setShowBulk] = useState(false);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["dialer-dnc", search, page],
+    queryFn: () => apiFetch<any>(`/dnc?page=${page}&search=${encodeURIComponent(search)}`),
+  });
+
+  const addMut = useMutation({
+    mutationFn: () => apiFetch("/dnc", { method: "POST", body: JSON.stringify({ phone_number: addNumber.trim(), reason: addReason }) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["dialer-dnc"] }); setAddNumber(""); setAddReason(""); toast({ title: "Added to DNC" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const bulkMut = useMutation({
+    mutationFn: () => {
+      const numbers = bulkText.split(/[\n,]+/).map((n) => n.trim()).filter(Boolean);
+      return apiFetch("/dnc/bulk", { method: "POST", body: JSON.stringify({ numbers, source: "scrub" }) });
+    },
+    onSuccess: (r: any) => { qc.invalidateQueries({ queryKey: ["dialer-dnc"] }); setBulkText(""); setShowBulk(false); toast({ title: `Imported ${r.imported} numbers` }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => apiFetch(`/dnc/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["dialer-dnc"] }),
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const entries: any[] = data?.dnc ?? [];
+  const total: number = data?.total ?? 0;
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Add to DNC</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2">
+            <Input value={addNumber} onChange={(e) => setAddNumber(e.target.value)} placeholder="+15551234567" className="max-w-[200px]" />
+            <Input value={addReason} onChange={(e) => setAddReason(e.target.value)} placeholder="Reason (optional)" className="flex-1" />
+            <Button disabled={!addNumber || addMut.isPending} onClick={() => addMut.mutate()}>
+              {addMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4 mr-1" />}
+              Add
+            </Button>
+            <Button variant="outline" onClick={() => setShowBulk(true)}>
+              <Upload className="h-4 w-4 mr-1" /> Bulk Import
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="flex items-center gap-3">
+        <Input
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          placeholder="Search phone number…"
+          className="max-w-xs"
+        />
+        <span className="text-sm text-muted-foreground">{total} total entries</span>
+      </div>
+
+      <Card>
+        {isLoading ? (
+          <CardContent className="py-12 text-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground mx-auto" /></CardContent>
+        ) : entries.length === 0 ? (
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">No DNC entries{search ? " matching your search" : ""}.</CardContent>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Phone Number</TableHead>
+                <TableHead>Source</TableHead>
+                <TableHead>Reason</TableHead>
+                <TableHead>Added</TableHead>
+                <TableHead>Expires</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {entries.map((e: any) => (
+                <TableRow key={e.id}>
+                  <TableCell className="font-mono">{e.phone_number}</TableCell>
+                  <TableCell><Badge variant="outline">{e.source}</Badge></TableCell>
+                  <TableCell className="text-muted-foreground text-xs">{e.reason ?? "—"}</TableCell>
+                  <TableCell className="text-xs">{new Date(e.created_at).toLocaleDateString()}</TableCell>
+                  <TableCell className="text-xs">{e.expires_at ? new Date(e.expires_at).toLocaleDateString() : "Never"}</TableCell>
+                  <TableCell>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500" onClick={() => deleteMut.mutate(e.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
+      {total > 50 && (
+        <div className="flex items-center justify-between text-sm">
+          <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+          <span className="text-muted-foreground">Page {page}</span>
+          <Button variant="outline" size="sm" disabled={entries.length < 50} onClick={() => setPage((p) => p + 1)}>Next</Button>
+        </div>
+      )}
+
+      <Dialog open={showBulk} onOpenChange={setShowBulk}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bulk DNC Import</DialogTitle>
+            <DialogDescription>Paste numbers (one per line or comma-separated). Up to 5,000 at once.</DialogDescription>
+          </DialogHeader>
+          <Textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} rows={10} placeholder="+15551234567&#10;+15559876543&#10;..." />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulk(false)}>Cancel</Button>
+            <Button disabled={!bulkText.trim() || bulkMut.isPending} onClick={() => bulkMut.mutate()}>
+              {bulkMut.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              Import
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ─── SCRIPTS ─────────────────────────────────────────────────────────────────
+
+const SECTION_TYPES = ["opening", "discovery", "pitch", "objection", "close", "custom"] as const;
+
+function ScriptsTab() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [selected, setSelected] = useState<any>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ name: "", category: "", content: { sections: [] as any[] }, is_active: true });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["dialer-scripts"],
+    queryFn: () => apiFetch<any>("/scripts"),
+  });
+
+  const createMut = useMutation({
+    mutationFn: (body: typeof form) => apiFetch("/scripts", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["dialer-scripts"] }); setShowCreate(false); toast({ title: "Script created" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => apiFetch(`/scripts/${id}`, { method: "DELETE" }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["dialer-scripts"] }); if (selected) setSelected(null); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const scripts: any[] = data?.scripts ?? [];
+
+  const addSection = () => setForm((f) => ({
+    ...f,
+    content: { sections: [...f.content.sections, { title: "New Section", text: "", type: "custom" }] },
+  }));
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium">{scripts.length} Script{scripts.length !== 1 ? "s" : ""}</p>
+          <Button size="sm" onClick={() => setShowCreate(true)}><Plus className="h-3.5 w-3.5 mr-1" /> New</Button>
+        </div>
+        {isLoading ? (
+          <div className="flex justify-center py-8"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
+        ) : scripts.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-8">No scripts yet.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {scripts.map((s: any) => (
+              <div
+                key={s.id}
+                onClick={() => setSelected(s)}
+                className={`rounded-lg border p-3 cursor-pointer transition-colors ${selected?.id === s.id ? "bg-primary/10 border-primary/30" : "hover:bg-muted/60"}`}
+              >
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium truncate">{s.name}</p>
+                  <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-400 opacity-0 group-hover:opacity-100"
+                    onClick={(e) => { e.stopPropagation(); if (confirm("Delete script?")) deleteMut.mutate(s.id); }}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+                {s.category && <p className="text-xs text-muted-foreground">{s.category}</p>}
+                <p className="text-xs text-muted-foreground mt-0.5">{s.content?.sections?.length ?? 0} sections</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="md:col-span-2">
+        {selected ? (
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm">{selected.name}</CardTitle>
+                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-400" onClick={() => { if (confirm("Delete?")) deleteMut.mutate(selected.id); }}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {(selected.content?.sections ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No sections in this script.</p>
+              ) : (
+                <div className="space-y-3">
+                  {(selected.content.sections as any[]).map((sec: any, i: number) => (
+                    <div key={i} className="rounded-lg border p-3 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-xs capitalize">{sec.type}</Badge>
+                        <p className="text-sm font-semibold">{sec.title}</p>
+                      </div>
+                      <p className="text-sm text-muted-foreground whitespace-pre-wrap">{sec.text}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="flex items-center justify-center h-full text-muted-foreground text-sm py-20">
+            Select a script to preview it
+          </div>
+        )}
+      </div>
+
+      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+        <DialogContent className="max-w-xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>New Call Script</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Script Name *</Label>
+                <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Mass Tort Intake Script" />
+              </div>
+              <div>
+                <Label>Category</Label>
+                <Input value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} placeholder="Intake, Follow-up…" />
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label>Sections</Label>
+                <Button size="sm" variant="outline" onClick={addSection}><Plus className="h-3 w-3 mr-1" /> Add Section</Button>
+              </div>
+              {form.content.sections.map((sec: any, i: number) => (
+                <div key={i} className="border rounded-lg p-3 space-y-2 mb-2">
+                  <div className="flex gap-2">
+                    <Input value={sec.title} onChange={(e) => {
+                      const secs = [...form.content.sections];
+                      secs[i] = { ...secs[i], title: e.target.value };
+                      setForm((f) => ({ ...f, content: { sections: secs } }));
+                    }} placeholder="Section title" className="flex-1" />
+                    <Select value={sec.type} onValueChange={(v) => {
+                      const secs = [...form.content.sections];
+                      secs[i] = { ...secs[i], type: v };
+                      setForm((f) => ({ ...f, content: { sections: secs } }));
+                    }}>
+                      <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                      <SelectContent>{SECTION_TYPES.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}</SelectContent>
+                    </Select>
+                    <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-red-400" onClick={() => {
+                      const secs = form.content.sections.filter((_, idx) => idx !== i);
+                      setForm((f) => ({ ...f, content: { sections: secs } }));
+                    }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                  </div>
+                  <Textarea value={sec.text} rows={3} onChange={(e) => {
+                    const secs = [...form.content.sections];
+                    secs[i] = { ...secs[i], text: e.target.value };
+                    setForm((f) => ({ ...f, content: { sections: secs } }));
+                  }} placeholder="Script text for this section…" />
+                </div>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
+            <Button disabled={!form.name || createMut.isPending} onClick={() => createMut.mutate(form)}>
+              {createMut.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              Create Script
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ─── RECORDINGS ───────────────────────────────────────────────────────────────
+
+function RecordingsTab() {
+  const [page, setPage] = useState(1);
+  const { data, isLoading } = useQuery({
+    queryKey: ["dialer-recordings", page],
+    queryFn: () => apiFetch<any>(`/recordings?page=${page}`),
+  });
+  const recs: any[] = data?.recordings ?? [];
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        {isLoading ? (
+          <CardContent className="py-12 text-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground mx-auto" /></CardContent>
+        ) : recs.length === 0 ? (
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">No recordings available yet. Recordings appear after calls complete.</CardContent>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>From</TableHead>
+                <TableHead>To</TableHead>
+                <TableHead>Duration</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Recording</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {recs.map((r: any) => (
+                <TableRow key={r.id}>
+                  <TableCell className="text-xs">{new Date(r.created_at).toLocaleString()}</TableCell>
+                  <TableCell className="font-mono text-xs">{r.from_number ?? "—"}</TableCell>
+                  <TableCell className="font-mono text-xs">{r.to_number ?? "—"}</TableCell>
+                  <TableCell className="text-xs">{r.duration_seconds != null ? `${Math.floor(r.duration_seconds / 60)}:${String(r.duration_seconds % 60).padStart(2, "0")}` : "—"}</TableCell>
+                  <TableCell>{statusBadge(r.status)}</TableCell>
+                  <TableCell>
+                    {r.recording_url ? (
+                      <a href={r.recording_url} target="_blank" rel="noopener noreferrer">
+                        <Button size="sm" variant="outline" className="h-7">
+                          <Headphones className="h-3.5 w-3.5 mr-1" /> Play
+                        </Button>
+                      </a>
+                    ) : "—"}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+      {(recs.length === 25) && (
+        <div className="flex justify-between text-sm">
+          <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+          <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)}>Next</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── REPORTS ─────────────────────────────────────────────────────────────────
+
+function ReportsTab() {
+  const [days, setDays] = useState(30);
+  const { data, isLoading } = useQuery({
+    queryKey: ["dialer-reports", days],
+    queryFn: () => apiFetch<any>(`/reports?days=${days}`),
+  });
+
+  const byStatus: any[] = data?.by_status ?? [];
+  const byDay: any[] = data?.by_day ?? [];
+  const avgDuration = data?.avg_duration_seconds ?? 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Label className="text-sm">Period</Label>
+        <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v))}>
+          <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {[7, 14, 30, 60, 90].map((d) => <SelectItem key={d} value={String(d)}>Last {d} days</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Avg Call Duration</CardTitle></CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{Math.floor(avgDuration / 60)}:{String(avgDuration % 60).padStart(2, "0")}</p>
+            <p className="text-xs text-muted-foreground">min:sec</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Total Calls</CardTitle></CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{byStatus.reduce((sum, s) => sum + Number(s.count), 0)}</p>
+            <p className="text-xs text-muted-foreground">last {days} days</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Connect Rate</CardTitle></CardHeader>
+          <CardContent>
+            {(() => {
+              const total = byStatus.reduce((sum, s) => sum + Number(s.count), 0);
+              const connected = byStatus.find((s) => s.status === "completed")?.count ?? 0;
+              return (
+                <>
+                  <p className="text-2xl font-bold text-green-600">{total > 0 ? Math.round((Number(connected) / total) * 100) : 0}%</p>
+                  <p className="text-xs text-muted-foreground">{connected} connected / {total} total</p>
+                </>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader><CardTitle className="text-sm">By Status</CardTitle></CardHeader>
+          <CardContent>
+            {isLoading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : (
+              <div className="space-y-2">
+                {byStatus.map((s: any) => {
+                  const total = byStatus.reduce((sum: number, x: any) => sum + Number(x.count), 0);
+                  const pct = total > 0 ? Math.round((Number(s.count) / total) * 100) : 0;
+                  return (
+                    <div key={s.status} className="flex items-center gap-3">
+                      <span className="w-24 text-xs capitalize text-muted-foreground">{s.status}</span>
+                      <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
+                        <div className="h-2 bg-primary rounded-full" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-xs font-medium w-8 text-right">{s.count}</span>
+                    </div>
+                  );
+                })}
+                {byStatus.length === 0 && <p className="text-sm text-muted-foreground">No call data in this period.</p>}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle className="text-sm">Daily Call Volume</CardTitle></CardHeader>
+          <CardContent>
+            {isLoading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : byDay.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No data yet.</p>
+            ) : (
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {byDay.slice(-14).map((d: any) => {
+                  const maxCount = Math.max(...byDay.map((x: any) => Number(x.count)), 1);
+                  const pct = Math.round((Number(d.count) / maxCount) * 100);
+                  return (
+                    <div key={d.day} className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground w-24">{d.day?.slice(0, 10)}</span>
+                      <div className="flex-1 bg-muted rounded-full h-1.5 overflow-hidden">
+                        <div className="h-1.5 bg-blue-500 rounded-full" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-xs w-8 text-right">{d.count}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── PAGE ─────────────────────────────────────────────────────────────────────
+
+export default function DialerPage() {
+  return (
+    <div className="p-6 max-w-7xl mx-auto space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center">
+          <Phone className="h-4 w-4 text-primary" />
+        </div>
+        <div>
+          <h1 className="text-lg font-semibold">Internal Dialer</h1>
+          <p className="text-xs text-muted-foreground">Enterprise outbound call center — campaigns, DNC, scripts, and live analytics</p>
+        </div>
+      </div>
+
+      <Tabs defaultValue="dashboard" className="space-y-4">
+        <TabsList className="flex-wrap h-auto gap-1">
+          <TabsTrigger value="dashboard" className="gap-1.5"><BarChart3 className="h-3.5 w-3.5" />Dashboard</TabsTrigger>
+          <TabsTrigger value="campaigns" className="gap-1.5"><Play className="h-3.5 w-3.5" />Campaigns</TabsTrigger>
+          <TabsTrigger value="manual" className="gap-1.5"><Phone className="h-3.5 w-3.5" />Manual Dial</TabsTrigger>
+          <TabsTrigger value="scripts" className="gap-1.5"><FileText className="h-3.5 w-3.5" />Call Scripts</TabsTrigger>
+          <TabsTrigger value="dnc" className="gap-1.5"><ShieldOff className="h-3.5 w-3.5" />DNC Manager</TabsTrigger>
+          <TabsTrigger value="recordings" className="gap-1.5"><Headphones className="h-3.5 w-3.5" />Recordings</TabsTrigger>
+          <TabsTrigger value="reports" className="gap-1.5"><TrendingUp className="h-3.5 w-3.5" />Reports</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="dashboard"><StatsTab /></TabsContent>
+        <TabsContent value="campaigns"><CampaignsTab /></TabsContent>
+        <TabsContent value="manual"><ManualDialTab /></TabsContent>
+        <TabsContent value="scripts"><ScriptsTab /></TabsContent>
+        <TabsContent value="dnc"><DncTab /></TabsContent>
+        <TabsContent value="recordings"><RecordingsTab /></TabsContent>
+        <TabsContent value="reports"><ReportsTab /></TabsContent>
+      </Tabs>
+    </div>
+  );
+}
