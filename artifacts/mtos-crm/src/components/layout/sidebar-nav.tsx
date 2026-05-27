@@ -82,13 +82,12 @@ export const navigation: NavSection[] = [
   },
 
   // ── 6. AI AGENTS & CLINICAL ───────────────────────────────────────────────
-  // Autonomous agents, provider lookup, case qualification, predictive scoring.
+  // Autonomous agents, case qualification, predictive scoring.
   {
     section: "AI & Clinical",
     items: [
       { name: "Abby",            href: "/abby",            icon: Sparkles    },
       { name: "AI Agents",       href: "/ai-agents",       icon: Bot         },
-      { name: "NPI Lookup",      href: "/npi-lookup",      icon: Stethoscope },
       { name: "Decision Engine", href: "/decision-engine", icon: Scale       },
       { name: "Praxis AI",       href: "/predictive",      icon: Brain       },
     ],

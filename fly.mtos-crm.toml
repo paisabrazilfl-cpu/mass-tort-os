@@ -7,21 +7,27 @@ primary_region = "iad"
 [env]
   NODE_ENV = "production"
   PORT = "8080"
+  # Points the CRM's reverse proxy at the API server Fly app.
+  # server.mjs forwards /api/* and /webhook/* here so the SPA can use
+  # path-relative URLs (/api/...) without CORS issues.
+  API_BASE_URL = "https://mtos-api-server.fly.dev"
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "off"
+  auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 1
   processes = ["app"]
 
+  # /healthz is proxied through to the API server — confirms the full stack
+  # is reachable, not just the static file server.
   [[http_service.checks]]
     grace_period = "20s"
-    interval = "15s"
+    interval = "30s"
     method = "GET"
     timeout = "5s"
-    path = "/"
+    path = "/healthz"
 
 [[vm]]
   cpu_kind = "shared"
