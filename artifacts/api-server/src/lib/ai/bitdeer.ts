@@ -53,7 +53,7 @@ export type BitdeerRole =
 const DEFAULT_MODELS: Record<BitdeerRole, string> = {
   code: "mistralai/Devstral-2-123B-Instruct-2512",
   planner: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
-  chat: "mistralai/Devstral-2-123B-Instruct-2512",
+  chat: "mistralai/Mistral-Large-3-675B-Instruct-2512",
   router: "google/gemma-4-E4B-it",
   vision: "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning",
   image: "google/imagen-4.0-ultra",
