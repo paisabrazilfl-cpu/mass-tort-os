@@ -160,7 +160,7 @@ router.get(
   "/campaigns/:id",
   requirePermission(Permission.CALLS_VIEW),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const firmId = await getFirmId(req.user!.id);
     const [row] = await db
@@ -181,7 +181,7 @@ router.patch(
   "/campaigns/:id",
   requirePermission(Permission.CALLS_MANAGE),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const parsed = campaignSchema.partial().safeParse(req.body);
     if (!parsed.success) { badRequest(res, "Invalid data", parsed.error.issues); return; }
@@ -205,7 +205,7 @@ router.delete(
   "/campaigns/:id",
   requirePermission(Permission.CALLS_MANAGE),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const firmId = await getFirmId(req.user!.id);
     const [row] = await db
@@ -226,7 +226,7 @@ router.post(
   "/campaigns/:id/start",
   requirePermission(Permission.CALLS_MANAGE),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const firmId = await getFirmId(req.user!.id);
     const [row] = await db
@@ -249,7 +249,7 @@ router.post(
   "/campaigns/:id/pause",
   requirePermission(Permission.CALLS_MANAGE),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const firmId = await getFirmId(req.user!.id);
     const [row] = await db
@@ -272,7 +272,7 @@ router.get(
   "/campaigns/:id/leads",
   requirePermission(Permission.CALLS_VIEW),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10));
     const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.page_size ?? "50"), 10)));
@@ -281,7 +281,8 @@ router.get(
     const rows = await db
       .select({
         cl: dialerCampaignLeadsTable,
-        lead_name: leadsTable.full_name,
+        lead_first: leadsTable.first_name,
+        lead_last: leadsTable.last_name,
         lead_phone: leadsTable.phone,
       })
       .from(dialerCampaignLeadsTable)
@@ -299,7 +300,7 @@ router.post(
   "/campaigns/:id/leads",
   requirePermission(Permission.CALLS_MANAGE),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const parsed = z.object({ lead_ids: z.array(z.number().int().positive()).min(1).max(1000) })
       .safeParse(req.body);
@@ -428,7 +429,7 @@ router.delete(
   "/dnc/:id",
   requirePermission(Permission.CALLS_MANAGE),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const firmId = await getFirmId(req.user!.id);
     const [row] = await db
@@ -501,7 +502,7 @@ router.get(
   "/scripts/:id",
   requirePermission(Permission.CALLS_VIEW),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const firmId = await getFirmId(req.user!.id);
     const [row] = await db
@@ -522,7 +523,7 @@ router.patch(
   "/scripts/:id",
   requirePermission(Permission.CALLS_MANAGE),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const parsed = scriptSchema.partial().safeParse(req.body);
     if (!parsed.success) { badRequest(res, "Invalid data", parsed.error.issues); return; }
@@ -546,7 +547,7 @@ router.delete(
   "/scripts/:id",
   requirePermission(Permission.CALLS_MANAGE),
   async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) { badRequest(res, "Invalid id"); return; }
     const firmId = await getFirmId(req.user!.id);
     const [row] = await db
@@ -599,8 +600,8 @@ router.post(
       return;
     }
 
-    // Resolve the configured voice provider
-    const resolved = await resolveProvider("voice", firmId);
+    // Resolve the configured voice provider (voice has no per-buyer override)
+    const resolved = await resolveProvider("voice");
     const hasProvider = isResolved(resolved);
 
     // Log the call attempt regardless of provider availability
@@ -630,9 +631,9 @@ router.post(
     }
 
     try {
-      const adapter = getVoiceAdapter(resolved.providerName);
+      const adapter = getVoiceAdapter(resolved.provider);
       if (adapter && typeof (adapter as any).initiateOutbound === "function") {
-        await (adapter as any).initiateOutbound(resolved.creds, {
+        await (adapter as any).initiateOutbound(resolved.credentials, {
           to: parsed.data.to_number,
           from: parsed.data.caller_id,
           callLogId: callLog.id,
@@ -643,7 +644,7 @@ router.post(
         .set({ status: "in_progress", updated_at: new Date() })
         .where(eq(callLogsTable.id, callLog.id));
 
-      res.json({ call_log_id: callLog.id, status: "in_progress", provider: resolved.providerName });
+      res.json({ call_log_id: callLog.id, status: "in_progress", provider: resolved.provider });
     } catch (err) {
       logger.error({ err, callLogId: callLog.id }, "dialer: outbound call initiation failed");
       await db
@@ -743,6 +744,166 @@ router.get(
       by_day: byDay,
       avg_duration_seconds: Number(avgDuration[0]?.avg_seconds ?? 0),
     });
+  },
+);
+
+// ─── VAPI CONFIG (for Web SDK) ───────────────────────────────────────────────
+
+router.get(
+  "/vapi-config",
+  requirePermission(Permission.CALLS_VIEW),
+  async (req, res) => {
+    const resolved = await resolveProvider("voice");
+
+    if (!isResolved(resolved) || resolved.provider !== "vapi") {
+      res.json({ configured: false, public_key: null, assistants: [] });
+      return;
+    }
+
+    const creds = resolved.credentials as Record<string, unknown>;
+    const publicKey = typeof creds.public_key === "string" ? creds.public_key.trim() || null : null;
+
+    const adapter = getVoiceAdapter("vapi");
+    if (!adapter) {
+      res.json({ configured: true, public_key: publicKey, assistants: [] });
+      return;
+    }
+    const listResult = await adapter.listAssistants(resolved.credentials);
+
+    res.json({
+      configured: true,
+      public_key: publicKey,
+      assistants: listResult.ok ? listResult.assistants : [],
+    });
+  },
+);
+
+// ─── VAPI ASSISTANT SETUP (BitDeer Qwen3-235B as LLM) ────────────────────────
+
+router.post(
+  "/vapi-assistant",
+  requirePermission(Permission.CALLS_MANAGE),
+  async (req, res) => {
+    const resolved = await resolveProvider("voice");
+
+    if (!isResolved(resolved) || resolved.provider !== "vapi") {
+      res.status(422).json({ code: "NO_VAPI", message: "Vapi is not configured as your voice provider." });
+      return;
+    }
+
+    const vapiCreds = resolved.credentials as Record<string, unknown>;
+    const apiKey = typeof vapiCreds.api_key === "string" ? vapiCreds.api_key.trim() : "";
+    if (!apiKey) {
+      res.status(422).json({ code: "NO_VAPI_KEY", message: "Vapi api_key is missing from your integration." });
+      return;
+    }
+
+    const bitdeerKey = process.env["BITDEER_API_KEY"]?.trim() ?? "";
+    if (!bitdeerKey) {
+      res.status(422).json({ code: "NO_BITDEER_KEY", message: "BITDEER_API_KEY is not set. Add it in Integrations → AI / LLM → Bitdeer." });
+      return;
+    }
+
+    const schema = z.object({
+      name: z.string().default("MTOS Intake Agent"),
+      voice_id: z.enum(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]).default("alloy"),
+      system_prompt: z.string().optional(),
+      first_message: z.string().optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      badRequest(res, "Invalid request body");
+      return;
+    }
+
+    const payload = {
+      name: parsed.data.name,
+      model: {
+        provider: "custom-llm",
+        url: "https://api-inference.bitdeer.ai/v1/chat/completions",
+        model: "Qwen/Qwen3-235B-A22B",
+        authorizationHeader: `Bearer ${bitdeerKey}`,
+        messages: [
+          {
+            role: "system",
+            content:
+              parsed.data.system_prompt ??
+              "You are a professional intake specialist for a mass tort law firm. Gather: full name, date of birth, phone, email, nature of injury or claim, timeline, and relevant product or defendant details. Be empathetic and professional. If the caller qualifies, schedule a consultation. Never provide legal advice.",
+          },
+        ],
+      },
+      voice: {
+        provider: "openai",
+        voiceId: parsed.data.voice_id,
+      },
+      transcriber: {
+        provider: "deepgram",
+        model: "nova-2",
+        language: "en-US",
+      },
+      firstMessage:
+        parsed.data.first_message ??
+        "Thank you for calling. This is the intake line for our law firm. How can I help you today?",
+      endCallFunctionEnabled: true,
+      recordingEnabled: true,
+    };
+
+    let resp: Response;
+    try {
+      resp = await fetch("https://api.vapi.ai/assistant", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      logger.error({ err }, "vapi: create assistant network error");
+      res.status(502).json({ code: "NETWORK_ERROR", message: "Could not reach Vapi API." });
+      return;
+    }
+
+    const json = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!resp.ok) {
+      logger.error({ status: resp.status, body: json }, "vapi: create assistant failed");
+      res.status(502).json({ code: "VAPI_ERROR", message: `Vapi returned HTTP ${resp.status}`, detail: json });
+      return;
+    }
+
+    logger.info({ assistantId: json.id, name: json.name }, "vapi: assistant created with BitDeer Qwen3-235B LLM");
+    res.status(201).json({
+      assistant_id: json.id,
+      name: json.name,
+      model: "Qwen/Qwen3-235B-A22B",
+      voice: parsed.data.voice_id,
+      assistant: json,
+    });
+  },
+);
+
+// ─── END ACTIVE CALL ─────────────────────────────────────────────────────────
+
+router.put(
+  "/call/:id/end",
+  requirePermission(Permission.CALLS_MANAGE),
+  async (req, res) => {
+    const callId = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(callId)) {
+      badRequest(res, "Invalid call ID");
+      return;
+    }
+    const firmId = await getFirmId(req.user!.id);
+    const [row] = await db
+      .update(callLogsTable)
+      .set({ status: "completed", updated_at: new Date() })
+      .where(
+        and(
+          eq(callLogsTable.id, callId),
+          firmId != null ? eq(callLogsTable.firm_id, firmId) : sql`true`,
+        ),
+      )
+      .returning();
+
+    if (!row) { notFound(res); return; }
+    res.json({ call_log_id: row.id, status: "completed" });
   },
 );
 

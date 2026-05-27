@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import Vapi from "@vapi-ai/web";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -299,125 +300,432 @@ function CampaignsTab() {
 
 // ─── MANUAL DIAL ─────────────────────────────────────────────────────────────
 
+type CallState = "idle" | "connecting" | "active" | "ended";
+
+interface VapiConfig {
+  configured: boolean;
+  public_key: string | null;
+  assistants: { id: string; name?: string }[];
+}
+
+interface TranscriptLine {
+  role: "user" | "assistant";
+  text: string;
+}
+
 function ManualDialTab() {
   const { toast } = useToast();
   const [number, setNumber] = useState("");
-  const [calling, setCalling] = useState(false);
-  const [callResult, setCallResult] = useState<any>(null);
+  const [callState, setCallState] = useState<CallState>("idle");
   const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(0);
+  const [agentSpeaking, setAgentSpeaking] = useState(false);
+  const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
+  const [callDuration, setCallDuration] = useState(0);
+  const [selectedAssistant, setSelectedAssistant] = useState("");
+  const [showSetup, setShowSetup] = useState(false);
+  const [setupName, setSetupName] = useState("MTOS Intake Agent");
+  const [setupVoice, setSetupVoice] = useState("alloy");
+
+  const vapiRef = useRef<Vapi | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+
+  const { data: vapiConfig, refetch: refetchConfig } = useQuery<VapiConfig>({
+    queryKey: ["dialer-vapi-config"],
+    queryFn: () => apiFetch<VapiConfig>("/vapi-config"),
+    staleTime: 30_000,
+  });
+
+  const setupMut = useMutation({
+    mutationFn: () =>
+      apiFetch<any>("/vapi-assistant", {
+        method: "POST",
+        body: JSON.stringify({ name: setupName, voice_id: setupVoice }),
+      }),
+    onSuccess: (r) => {
+      toast({ title: "Assistant created", description: `${r.name} (${r.model})` });
+      setShowSetup(false);
+      refetchConfig();
+      setSelectedAssistant(r.assistant_id);
+    },
+    onError: (e: Error) => toast({ title: "Setup failed", description: e.message, variant: "destructive" }),
+  });
+
+  useEffect(() => {
+    if (vapiConfig?.assistants?.length && !selectedAssistant) {
+      setSelectedAssistant(vapiConfig.assistants[0].id);
+    }
+  }, [vapiConfig, selectedAssistant]);
+
+  useEffect(() => {
+    if (transcriptRef.current) {
+      transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+    }
+  }, [transcript]);
+
+  useEffect(() => {
+    return () => {
+      vapiRef.current?.stop();
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
 
   const appendDigit = (d: string) => setNumber((n) => n + d);
   const backspace = () => setNumber((n) => n.slice(0, -1));
+  const fmt = (s: number) =>
+    `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
-  const dialMut = useMutation({
-    mutationFn: () => apiFetch<any>("/call", { method: "POST", body: JSON.stringify({ to_number: number }) }),
-    onSuccess: (r) => {
-      setCalling(true);
-      setCallResult(r);
-      if (r.provider_status === "no_provider") {
-        toast({ title: "No Voice Provider", description: r.message });
-        setCalling(false);
-      } else {
-        toast({ title: "Call initiated", description: `Call ID: ${r.call_log_id}` });
+  const startCall = useCallback(() => {
+    if (!vapiConfig?.public_key) {
+      toast({
+        title: "Public key missing",
+        description: "Add your Vapi public key in Integrations → Voice AI (Vapi) → public_key field.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!selectedAssistant) {
+      toast({
+        title: "No assistant selected",
+        description: "Click Setup Assistant to create one powered by Qwen3-235B.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setCallState("connecting");
+    setTranscript([]);
+    setCallDuration(0);
+    setMuted(false);
+    setVolume(0);
+
+    const vapi = new Vapi(vapiConfig.public_key);
+    vapiRef.current = vapi;
+
+    vapi.on("call-start", () => {
+      setCallState("active");
+      timerRef.current = setInterval(() => setCallDuration((d) => d + 1), 1000);
+    });
+
+    vapi.on("call-end", () => {
+      setCallState("ended");
+      setVolume(0);
+      setAgentSpeaking(false);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
       }
-    },
-    onError: (e: Error) => toast({ title: "Call failed", description: e.message, variant: "destructive" }),
-  });
+      setTimeout(() => setCallState("idle"), 3000);
+    });
+
+    vapi.on("speech-start", () => setAgentSpeaking(true));
+    vapi.on("speech-end", () => setAgentSpeaking(false));
+    vapi.on("volume-level", (lvl: number) => setVolume(lvl));
+
+    vapi.on("message", (msg: any) => {
+      if (msg?.type === "transcript" && msg?.transcriptType === "final") {
+        setTranscript((prev) => [
+          ...prev,
+          { role: msg.role as "user" | "assistant", text: msg.transcript },
+        ]);
+      }
+    });
+
+    vapi.on("error", (e: any) => {
+      toast({ title: "Call error", description: e?.message ?? String(e), variant: "destructive" });
+      setCallState("idle");
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    });
+
+    vapi.start(selectedAssistant, {
+      variableValues: { customer_phone: number },
+    } as any);
+  }, [vapiConfig, selectedAssistant, number, toast]);
+
+  const hangUp = useCallback(() => {
+    vapiRef.current?.stop();
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const next = !muted;
+    vapiRef.current?.setMuted(next);
+    setMuted(next);
+  }, [muted]);
 
   const KEYS = [
-    ["1", ""],["2", "ABC"],["3", "DEF"],
-    ["4", "GHI"],["5", "JKL"],["6", "MNO"],
-    ["7", "PQRS"],["8", "TUV"],["9", "WXYZ"],
-    ["*", ""],["0", "+"],["#", ""],
+    ["1", ""], ["2", "ABC"], ["3", "DEF"],
+    ["4", "GHI"], ["5", "JKL"], ["6", "MNO"],
+    ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"],
+    ["*", ""], ["0", "+"], ["#", ""],
   ];
 
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Dialpad</CardTitle>
-          <CardDescription className="text-xs">Click-to-call or enter a number manually</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Input
-            value={number}
-            onChange={(e) => setNumber(e.target.value)}
-            placeholder="+1 (555) 000-0000"
-            className="text-center text-lg font-mono tracking-widest"
-          />
-          <div className="grid grid-cols-3 gap-2">
-            {KEYS.map(([digit, sub]) => (
-              <button
-                key={digit}
-                onClick={() => appendDigit(digit)}
-                className="flex flex-col items-center justify-center h-14 rounded-lg border border-border bg-muted/40 hover:bg-muted/80 transition-colors active:scale-95"
-              >
-                <span className="text-lg font-semibold leading-none">{digit}</span>
-                <span className="text-[9px] text-muted-foreground tracking-widest mt-0.5">{sub}</span>
-              </button>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" className="flex-1" onClick={backspace}>
-              <Delete className="h-4 w-4" />
-            </Button>
-            {!calling ? (
-              <Button
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                disabled={number.length < 7 || dialMut.isPending}
-                onClick={() => dialMut.mutate()}
-              >
-                {dialMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Phone className="h-4 w-4" />}
-              </Button>
-            ) : (
-              <Button
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
-                onClick={() => { setCalling(false); setCallResult(null); }}
-              >
-                <PhoneOff className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
+  const isActive = callState === "active";
+  const isConnecting = callState === "connecting";
+  const isEnded = callState === "ended";
+  const inCall = isActive || isConnecting;
 
-          {calling && (
-            <div className="border rounded-lg p-3 space-y-2">
-              <div className="flex items-center gap-2 text-sm font-medium text-green-700">
-                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                Call Active — {number}
+  const volBars = Array.from({ length: 8 }, (_, i) => i / 7 <= volume);
+
+  return (
+    <div className="space-y-4">
+      {/* Status banner */}
+      {!vapiConfig?.configured && (
+        <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 px-4 py-3 text-sm">
+          <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+          <span className="text-amber-800 dark:text-amber-300">
+            Vapi is not configured as your voice provider. Go to{" "}
+            <a href="/integrations" className="underline font-medium">Integrations</a> → Voice AI (Vapi) and add
+            both your <strong>api_key</strong> and <strong>public_key</strong>.
+          </span>
+        </div>
+      )}
+      {vapiConfig?.configured && !vapiConfig?.public_key && (
+        <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 px-4 py-3 text-sm">
+          <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+          <span className="text-amber-800 dark:text-amber-300">
+            Vapi public key not set — browser calling disabled. Add <strong>public_key</strong> in{" "}
+            <a href="/integrations" className="underline font-medium">Integrations → Vapi</a>.
+          </span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* ── DIALPAD ── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-sm">Dialpad</CardTitle>
+                <CardDescription className="text-xs">
+                  Live browser call via Vapi · Qwen3-235B AI
+                </CardDescription>
               </div>
-              <div className="flex gap-2">
-                <Button size="sm" variant={muted ? "destructive" : "outline"} onClick={() => setMuted(!muted)}>
-                  {muted ? <MicOff className="h-3.5 w-3.5 mr-1" /> : <Mic className="h-3.5 w-3.5 mr-1" />}
-                  {muted ? "Unmute" : "Mute"}
+              <Button size="sm" variant="outline" onClick={() => setShowSetup(true)}>
+                <Star className="h-3.5 w-3.5 mr-1" /> Setup Assistant
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Assistant selector */}
+            {vapiConfig?.assistants && vapiConfig.assistants.length > 0 && (
+              <Select value={selectedAssistant} onValueChange={setSelectedAssistant} disabled={inCall}>
+                <SelectTrigger className="text-xs h-8">
+                  <SelectValue placeholder="Select assistant…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {vapiConfig.assistants.map((a) => (
+                    <SelectItem key={a.id} value={a.id} className="text-xs">
+                      {a.name ?? a.id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+
+            <Input
+              value={number}
+              onChange={(e) => setNumber(e.target.value)}
+              placeholder="+1 (555) 000-0000"
+              className="text-center text-lg font-mono tracking-widest"
+              disabled={inCall}
+            />
+
+            <div className="grid grid-cols-3 gap-2">
+              {KEYS.map(([digit, sub]) => (
+                <button
+                  key={digit}
+                  onClick={() => appendDigit(digit)}
+                  disabled={inCall}
+                  className="flex flex-col items-center justify-center h-14 rounded-lg border border-border bg-muted/40 hover:bg-muted/80 transition-colors active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+                >
+                  <span className="text-lg font-semibold leading-none">{digit}</span>
+                  <span className="text-[9px] text-muted-foreground tracking-widest mt-0.5">{sub}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={backspace} disabled={inCall}>
+                <Delete className="h-4 w-4" />
+              </Button>
+              {!inCall ? (
+                <Button
+                  className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                  disabled={number.length < 7 || !vapiConfig?.configured}
+                  onClick={startCall}
+                >
+                  <Phone className="h-4 w-4" />
                 </Button>
-                <Button size="sm" variant="outline">
-                  <Headphones className="h-3.5 w-3.5 mr-1" /> Hold
+              ) : (
+                <Button
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                  onClick={hangUp}
+                >
+                  <PhoneOff className="h-4 w-4" />
                 </Button>
-                <Button size="sm" variant="outline">
-                  <Hash className="h-3.5 w-3.5 mr-1" /> DTMF
-                </Button>
-              </div>
-              {callResult && (
-                <p className="text-xs text-muted-foreground">Log ID: {callResult.call_log_id} · Provider: {callResult.provider ?? "–"}</p>
               )}
             </div>
-          )}
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Quick Lead Dial</CardTitle>
-          <CardDescription className="text-xs">Search leads and dial directly</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground py-6 text-center">
-            Open a lead record and click the phone icon to pre-populate the dialpad.
-            <br /><br />
-            <a href="/leads" className="text-primary underline text-xs">Browse Leads →</a>
-          </p>
-        </CardContent>
-      </Card>
+            {/* ── ACTIVE CALL PANEL ── */}
+            {(inCall || isEnded) && (
+              <div className={`rounded-lg border p-3 space-y-3 transition-colors ${
+                isEnded ? "border-gray-200 bg-gray-50 dark:bg-gray-900/30" :
+                isActive ? "border-green-200 bg-green-50 dark:bg-green-950/20" :
+                "border-blue-200 bg-blue-50 dark:bg-blue-950/20"
+              }`}>
+                {/* Status row */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    {isConnecting && <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />}
+                    {isActive && <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />}
+                    {isEnded && <CheckCircle className="h-3.5 w-3.5 text-gray-500" />}
+                    <span className={isActive ? "text-green-700 dark:text-green-400" : isEnded ? "text-gray-500" : "text-blue-700 dark:text-blue-400"}>
+                      {isConnecting ? "Connecting…" : isActive ? `Live · ${number}` : "Call ended"}
+                    </span>
+                  </div>
+                  {isActive && (
+                    <span className="text-xs font-mono text-muted-foreground">{fmt(callDuration)}</span>
+                  )}
+                </div>
+
+                {/* Volume meter */}
+                {isActive && (
+                  <div className="flex items-center gap-2">
+                    <Volume2 className={`h-3.5 w-3.5 ${agentSpeaking ? "text-green-600 animate-pulse" : "text-muted-foreground"}`} />
+                    <div className="flex gap-0.5 items-end h-4">
+                      {volBars.map((lit, i) => (
+                        <div
+                          key={i}
+                          style={{ height: `${40 + i * 8}%` }}
+                          className={`w-1 rounded-sm transition-colors ${lit ? "bg-green-500" : "bg-muted"}`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-xs text-muted-foreground">{agentSpeaking ? "Agent speaking" : "Listening"}</span>
+                  </div>
+                )}
+
+                {/* Controls */}
+                {isActive && (
+                  <div className="flex gap-2 flex-wrap">
+                    <Button
+                      size="sm"
+                      variant={muted ? "destructive" : "outline"}
+                      onClick={toggleMute}
+                    >
+                      {muted ? <MicOff className="h-3.5 w-3.5 mr-1" /> : <Mic className="h-3.5 w-3.5 mr-1" />}
+                      {muted ? "Unmute" : "Mute"}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={hangUp}>
+                      <PhoneOff className="h-3.5 w-3.5 mr-1 text-red-500" /> Hang Up
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ── LIVE TRANSCRIPT ── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">Live Transcript</CardTitle>
+            <CardDescription className="text-xs">Real-time speech-to-text during the call</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {transcript.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground">
+                <Headphones className="h-8 w-8 mb-2 opacity-30" />
+                <p className="text-xs">Transcript will appear here during a live call.</p>
+                {!inCall && (
+                  <p className="text-xs mt-1 opacity-60">Dial a number and press the green button to start.</p>
+                )}
+              </div>
+            ) : (
+              <div
+                ref={transcriptRef}
+                className="space-y-2 max-h-72 overflow-y-auto pr-1"
+              >
+                {transcript.map((line, i) => (
+                  <div
+                    key={i}
+                    className={`flex gap-2 text-xs ${line.role === "assistant" ? "" : "flex-row-reverse"}`}
+                  >
+                    <div className={`rounded-lg px-2.5 py-1.5 max-w-[85%] ${
+                      line.role === "assistant"
+                        ? "bg-muted text-foreground"
+                        : "bg-primary text-primary-foreground ml-auto"
+                    }`}>
+                      <span className={`block text-[10px] font-medium mb-0.5 opacity-60 ${line.role === "user" ? "text-right" : ""}`}>
+                        {line.role === "assistant" ? "Agent" : "Lead"}
+                      </span>
+                      {line.text}
+                    </div>
+                  </div>
+                ))}
+                {agentSpeaking && (
+                  <div className="flex gap-2 text-xs">
+                    <div className="rounded-lg px-2.5 py-1.5 bg-muted">
+                      <span className="block text-[10px] font-medium mb-0.5 opacity-60">Agent</span>
+                      <span className="flex gap-1 items-center">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-bounce" style={{ animationDelay: "0ms" }} />
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-bounce" style={{ animationDelay: "150ms" }} />
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-bounce" style={{ animationDelay: "300ms" }} />
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* ── SETUP ASSISTANT DIALOG ── */}
+      <Dialog open={showSetup} onOpenChange={setShowSetup}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Vapi Assistant</DialogTitle>
+            <DialogDescription>
+              Provisions a Vapi voice assistant powered by <strong>BitDeer · Qwen3-235B-A22B</strong>.
+              Requires Vapi api_key in your integration vault.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Assistant Name</Label>
+              <Input value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="MTOS Intake Agent" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Voice</Label>
+              <Select value={setupVoice} onValueChange={setSetupVoice}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
+                    <SelectItem key={v} value={v} className="capitalize">{v}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+              <p><strong>LLM:</strong> Qwen/Qwen3-235B-A22B via BitDeer AI</p>
+              <p><strong>STT:</strong> Deepgram Nova-2</p>
+              <p><strong>TTS:</strong> OpenAI {setupVoice}</p>
+              <p><strong>Recording:</strong> enabled</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSetup(false)}>Cancel</Button>
+            <Button onClick={() => setupMut.mutate()} disabled={setupMut.isPending || !setupName}>
+              {setupMut.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              Create Assistant
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
