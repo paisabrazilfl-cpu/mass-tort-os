@@ -30,6 +30,7 @@ export const workflowSettingsTable = pgTable("workflow_settings", {
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   notes: text("notes"),
   updated_by_user_id: integer("updated_by_user_id"),
+  firm_id: integer("firm_id"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });

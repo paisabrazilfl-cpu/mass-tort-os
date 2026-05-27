@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, boolean, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, boolean, jsonb } from "drizzle-orm/pg-core";
 
 export const integrationsTable = pgTable("integrations", {
   id: serial("id").primaryKey(),
@@ -13,6 +13,7 @@ export const integrationsTable = pgTable("integrations", {
   last_sync_at: timestamp("last_sync_at"),
   sync_direction: text("sync_direction").default("bidirectional"),
   field_mapping: jsonb("field_mapping"),
+  firm_id: integer("firm_id"),
   created_at: timestamp("created_at").defaultNow(),
   updated_at: timestamp("updated_at").defaultNow(),
 });

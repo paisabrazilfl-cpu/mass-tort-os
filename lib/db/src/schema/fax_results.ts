@@ -6,6 +6,7 @@ import {
   real,
   timestamp,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -13,6 +14,7 @@ import { z } from "zod/v4";
 export const faxResultsTable = pgTable("fax_results", {
   id: serial("id").primaryKey(),
   job_id: integer("job_id"),
+  external_fax_id: text("external_fax_id"),
   // Resolved leads.id when the fax PDF has been matched to a lead. Nullable
   // because legacy rows pre-date the matcher and because match can fail
   // (e.g. patient name on the fax doesn't appear in any open lead). No
@@ -35,6 +37,7 @@ export const faxResultsTable = pgTable("fax_results", {
   createdAtIdx: index("fax_results_created_at_idx").on(t.created_at),
   statusCreatedIdx: index("fax_results_status_created_at_idx").on(t.status, t.created_at),
   leadIdx: index("fax_results_lead_id_idx").on(t.lead_id),
+  externalFaxIdIdx: uniqueIndex("fax_results_external_fax_id_idx").on(t.external_fax_id),
 }));
 
 export const insertFaxResultSchema = createInsertSchema(faxResultsTable).omit({

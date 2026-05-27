@@ -78,7 +78,7 @@ registerSyncHandler("fasten_connect", async (integration) => {
   // instead of "not implemented" — the implementation IS present, it
   // just operates at a different scope than the integration row.
   logger.info(
-    { integration_id: integration.id, provider: integration.provider, firm_id: integration.firm_id },
+    { integration_id: integration.id, provider: integration.provider },
     "integration-sync: fasten_connect — integration-level sync is a no-op (sync runs per-connection via fasten_records_sync jobs)",
   );
   return {
