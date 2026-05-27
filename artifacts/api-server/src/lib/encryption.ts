@@ -28,6 +28,8 @@ const CURRENT_KEY_VERSION = 1;
 
 const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
 
+const keyCache = new Map<number, Buffer>();
+
 /**
  * Resolve the AES-256 key for a given version. Strict, no silent fallbacks
  * across versions (a missing v2 must NOT silently use v1, or you'd produce
@@ -39,6 +41,9 @@ const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
  */
 function getKey(version?: number): Buffer {
   const keyVersion = version ?? CURRENT_KEY_VERSION;
+  const cached = keyCache.get(keyVersion);
+  if (cached) return cached;
+
   const envName = `ENCRYPTION_KEY_V${keyVersion}`;
   let raw = process.env[envName];
   if (!raw && keyVersion === 1) {
@@ -54,7 +59,9 @@ function getKey(version?: number): Buffer {
       `${envName} must be exactly 64 hex characters (32 bytes for AES-256-GCM); got ${raw.length} chars`,
     );
   }
-  return Buffer.from(raw, "hex");
+  const key = Buffer.from(raw, "hex");
+  keyCache.set(keyVersion, key);
+  return key;
 }
 
 export function getCurrentKeyVersion(): number {
@@ -71,8 +78,22 @@ export function isKeyConfigured(version: number): boolean {
   }
 }
 
+const aadCache = new Map<string, Buffer>();
+
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
+
+  // Optimized: cache AAD buffers for field-only lookups (no entityId).
+  // These are frequently reused in deduplication fallback loops where we
+  // decrypt 1000s of rows using the same field-level AAD.
+  if (!entityId) {
+    const cached = aadCache.get(fieldName);
+    if (cached) return cached;
+    const buf = Buffer.from(fieldName, "utf8");
+    aadCache.set(fieldName, buf);
+    return buf;
+  }
+
   const parts = [fieldName];
   if (entityId) parts.push(entityId);
   return Buffer.from(parts.join(":"), "utf8");
