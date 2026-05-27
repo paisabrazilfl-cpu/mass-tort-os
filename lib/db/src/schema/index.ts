@@ -46,3 +46,5 @@ export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";
 export * from "./nppes_providers";
 export * from "./medical_records_requests";
+export * from "./processed_webhook_events";
+export * from "./system_snapshots";

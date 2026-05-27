@@ -333,7 +333,7 @@ export default function FormEngine() {
     ev.setUint16(10, files.length, true);
     ev.setUint32(12, centralSize, true);
     ev.setUint32(16, offset, true);
-    return new Blob([...parts, ...central, eocd], { type: "application/zip" });
+    return new Blob([...parts, ...central, eocd] as BlobPart[], { type: "application/zip" });
   }
 
   function triggerDownload(blob: Blob, filename: string) {
