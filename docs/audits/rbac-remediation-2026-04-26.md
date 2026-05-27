@@ -580,7 +580,8 @@ applies. A route is healthy iff one of the following is true:
   scoped (e.g. `auth POST /logout`, `auth GET /me`, MFA setup).
 
 
-Boot-time count: **288 checked / 44 public / 244 protected / 0 unprotected.**
+
+Boot-time count: **293 checked / 44 public / 249 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | GET | `/api/navigation` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -681,10 +682,12 @@ Boot-time count: **288 checked / 44 public / 244 protected / 0 unprotected.**
 | decision-engine | POST | `/api/decision-engine/recompute-all` | ✓ | ✓ |  |  |  | — | `decision_engine:manage` | ✓ |
 | decision-engine | GET | `/api/decision-engine/settings` | ✓ | ✓ |  |  |  | — | `decision_engine:view` | ✓ |
 | decision-engine | PUT | `/api/decision-engine/settings` | ✓ | ✓ |  |  |  | — | `decision_engine:manage` | ✓ |
+| dialer | PUT | `/api/dialer/call/:id/end` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | POST | `/api/dialer/call` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | GET | `/api/dialer/campaigns/:id/leads` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | POST | `/api/dialer/campaigns/:id/leads` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | POST | `/api/dialer/campaigns/:id/pause` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/campaigns/:id/progress` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | POST | `/api/dialer/campaigns/:id/start` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | DELETE | `/api/dialer/campaigns/:id` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | GET | `/api/dialer/campaigns/:id` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
@@ -704,6 +707,9 @@ Boot-time count: **288 checked / 44 public / 244 protected / 0 unprotected.**
 | dialer | GET | `/api/dialer/scripts` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | POST | `/api/dialer/scripts` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | GET | `/api/dialer/stats` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | POST | `/api/dialer/vapi-assistant` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/vapi-config` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | GET | `/api/dialer/vapi-phones` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | document-templates | GET | `/api/document-templates/:id/preview` | ✓ | ✓ |  |  |  | — | `templates:view` | ✓ |
 | document-templates | DELETE | `/api/document-templates/:id` | ✓ | ✓ |  |  |  | — | `templates:manage` | ✓ |
 | document-templates | GET | `/api/document-templates/:id` | ✓ | ✓ |  |  |  | — | `templates:view` | ✓ |
