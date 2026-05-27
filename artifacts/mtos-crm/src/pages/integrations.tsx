@@ -138,12 +138,14 @@ export default function Integrations() {
   useEffect(() => { fetchData(); }, []);
 
   const categories = useMemo(() => {
-    const cats = Array.from(new Set(presets.map(p => p.category))).sort();
+    const cats = Array.from(new Set(presets.map(p => p.category)))
+      .filter(c => c !== "AI / LLM")
+      .sort();
     return cats;
   }, [presets]);
 
   const filteredPresets = useMemo(() => {
-    let list = [...presets];
+    let list = presets.filter(p => p.category !== "AI / LLM");
     if (categoryFilter !== "all") list = list.filter(p => p.category === categoryFilter);
     if (recommendedOnly) list = list.filter(p => p.recommended);
     if (search.trim()) {

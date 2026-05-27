@@ -152,12 +152,25 @@ ${snapshot.recent_activity.map((e) => `- ${e.action} on ${e.entity_type} at ${e.
     `MTOS Agent:`,
   ].join("\n\n");
 
-  const reply = await callLLM({
-    module: "lead-intelligence",
-    systemPrompt,
-    prompt: turns,
-    maxTokens: 1024,
-  });
+  let reply: string;
+  try {
+    reply = await callLLM({
+      module: "lead-intelligence",
+      systemPrompt,
+      prompt: turns,
+      maxTokens: 1024,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    req.log.warn({ err: msg }, "ai-chat: LLM call failed");
+    res.json({
+      reply:
+        "I'm not able to respond right now — no AI provider is configured yet. " +
+        "Once your API key is wired in, I'll have full access to your CRM data and can answer any question.",
+      crmContext: snapshot,
+    });
+    return;
+  }
 
   res.json({ reply, crmContext: snapshot });
 });
