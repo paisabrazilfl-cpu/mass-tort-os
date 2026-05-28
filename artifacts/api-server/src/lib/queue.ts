@@ -11,7 +11,8 @@ export type JobType =
   | "fax_med_records_request"
   | "send_workflow_email"
   | "send_workflow_sms"
-  | "poll_fax_delivery";
+  | "fasten_records_sync"
+  | "dialer_campaign_run";
 
 export interface JobPayload {
   create_case: { case_id: string; data: Record<string, unknown>; created_by_user_id?: number | null };
@@ -49,12 +50,26 @@ export interface JobPayload {
     firm_id?: number | null;
     source?: string;
   };
-  poll_fax_delivery: {
-    fax_result_id: number;
-    external_fax_id: string;
-    provider: string;
-    integration_id: number;
-    poll_count: number;
+  fasten_records_sync: {
+    connection_id: number;
+    lead_id: number;
+    case_id: string;
+    backend: "connect" | "onprem";
+    org_connection_id: string;
+    /** When polling a Fasten Connect bulk export, the task_id we're waiting on. */
+    task_id?: string;
+    /** Number of poll attempts so far — guards against infinite re-enqueue. */
+    poll_attempt?: number;
+    /**
+     * Task #72: when true, skip startBulkExport and only re-download the
+     * file_ids saved to metadata.failed_files from the prior partial run.
+     * Triggered from /api/fasten/sync with `mode=retry-failed`.
+     */
+    retry_failed_only?: boolean;
+  };
+  /** Processes one batch of an active outbound dialing campaign. Self-re-enqueues until complete or paused. */
+  dialer_campaign_run: {
+    campaign_id: number;
   };
 }
 
@@ -79,18 +94,22 @@ function backoffUntil(retryCount: number): Date {
 export async function enqueueJob<T extends JobType>(
   job_type: T,
   payload: JobPayload[T],
-  opts: { nextAttemptAt?: Date } = {},
+  opts?: { delaySeconds?: number },
 ): Promise<number> {
+  const nextAttemptAt =
+    opts?.delaySeconds && opts.delaySeconds > 0
+      ? new Date(Date.now() + opts.delaySeconds * 1000)
+      : undefined;
   const [job] = await db
     .insert(jobQueueTable)
     .values({
       job_type,
       payload: payload as Record<string, unknown>,
       status: "pending",
-      next_attempt_at: opts.nextAttemptAt ?? null,
+      ...(nextAttemptAt ? { next_attempt_at: nextAttemptAt } : {}),
     })
     .returning({ id: jobQueueTable.id });
-  logger.info({ job_id: job.id, job_type }, "Job enqueued");
+  logger.info({ job_id: job.id, job_type, delay_seconds: opts?.delaySeconds }, "Job enqueued");
   return job.id;
 }
 
@@ -265,27 +284,4 @@ export async function getQueueStats() {
     stats[row.status] = row.count;
   }
   return stats;
-}
-
-export async function getFaxPollStats() {
-  const rows = await db
-    .select({
-      status: jobQueueTable.status,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(jobQueueTable)
-    .where(eq(jobQueueTable.job_type, "poll_fax_delivery"))
-    .groupBy(jobQueueTable.status);
-
-  const byStatus: Record<string, number> = {};
-  for (const row of rows) {
-    byStatus[row.status] = row.count;
-  }
-  return {
-    pending: byStatus["pending"] ?? 0,
-    processing: byStatus["processing"] ?? 0,
-    done: byStatus["done"] ?? 0,
-    dead_letter: byStatus["dead_letter"] ?? 0,
-    total: Object.values(byStatus).reduce((a, b) => a + b, 0),
-  };
 }
