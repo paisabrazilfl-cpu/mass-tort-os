@@ -15,13 +15,12 @@ import { format } from "date-fns";
 import {
   ArrowLeft, Trash2, FileText, CheckCircle, XCircle, FileSignature,
   AlertTriangle, Download, Brain, Save, RefreshCw, Shield, User,
-  MapPin, Phone, Mail, Building2, Stethoscope, Scale, Activity, Zap,
-  Send, Inbox, Clock, RotateCcw
+  MapPin, Phone, Mail, Building2, Stethoscope, Scale, Activity, Zap
 } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { EnvelopeTimeline } from "@/components/envelope-timeline";
 import { BackgroundCheckHubCard } from "@/components/background-check-hub-card";
-import { PortalStatusCard } from "@/components/portal-status-card";
+import { FastenConnectCard } from "@/components/fasten-connect-card";
 import { SendSmsButton } from "@/components/send-sms-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
@@ -111,6 +110,7 @@ export default function LeadDetail() {
   const [lensScore, setLensScore] = useState<LensScore | null>(null);
   const [lensLoading, setLensLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("profile");
+  const [docSourceFilter, setDocSourceFilter] = useState<"all" | "fasten">("all");
   const autoTriggered = useRef(false);
 
   const { data: lead, isLoading, isError, error } = useGetLead(leadId, {
@@ -550,15 +550,7 @@ export default function LeadDetail() {
 
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><Building2 className="h-4 w-4" />Hospital / Treatment Facility</CardTitle>
-                  <a
-                    href={`/npi-lookup?lead_id=${leadId}`}
-                    className="text-xs text-primary hover:underline font-medium"
-                  >
-                    Find Provider →
-                  </a>
-                </div>
+                <CardTitle className="flex items-center gap-2"><Building2 className="h-4 w-4" />Hospital / Treatment Facility</CardTitle>
               </CardHeader>
               <CardContent className="space-y-0">
                 <FieldRow label="Facility Name" value={lead.hospital_name} />
@@ -758,7 +750,13 @@ export default function LeadDetail() {
             })()}
 
             <BackgroundCheckHubCard leadId={leadId} />
-            <PortalStatusCard leadId={leadId} />
+            <FastenConnectCard
+              leadId={leadId}
+              onViewDocuments={() => {
+                setDocSourceFilter("fasten");
+                setActiveTab("documents");
+              }}
+            />
           </div>
         </TabsContent>
 
@@ -769,16 +767,47 @@ export default function LeadDetail() {
                 <CardTitle>Associated Documents</CardTitle>
                 <CardDescription>All documents, agreements, and records linked to this claimant</CardDescription>
               </div>
+              <div className="flex gap-2">
+                <Button
+                  variant={docSourceFilter === "all" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setDocSourceFilter("all")}
+                  data-testid="filter-docs-all"
+                >
+                  All
+                </Button>
+                <Button
+                  variant={docSourceFilter === "fasten" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setDocSourceFilter("fasten")}
+                  data-testid="filter-docs-fasten"
+                >
+                  <Stethoscope className="h-3 w-3 mr-1" />Fasten medical records
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               {(() => {
-                const visible = documents ?? [];
+                const visible = (documents ?? []).filter((d) =>
+                  docSourceFilter === "all"
+                    ? true
+                    : (d.notes ?? "").startsWith("fasten_"),
+                );
                 if (docsLoading) return <Skeleton className="h-24 w-full" />;
                 if (!documents || documents.length === 0) {
                   return (
                     <div className="text-center py-8 text-muted-foreground">
                       <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
                       <p className="text-sm">No documents have been associated with this claimant record.</p>
+                    </div>
+                  );
+                }
+                if (visible.length === 0) {
+                  return (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Stethoscope className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No Fasten medical records have been ingested yet.</p>
+                      <Button variant="link" size="sm" onClick={() => setDocSourceFilter("all")}>Show all documents</Button>
                     </div>
                   );
                 }
@@ -805,22 +834,6 @@ export default function LeadDetail() {
                 </div>
                 );
               })()}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Doctor Fax History</CardTitle>
-                  <CardDescription>Outbound records requests and inbound fax responses</CardDescription>
-                </div>
-                <Button variant="ghost" size="sm" onClick={() => window.location.reload()}>
-                  <RotateCcw className="h-3.5 w-3.5 mr-1" /> Refresh
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <FaxHistory leadId={leadId} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -982,112 +995,6 @@ export default function LeadDetail() {
           </Dialog>
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-interface FaxRow {
-  id: number;
-  vault_path: string;
-  source_file: string;
-  status: string;
-  delivery_status: string | null;
-  delivery_checked_at: string | null;
-  drug_name: string | null;
-  confidence: number | null;
-  provider: string | null;
-  external_fax_id: string | null;
-  created_at: string;
-  processed_at: string | null;
-}
-
-function DeliveryBadge({ status }: { status: string | null }) {
-  if (!status || status === "pending") {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
-        <Clock className="h-3 w-3" /> In transit
-      </span>
-    );
-  }
-  if (status === "delivered") {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-        <CheckCircle className="h-3 w-3" /> Delivered
-      </span>
-    );
-  }
-  if (status === "failed") {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
-        <XCircle className="h-3 w-3" /> Failed
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">
-      Unknown
-    </span>
-  );
-}
-
-function FaxHistory({ leadId }: { leadId: number }) {
-  const [rows, setRows] = useState<FaxRow[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    void apiFetchRaw(`/api/leads/${leadId}/fax-results`)
-      .then(r => r.json())
-      .then((data: FaxRow[]) => setRows(data))
-      .catch(() => {/* silent — section just stays empty */})
-      .finally(() => setLoading(false));
-  }, [leadId]);
-
-  if (loading) return <Skeleton className="h-24 w-full" />;
-  if (rows.length === 0) return (
-    <div className="text-center py-6 text-muted-foreground text-sm">No fax activity yet.</div>
-  );
-
-  return (
-    <div className="space-y-2">
-      {rows.map(row => {
-        const isOutbound = row.vault_path?.startsWith("outbound:");
-        return (
-          <div key={row.id} className="flex items-start gap-3 py-3 border-b last:border-0">
-            <div className={`p-1.5 rounded-lg mt-0.5 ${isOutbound ? "bg-blue-50" : "bg-green-50"}`}>
-              {isOutbound
-                ? <Send className="h-4 w-4 text-blue-500" />
-                : <Inbox className="h-4 w-4 text-green-600" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-slate-800">
-                {isOutbound ? "Records Request Sent" : (row.drug_name ? `Records Received — ${row.drug_name}` : "Inbound Fax Received")}
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {row.provider && <span className="mr-2 capitalize">{row.provider}</span>}
-                {row.processed_at
-                  ? format(new Date(row.processed_at), "MMM d, yyyy h:mm a")
-                  : format(new Date(row.created_at), "MMM d, yyyy h:mm a")}
-                {!isOutbound && row.confidence != null && (
-                  <span className="ml-2 text-slate-400">confidence {Math.round(row.confidence * 100)}%</span>
-                )}
-              </p>
-            </div>
-            <div className="flex flex-col items-end gap-1 shrink-0">
-              {row.status === "error" && (
-                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
-                  <XCircle className="h-3 w-3" /> Error
-                </span>
-              )}
-              {isOutbound && row.status !== "error" && <DeliveryBadge status={row.delivery_status} />}
-              {!isOutbound && row.status === "done" && (
-                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <CheckCircle className="h-3 w-3" /> Processed
-                </span>
-              )}
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }
