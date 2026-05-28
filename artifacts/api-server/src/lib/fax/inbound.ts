@@ -25,14 +25,12 @@
  * The pure classification + download logic lives in inbound-classify.ts
  * (no DB import) so it stays unit-testable without a database.
  */
-import { db, pool, faxResultsTable, documentsTable, jobQueueTable, medicalRecordsRequestsTable, leadsTable } from "@workspace/db";
-import { eq, and, inArray, desc } from "drizzle-orm";
+import { db, pool, faxResultsTable, documentsTable, jobQueueTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import { saveFile } from "../vault";
 import { logger } from "../logger";
 import { auditLog } from "../audit";
 import { dispatchTrigger } from "../automations/dispatch";
-import { enqueueJob } from "../queue";
-import { decryptLeadFields } from "../encryption";
 import {
   deepFindString,
   isInboundReceivedEvent,
@@ -245,51 +243,6 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
       documentId = doc?.id;
     }
 
-    // Mark the most recent outstanding MRR request for this lead as fulfilled.
-    // Uses the same "most-recent-wins" heuristic as correlateLead's tie-break.
-    if (leadId) {
-      try {
-        const [openRequest] = await db
-          .select({
-            id: medicalRecordsRequestsTable.id,
-            fax_result_id: medicalRecordsRequestsTable.fax_result_id,
-          })
-          .from(medicalRecordsRequestsTable)
-          .where(
-            and(
-              eq(medicalRecordsRequestsTable.lead_id, leadId),
-              inArray(medicalRecordsRequestsTable.status, ["sent", "pending"]),
-            ),
-          )
-          .orderBy(desc(medicalRecordsRequestsTable.created_at))
-          .limit(1);
-
-        if (openRequest) {
-          await db
-            .update(medicalRecordsRequestsTable)
-            .set({
-              status: "fulfilled",
-              fulfilled_at: new Date(),
-              response_fax_result_id: faxRow.id,
-              updated_at: new Date(),
-            })
-            .where(eq(medicalRecordsRequestsTable.id, openRequest.id));
-
-          // Also mark the outbound fax as delivered so the poller stops and
-          // the lead's fax timeline shows the confirmed-received status.
-          if (openRequest.fax_result_id) {
-            await db
-              .update(faxResultsTable)
-              .set({ delivery_status: "delivered", delivery_checked_at: new Date() })
-              .where(eq(faxResultsTable.id, openRequest.fax_result_id));
-          }
-        }
-      } catch (err) {
-        // Non-fatal: don't let MRR update failure break the inbound fax pipeline.
-        logger.warn({ err, leadId }, "inbound fax: failed to mark MRR request fulfilled");
-      }
-    }
-
     await auditLog("fax", String(faxRow.id), "inbound_received", {
       provider: input.provider,
       external_fax_id: input.externalFaxId,
@@ -305,62 +258,22 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
     //    need a lead context. Unmatched faxes stay in the fax inbox for the
     //    operator to assign manually.
     if (leadId) {
-      const sharedTriggerInput = {
-        lead_id: leadId,
-        fax_result_id: faxRow.id,
-        documentId: vaultPath,
-        document_id: documentId ?? null,
-        vault_path: vaultPath,
-        from: fromNumber || null,
-        provider: input.provider,
-        external_fax_id: input.externalFaxId,
-      };
-      const firmId = lead?.firm_id ?? input.firmId ?? "any";
-
       dispatchTrigger("trigger.inbound_fax", {
-        input: sharedTriggerInput,
-        firmId,
+        input: {
+          lead_id: leadId,
+          fax_result_id: faxRow.id,
+          documentId: vaultPath,
+          document_id: documentId ?? null,
+          vault_path: vaultPath,
+          from: fromNumber || null,
+          provider: input.provider,
+          external_fax_id: input.externalFaxId,
+        },
+        firmId: lead?.firm_id ?? input.firmId ?? "any",
         source: "inbound_fax_webhook",
       }).catch((err) =>
         logger.error({ err, leadId }, "inbound fax: dispatchTrigger(trigger.inbound_fax) failed"),
       );
-
-      // Also fire trigger.records_received so automations can branch on
-      // "records arrived" specifically (e.g. notify paralegal, update case stage).
-      dispatchTrigger("trigger.records_received", {
-        input: sharedTriggerInput,
-        firmId,
-        source: "inbound_fax_mrr_fulfilled",
-      }).catch((err) =>
-        logger.error({ err, leadId }, "inbound fax: dispatchTrigger(trigger.records_received) failed"),
-      );
-
-      // Send a portal notification email to the claimant if they have an email
-      // on file. Non-fatal — a missing email or unconfigured email provider
-      // just skips the notification silently.
-      try {
-        const [fullLead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId)).limit(1);
-        if (fullLead) {
-          const decrypted = decryptLeadFields(fullLead);
-          const email = typeof decrypted.email === "string" ? decrypted.email.trim() : "";
-          const name = (decrypted.name as string)
-            || `${decrypted.first_name ?? ""} ${decrypted.last_name ?? ""}`.trim()
-            || "Claimant";
-          if (email) {
-            await enqueueJob("send_workflow_email", {
-              lead_id: leadId,
-              to: email,
-              to_name: name,
-              subject: "Your medical records have been received",
-              html: `<p>Hi ${name},</p><p>We have received your medical records from ${fullLead.hospital_name || "your treatment facility"}. Our team will review them and keep you updated on your case.</p><p>You can view the status of your records anytime in your <a href="/portal">client portal</a>.</p>`,
-              text: `Hi ${name},\n\nWe have received your medical records from ${fullLead.hospital_name || "your treatment facility"}. Our team will review them and keep you updated on your case.\n\nYou can view the status of your records in your client portal.`,
-            });
-            logger.info({ lead_id: leadId, email }, "inbound fax: portal notification email queued");
-          }
-        }
-      } catch (err) {
-        logger.warn({ err, leadId }, "inbound fax: failed to enqueue portal notification email");
-      }
     } else {
       logger.warn(
         { provider: input.provider, from: fromNumber || null, externalFaxId: input.externalFaxId },
