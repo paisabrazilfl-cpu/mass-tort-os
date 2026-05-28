@@ -1,13 +1,6 @@
 import type { FaxAdapter, FaxSendOutcome } from "./types";
 import { logger } from "../logger";
 
-function normalizeEfaxStatus(s: string): string {
-  const lower = s.toLowerCase();
-  if (lower === "delivered" || lower === "success" || lower === "sent") return "delivered";
-  if (lower === "failed" || lower === "error" || lower === "declined") return "failed";
-  return "pending";
-}
-
 /**
  * eFax Corporate adapter. eFax exposes a SOAP API plus a Mail-to-Fax
  * gateway. We use the modern REST-ish v1 endpoint published in the
@@ -50,21 +43,5 @@ export const efaxAdapter: FaxAdapter = {
       };
     }
     return { ok: true, externalFaxId: String(json.id), rawResponse: json };
-  },
-
-  async getStatus(creds, externalFaxId): Promise<string> {
-    const apiKey = creds.api_key?.trim();
-    if (!apiKey) return "unknown";
-    const baseUrl = creds.api_url?.trim() || "https://secure.efaxdeveloper.com/EFax_WebFax.serv";
-    try {
-      const resp = await fetch(`${baseUrl}/api/v1/fax/${externalFaxId}`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-      });
-      if (!resp.ok) return "unknown";
-      const json: any = await resp.json().catch(() => ({}));
-      return normalizeEfaxStatus(json?.status ?? json?.fax_status ?? "");
-    } catch {
-      return "unknown";
-    }
   },
 };
