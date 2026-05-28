@@ -72,19 +72,6 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
-    // Proxy /api/* and /webhook/* to the local API server in dev so the SPA
-    // can use path-relative URLs (/api/...) without CORS issues.
-    // Set API_PORT to match whatever port the api-server dev script binds.
-    proxy: {
-      "/api": {
-        target: `http://localhost:${process.env["API_PORT"] ?? 8080}`,
-        changeOrigin: true,
-      },
-      "/webhook": {
-        target: `http://localhost:${process.env["API_PORT"] ?? 8080}`,
-        changeOrigin: true,
-      },
-    },
   },
   preview: {
     port,
