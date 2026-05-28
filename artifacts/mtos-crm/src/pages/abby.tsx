@@ -5,7 +5,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
-import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface Message {
   id: string;
@@ -181,9 +180,13 @@ export default function AbbyPage() {
         .map((m) => ({ role: m.role, content: m.content }));
 
       try {
-        const res = await apiFetchRaw("/api/ai-chat", {
+        const token =
+          localStorage.getItem("mtos_token") ??
+          sessionStorage.getItem("mtos_token") ??
+          "";
+        const res = await fetch("/api/ai-chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({ message: content, history }),
         });
         if (!res.ok) throw new Error(`${res.status}`);
