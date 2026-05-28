@@ -42,5 +42,6 @@ export * from "./competitive_intel";
 export * from "./webhook_deliveries";
 export * from "./processed_webhook_events";
 export * from "./system_snapshots";
+export * from "./dialer";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";
