@@ -1,13 +1,6 @@
 import type { FaxAdapter, FaxSendOutcome } from "./types";
 import { logger } from "../logger";
 
-// Phaxio status → normalized delivery status
-function normalizePhaxioStatus(s: string): string {
-  if (s === "success") return "delivered";
-  if (s === "error" || s === "failed") return "failed";
-  return "pending"; // queued, processing
-}
-
 /**
  * Phaxio (by Sinch) fax adapter. https://www.phaxio.com/docs/api/v2.1
  * Auth: HTTP Basic with key (api_key) + secret (client_secret).
@@ -50,21 +43,5 @@ export const phaxioAdapter: FaxAdapter = {
       };
     }
     return { ok: true, externalFaxId: String(json.data.id), rawResponse: json };
-  },
-
-  async getStatus(creds, externalFaxId): Promise<string> {
-    const apiKey = creds.api_key?.trim();
-    const secret = creds.client_secret?.trim();
-    if (!apiKey || !secret) return "unknown";
-    try {
-      const resp = await fetch(`https://api.phaxio.com/v2.1/faxes/${externalFaxId}`, {
-        headers: { Authorization: `Basic ${Buffer.from(`${apiKey}:${secret}`).toString("base64")}` },
-      });
-      if (!resp.ok) return "unknown";
-      const json: any = await resp.json().catch(() => ({}));
-      return normalizePhaxioStatus(json?.data?.status ?? "");
-    } catch {
-      return "unknown";
-    }
   },
 };
