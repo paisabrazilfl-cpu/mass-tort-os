@@ -47,6 +47,7 @@ RUN pnpm install --no-frozen-lockfile --prod
 
 COPY --from=builder /app/artifacts/api-server/dist  ./artifacts/api-server/dist
 COPY --from=builder /app/artifacts/mtos-crm/dist    ./artifacts/mtos-crm/dist
+COPY --from=builder /app/docs                        ./docs
 
 ENV NODE_ENV=production
 ENV PORT=8080
