@@ -1,6 +1,6 @@
 /**
  * Inbound provider webhook idempotency. Providers retry on 5xx / timeout,
- * so without this every Stripe/Telnyx/Vapi/DocuSign retry creates
+ * so without this every Stripe/Telnyx/Vapi/Fasten/DocuSign retry creates
  * duplicate rows in `sms_messages` / `fax_events` / `email_events` and
  * re-fires the downstream automations.
  *
