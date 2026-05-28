@@ -1,17 +1,20 @@
-// Production server for the MTOS CRM SPA. Serves the built Vite bundle under
-// dist/public and proxies /api/* + /healthz + /webhook/* to the API service.
+// Production server for the SPA service on Railway. Serves the built Vite
+// bundle under dist/public and proxies /api/* + /healthz to the API service.
 //
 // Why this exists: the SPA's fetch calls use path-relative URLs (`/api/...`)
-// so it can be served same-origin as the API. The CRM and the API server are
-// deployed as separate Fly apps, so we need a reverse proxy in front of the
-// static bundle to avoid CORS. Built with Node's stdlib `http`/`https` modules.
+// so it can be served same-origin as the API. On Railway each service has
+// its own *.up.railway.app host, so we need a reverse proxy in front of
+// the static bundle. Built with Node's stdlib `http`/`https` modules so we
+// don't introduce a new runtime dependency just for proxying.
 //
 // Env vars:
-//   PORT                 — bind port (default 4173; Fly.io / Railway inject this)
+//   PORT                 — bind port (Railway injects)
 //   API_BASE_URL         — upstream API origin (no trailing slash).
-//                          Fly.io example: https://mtos-api-server.fly.dev
-//   VITE_API_BASE_URL    — accepted as a fallback alias so a single env var
-//                          covers both the Vite build step and the runtime.
+//                          Example: https://api-server-production-8349.up.railway.app
+//   VITE_API_BASE_URL    — accepted as a fallback alias since the Vite build
+//                          step already uses that name; lets you set one
+//                          env var in Railway and have both the build and
+//                          the runtime read it.
 
 import http from "node:http";
 import https from "node:https";
@@ -33,7 +36,7 @@ process.stdout.write(`[mtos-crm] startup — PORT=${PORT} API_BASE_URL=${API_BAS
 
 if (!API_BASE_URL) {
   process.stdout.write(
-    "[mtos-crm] FATAL: API_BASE_URL (or VITE_API_BASE_URL) is required. Set it to the api-server origin (e.g. https://mtos-api-server.fly.dev) so /api/* requests can be proxied.\n",
+    "[mtos-crm] FATAL: API_BASE_URL (or VITE_API_BASE_URL) is required. Set it on the Railway service so /api/* requests can be proxied to the api-server.\n",
   );
   // Keep process alive briefly so Railway captures the log before exit
   setTimeout(() => process.exit(1), 2000);
