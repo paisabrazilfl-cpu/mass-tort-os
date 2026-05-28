@@ -56,6 +56,7 @@ import WorkflowSettingsPage from "@/pages/workflow-settings";
 import WebFormsPage from "@/pages/web-forms";
 import JobQueue from "@/pages/job-queue";
 import CallsPage from "@/pages/calls";
+import DialerPage from "@/pages/dialer";
 import DarkRoomPage from "@/pages/dark-room";
 import AutomationsPage from "@/pages/automations";
 import AutomationDocsPage from "@/pages/automation-docs";
@@ -69,8 +70,6 @@ import AdsLibrariesPage from "@/pages/ads-libraries";
 import AutomationDeliveriesPage from "@/pages/automation-deliveries";
 import AiAgentsPage from "@/pages/ai-agents";
 import AbbyPage from "@/pages/abby";
-import PortalSettingsPage from "@/pages/portal-settings";
-import MedicalRecordsPage from "@/pages/medical-records";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
 // 401s are handled separately by api-fetch's auth-failure callback.
@@ -134,6 +133,7 @@ function AuthedRoutes() {
           <Route path="/integrations" component={IntegrationsPage} />
           <Route path="/billing" component={BillingPage} />
           <Route path="/calls" component={CallsPage} />
+          <Route path="/dialer" component={DialerPage} />
           <Route path="/news" component={News} />
           <Route path="/financial-news" component={FinancialNews} />
           <Route path="/lead-import" component={LeadImport} />
@@ -158,8 +158,6 @@ function AuthedRoutes() {
           <Route path="/automations/:id" component={AutomationEditorPage} />
           <Route path="/ai-agents" component={AiAgentsPage} />
           <Route path="/abby" component={AbbyPage} />
-          <Route path="/portal-settings" component={PortalSettingsPage} />
-          <Route path="/medical-records" component={MedicalRecordsPage} />
           <Route component={NotFound} />
         </Switch>
       </RouteErrorBoundary>
