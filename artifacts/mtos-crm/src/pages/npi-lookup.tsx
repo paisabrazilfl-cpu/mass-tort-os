@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { Link, useLocation } from "wouter";
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { Link } from "wouter";
 import {
   useSearchNpi,
   getSearchNpiQueryKey,
@@ -8,7 +7,6 @@ import {
   NpiProvider,
   useVerifyProviderMatch,
   NpiVerifyRichResult,
-  useUpdateLead,
 } from "@workspace/api-client-react";
 import {
   Search,
@@ -24,15 +22,10 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
-  Copy,
-  Database,
-  ArrowLeft,
-  CheckCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -40,8 +33,6 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
-import { apiFetch } from "@/lib/api-fetch";
-import { useToast } from "@/hooks/use-toast";
 
 const US_STATES = [
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", 
@@ -390,472 +381,7 @@ function VerifyResultPanel({ result }: { result: NpiVerifyRichResult }) {
   );
 }
 
-// ─── Local NPPES DB types ────────────────────────────────────────────────────
-
-type LocalProviderTaxonomy = { code: string; primary?: boolean; license?: string; state?: string };
-
-type LocalProvider = {
-  npi: string;
-  entity_type: string | null;
-  display_name: string | null;
-  first_name: string | null;
-  last_name: string | null;
-  credential: string | null;
-  org_name: string | null;
-  practice_city: string | null;
-  practice_state: string | null;
-  practice_zip: string | null;
-  practice_phone: string | null;
-  practice_fax: string | null;
-  mail_city: string | null;
-  mail_state: string | null;
-  mail_phone: string | null;
-  mail_fax: string | null;
-  deactivation_date: string | null;
-  taxonomies: LocalProviderTaxonomy[] | null;
-};
-
-type LocalProviderPage = {
-  results: LocalProvider[];
-  total: number;
-  page: number;
-  page_size: number;
-  has_more: boolean;
-};
-
-type LocalSearchParams = {
-  search: string;
-  state: string;
-  entity_type: string; // "" | "1" | "2"
-  has_fax: boolean;
-};
-
-function fmtPhone(raw: string | null | undefined): string {
-  if (!raw) return "—";
-  const d = raw.replace(/\D/g, "");
-  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
-  if (d.length === 11 && d[0] === "1") return `(${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
-  return raw;
-}
-
-function LocalProviderRow({
-  provider,
-  onCopyFax,
-  onUseProvider,
-  usedNpi,
-}: {
-  provider: LocalProvider;
-  onCopyFax: (fax: string) => void;
-  onUseProvider?: (p: LocalProvider) => void;
-  usedNpi?: string;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const fax = provider.practice_fax || provider.mail_fax;
-  const isDeactivated = !!provider.deactivation_date;
-  const primaryTax = provider.taxonomies?.find((t) => t.primary) ?? provider.taxonomies?.[0];
-
-  return (
-    <>
-      <TableRow
-        className="cursor-pointer hover:bg-muted/50 transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <TableCell className="font-mono text-xs">{provider.npi}</TableCell>
-        <TableCell className="font-medium">
-          <div className="flex items-center gap-1.5">
-            {isDeactivated && <Badge variant="destructive" className="text-[10px] px-1 py-0">Deactivated</Badge>}
-            <span className={isDeactivated ? "line-through text-muted-foreground" : ""}>
-              {provider.display_name || "—"}
-            </span>
-          </div>
-        </TableCell>
-        <TableCell>
-          {provider.credential ? (
-            <Badge variant="secondary" className="text-xs">{provider.credential}</Badge>
-          ) : (
-            <span className="text-muted-foreground text-xs">—</span>
-          )}
-        </TableCell>
-        <TableCell>
-          <span className="text-xs text-muted-foreground">
-            {primaryTax?.code || "—"}
-          </span>
-        </TableCell>
-        <TableCell className="text-sm">
-          {provider.practice_city || provider.mail_city || "—"}
-          {(provider.practice_state || provider.mail_state) && `, ${provider.practice_state || provider.mail_state}`}
-        </TableCell>
-        <TableCell className="text-sm">{fmtPhone(provider.practice_phone || provider.mail_phone)}</TableCell>
-        <TableCell>
-          {fax ? (
-            <div className="flex items-center gap-1">
-              <span className="text-sm font-mono text-xs">{fmtPhone(fax)}</span>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-6 w-6"
-                title="Copy fax"
-                onClick={(e) => { e.stopPropagation(); onCopyFax(fax); }}
-              >
-                <Copy className="h-3 w-3" />
-              </Button>
-            </div>
-          ) : (
-            <span className="text-muted-foreground text-xs">—</span>
-          )}
-        </TableCell>
-        <TableCell className="text-right">
-          <div className="flex items-center justify-end gap-1">
-            {onUseProvider && (
-              <Button
-                size="sm"
-                variant={usedNpi === provider.npi ? "default" : "outline"}
-                className="h-7 text-xs gap-1"
-                onClick={(e) => { e.stopPropagation(); onUseProvider(provider); }}
-                title="Set as provider for this lead"
-              >
-                {usedNpi === provider.npi
-                  ? <><CheckCheck className="h-3 w-3" /> Selected</>
-                  : "Use this"}
-              </Button>
-            )}
-            {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-          </div>
-        </TableCell>
-      </TableRow>
-      {expanded && (
-        <TableRow className="bg-muted/30">
-          <TableCell colSpan={8} className="p-0 border-b">
-            <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in slide-in-from-top-2 duration-200">
-              <div className="space-y-2">
-                <div className="flex items-start gap-2">
-                  <MapPin className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium mb-1">Practice Address</p>
-                    <p className="text-xs text-muted-foreground">
-                      {provider.practice_city}, {provider.practice_state} {provider.practice_zip || ""}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">Ph: {fmtPhone(provider.practice_phone)}</p>
-                    <p className="text-xs text-muted-foreground">Fax: {fmtPhone(provider.practice_fax)}</p>
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-start gap-2">
-                  <Phone className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium mb-1">Mailing Address</p>
-                    <p className="text-xs text-muted-foreground">
-                      {provider.mail_city}, {provider.mail_state}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">Ph: {fmtPhone(provider.mail_phone)}</p>
-                    <p className="text-xs text-muted-foreground">Fax: {fmtPhone(provider.mail_fax)}</p>
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-start gap-2">
-                  {provider.entity_type === "2" ? (
-                    <Building className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                  ) : (
-                    <User className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                  )}
-                  <div>
-                    <p className="text-sm font-medium mb-1">Taxonomy Codes</p>
-                    {provider.taxonomies && provider.taxonomies.length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {provider.taxonomies.map((t, i) => (
-                          <Badge key={i} variant={t.primary ? "default" : "outline"} className="text-[10px] font-mono">
-                            {t.code}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">None on file</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </TableCell>
-        </TableRow>
-      )}
-    </>
-  );
-}
-
-const EMPTY_LOCAL_SEARCH: LocalSearchParams = { search: "", state: "", entity_type: "", has_fax: false };
-
-function LocalDbTab({ leadId }: { leadId: number | null }) {
-  const { toast } = useToast();
-  const [, navigate] = useLocation();
-  const [form, setForm] = useState<LocalSearchParams>(EMPTY_LOCAL_SEARCH);
-  const [activeParams, setActiveParams] = useState<LocalSearchParams | null>(null);
-  const [page, setPage] = useState(1);
-  const [selectedNpi, setSelectedNpi] = useState<string | null>(null);
-  const PAGE_SIZE = 25;
-
-  const updateLead = useUpdateLead();
-
-  const queryParams = activeParams
-    ? {
-        ...(activeParams.search ? { search: activeParams.search } : {}),
-        ...(activeParams.state ? { state: activeParams.state } : {}),
-        ...(activeParams.entity_type ? { entity_type: activeParams.entity_type } : {}),
-        ...(activeParams.has_fax ? { has_fax: "true" } : {}),
-        page: String(page),
-        page_size: String(PAGE_SIZE),
-      }
-    : null;
-
-  const { data, isLoading, isError } = useQuery<LocalProviderPage>({
-    queryKey: ["npi-providers-local", queryParams],
-    queryFn: () => apiFetch<LocalProviderPage>(`/api/npi/providers?${new URLSearchParams(queryParams!).toString()}`),
-    enabled: !!queryParams,
-    placeholderData: keepPreviousData,
-  });
-
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    const hasFilter = form.search || form.state || form.entity_type || form.has_fax;
-    if (!hasFilter) return;
-    setPage(1);
-    setActiveParams({ ...form });
-  };
-
-  const handleClear = () => {
-    setForm(EMPTY_LOCAL_SEARCH);
-    setActiveParams(null);
-    setPage(1);
-  };
-
-  const handleCopyFax = (fax: string) => {
-    const digits = fax.replace(/\D/g, "");
-    navigator.clipboard.writeText(digits).then(() => {
-      toast({ title: "Fax copied", description: digits });
-    });
-  };
-
-  const handleUseProvider = async (p: LocalProvider) => {
-    if (!leadId) return;
-    const fax = p.practice_fax || p.mail_fax;
-    if (!fax) {
-      toast({ variant: "destructive", title: "No fax number", description: "This provider has no fax on file." });
-      return;
-    }
-    try {
-      await updateLead.mutateAsync({
-        id: leadId,
-        data: {
-          hospital_name: p.display_name || p.org_name || undefined,
-          hospital_fax: fax,
-        },
-      });
-      setSelectedNpi(p.npi);
-      toast({
-        title: "Provider set",
-        description: `${p.display_name || p.org_name || p.npi} — fax ${fmtPhone(fax)} saved to lead.`,
-      });
-    } catch {
-      toast({ variant: "destructive", title: "Failed to update lead", description: "Please try again." });
-    }
-  };
-
-  const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
-
-  return (
-    <div className="space-y-4">
-      {leadId && (
-        <div className="flex items-center justify-between rounded-md border border-primary/30 bg-primary/5 px-4 py-2.5 text-sm">
-          <span>
-            <span className="font-medium">Selecting provider for Lead #{leadId}</span>
-            <span className="text-muted-foreground ml-2">— click "Use this" on a row to set the hospital fax.</span>
-          </span>
-          <Button variant="ghost" size="sm" className="gap-1.5 h-7" onClick={() => navigate(`/leads/${leadId}`)}>
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Back to lead
-          </Button>
-        </div>
-      )}
-      <Card className="border-border/50 shadow-sm">
-        <form onSubmit={handleSearch}>
-          <CardContent className="pt-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <div className="space-y-2 lg:col-span-2">
-                <Label htmlFor="local_search">Name or Organization</Label>
-                <Input
-                  id="local_search"
-                  placeholder="e.g. Memorial Hospital, Dr. Smith"
-                  value={form.search}
-                  onChange={(e) => setForm({ ...form, search: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="local_state">State</Label>
-                <Select
-                  value={form.state || ""}
-                  onValueChange={(val) => setForm({ ...form, state: val === "ALL" ? "" : val })}
-                >
-                  <SelectTrigger id="local_state">
-                    <SelectValue placeholder="Any State" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ALL">Any State</SelectItem>
-                    {US_STATES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="local_entity">Type</Label>
-                <Select
-                  value={form.entity_type || ""}
-                  onValueChange={(val) => setForm({ ...form, entity_type: val === "ALL" ? "" : val })}
-                >
-                  <SelectTrigger id="local_entity">
-                    <SelectValue placeholder="All Types" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ALL">All Types</SelectItem>
-                    <SelectItem value="1">Individual</SelectItem>
-                    <SelectItem value="2">Organization</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="mt-4 flex items-center gap-2">
-              <Checkbox
-                id="local_has_fax"
-                checked={form.has_fax}
-                onCheckedChange={(checked) => setForm({ ...form, has_fax: !!checked })}
-              />
-              <Label htmlFor="local_has_fax" className="cursor-pointer text-sm font-normal">
-                Only show providers with a fax number
-              </Label>
-            </div>
-            <div className="mt-6 flex gap-3">
-              <Button type="button" variant="outline" onClick={handleClear} className="w-1/4">
-                Clear
-              </Button>
-              <Button
-                type="submit"
-                className="w-3/4"
-                disabled={isLoading || (!form.search && !form.state && !form.entity_type && !form.has_fax)}
-              >
-                {isLoading ? (
-                  <span className="flex items-center gap-2">
-                    <div className="h-4 w-4 rounded-full border-2 border-background border-t-transparent animate-spin" />
-                    Searching…
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-2">
-                    <Database className="h-4 w-4" />
-                    Search Local Database
-                  </span>
-                )}
-              </Button>
-            </div>
-          </CardContent>
-        </form>
-      </Card>
-
-      {activeParams && data && (
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <span>{data.total.toLocaleString()} provider{data.total !== 1 ? "s" : ""} found</span>
-          {totalPages > 1 && (
-            <span>Page {page} of {totalPages.toLocaleString()}</span>
-          )}
-        </div>
-      )}
-
-      <Card className="border-border/50 overflow-hidden">
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[110px]">NPI</TableHead>
-                <TableHead>Name / Organization</TableHead>
-                <TableHead className="w-[80px]">Cred</TableHead>
-                <TableHead className="w-[130px]">Taxonomy</TableHead>
-                <TableHead className="w-[160px]">Location</TableHead>
-                <TableHead className="w-[150px]">Phone</TableHead>
-                <TableHead className="w-[180px]">Fax</TableHead>
-                <TableHead className="w-[40px]" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {!activeParams && !isLoading && (
-                <TableRow>
-                  <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
-                    <div className="flex flex-col items-center justify-center gap-2">
-                      <Database className="h-8 w-8 opacity-20" />
-                      <p>Search the local NPPES database of 9.5M providers.</p>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
-              {isLoading && Array.from({ length: 5 }).map((_, i) => (
-                <TableRow key={i}>
-                  {Array.from({ length: 8 }).map((_, j) => (
-                    <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
-                  ))}
-                </TableRow>
-              ))}
-              {isError && !isLoading && (
-                <TableRow>
-                  <TableCell colSpan={8} className="h-32 text-center text-destructive">
-                    Search failed. Please try again.
-                  </TableCell>
-                </TableRow>
-              )}
-              {data && data.results.length === 0 && !isLoading && (
-                <TableRow>
-                  <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
-                    No providers found matching your criteria.
-                  </TableCell>
-                </TableRow>
-              )}
-              {data && data.results.map((p) => (
-                <LocalProviderRow
-                  key={p.npi}
-                  provider={p}
-                  onCopyFax={handleCopyFax}
-                  onUseProvider={leadId ? handleUseProvider : undefined}
-                  usedNpi={selectedNpi ?? undefined}
-                />
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      </Card>
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setPage(1)} disabled={page === 1 || isLoading}>
-            «
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1 || isLoading}>
-            ‹ Prev
-          </Button>
-          <span className="text-sm text-muted-foreground px-2">
-            {page} / {totalPages.toLocaleString()}
-          </span>
-          <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)} disabled={!data?.has_more || isLoading}>
-            Next ›
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setPage(totalPages)} disabled={page === totalPages || isLoading}>
-            »
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function NpiLookup() {
-  // Read optional ?lead_id=123 from URL — set by the lead detail page "Find Provider" link.
-  const leadIdParam = new URLSearchParams(window.location.search).get("lead_id");
-  const contextLeadId = leadIdParam ? parseInt(leadIdParam, 10) || null : null;
-
   const [formValues, setFormValues] = useState<SearchNpiParams>({
     npi_number: "",
     first_name: "",
@@ -942,25 +468,17 @@ export default function NpiLookup() {
         </div>
       </div>
 
-      <Tabs defaultValue="local">
+      <Tabs defaultValue="search">
         <TabsList>
-          <TabsTrigger value="local" className="gap-2">
-            <Database className="h-4 w-4" />
-            Local Database
-          </TabsTrigger>
           <TabsTrigger value="search" className="gap-2">
             <Search className="h-4 w-4" />
-            CMS Registry
+            Search
           </TabsTrigger>
           <TabsTrigger value="verify" className="gap-2">
             <ShieldCheck className="h-4 w-4" />
             Verify Match
           </TabsTrigger>
         </TabsList>
-
-        <TabsContent value="local" className="mt-4">
-          <LocalDbTab leadId={contextLeadId} />
-        </TabsContent>
 
         <TabsContent value="search" className="space-y-4 mt-4">
 
