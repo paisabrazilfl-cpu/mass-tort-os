@@ -66,7 +66,10 @@ const MODULE_ENV_KEY: Record<LLMModule, string> = {
  * models (hard_code, chat) via BITDEER_MODULE_MODELS; general modules fall
  * through to the vault/workflow-settings resolution.
  */
-const BITDEER_PREFERRED_MODULES = new Set<LLMModule>(["run-script", "ai-agent"]);
+// lead-intelligence is also routed through Bitdeer when the key is present so
+// that the Abby internal assistant has a live AI connection without requiring
+// a separate OpenAI or Anthropic Replit integration to be configured.
+const BITDEER_PREFERRED_MODULES = new Set<LLMModule>(["run-script", "ai-agent", "lead-intelligence"]);
 
 export interface LLMRequest {
   module: LLMModule;

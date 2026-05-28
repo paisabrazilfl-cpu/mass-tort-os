@@ -7,6 +7,7 @@ import {
   db, casesTable, caseDocumentsTable, analysisTable, faxResultsTable, reviewQueueTable,
   dialerCampaignsTable, dialerCampaignLeadsTable, dialerDncTable, callLogsTable, leadsTable,
 } from "@workspace/db";
+import { getFaxAdapter } from "./lib/fax";
 import { eq, and, or, asc, inArray, sql } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { claimNextJob, markJobDone, markJobFailed, reclaimStaleProcessingJobs, enqueueJob } from "./lib/queue";
@@ -579,6 +580,74 @@ async function processJob(job: {
       : 15;
     await enqueueJob("dialer_campaign_run", { campaign_id }, { delaySeconds });
     logger.info({ campaign_id, dialedInBatch, delaySeconds }, "dialer: batch done — re-enqueued next tick");
+  } else if (job.job_type === "poll_fax_delivery") {
+    // ── Poll fax provider for outbound delivery confirmation ──────────────────
+    const { fax_result_id, external_fax_id, provider, poll_count } = job.payload as {
+      fax_result_id: number;
+      external_fax_id: string;
+      provider: string;
+      integration_id: number | null;
+      poll_count: number;
+    };
+
+    if (!fax_result_id || !external_fax_id || !provider) {
+      throw new NonRetryableJobError(`poll_fax_delivery: missing required fields (fax_result_id=${fax_result_id}, external_fax_id=${external_fax_id}, provider=${provider})`);
+    }
+
+    const MAX_FAX_POLLS = 48; // 48 × 5 min = 4 hours max
+
+    // Look up current delivery_status to short-circuit if already terminal.
+    const [existing] = await db
+      .select({ delivery_status: faxResultsTable.delivery_status })
+      .from(faxResultsTable)
+      .where(eq(faxResultsTable.id, fax_result_id));
+
+    if (existing?.delivery_status === "delivered" || existing?.delivery_status === "failed") {
+      logger.info({ fax_result_id, delivery_status: existing.delivery_status }, "poll_fax_delivery: already terminal — skipping");
+    } else if (poll_count >= MAX_FAX_POLLS) {
+      await db
+        .update(faxResultsTable)
+        .set({ delivery_status: "unknown", delivery_checked_at: new Date(), updated_at: new Date() } as any)
+        .where(eq(faxResultsTable.id, fax_result_id));
+      logger.warn({ fax_result_id, external_fax_id, provider, poll_count }, "poll_fax_delivery: max polls reached — marking unknown");
+    } else {
+      const adapter = getFaxAdapter(provider);
+      if (!adapter || typeof adapter.getStatus !== "function") {
+        logger.warn({ provider }, "poll_fax_delivery: adapter missing or no getStatus — skipping");
+      } else {
+        const resolved = await resolveProvider("fax");
+        if (!isResolved(resolved)) {
+          logger.warn({ provider }, "poll_fax_delivery: fax provider not resolved in vault — will retry");
+          await enqueueJob("poll_fax_delivery", { fax_result_id, external_fax_id, provider, integration_id: null, poll_count: poll_count + 1 }, { delaySeconds: 300 });
+        } else {
+          const rawStatus = await adapter.getStatus(resolved.credentials, external_fax_id);
+          logger.info({ fax_result_id, external_fax_id, provider, rawStatus, poll_count }, "poll_fax_delivery: polled provider");
+
+          // Normalise provider-specific status strings to our enum.
+          const DELIVERED = ["y", "delivered", "success", "sent", "ok"];
+          const FAILED    = ["n", "failed", "error", "busy", "no_answer", "noanswer", "rejected", "invalid"];
+          const lc = String(rawStatus).toLowerCase().trim();
+          const deliveryStatus =
+            DELIVERED.includes(lc) ? "delivered"
+            : FAILED.includes(lc)  ? "failed"
+            : "pending";
+
+          await db
+            .update(faxResultsTable)
+            .set({ delivery_status: deliveryStatus, delivery_checked_at: new Date(), updated_at: new Date() } as any)
+            .where(eq(faxResultsTable.id, fax_result_id));
+
+          if (deliveryStatus === "pending") {
+            // Not confirmed yet — re-enqueue with 5-minute delay.
+            const delaySeconds = poll_count < 12 ? 300 : 1800; // first hour: 5 min; after: 30 min
+            await enqueueJob("poll_fax_delivery", { fax_result_id, external_fax_id, provider, integration_id: null, poll_count: poll_count + 1 }, { delaySeconds });
+            logger.info({ fax_result_id, poll_count: poll_count + 1, delaySeconds }, "poll_fax_delivery: still pending — re-enqueued");
+          } else {
+            logger.info({ fax_result_id, deliveryStatus }, "poll_fax_delivery: terminal status reached");
+          }
+        }
+      }
+    }
   } else {
     logger.warn({ job_type: job.job_type }, "Unknown job type — skipping");
   }

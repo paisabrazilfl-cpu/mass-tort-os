@@ -72,8 +72,16 @@ app.listen(port, async (err) => {
   // Runs IF NOT EXISTS so safe on every boot; failures are logged but never
   // block the server from starting.
   const startupMigrations: Array<{ table: string; column: string; ddl: string }> = [
-    { table: "integrations", column: "field_mapping", ddl: "ALTER TABLE integrations ADD COLUMN IF NOT EXISTS field_mapping JSONB" },
-    { table: "integrations", column: "firm_id",       ddl: "ALTER TABLE integrations ADD COLUMN IF NOT EXISTS firm_id INTEGER" },
+    { table: "integrations",  column: "field_mapping",       ddl: "ALTER TABLE integrations ADD COLUMN IF NOT EXISTS field_mapping JSONB" },
+    { table: "integrations",  column: "firm_id",             ddl: "ALTER TABLE integrations ADD COLUMN IF NOT EXISTS firm_id INTEGER" },
+    // fax_results columns added for MRR delivery tracking (may be missing on Railway)
+    { table: "fax_results",   column: "external_fax_id",     ddl: "ALTER TABLE fax_results ADD COLUMN IF NOT EXISTS external_fax_id TEXT" },
+    { table: "fax_results",   column: "provider",            ddl: "ALTER TABLE fax_results ADD COLUMN IF NOT EXISTS provider VARCHAR(64)" },
+    { table: "fax_results",   column: "integration_id",      ddl: "ALTER TABLE fax_results ADD COLUMN IF NOT EXISTS integration_id INTEGER" },
+    { table: "fax_results",   column: "delivery_status",     ddl: "ALTER TABLE fax_results ADD COLUMN IF NOT EXISTS delivery_status VARCHAR(32) DEFAULT 'pending'" },
+    { table: "fax_results",   column: "delivery_checked_at", ddl: "ALTER TABLE fax_results ADD COLUMN IF NOT EXISTS delivery_checked_at TIMESTAMP" },
+    // medical_records_requests table added for MRR feature
+    { table: "medical_records_requests", column: "id",       ddl: "CREATE TABLE IF NOT EXISTS medical_records_requests (id SERIAL PRIMARY KEY, lead_id INTEGER NOT NULL, firm_id INTEGER, fax_result_id INTEGER, provider_name TEXT NOT NULL DEFAULT '', fax_number TEXT NOT NULL DEFAULT '', status VARCHAR(32) NOT NULL DEFAULT 'pending', fulfilled_at TIMESTAMP, response_fax_result_id INTEGER, notes TEXT, created_by INTEGER, created_at TIMESTAMP NOT NULL DEFAULT NOW(), updated_at TIMESTAMP NOT NULL DEFAULT NOW())" },
   ];
   for (const m of startupMigrations) {
     try {
