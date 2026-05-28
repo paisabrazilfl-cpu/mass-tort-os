@@ -4,7 +4,7 @@ import { seedFormConfigurations } from "./lib/form-config-service";
 import { seedDefaultFirm, seedSuperAdmin, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
 import { workerLoop } from "./worker";
 import { db, automationWorkflowsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { Cron } from "croner";
 import { runWorkflow } from "./lib/automations/executor";
 
@@ -66,6 +66,23 @@ app.listen(port, async (err) => {
     },
     "MTOS API server listening",
   );
+
+  // ── Startup schema migrations ────────────────────────────────────────────
+  // Idempotent column additions for production schema drift.
+  // Runs IF NOT EXISTS so safe on every boot; failures are logged but never
+  // block the server from starting.
+  const startupMigrations: Array<{ table: string; column: string; ddl: string }> = [
+    { table: "integrations", column: "field_mapping", ddl: "ALTER TABLE integrations ADD COLUMN IF NOT EXISTS field_mapping JSONB" },
+    { table: "integrations", column: "firm_id",       ddl: "ALTER TABLE integrations ADD COLUMN IF NOT EXISTS firm_id INTEGER" },
+  ];
+  for (const m of startupMigrations) {
+    try {
+      await db.execute(sql.raw(m.ddl));
+    } catch (e) {
+      logger.error({ err: e, table: m.table, column: m.column }, "Startup migration failed — continuing");
+    }
+  }
+  logger.info({ count: startupMigrations.length }, "Startup schema migrations applied");
 
   // Seed/refresh form configurations from TORT_REGISTRY on boot.
   // Safe: inserts missing rows and refreshes only rows where updated_by IS NULL
