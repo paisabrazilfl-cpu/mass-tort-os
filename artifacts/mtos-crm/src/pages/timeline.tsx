@@ -76,7 +76,14 @@ export default function Timeline() {
     try {
       const res = await apiFetchRaw(`/api/timeline/lead/${target}`);
       if (!res.ok) throw new Error("Failed");
-      setTimeline(await res.json());
+      const tlData = await res.json();
+      if (tlData && typeof tlData === "object") {
+        tlData.events = Array.isArray(tlData.events) ? tlData.events : [];
+        if (tlData.summary) {
+          tlData.summary.categories = Array.isArray(tlData.summary.categories) ? tlData.summary.categories : [];
+        }
+      }
+      setTimeline(tlData);
     } catch {
       toast({ title: "Failed to load timeline", variant: "destructive" });
     } finally {

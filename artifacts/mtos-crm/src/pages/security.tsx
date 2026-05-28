@@ -84,8 +84,10 @@ export default function Security() {
         apiFetchRaw("/api/security/blocked-ips"),
       ]);
       setStats(await statsRes.json());
-      setAlerts(await alertsRes.json());
-      setBlockedIps(await blockedRes.json());
+      const alertsData = await alertsRes.json();
+      setAlerts(Array.isArray(alertsData) ? alertsData : []);
+      const blockedData = await blockedRes.json();
+      setBlockedIps(Array.isArray(blockedData) ? blockedData : []);
     } catch {
       toast({ title: "Failed to load security data", variant: "destructive" });
     } finally {

@@ -648,7 +648,7 @@ export default function NpiLookup() {
                   </TableRow>
                 )}
 
-                {data && data.results.map((provider) => (
+                {data && (data.results ?? []).map((provider) => (
                   <ProviderRow key={provider.npi} provider={provider} />
                 ))}
               </TableBody>

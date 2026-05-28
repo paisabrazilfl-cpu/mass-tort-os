@@ -38,7 +38,7 @@ export default function Drafting() {
   const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   useEffect(() => {
-    apiFetchRaw("/api/drafting/templates").then(r => r.json()).then(setTemplates).catch(() => {});
+    apiFetchRaw("/api/drafting/templates").then(r => r.json()).then(d => setTemplates(Array.isArray(d) ? d : [])).catch(() => {});
   }, []);
 
   const generateDraft = async () => {

@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
+import { getAccessToken } from "@/lib/auth-store";
 
 interface Message {
   id: string;
@@ -117,7 +118,7 @@ function MessageBubble({ msg }: { msg: Message }) {
 
 function CrmStatsBar({ ctx }: { ctx: CrmContext | null }) {
   if (!ctx) return null;
-  const statuses = Object.entries(ctx.leads.by_status);
+  const statuses = Object.entries(ctx.leads.by_status ?? {});
   return (
     <div className="border-t border-border/50 bg-muted/20 px-4 py-2.5 space-y-1.5">
       <div className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
@@ -180,10 +181,7 @@ export default function AbbyPage() {
         .map((m) => ({ role: m.role, content: m.content }));
 
       try {
-        const token =
-          localStorage.getItem("mtos_token") ??
-          sessionStorage.getItem("mtos_token") ??
-          "";
+        const token = getAccessToken() ?? "";
         const res = await fetch("/api/ai-chat", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },

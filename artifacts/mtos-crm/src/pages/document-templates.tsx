@@ -52,7 +52,8 @@ export default function DocumentTemplatesPage() {
     setLoading(true);
     try {
       const res = await apiFetchRaw("/api/document-templates");
-      setTemplates(await res.json());
+      const tmplData = await res.json();
+      setTemplates(Array.isArray(tmplData) ? tmplData : []);
     } finally {
       setLoading(false);
     }

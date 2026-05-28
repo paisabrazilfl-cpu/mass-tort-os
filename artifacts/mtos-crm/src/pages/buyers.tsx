@@ -50,8 +50,16 @@ export default function BuyersPage() {
         apiFetchRaw("/api/buyers"),
         apiFetchRaw("/api/workflow-settings/_options/providers"),
       ]);
-      setBuyers(await bRes.json());
-      if (oRes.ok) setOptions(await oRes.json());
+      const buyersData = await bRes.json();
+      setBuyers(Array.isArray(buyersData) ? buyersData : []);
+      if (oRes.ok) {
+        const optData = await oRes.json();
+        setOptions({
+          esign: Array.isArray(optData?.esign) ? optData.esign : [],
+          fax: Array.isArray(optData?.fax) ? optData.fax : [],
+          email: Array.isArray(optData?.email) ? optData.email : [],
+        });
+      }
     } finally {
       setLoading(false);
     }

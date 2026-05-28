@@ -141,10 +141,10 @@ function EditorInner() {
     })();
   }, [id]);
 
-  const catalogByType = useMemo(() => Object.fromEntries(catalog.map((c) => [c.type, c])), [catalog]);
+  const catalogByType = useMemo(() => Object.fromEntries((Array.isArray(catalog) ? catalog : []).map((c) => [c.type, c])), [catalog]);
   const grouped = useMemo(() => {
     const m: Record<string, NodeDef[]> = {};
-    catalog.forEach((d) => { (m[d.category] ??= []).push(d); });
+    (Array.isArray(catalog) ? catalog : []).forEach((d) => { (m[d.category] ??= []).push(d); });
     return m;
   }, [catalog]);
 
@@ -328,9 +328,11 @@ function EditorInner() {
     // graph against the catalog, double-check here so a stale catalog cache
     // (e.g. after a server deploy) can't slip an unknown node onto the
     // canvas. We also ensure every edge points at a node we know about.
-    const ids = new Set(proposed.nodes.map((n: any) => n.id));
-    const badNodes = proposed.nodes.filter((n: any) => !catalogByType[n.type]);
-    const badEdges = proposed.edges.filter((e: any) => !ids.has(e.source) || !ids.has(e.target));
+    const proposedNodes: any[] = Array.isArray(proposed?.nodes) ? proposed.nodes : [];
+    const proposedEdges: any[] = Array.isArray(proposed?.edges) ? proposed.edges : [];
+    const ids = new Set(proposedNodes.map((n: any) => n.id));
+    const badNodes = proposedNodes.filter((n: any) => !catalogByType[n.type]);
+    const badEdges = proposedEdges.filter((e: any) => !ids.has(e.source) || !ids.has(e.target));
     if (badNodes.length > 0 || badEdges.length > 0) {
       const detail = [
         ...badNodes.map((n: any) => `unknown node type "${n.type}"`),
@@ -342,8 +344,8 @@ function EditorInner() {
     // Map the proposed catalog graph onto ReactFlow nodes the same way the
     // initial-load path does — keeping `data.nodeType` so the editor's per-
     // node config panel works on the new nodes.
-    const newNodes = proposed.nodes.map((n) => decorateNodeFromCatalog(n));
-    const newEdges = proposed.edges.map((e) => ({
+    const newNodes = proposedNodes.map((n) => decorateNodeFromCatalog(n));
+    const newEdges = proposedEdges.map((e) => ({
       ...e,
       sourceHandle: e.sourceHandle ?? null,
       targetHandle: e.targetHandle ?? null,

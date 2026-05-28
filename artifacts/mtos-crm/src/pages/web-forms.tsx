@@ -194,7 +194,7 @@ export default function WebFormsPage() {
         throw new Error(`HTTP ${res.status}`);
       }
       const data = (await res.json()) as FetchSummariesResp;
-      const sorted = [...data.web_forms].sort((a, b) => {
+      const sorted = [...(Array.isArray(data?.web_forms) ? data.web_forms : [])].sort((a, b) => {
         if (a.web_form_enabled !== b.web_form_enabled) {
           return a.web_form_enabled ? -1 : 1;
         }

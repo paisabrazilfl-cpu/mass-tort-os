@@ -56,7 +56,8 @@ export default function FinancialNews() {
     try {
       const res = await apiFetchRaw("/api/news/financial");
       if (!res.ok) throw new Error("Failed");
-      setArticles(await res.json());
+      const articlesData = await res.json();
+      setArticles(Array.isArray(articlesData) ? articlesData : []);
     } catch {
       toast({ title: "Failed to load financial news", variant: "destructive" });
     } finally {

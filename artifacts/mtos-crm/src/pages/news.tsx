@@ -58,7 +58,8 @@ export default function News() {
     try {
       const res = await apiFetchRaw("/api/news/mass-tort");
       if (!res.ok) throw new Error("Failed");
-      setArticles(await res.json());
+      const articlesData = await res.json();
+      setArticles(Array.isArray(articlesData) ? articlesData : []);
     } catch {
       toast({ title: "Failed to load news", variant: "destructive" });
     } finally {

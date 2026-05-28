@@ -83,7 +83,7 @@ export default function AdminPlatform() {
       }
       if (fRes.ok) {
         const j = (await fRes.json()) as { status: string; data: { rows: FirmRow[] } };
-        setFirms(j.data.rows);
+        setFirms(Array.isArray(j.data?.rows) ? j.data.rows : []);
       } else if (fRes.status === 403) {
         toast({
           title: "Restricted",
@@ -108,7 +108,7 @@ export default function AdminPlatform() {
       const r = await apiFetchRaw(url);
       if (r.ok) {
         const j = (await r.json()) as { status: string; data: { rows: PlatformUserRow[] } };
-        setUsers(j.data.rows);
+        setUsers(Array.isArray(j.data?.rows) ? j.data.rows : []);
       }
     } catch {
       toast({ title: "Couldn't load users", variant: "destructive" });

@@ -1192,7 +1192,7 @@ function ScriptsTab() {
                 <Label>Sections</Label>
                 <Button size="sm" variant="outline" onClick={addSection}><Plus className="h-3 w-3 mr-1" /> Add Section</Button>
               </div>
-              {form.content.sections.map((sec: any, i: number) => (
+              {(Array.isArray(form.content?.sections) ? form.content.sections : []).map((sec: any, i: number) => (
                 <div key={i} className="border rounded-lg p-3 space-y-2 mb-2">
                   <div className="flex gap-2">
                     <Input value={sec.title} onChange={(e) => {
@@ -1209,7 +1209,7 @@ function ScriptsTab() {
                       <SelectContent>{SECTION_TYPES.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}</SelectContent>
                     </Select>
                     <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-red-400" onClick={() => {
-                      const secs = form.content.sections.filter((_, idx) => idx !== i);
+                      const secs = (Array.isArray(form.content?.sections) ? form.content.sections : []).filter((_, idx) => idx !== i);
                       setForm((f) => ({ ...f, content: { sections: secs } }));
                     }}><Trash2 className="h-3.5 w-3.5" /></Button>
                   </div>
@@ -1386,7 +1386,7 @@ function ReportsTab() {
             ) : (
               <div className="space-y-1 max-h-48 overflow-y-auto">
                 {byDay.slice(-14).map((d: any) => {
-                  const maxCount = Math.max(...byDay.map((x: any) => Number(x.count)), 1);
+                  const maxCount = Math.max(...(Array.isArray(byDay) ? byDay : []).map((x: any) => Number(x.count)), 1);
                   const pct = Math.round((Number(d.count) / maxCount) * 100);
                   return (
                     <div key={d.day} className="flex items-center gap-3">

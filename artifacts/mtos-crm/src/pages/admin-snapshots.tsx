@@ -188,7 +188,7 @@ export default function AdminSnapshotsPage() {
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.message || res.statusText);
-      setRestorePlans(j.plans);
+      setRestorePlans(Array.isArray(j.plans) ? j.plans : []);
     } catch (err) {
       toast({ title: "Preview failed", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
     } finally {
@@ -212,7 +212,7 @@ export default function AdminSnapshotsPage() {
       if (!res.ok) throw new Error(j.message || res.statusText);
       toast({
         title: "Restore complete",
-        description: j.plans.map((p: RestorePlan) => `${p.table}: +${p.to_insert} insert, ${p.to_update} update`).join(" · "),
+        description: (Array.isArray(j.plans) ? j.plans : []).map((p: RestorePlan) => `${p.table}: +${p.to_insert} insert, ${p.to_update} update`).join(" · "),
       });
       setRestoreOpen(null);
       setRestorePlans(null);
@@ -305,7 +305,7 @@ export default function AdminSnapshotsPage() {
                         <Badge variant="outline" className="text-xs">{fmtBytes(r.byte_size)}</Badge>
                       </div>
                       <div className="text-xs text-muted-foreground mt-0.5">
-                        {relTime(r.created_at)} · {Object.entries(r.summary).map(([k, v]) => `${k}=${v}`).join(", ")}
+                        {relTime(r.created_at)} · {Object.entries(r.summary ?? {}).map(([k, v]) => `${k}=${v}`).join(", ")}
                       </div>
                       {r.notes && <div className="text-xs italic mt-1">{r.notes}</div>}
                     </div>

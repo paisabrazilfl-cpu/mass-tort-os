@@ -60,8 +60,10 @@ export default function Predictive() {
         apiFetchRaw("/api/analytics/predictive/by-tort"),
         apiFetchRaw("/api/analytics/predictive/model"),
       ]);
-      setBatchScores(await batchRes.json());
-      setTortPredictions(await tortRes.json());
+      const batchData = await batchRes.json();
+      setBatchScores(Array.isArray(batchData) ? batchData : []);
+      const tortData = await tortRes.json();
+      setTortPredictions(Array.isArray(tortData) ? tortData : []);
       setModelStats(await modelRes.json());
     } catch {
       toast({ title: "Failed to load predictions", variant: "destructive" });

@@ -37,9 +37,12 @@ export default function TemplateAssignmentsPage() {
         apiFetchRaw("/api/document-templates/assignments/all"),
         apiFetchRaw("/api/forms/config"),
       ]);
-      setTemplates(await tRes.json());
-      setBuyers(await bRes.json());
-      setAssignments(await aRes.json());
+      const tData = await tRes.json();
+      setTemplates(Array.isArray(tData) ? tData : []);
+      const bData = await bRes.json();
+      setBuyers(Array.isArray(bData) ? bData : []);
+      const aData = await aRes.json();
+      setAssignments(Array.isArray(aData) ? aData : []);
       const formsBody = await fRes.json().catch(() => ({}));
       const list: FormConfig[] = Array.isArray(formsBody)
         ? formsBody

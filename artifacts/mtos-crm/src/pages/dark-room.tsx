@@ -77,7 +77,7 @@ export default function DarkRoomPage() {
       const r = await fetch(API, { headers: authHeaders() });
       if (!r.ok) return;
       const j = (await r.json()) as { data?: { rows?: DarkRoomLink[] } };
-      setLinks(j.data?.rows ?? []);
+      setLinks(Array.isArray(j.data?.rows) ? j.data.rows : []);
     } catch {
       /* silent */
     }
