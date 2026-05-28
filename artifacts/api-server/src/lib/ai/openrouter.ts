@@ -44,7 +44,7 @@ export const openrouterAdapter: LlmAdapter = {
         buildHeaders: (key) => ({
           Authorization: `Bearer ${key}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": "https://masstortvelocity.com",
+          "HTTP-Referer": "https://mtosvelocity.com",
           "X-Title": "Mass Tort OS",
         }),
       },

@@ -3,7 +3,7 @@ import fs from "fs";
 
 const EMAIL      = "paisabrazilfl@gmail.com";
 const PASSWORD   = "1Giselle!";
-const DOMAIN     = "masstortvelocity.com";
+const DOMAIN     = "mtosvelocity.com";
 const CNAME_ROOT = "5bi0itzj.up.railway.app";
 const CNAME_WWW  = "ryxifg7n.up.railway.app";
 const SS_DIR     = "/tmp/namecom-screenshots";

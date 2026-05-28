@@ -31,7 +31,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import fs from "fs";
 import path from "path";
 
-const BASE_URL  = process.env.MONITOR_BASE_URL    ?? "https://masstortvelocity.com";
+const BASE_URL  = process.env.MONITOR_BASE_URL    ?? "https://mtosvelocity.com";
 const EMAIL     = process.env.MONITOR_EMAIL        ?? "paisabrazilfl@gmail.com";
 const PASSWORD  = process.env.MONITOR_PASSWORD;
 const INTERVAL  = parseInt(process.env.CHECK_INTERVAL_MS ?? "300000", 10);

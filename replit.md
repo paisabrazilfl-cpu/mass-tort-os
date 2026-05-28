@@ -27,7 +27,7 @@ If the super_admin account ever gets locked out from too many failed login attem
 # Deployment
 
 The application is deployed on **Railway** (not Render or Replit autoscale).
-- Production domain: **masstortvelocity.com**
+- Production domain: **mtosvelocity.com**
 - When debugging production issues, check Railway logs — not Replit deployment logs.
 - The `RENDER_API_KEY` secret is a legacy credential and is no longer the active deployment target.
 
