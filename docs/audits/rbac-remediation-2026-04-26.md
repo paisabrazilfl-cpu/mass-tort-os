@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **293 checked / 44 public / 249 protected / 0 unprotected.**
+Boot-time count: **298 checked / 44 public / 254 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | GET | `/api/navigation` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -806,6 +806,11 @@ Boot-time count: **293 checked / 44 public / 249 protected / 0 unprotected.**
 | leads | GET | `/api/leads/export` | ✓ | ✓ |  |  |  | — | `lead:export` | ✓ |
 | leads | GET | `/api/leads/` | ✓ | ✓ |  |  |  | — | `lead:view:own`, `lead:view:any` | ✓ |
 | leads | POST | `/api/leads/` | ✓ | ✓ |  |  |  | — | `lead:create` | ✓ |
+| mrr | PATCH | `/api/mrr/:id/cancel` | ✓ | ✓ |  |  |  | — | `medical_records:manage` | ✓ |
+| mrr | POST | `/api/mrr/:id/resend` | ✓ | ✓ |  |  |  | — | `medical_records:manage` | ✓ |
+| mrr | GET | `/api/mrr/:id` | ✓ | ✓ |  |  |  | — | `medical_records:view` | ✓ |
+| mrr | GET | `/api/mrr/` | ✓ | ✓ |  |  |  | — | `medical_records:view` | ✓ |
+| mrr | GET | `/api/mrr/poll-stats` | ✓ | ✓ |  |  |  | — | `medical_records:view` | ✓ |
 | news | GET | `/api/news/financial` | ✓ | ✓ |  |  |  | — | `news:view` | ✓ |
 | news | GET | `/api/news/mass-tort` | ✓ | ✓ |  |  |  | — | `news:view` | ✓ |
 | npi | GET | `/api/npi/lookup/:npi` | ✓ | ✓ |  |  |  | — | `npi:lookup` | ✓ |
