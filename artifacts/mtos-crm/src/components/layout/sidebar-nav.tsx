@@ -5,7 +5,7 @@ import {
   Building2, ShieldCheck, FileSearch, Clock, Wand2, Brain, Plug, Newspaper,
   TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings,
   Activity, CreditCard, Phone, Workflow, Eye, BookOpen, Library,
-  Webhook, Wrench, Search, ListChecks, Bot, Skull, Sparkles, Globe,
+  Webhook, Wrench, Search, ListChecks, Bot, Skull, Sparkles, PhoneCall,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -39,18 +39,25 @@ export const navigation: NavSection[] = [
     ],
   },
 
+  // ── 2b. DIALER ─────────────────────────────────────────────────────────────
+  // Enterprise internal call center — campaigns, DNC, scripts, reports.
+  {
+    section: "Dialer",
+    items: [
+      { name: "Dialer",       href: "/dialer",      icon: PhoneCall  },
+    ],
+  },
+
   // ── 3. DOCUMENTS ──────────────────────────────────────────────────────────
   // From raw scan → AI draft → signed template.
   {
     section: "Documents",
     items: [
-      { name: "All Documents",   href: "/documents",          icon: FileText      },
-      { name: "OCR Inbox",       href: "/ocr-inbox",          icon: Inbox         },
-      { name: "Medical Records", href: "/medical-records",    icon: Stethoscope   },
-      { name: "NPI Lookup",      href: "/npi-lookup",         icon: Search        },
-      { name: "Doc Review",      href: "/doc-review",         icon: FileSearch    },
-      { name: "AI Drafting",     href: "/drafting",           icon: Wand2         },
-      { name: "Templates",       href: "/document-templates", icon: FileSignature },
+      { name: "All Documents", href: "/documents",          icon: FileText      },
+      { name: "OCR Inbox",     href: "/ocr-inbox",          icon: Inbox         },
+      { name: "Doc Review",    href: "/doc-review",         icon: FileSearch    },
+      { name: "AI Drafting",   href: "/drafting",           icon: Wand2         },
+      { name: "Templates",     href: "/document-templates", icon: FileSignature },
     ],
   },
 
@@ -82,12 +89,13 @@ export const navigation: NavSection[] = [
   },
 
   // ── 6. AI AGENTS & CLINICAL ───────────────────────────────────────────────
-  // Autonomous agents, case qualification, predictive scoring.
+  // Autonomous agents, provider lookup, case qualification, predictive scoring.
   {
     section: "AI & Clinical",
     items: [
       { name: "Abby",            href: "/abby",            icon: Sparkles    },
       { name: "AI Agents",       href: "/ai-agents",       icon: Bot         },
+      { name: "NPI Lookup",      href: "/npi-lookup",      icon: Stethoscope },
       { name: "Decision Engine", href: "/decision-engine", icon: Scale       },
       { name: "Praxis AI",       href: "/predictive",      icon: Brain       },
     ],
@@ -116,7 +124,6 @@ export const navigation: NavSection[] = [
       { name: "Buyers",            href: "/buyers",               icon: Building    },
       { name: "Assignment Matrix", href: "/template-assignments", icon: Grid3x3     },
       { name: "Workflow Settings", href: "/workflow-settings",    icon: Settings    },
-      { name: "Portal Settings",   href: "/portal-settings",      icon: Globe       },
       { name: "Integrations",      href: "/integrations",         icon: Plug        },
       { name: "Billing",           href: "/billing",              icon: CreditCard  },
       { name: "Compliance",        href: "/compliance",           icon: Shield      },
