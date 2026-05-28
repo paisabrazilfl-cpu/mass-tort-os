@@ -3,9 +3,8 @@ import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
 import { seedDefaultFirm, seedSuperAdmin, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
 import { workerLoop } from "./worker";
-import { db, automationWorkflowsTable, medicalRecordsRequestsTable, jobQueueTable } from "@workspace/db";
-import { eq, and, lt } from "drizzle-orm";
-import { auditLog } from "./lib/audit";
+import { db, automationWorkflowsTable } from "@workspace/db";
+import { eq, and } from "drizzle-orm";
 import { Cron } from "croner";
 import { runWorkflow } from "./lib/automations/executor";
 
@@ -184,85 +183,4 @@ app.listen(port, async (err) => {
     }
   }, 60_000);
   logger.info("trigger.schedule cron poller started (60s interval)");
-
-  // ── MRR SLA follow-up poller ───────────────────────────────────────────────
-  // Runs every hour. Finds sent requests whose expected_by window has passed
-  // and either re-enqueues a fax (up to MAX_AUTO_RESENDS) or notes they need
-  // manual follow-up when the cap is reached.
-  const MAX_AUTO_RESENDS = 3;
-  const SLA_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
-
-  setInterval(async () => {
-    try {
-      const overdue = await db
-        .select()
-        .from(medicalRecordsRequestsTable)
-        .where(
-          and(
-            eq(medicalRecordsRequestsTable.status, "sent"),
-            lt(medicalRecordsRequestsTable.expected_by, new Date()),
-          ),
-        )
-        .limit(50);
-
-      for (const req of overdue) {
-        try {
-          if (req.attempt_count < MAX_AUTO_RESENDS && req.envelope_id != null) {
-            // Auto-resend: enqueue a new fax job with the same lead + envelope + fax.
-            await db.insert(jobQueueTable).values({
-              job_type: "fax_med_records_request",
-              payload: {
-                lead_id: req.lead_id,
-                envelope_id: req.envelope_id,
-                override_fax: req.fax_number,
-              },
-            });
-            const newExpectedBy = new Date(Date.now() + SLA_WINDOW_MS);
-            await db
-              .update(medicalRecordsRequestsTable)
-              .set({
-                attempt_count: req.attempt_count + 1,
-                last_attempt_at: new Date(),
-                expected_by: newExpectedBy,
-                notes: `Auto-resend #${req.attempt_count + 1} triggered by SLA poller on ${new Date().toISOString().slice(0, 10)}.`,
-                updated_at: new Date(),
-              })
-              .where(eq(medicalRecordsRequestsTable.id, req.id));
-            await auditLog("medical_records_request", String(req.id), "sla_auto_resend", {
-              lead_id: req.lead_id,
-              attempt: req.attempt_count + 1,
-              hospital: req.hospital_name,
-            });
-            logger.info(
-              { mrr_id: req.id, lead_id: req.lead_id, attempt: req.attempt_count + 1 },
-              "MRR SLA auto-resend enqueued",
-            );
-          } else {
-            // Cap reached or no envelope_id — flag for manual follow-up.
-            await db
-              .update(medicalRecordsRequestsTable)
-              .set({
-                notes: `SLA expired after ${req.attempt_count} attempt(s). Manual follow-up required.`,
-                updated_at: new Date(),
-              })
-              .where(eq(medicalRecordsRequestsTable.id, req.id));
-            await auditLog("medical_records_request", String(req.id), "sla_manual_followup_required", {
-              lead_id: req.lead_id,
-              attempts: req.attempt_count,
-            });
-          }
-        } catch (err) {
-          logger.error({ err, mrr_id: req.id }, "MRR SLA poller: failed to process request");
-        }
-      }
-
-      if (overdue.length > 0) {
-        logger.info({ count: overdue.length }, "MRR SLA poller: processed overdue requests");
-      }
-    } catch (err) {
-      logger.error({ err }, "MRR SLA poller error");
-    }
-  }, 60 * 60_000); // every hour
-
-  logger.info("MRR SLA follow-up poller started (60m interval)");
 });
