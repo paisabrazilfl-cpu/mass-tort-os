@@ -70,8 +70,6 @@ export default function N8nSetupPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newScopes, setNewScopes] = useState<Set<string>>(new Set());
-  const [newDescription, setNewDescription] = useState("");
-  const [newExpiresIn, setNewExpiresIn] = useState<string>("never");
   const [creating, setCreating] = useState(false);
   const [justMinted, setJustMinted] = useState<MintResult | null>(null);
 
@@ -125,16 +123,10 @@ export default function N8nSetupPage() {
     }
     setCreating(true);
     try {
-      const body: Record<string, unknown> = {
-        name: newName.trim(),
-        scopes: Array.from(newScopes),
-      };
-      if (newDescription.trim()) body["description"] = newDescription.trim();
-      if (newExpiresIn !== "never") body["expires_in_days"] = Number(newExpiresIn);
       const res = await apiFetchRaw("/api/admin/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ name: newName.trim(), scopes: Array.from(newScopes) }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -145,8 +137,6 @@ export default function N8nSetupPage() {
       setCreateOpen(false);
       setNewName("");
       setNewScopes(new Set());
-      setNewDescription("");
-      setNewExpiresIn("never");
       await refresh();
     } catch (err: any) {
       toast({ title: "Couldn't create key", description: err?.message, variant: "destructive" });
@@ -330,36 +320,6 @@ export default function N8nSetupPage() {
             <div>
               <Label htmlFor="key-name">Name</Label>
               <Input id="key-name" placeholder="e.g. n8n production" value={newName} onChange={(e) => setNewName(e.target.value)} />
-            </div>
-            <div>
-              <Label htmlFor="key-description">Description <span className="text-muted-foreground font-normal">(optional)</span></Label>
-              <Input
-                id="key-description"
-                placeholder="What is this key used for?"
-                value={newDescription}
-                onChange={(e) => setNewDescription(e.target.value)}
-                maxLength={500}
-              />
-            </div>
-            <div>
-              <Label htmlFor="key-expires">Expiration</Label>
-              <select
-                id="key-expires"
-                value={newExpiresIn}
-                onChange={(e) => setNewExpiresIn(e.target.value)}
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value="never">Never expires</option>
-                <option value="7">7 days</option>
-                <option value="30">30 days</option>
-                <option value="90">90 days (recommended)</option>
-                <option value="180">180 days</option>
-                <option value="365">1 year</option>
-                <option value="730">2 years</option>
-              </select>
-              <p className="text-xs text-muted-foreground mt-1">
-                Short-lived keys reduce blast radius if a token is leaked.
-              </p>
             </div>
             <div>
               <Label>Scopes</Label>
