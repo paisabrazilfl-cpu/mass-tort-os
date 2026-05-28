@@ -126,8 +126,10 @@ export default function Integrations() {
         apiFetchRaw("/api/integrations/presets"),
         apiFetchRaw("/api/integrations"),
       ]);
-      setPresets(await presetsRes.json());
-      setIntegrations(await integrationsRes.json());
+      const presetsData = await presetsRes.json();
+      setPresets(Array.isArray(presetsData) ? presetsData : []);
+      const integrationsData = await integrationsRes.json();
+      setIntegrations(Array.isArray(integrationsData) ? integrationsData : []);
     } catch {
       toast({ title: "Failed to load integrations", variant: "destructive" });
     } finally {

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import Vapi from "@vapi-ai/web";
+import { getAccessToken } from "@/lib/auth-store";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -31,7 +32,7 @@ import { useAuth } from "@/contexts/auth-context";
 const API = (path: string) => `/api/dialer${path}`;
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  const token = localStorage.getItem("mtos:token");
+  const token = getAccessToken();
   const res = await fetch(API(path), {
     ...opts,
     headers: {
