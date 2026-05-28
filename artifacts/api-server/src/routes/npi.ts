@@ -1,7 +1,5 @@
 import { Router } from "express";
 import { VerifyProviderMatchBody } from "@workspace/api-zod";
-import { db, nppsProvidersTable } from "@workspace/db";
-import { and, or, eq, ilike, isNotNull, sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import { Permission, requirePermission } from "../lib/rbac";
 import { badRequest, errorEnvelope, notFound } from "../lib/http-errors";
@@ -186,73 +184,6 @@ router.post("/verify", requirePermission(Permission.NPI_LOOKUP), async (req, res
   } catch (err) {
     logger.error({ err }, "NPI verify failed");
     errorEnvelope(res, 502, "upstream_error", "NPI Registry verification failed");
-  }
-});
-
-// Search the locally-imported NPPES provider directory (9.5M records).
-// Requires at least one filter to avoid a full-table scan on the count query.
-router.get("/providers", requirePermission(Permission.NPI_LOOKUP), async (req, res) => {
-  const raw = req.query as Record<string, string | undefined>;
-  const search = raw.search?.trim() || null;
-  const state = raw.state?.trim().toUpperCase() || null;
-  const entityType = raw.entity_type?.trim() || null; // "1" | "2"
-  const hasFax = raw.has_fax === "true" ? true : raw.has_fax === "false" ? false : null;
-  const page = Math.max(1, parseInt(raw.page || "1") || 1);
-  const pageSize = Math.min(100, Math.max(1, parseInt(raw.page_size || "25") || 25));
-
-  if (!search && !state && !entityType && hasFax === null) {
-    badRequest(res, "Provide at least one filter: search, state, entity_type, or has_fax");
-    return;
-  }
-
-  const conditions = [];
-  if (search) conditions.push(ilike(nppsProvidersTable.display_name, `%${search}%`));
-  if (state) conditions.push(or(eq(nppsProvidersTable.practice_state, state), eq(nppsProvidersTable.mail_state, state))!);
-  if (entityType === "1" || entityType === "2") conditions.push(eq(nppsProvidersTable.entity_type, entityType));
-  if (hasFax === true) conditions.push(or(isNotNull(nppsProvidersTable.practice_fax), isNotNull(nppsProvidersTable.mail_fax))!);
-
-  const where = conditions.length > 1 ? and(...conditions) : conditions[0];
-  const offset = (page - 1) * pageSize;
-
-  try {
-    const [results, countRows] = await Promise.all([
-      db
-        .select({
-          npi: nppsProvidersTable.npi,
-          entity_type: nppsProvidersTable.entity_type,
-          display_name: nppsProvidersTable.display_name,
-          first_name: nppsProvidersTable.first_name,
-          last_name: nppsProvidersTable.last_name,
-          credential: nppsProvidersTable.credential,
-          org_name: nppsProvidersTable.org_name,
-          practice_city: nppsProvidersTable.practice_city,
-          practice_state: nppsProvidersTable.practice_state,
-          practice_zip: nppsProvidersTable.practice_zip,
-          practice_phone: nppsProvidersTable.practice_phone,
-          practice_fax: nppsProvidersTable.practice_fax,
-          mail_city: nppsProvidersTable.mail_city,
-          mail_state: nppsProvidersTable.mail_state,
-          mail_phone: nppsProvidersTable.mail_phone,
-          mail_fax: nppsProvidersTable.mail_fax,
-          deactivation_date: nppsProvidersTable.deactivation_date,
-          taxonomies: nppsProvidersTable.taxonomies,
-        })
-        .from(nppsProvidersTable)
-        .where(where)
-        .orderBy(nppsProvidersTable.display_name)
-        .limit(pageSize)
-        .offset(offset),
-      db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(nppsProvidersTable)
-        .where(where),
-    ]);
-
-    const total = countRows[0]?.count ?? 0;
-    res.json({ results, total, page, page_size: pageSize, has_more: offset + results.length < total });
-  } catch (err) {
-    logger.error({ err }, "NPPES local provider search failed");
-    errorEnvelope(res, 500, "db_error", "Provider search failed");
   }
 });
 
