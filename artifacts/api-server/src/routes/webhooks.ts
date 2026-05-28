@@ -23,7 +23,6 @@ import {
   leadDispositionsTable,
   emailEventsTable,
   faxEventsTable,
-  faxResultsTable,
 } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import crypto from "crypto";
@@ -35,6 +34,10 @@ import { badRequest, notFound } from "../lib/http-errors";
 import { verifyWebhook as verifyStripeWebhook } from "../lib/payments/stripe";
 import { verifyVapiSignature } from "../lib/voice/vapi-webhook";
 import { verifyTelnyxSignature } from "../lib/sms/telnyx";
+import { verifyFastenSignature } from "../lib/fasten/webhook";
+import { getFastenWebhookSecret } from "../lib/fasten/client";
+import { fastenConnectionsTable } from "@workspace/db";
+import { enqueueJob } from "../lib/queue";
 import { dispatchTrigger } from "../lib/automations/dispatch";
 import { getEmailVerifier, getSmsVerifier, type VerifyContext, type SignatureStatus } from "../lib/webhook-verifiers";
 import { invalidateStripeConfiguredCache } from "../lib/subscription-gate";
@@ -793,18 +796,6 @@ router.post("/_test/envelope-signed", async (req, res) => {
 
 const EMAIL_EVENT_PROVIDERS = new Set(["sendgrid", "postmark", "resend", "mailgun", "aws_ses", "brevo"]);
 const FAX_EVENT_PROVIDERS = new Set(["srfax", "efax", "phaxio", "documo", "telnyx_fax"]);
-
-function normalizeWebhookFaxStatus(provider: string, rawStatus: string | undefined): string | null {
-  if (!rawStatus) return null;
-  const s = rawStatus.toLowerCase();
-  // Delivered / success
-  if (["delivered", "success", "sent", "completed"].includes(s)) return "delivered";
-  // Failed
-  if (["failed", "error", "declined", "busy", "no_answer", "cancelled"].includes(s)) return "failed";
-  // Pending / in transit
-  if (["queued", "processing", "sending", "pending", "in_progress"].includes(s)) return "pending";
-  return null; // don't overwrite with unknown on unrecognized status
-}
 const SMS_EVENT_PROVIDERS = new Set(["bandwidth", "plivo", "messagebird", "sinch"]);
 const VOICE_EVENT_PROVIDERS = new Set(["retell_ai", "bland_ai", "elevenlabs", "synthflow"]);
 
@@ -939,7 +930,7 @@ router.post("/fax/:provider", async (req, res) => {
   try {
     await db.insert(faxEventsTable).values({
       integration_id: integrationId,
-      firm_id: null,
+      firm_id: null,   // fax correlation requires an outbound fax_messages table; not yet shipped
       lead_id: null,
       provider,
       external_fax_id: externalId,
@@ -952,24 +943,6 @@ router.post("/fax/:provider", async (req, res) => {
   } catch (err) {
     logger.warn({ err, provider }, "fax_events insert failed");
   }
-
-  // Correlate the event to an outbound fax_results row and update delivery_status.
-  // This gives instant confirmation rather than waiting for the next poll job.
-  if (externalId) {
-    const normalizedStatus = normalizeWebhookFaxStatus(provider, status);
-    if (normalizedStatus) {
-      try {
-        await db
-          .update(faxResultsTable)
-          .set({ delivery_status: normalizedStatus, delivery_checked_at: new Date() })
-          .where(eq(faxResultsTable.external_fax_id, externalId));
-        logger.info({ provider, external_fax_id: externalId, delivery_status: normalizedStatus }, "fax delivery_status updated via webhook");
-      } catch (err) {
-        logger.warn({ err, provider, externalId }, "fax delivery_status webhook update failed");
-      }
-    }
-  }
-
   res.json({ ok: true, signature_status: signatureStatus });
 });
 
@@ -1188,6 +1161,99 @@ router.post("/voice/:provider", async (req, res) => {
     status,
   });
   res.json({ ok: true, signature_status: signatureStatus });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Fasten Health webhook
+//   Auth: HMAC-SHA256 of `${timestamp}.${rawBody}` using the webhook
+//   signing secret stored on the fasten_connect integration row as
+//   `client_secret`. Header: `Fasten-Signature: t=<unix>,v1=<hex>`.
+//   Replay window: 5 minutes.
+//
+//   On `connection.completed` we mark the matching pending row "active"
+//   and enqueue the first records sync. On `connection.disconnected`
+//   we mark the row "revoked". Other events are recorded for audit.
+// ─────────────────────────────────────────────────────────────────
+
+router.post("/fasten", async (req, res) => {
+  try {
+    const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+    const header = req.header("fasten-signature") || req.header("Fasten-Signature") || "";
+    const secret = await getFastenWebhookSecret();
+    const sigStatus = verifyFastenSignature({ rawBody, header, secret });
+
+    if (sigStatus !== "ok") {
+      logger.warn({ provider: "fasten", sigStatus }, "Fasten webhook signature check failed — refusing state mutation");
+      res.status(200).json({ ok: true, note: sigStatus });
+      return;
+    }
+
+    const evt = (req.body || {}) as {
+      type?: string;
+      data?: { org_connection_id?: string; external_id?: string; status?: string };
+    };
+    const orgConnectionId = evt.data?.org_connection_id;
+    const externalId = evt.data?.external_id;
+    if (!orgConnectionId && !externalId) {
+      logger.info({ provider: "fasten", type: evt.type }, "Fasten webhook with no correlation id — ack only");
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    // Locate the pending connection row by external_id (carried in metadata)
+    // or by an already-known org_connection_id.
+    const rows = await db.select().from(fastenConnectionsTable);
+    const conn = rows.find((r) => {
+      if (orgConnectionId && r.org_connection_id === orgConnectionId) return true;
+      const meta = (r.metadata as { external_id?: string } | null) || null;
+      return externalId && meta?.external_id === externalId;
+    });
+    if (!conn) {
+      logger.warn({ provider: "fasten", orgConnectionId, externalId }, "Fasten webhook for unknown connection — ignoring");
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const update: Record<string, unknown> = { updated_at: new Date() };
+    if (orgConnectionId && !conn.org_connection_id) update.org_connection_id = orgConnectionId;
+
+    if (evt.type === "connection.completed" || evt.data?.status === "active") {
+      update.status = "active";
+    } else if (evt.type === "connection.disconnected" || evt.data?.status === "revoked") {
+      update.status = "revoked";
+    } else if (evt.type === "connection.reauth_required" || evt.data?.status === "reauth") {
+      update.status = "reauth";
+    }
+
+    await db
+      .update(fastenConnectionsTable)
+      .set(update)
+      .where(eq(fastenConnectionsTable.id, conn.id));
+
+    await auditLog("fasten_connection", String(conn.id), `webhook_${evt.type ?? "event"}`, {
+      org_connection_id: orgConnectionId,
+      external_id: externalId,
+    });
+
+    if (update.status === "active") {
+      try {
+        await enqueueJob("fasten_records_sync", {
+          connection_id: conn.id,
+          lead_id: conn.lead_id,
+          case_id: `lead-${conn.lead_id}`,
+          backend: conn.backend as "connect" | "onprem",
+          org_connection_id: (orgConnectionId || conn.org_connection_id) as string,
+        });
+      } catch (err) {
+        logger.warn({ err, connectionId: conn.id }, "Auto-enqueue of fasten sync from webhook failed");
+      }
+    }
+
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Fasten webhook handler error");
+    res.status(200).json({ ok: true, note: "handler_error_logged" });
+  }
 });
 
 export default router;
