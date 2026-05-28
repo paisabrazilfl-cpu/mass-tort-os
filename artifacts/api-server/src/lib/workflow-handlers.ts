@@ -8,8 +8,8 @@
  *  - Persist a row in document_envelopes / fax_results so admin can audit
  *  - Use structured error returns from adapters; throw with a clear message on terminal errors
  */
-import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable, workflowSettingsTable, medicalRecordsRequestsTable } from "@workspace/db";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable, workflowSettingsTable } from "@workspace/db";
+import { eq, and, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
 import { resolveProvider, isResolved } from "./provider-router";
@@ -17,10 +17,8 @@ import { getEsignAdapter } from "./esign";
 import { getFaxAdapter } from "./fax";
 import { getEmailAdapter } from "./email/sendgrid";
 import { downloadTemplate } from "./template-storage";
-import { readFile } from "./vault";
 import { decryptLeadFields } from "./encryption";
 import { FAX_SOURCE_FILE_TEMPLATE } from "./fax-results-matcher";
-import { enqueueJob } from "./queue";
 
 // pdf-lib is heavy (~830 KB with transitives) and only needed when
 // buildTemplatePdf or buildMedRecordsCoverLetter actually run a job that
@@ -148,25 +146,6 @@ async function buildMedRecordsCoverLetter(lead: typeof leadsTable.$inferSelect, 
 
   const bytes = await pdf.save();
   return Buffer.from(bytes);
-}
-
-/**
- * Merge two PDFs into one using pdf-lib. Returns the combined buffer.
- * Falls back to just returning `first` if the second PDF is malformed.
- */
-async function mergePdfs(first: Buffer, second: Buffer): Promise<Buffer> {
-  const { PDFDocument } = await loadPdfLib();
-  const merged = await PDFDocument.create();
-  for (const src of [first, second]) {
-    try {
-      const doc = await PDFDocument.load(src);
-      const pages = await merged.copyPages(doc, doc.getPageIndices());
-      pages.forEach(p => merged.addPage(p));
-    } catch (err) {
-      logger.warn({ err }, "mergePdfs: failed to load one source PDF — skipping it");
-    }
-  }
-  return Buffer.from(await merged.save());
 }
 
 /**
@@ -535,26 +514,6 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
 
   const coverPdf = await buildMedRecordsCoverLetter(lead, envelope_id);
 
-  // Attempt to attach the signed HIPAA authorization PDF so hospitals receive
-  // it as page 2+ of the same fax. Non-fatal — missing or corrupt signed PDF
-  // just sends the cover letter alone.
-  let faxPdf = coverPdf;
-  try {
-    const [signedEnvelope] = await db
-      .select({ signed_pdf_path: documentEnvelopesTable.signed_pdf_path })
-      .from(documentEnvelopesTable)
-      .where(and(eq(documentEnvelopesTable.id, envelope_id), eq(documentEnvelopesTable.lead_id, lead_id)))
-      .limit(1);
-    if (signedEnvelope?.signed_pdf_path) {
-      const rawBase64 = await readFile(signedEnvelope.signed_pdf_path);
-      const signedBuf = Buffer.from(rawBase64, "base64");
-      faxPdf = await mergePdfs(coverPdf, signedBuf);
-      logger.info({ lead_id, envelope_id }, "HIPAA auth PDF appended to MRR fax");
-    }
-  } catch (err) {
-    logger.warn({ err, lead_id, envelope_id }, "Could not attach signed HIPAA PDF — sending cover letter only");
-  }
-
   // Pre-insert a pending fax_results row so admins see the attempt even if the call fails.
   const [faxRow] = await db
     .insert(faxResultsTable)
@@ -564,7 +523,6 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
       // `buildFaxResultsLikePattern`, so producer/consumer can never drift.
       source_file: FAX_SOURCE_FILE_TEMPLATE(lead_id, envelope_id),
       vault_path: "outbound:med_records_request",
-      lead_id,
       status: "processing",
     })
     .returning();
@@ -572,7 +530,7 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
   let outcome;
   try {
     outcome = await adapter.send(resolved.credentials, {
-      pdf: faxPdf,
+      pdf: coverPdf,
       fileName: `med_records_request_${envelope_id}.pdf`,
       toNumber: targetFax,
       metadata: {
@@ -633,41 +591,8 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
       status: "done",
       raw_text: `Sent to ${targetFax} via ${resolved.provider} — external_id=${outcome.externalFaxId}`,
       processed_at: new Date(),
-      external_fax_id: outcome.externalFaxId ?? null,
-      provider: resolved.provider,
-      integration_id: resolved.integration_id,
-      delivery_status: "pending",
     })
     .where(eq(faxResultsTable.id, faxRow.id));
-
-  // Schedule delivery confirmation polling (5 min after send, then backoff).
-  if (outcome.externalFaxId) {
-    const firstPollAt = new Date(Date.now() + 5 * 60 * 1000);
-    await enqueueJob("poll_fax_delivery", {
-      fax_result_id: faxRow.id,
-      external_fax_id: outcome.externalFaxId,
-      provider: resolved.provider,
-      integration_id: resolved.integration_id,
-      poll_count: 0,
-    }, { nextAttemptAt: firstPollAt });
-  }
-
-  // Record the outbound request in the MRR tracking table so operators can
-  // monitor outstanding requests and the inbound handler can mark it fulfilled.
-  const now = new Date();
-  const expectedBy = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000); // 14-day SLA
-  await db.insert(medicalRecordsRequestsTable).values({
-    lead_id,
-    firm_id: lead.firm_id ?? null,
-    hospital_name: lead.hospital_name ?? null,
-    fax_number: targetFax,
-    envelope_id: envelope_id ?? null,
-    fax_result_id: faxRow.id,
-    status: "sent",
-    sent_at: now,
-    expected_by: expectedBy,
-    last_attempt_at: now,
-  }).onConflictDoNothing();
 
   await auditLog("fax", String(faxRow.id), "sent", {
     lead_id,
@@ -755,94 +680,6 @@ export async function handleSendWorkflowEmail(payload: SendWorkflowEmailPayload)
   }
 
   logger.info({ to, subject, provider: resolved.provider, external_id: outcome.externalMessageId }, "Workflow email sent");
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// HANDLER: poll_fax_delivery
-// ────────────────────────────────────────────────────────────────────────────
-
-// Delays (ms) between successive polls. poll_count is the index used when
-// *scheduling* the next poll — so poll_count=0 job already ran after 5min,
-// and schedules the next at +30min, etc.
-const POLL_DELAYS_MS = [
-  30 * 60 * 1000,   // poll_count 0 → next in 30 min
-  2 * 60 * 60 * 1000,  // poll_count 1 → next in 2 h
-  8 * 60 * 60 * 1000,  // poll_count 2 → next in 8 h
-  24 * 60 * 60 * 1000, // poll_count 3 → next in 24 h
-  // poll_count 4 is the final poll — no reschedule
-];
-const MAX_POLL_COUNT = POLL_DELAYS_MS.length; // 4 — final run at index 4
-
-interface PollFaxDeliveryPayload {
-  fax_result_id: number;
-  external_fax_id: string;
-  provider: string;
-  integration_id: number;
-  poll_count: number;
-}
-
-export async function handlePollFaxDelivery(payload: PollFaxDeliveryPayload): Promise<void> {
-  const { fax_result_id, external_fax_id, provider, integration_id, poll_count } = payload;
-
-  // Skip if already resolved by a webhook or inbound-fax correlation.
-  const [existing] = await db
-    .select({ delivery_status: faxResultsTable.delivery_status })
-    .from(faxResultsTable)
-    .where(eq(faxResultsTable.id, fax_result_id))
-    .limit(1);
-  if (existing?.delivery_status === "delivered" || existing?.delivery_status === "failed") {
-    logger.info({ fax_result_id, delivery_status: existing.delivery_status }, "poll_fax_delivery: already resolved — skipping poll");
-    return;
-  }
-
-  // Resolve credentials for this specific integration.
-  const resolved = await resolveProvider("fax", { explicitIntegrationId: integration_id });
-  if (!isResolved(resolved)) {
-    logger.warn({ fax_result_id, integration_id }, "poll_fax_delivery: integration not found, marking unknown");
-    await db.update(faxResultsTable)
-      .set({ delivery_status: "unknown", delivery_checked_at: new Date() })
-      .where(eq(faxResultsTable.id, fax_result_id));
-    return;
-  }
-
-  const adapter = getFaxAdapter(resolved.provider);
-  if (!adapter?.getStatus) {
-    logger.warn({ fax_result_id, provider: resolved.provider }, "poll_fax_delivery: adapter has no getStatus");
-    await db.update(faxResultsTable)
-      .set({ delivery_status: "unknown", delivery_checked_at: new Date() })
-      .where(eq(faxResultsTable.id, fax_result_id));
-    return;
-  }
-
-  const status = await adapter.getStatus(resolved.credentials, external_fax_id);
-  const now = new Date();
-
-  await db.update(faxResultsTable)
-    .set({ delivery_status: status, delivery_checked_at: now })
-    .where(eq(faxResultsTable.id, fax_result_id));
-
-  await auditLog("fax", String(fax_result_id), "delivery_polled", {
-    provider,
-    external_fax_id,
-    delivery_status: status,
-    poll_count,
-  });
-
-  logger.info({ fax_result_id, external_fax_id, provider, delivery_status: status, poll_count }, "Fax delivery status polled");
-
-  // Schedule next poll if still in transit and haven't exhausted the schedule.
-  if (status === "pending" && poll_count < MAX_POLL_COUNT) {
-    const nextDelay = POLL_DELAYS_MS[poll_count]!;
-    const nextAt = new Date(now.getTime() + nextDelay);
-    await enqueueJob("poll_fax_delivery", {
-      fax_result_id,
-      external_fax_id,
-      provider,
-      integration_id,
-      poll_count: poll_count + 1,
-    }, { nextAttemptAt: nextAt });
-    logger.info({ fax_result_id, poll_count: poll_count + 1, next_at: nextAt }, "Next delivery poll scheduled");
-  }
 }
 
 // =============================================================================
