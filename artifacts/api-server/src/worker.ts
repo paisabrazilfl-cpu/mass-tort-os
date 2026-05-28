@@ -3,10 +3,14 @@
  * Polls the PostgreSQL job_queue table and processes jobs.
  * Runs as a separate process — started via "pnpm run worker" command.
  */
-import { db, casesTable, caseDocumentsTable, analysisTable, faxResultsTable, reviewQueueTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import {
+  db, casesTable, caseDocumentsTable, analysisTable, faxResultsTable, reviewQueueTable,
+  dialerCampaignsTable, dialerCampaignLeadsTable, dialerDncTable, callLogsTable, leadsTable,
+} from "@workspace/db";
+import { eq, and, or, asc, inArray, sql } from "drizzle-orm";
 import { logger } from "./lib/logger";
-import { claimNextJob, markJobDone, markJobFailed, reclaimStaleProcessingJobs } from "./lib/queue";
+import { claimNextJob, markJobDone, markJobFailed, reclaimStaleProcessingJobs, enqueueJob } from "./lib/queue";
+import { resolveProvider, isResolved } from "./lib/provider-router";
 import { saveFile, readFile, listCaseFiles } from "./lib/vault";
 import { extractFeatures } from "./lib/ai-extract";
 import { scoreFeatures, scoreToVerdict } from "./lib/scoring";
@@ -15,7 +19,8 @@ import { preprocessFaxBuffer, base64ToBuffer, detectMimeType } from "./lib/ocr-p
 import { extractOcrData, extractOcrDataFromText } from "./lib/ai-ocr";
 import { extractPdfText } from "./lib/pdf-extract";
 import { withErrorFallback, createLoopGuard, DEFAULT_LIMITS } from "./lib/error-fallback";
-import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail, handleSendWorkflowSms, handlePollFaxDelivery } from "./lib/workflow-handlers";
+import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail, handleSendWorkflowSms } from "./lib/workflow-handlers";
+import { handleFastenRecordsSync, auditStaleFastenPartials } from "./lib/fasten-job";
 import { ensureSystemUser } from "./lib/case-ownership-backfill";
 import { dispatchEvent } from "./lib/event-dispatcher";
 import { updateCaseStatus } from "./lib/case-status";
@@ -348,8 +353,232 @@ async function processJob(job: {
     await handleSendWorkflowEmail(payload as unknown as Parameters<typeof handleSendWorkflowEmail>[0]);
   } else if (job.job_type === "send_workflow_sms") {
     await handleSendWorkflowSms(payload as unknown as Parameters<typeof handleSendWorkflowSms>[0]);
-  } else if (job.job_type === "poll_fax_delivery") {
-    await handlePollFaxDelivery(payload as unknown as Parameters<typeof handlePollFaxDelivery>[0]);
+  } else if (job.job_type === "fasten_records_sync") {
+    await handleFastenRecordsSync(payload as unknown as Parameters<typeof handleFastenRecordsSync>[0]);
+  } else if (job.job_type === "dialer_campaign_run") {
+    // ── Campaign outbound dialer ──────────────────────────────────────────────
+    const { campaign_id } = payload as { campaign_id: unknown };
+    if (typeof campaign_id !== "number" || !Number.isInteger(campaign_id) || campaign_id <= 0) {
+      throw new NonRetryableJobError(`dialer_campaign_run: campaign_id must be a positive integer, got ${campaign_id}`);
+    }
+
+    const [campaign] = await db
+      .select()
+      .from(dialerCampaignsTable)
+      .where(eq(dialerCampaignsTable.id, campaign_id));
+
+    if (!campaign || campaign.status !== "active") {
+      logger.info({ campaign_id, status: campaign?.status }, "dialer: campaign not active — stopping worker chain");
+      return;
+    }
+
+    // ── Call-window guard (timezone-aware) ────────────────────────────────────
+    const tz = campaign.timezone ?? "America/New_York";
+    const localTime = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false,
+    }).format(new Date());
+    const [lh, lm] = localTime.split(":").map(Number);
+    const nowMin = (lh ?? 0) * 60 + (lm ?? 0);
+    const [wsh, wsm] = (campaign.call_window_start ?? "09:00").split(":").map(Number);
+    const [weh, wem] = (campaign.call_window_end ?? "20:00").split(":").map(Number);
+    const windowStart = (wsh ?? 9) * 60 + (wsm ?? 0);
+    const windowEnd = (weh ?? 20) * 60 + (wem ?? 0);
+
+    if (nowMin < windowStart || nowMin > windowEnd) {
+      // Outside window — re-check in 5 minutes
+      await enqueueJob("dialer_campaign_run", { campaign_id }, { delaySeconds: 300 });
+      logger.info({ campaign_id, localTime, tz }, "dialer: outside call window — retrying in 5 min");
+      return;
+    }
+
+    // ── Resolve Vapi credentials ──────────────────────────────────────────────
+    const resolved = await resolveProvider("voice");
+    if (!isResolved(resolved) || resolved.provider !== "vapi") {
+      logger.warn({ campaign_id }, "dialer: Vapi not configured — pausing campaign");
+      await db.update(dialerCampaignsTable)
+        .set({ status: "paused", updated_at: new Date() })
+        .where(eq(dialerCampaignsTable.id, campaign_id));
+      return;
+    }
+    const creds = resolved.credentials as Record<string, unknown>;
+    const apiKey = typeof creds.api_key === "string" ? creds.api_key.trim() : "";
+    if (!apiKey) {
+      logger.warn({ campaign_id }, "dialer: Vapi api_key missing — pausing campaign");
+      await db.update(dialerCampaignsTable)
+        .set({ status: "paused", updated_at: new Date() })
+        .where(eq(dialerCampaignsTable.id, campaign_id));
+      return;
+    }
+
+    if (!campaign.vapi_assistant_id) {
+      logger.warn({ campaign_id }, "dialer: no vapi_assistant_id on campaign — pausing");
+      await db.update(dialerCampaignsTable)
+        .set({ status: "paused", updated_at: new Date() })
+        .where(eq(dialerCampaignsTable.id, campaign_id));
+      return;
+    }
+
+    // ── Claim next batch of pending leads ─────────────────────────────────────
+    const batchSize = Math.max(1, Math.min(campaign.max_concurrent_calls, 10));
+    const pendingRows = await db
+      .select({
+        cl_id: dialerCampaignLeadsTable.id,
+        cl_lead_id: dialerCampaignLeadsTable.lead_id,
+        cl_attempts: dialerCampaignLeadsTable.attempts,
+        phone: leadsTable.phone,
+        first_name: leadsTable.first_name,
+      })
+      .from(dialerCampaignLeadsTable)
+      .leftJoin(leadsTable, eq(dialerCampaignLeadsTable.lead_id, leadsTable.id))
+      .where(
+        and(
+          eq(dialerCampaignLeadsTable.campaign_id, campaign_id),
+          inArray(dialerCampaignLeadsTable.status, ["pending", "queued"]),
+        ),
+      )
+      .orderBy(asc(dialerCampaignLeadsTable.id))
+      .limit(batchSize);
+
+    if (pendingRows.length === 0) {
+      await db.update(dialerCampaignsTable)
+        .set({ status: "completed", updated_at: new Date() })
+        .where(eq(dialerCampaignsTable.id, campaign_id));
+      logger.info({ campaign_id }, "dialer: campaign completed — all leads dialed");
+      return;
+    }
+
+    let dialedInBatch = 0;
+
+    for (const row of pendingRows) {
+      // No phone number — skip
+      if (!row.phone) {
+        await db.update(dialerCampaignLeadsTable)
+          .set({ status: "failed", disposition: "no_phone", updated_at: new Date() })
+          .where(eq(dialerCampaignLeadsTable.id, row.cl_id));
+        continue;
+      }
+
+      // DNC check
+      const normalised = row.phone.replace(/\D/g, "");
+      const [dncHit] = await db
+        .select({ id: dialerDncTable.id })
+        .from(dialerDncTable)
+        .where(
+          and(
+            eq(dialerDncTable.firm_id, campaign.firm_id),
+            or(
+              eq(dialerDncTable.phone_number, row.phone),
+              eq(dialerDncTable.phone_number, normalised),
+            ),
+          ),
+        )
+        .limit(1);
+
+      if (dncHit) {
+        await db.update(dialerCampaignLeadsTable)
+          .set({ status: "dnc", disposition: "dnc_blocked", updated_at: new Date() })
+          .where(eq(dialerCampaignLeadsTable.id, row.cl_id));
+        continue;
+      }
+
+      // Mark as dialing
+      await db.update(dialerCampaignLeadsTable)
+        .set({
+          status: "dialing",
+          attempts: row.cl_attempts + 1,
+          last_called_at: new Date(),
+          updated_at: new Date(),
+        })
+        .where(eq(dialerCampaignLeadsTable.id, row.cl_id));
+
+      // Create call log row
+      const [callLog] = await db.insert(callLogsTable).values({
+        firm_id: campaign.firm_id,
+        lead_id: row.cl_lead_id,
+        direction: "outbound",
+        to_number: row.phone,
+        from_number: campaign.caller_id,
+        status: "queued",
+        transcript: [],
+        events: [],
+      }).returning();
+
+      // Initiate outbound Vapi call
+      try {
+        const callPayload: Record<string, unknown> = {
+          assistantId: campaign.vapi_assistant_id,
+          customer: {
+            number: row.phone,
+            ...(row.first_name ? { name: row.first_name } : {}),
+          },
+          metadata: {
+            campaign_id: String(campaign_id),
+            campaign_lead_id: String(row.cl_id),
+            call_log_id: String(callLog.id),
+            firm_id: String(campaign.firm_id),
+          },
+        };
+        if (campaign.vapi_phone_number_id) {
+          callPayload.phoneNumberId = campaign.vapi_phone_number_id;
+        }
+
+        const resp = await fetch("https://api.vapi.ai/call", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(callPayload),
+        });
+        const json = await resp.json().catch(() => ({})) as Record<string, unknown>;
+
+        if (resp.ok && json.id) {
+          await db.update(callLogsTable)
+            .set({ status: "in_progress", vapi_call_id: String(json.id), updated_at: new Date() })
+            .where(eq(callLogsTable.id, callLog.id));
+          await db.update(dialerCampaignLeadsTable)
+            .set({ status: "called", last_call_log_id: callLog.id, updated_at: new Date() })
+            .where(eq(dialerCampaignLeadsTable.id, row.cl_id));
+          dialedInBatch++;
+          logger.info({ campaign_id, lead_id: row.cl_lead_id, vapi_call_id: json.id }, "dialer: outbound call initiated");
+        } else {
+          const errMsg = typeof json.message === "string" ? json.message : `HTTP ${resp.status}`;
+          await db.update(callLogsTable)
+            .set({ status: "failed", error: errMsg, updated_at: new Date() })
+            .where(eq(callLogsTable.id, callLog.id));
+          await db.update(dialerCampaignLeadsTable)
+            .set({ status: "failed", disposition: `vapi_error_${resp.status}`, updated_at: new Date() })
+            .where(eq(dialerCampaignLeadsTable.id, row.cl_id));
+          logger.warn({ campaign_id, lead_id: row.cl_lead_id, status: resp.status, body: json }, "dialer: Vapi call failed");
+        }
+      } catch (callErr) {
+        const errMsg = callErr instanceof Error ? callErr.message : String(callErr);
+        await db.update(callLogsTable)
+          .set({ status: "failed", error: errMsg, updated_at: new Date() })
+          .where(eq(callLogsTable.id, callLog.id));
+        await db.update(dialerCampaignLeadsTable)
+          .set({ status: "failed", disposition: "network_error", updated_at: new Date() })
+          .where(eq(dialerCampaignLeadsTable.id, row.cl_id));
+        logger.error({ err: callErr, campaign_id, lead_id: row.cl_lead_id }, "dialer: Vapi call network error");
+      }
+    }
+
+    // ── Update campaign counters ───────────────────────────────────────────────
+    if (dialedInBatch > 0) {
+      await db.update(dialerCampaignsTable)
+        .set({
+          dialed_count: sql`${dialerCampaignsTable.dialed_count} + ${dialedInBatch}`,
+          updated_at: new Date(),
+        })
+        .where(eq(dialerCampaignsTable.id, campaign_id));
+    }
+
+    // ── Re-enqueue next batch with mode-appropriate delay ────────────────────
+    const delaySeconds = campaign.type === "predictive" ? 3
+      : campaign.type === "power" ? 8
+      : 15;
+    await enqueueJob("dialer_campaign_run", { campaign_id }, { delaySeconds });
+    logger.info({ campaign_id, dialedInBatch, delaySeconds }, "dialer: batch done — re-enqueued next tick");
   } else {
     logger.warn({ job_type: job.job_type }, "Unknown job type — skipping");
   }
@@ -371,6 +600,12 @@ export async function workerLoop(): Promise<void> {
   const RECLAIM_EVERY_MS = 60_000;
   const STALE_AFTER_MS = 5 * 60_000;
 
+  // Surface Fasten partial syncs that have sat unresolved for >24h. Hourly
+  // tick is plenty — a single audit row per stale partial is the contract,
+  // and dedup is enforced via metadata.partial_audited_at inside the helper.
+  let lastFastenStaleAuditAt = 0;
+  const FASTEN_STALE_AUDIT_EVERY_MS = 60 * 60_000;
+
   while (true) {
     try {
       const now = Date.now();
@@ -380,6 +615,14 @@ export async function workerLoop(): Promise<void> {
           await reclaimStaleProcessingJobs(STALE_AFTER_MS);
         } catch (e) {
           logger.error({ err: e }, "Stale-job reclaim failed");
+        }
+      }
+      if (now - lastFastenStaleAuditAt > FASTEN_STALE_AUDIT_EVERY_MS) {
+        lastFastenStaleAuditAt = now;
+        try {
+          await auditStaleFastenPartials();
+        } catch (e) {
+          logger.error({ err: e }, "Stale Fasten partial audit failed");
         }
       }
     } catch {
