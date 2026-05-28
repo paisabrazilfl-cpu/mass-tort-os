@@ -108,8 +108,8 @@ router.get("/preview/:tortId", async (req, res) => {
 <body>
 <div class="banner"><strong>Preview Mode</strong> — submissions are disabled in this preview window.</div>
 <div id="mtos-form"></div>
-<script src="/api/forms-public/embed/${safeTortId}"></script>
-<script src="/api/forms-public/preview-blocker.js"></script>
+<script src="${htmlEscape(baseUrl)}/api/forms-public/embed/${safeTortId}"></script>
+<script src="${htmlEscape(baseUrl)}/api/forms-public/preview-blocker.js"></script>
 </body>
 </html>`;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -311,7 +311,6 @@ router.get("/embed/:tortId", async (req, res) => {
         exposure_fields: config.exposure_fields,
         intro_text: config.intro_text,
         custom_fields: config.custom_fields,
-        web_form_fields: config.web_form_config?.fields ?? [],
       },
       baseUrl,
     );
