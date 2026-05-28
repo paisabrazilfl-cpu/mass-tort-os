@@ -1297,7 +1297,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     }
     try {
       const output = await callLLM({
-        module: "lead-intelligence",
+        module: "ai-agent",
         systemPrompt: "You are an autonomous assistant. Reply only with the final answer.",
         prompt: `${goal}\n\nContext:\n${JSON.stringify(s.input ?? {}, null, 2).slice(0, 4000)}`,
         maxTokens: 1000,

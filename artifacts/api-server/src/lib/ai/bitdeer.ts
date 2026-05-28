@@ -41,24 +41,32 @@ export const BITDEER_BASE_URL = (
 
 /** Capability roles → the Bitdeer model that serves them. */
 export type BitdeerRole =
-  | "code"
-  | "planner"
-  | "chat"
-  | "router"
-  | "vision"
-  | "image"
-  | "embed"
-  | "rerank";
+  | "chat"           // Main Chat  — Qwen3-235B: reasoning, planning, general
+  | "cheap_backup"   // Cheap Backup — gpt-oss-20b: low-cost fallback before Anthropic
+  | "code"           // Code        — Devstral-2: code generation, code review
+  | "hard_code"      // Hard Code   — Qwen3-Coder-Plus: deep code / reasoning + code
+  | "shell"          // Shell       — Devstral-2: bash / shell script generation
+  | "planner"        // Planner     — Nemotron-3-Super: multi-step task decomposition
+  | "router"         // Router      — Gemma-4-E4B: cheap routing / intent classification
+  | "vision"         // Vision      — Qwen3-235B: multimodal, document image analysis
+  | "image"          // Image gen   — Imagen-4 ultra: text-to-image
+  | "embed"          // Embeddings  — BAAI/bge-m3: semantic vectors
+  | "rerank";        // Reranker    — BAAI/bge-reranker-v2-m3: precision re-scoring
 
 const DEFAULT_MODELS: Record<BitdeerRole, string> = {
-  code: "mistralai/Devstral-2-123B-Instruct-2512",
-  planner: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
-  chat: "Qwen/Qwen3-235B-A22B",
-  router: "google/gemma-4-E4B-it",
-  vision: "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning",
-  image: "google/imagen-4.0-ultra",
-  embed: "BAAI/bge-m3",
-  rerank: "BAAI/bge-reranker-v2-m3",
+  chat:         "Qwen/Qwen3-235B-A22B",
+  cheap_backup: "openai/gpt-oss-20b",
+  code:         "mistralai/Devstral-2-123B-Instruct-2512",
+  hard_code:    "Qwen/Qwen3-Coder-Plus",
+  shell:        "mistralai/Devstral-2-123B-Instruct-2512",
+  planner:      "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
+  router:       "google/gemma-4-E4B-it",
+  // Vision: Qwen3-235B is multimodal and accepts image_url content-array
+  // messages, making it the right pick for document-image analysis tasks.
+  vision:       "Qwen/Qwen3-235B-A22B",
+  image:        "google/imagen-4.0-ultra",
+  embed:        "BAAI/bge-m3",
+  rerank:       "BAAI/bge-reranker-v2-m3",
 };
 
 /**
@@ -76,8 +84,48 @@ export const BITDEER_MODELS: Readonly<Record<BitdeerRole, string>> = Object.free
   ),
 );
 
-/** Models that spend `max_tokens` budget on hidden reasoning before output. */
-const REASONING_MODELS = new Set<string>([BITDEER_MODELS.planner, BITDEER_MODELS.vision]);
+/**
+ * Per-module model routing for the Bitdeer provider.
+ *
+ * When `callLLM` resolves to the "bitdeer" provider and no explicit `model`
+ * field is set on the request, it consults this map to select the role-
+ * appropriate model for the calling module. This keeps module owners from
+ * hard-coding model strings while still getting specialized inference.
+ *
+ *   "run-script"  → hard_code (Qwen3-Coder-Plus)  — deep code + reasoning
+ *   "ai-agent"    → chat      (Qwen3-235B)         — multi-turn reasoning
+ *   "ai-ocr"      → vision    (Qwen3-235B)         — multimodal extraction
+ *   "drafting-ai" → planner   (Nemotron-3-Super)   — long-form legal drafting
+ *
+ * All other modules fall through to BITDEER_MODELS.chat.
+ */
+export const BITDEER_MODULE_MODELS: Record<string, string> = {
+  "run-script":       BITDEER_MODELS.hard_code,
+  "ai-agent":         BITDEER_MODELS.chat,
+  "ai-ocr":           BITDEER_MODELS.vision,
+  "drafting-ai":      BITDEER_MODELS.planner,
+  "ai-extract":       BITDEER_MODELS.chat,
+  "ai-fields":        BITDEER_MODELS.chat,
+  "threat-analyzer":  BITDEER_MODELS.router,
+  "lead-intelligence": BITDEER_MODELS.chat,
+};
+
+/**
+ * Models that spend part of their `max_tokens` budget on a hidden
+ * chain-of-thought before emitting visible output. REASONING_HEADROOM is added
+ * to the caller-requested max_tokens so the output budget survives the thinking
+ * phase intact.
+ *
+ * Qwen3-235B (chat/vision) and Qwen3-Coder-Plus (hard_code) both operate in
+ * extended thinking mode by default. gpt-oss-20b and Devstral are non-thinking.
+ */
+const REASONING_MODELS = new Set<string>([
+  BITDEER_MODELS.planner,
+  BITDEER_MODELS.chat,
+  BITDEER_MODELS.hard_code,
+  // vision shares the same model id as chat; add explicitly for clarity
+  BITDEER_MODELS.vision,
+]);
 
 /** Extra token budget granted to reasoning models so requested output survives. */
 const REASONING_HEADROOM = (() => {
