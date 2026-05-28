@@ -45,3 +45,8 @@ export * from "./system_snapshots";
 export * from "./dialer";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";
+export * from "./firm_portal_configs";
+export * from "./medical_records_requests";
+export * from "./nppes_providers";
+export * from "./portal_audit_log";
+export * from "./portal_users";
