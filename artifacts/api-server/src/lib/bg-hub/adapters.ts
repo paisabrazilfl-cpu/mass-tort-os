@@ -8,6 +8,7 @@ import { logger } from "../logger";
 import { searchPcl } from "../pacer/pcl-client";
 import { searchEdgar } from "./sec-edgar";
 import { searchClAttorney } from "./courtlistener-attorney";
+import { checkFccRnd } from "./fcc-rnd";
 
 import { BACKGROUND_SOURCES } from "./sources";
 import { statusFromFlags } from "./escalation";
@@ -140,21 +141,118 @@ export async function adaptEmail(lead: LeadLike): Promise<BackgroundLaneResult> 
 }
 
 // ---------------------------------------------------------------------------
-// Phone — format-only check. Twilio Lookup adapter is NOT wired.
+// Phone — E.164 format validation + FCC Reassigned Numbers Database check.
+//
+// The FCC RND check is vault-gated (free key from rnd.fcc.gov):
+//   - No key configured   → phone_not_checked  (REVIEW — same as before)
+//   - Clean (not reassigned) → no adverse flag (PASS for format-valid number)
+//   - Reassigned           → fcc_rnd_reassigned (REVIEW — TCPA risk)
+//   - Not in RND dataset   → fcc_rnd_not_in_rnd (REVIEW — non-US/VoIP)
+//   - API unavailable      → fcc_rnd_unavailable + phone_not_checked (REVIEW)
+//
+// Configuring the FCC RND key is the path to getting PASS on the phone lane.
+// Without it the lane stays REVIEW_REQUIRED — never a silent PASS.
 // ---------------------------------------------------------------------------
 export async function adaptPhone(lead: LeadLike): Promise<BackgroundLaneResult> {
   const raw = (lead.phone ?? "").trim();
   const digits = raw.replace(/\D/g, "");
-  const flags: string[] = [];
+
   if (!digits) {
-    flags.push("missing_phone");
-  } else if (digits.length !== 10 && digits.length !== 11) {
-    flags.push("invalid_phone_format");
-  } else {
-    // Format is plausible but we have no carrier-level signal.
-    flags.push("phone_not_checked");
+    return makeResult("phone", ["missing_phone"], { input: raw, normalized: "" });
   }
-  return makeResult("phone", flags, { input: raw, normalized: digits });
+  if (digits.length !== 10 && digits.length !== 11) {
+    return makeResult("phone", ["invalid_phone_format"], { input: raw, normalized: digits });
+  }
+
+  // Normalize: strip leading country code if present.
+  const normalized = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+
+  // Attempt FCC RND check — vault-gated, degrades gracefully when unconfigured.
+  try {
+    const fcc = await checkFccRnd(normalized);
+
+    switch (fcc.status) {
+      case "unconfigured":
+        // No key — same honest stub behavior as before.
+        return makeResult(
+          "phone",
+          ["phone_not_checked"],
+          {
+            input: raw,
+            normalized,
+            fcc_rnd: "not_configured — add FCC_RND_API_KEY to vault for TCPA reassignment check (free: rnd.fcc.gov)",
+          },
+        );
+
+      case "clean":
+        // FCC confirms number not reassigned within lookback — no adverse flag.
+        return makeResult(
+          "phone",
+          [],
+          {
+            input: raw,
+            normalized,
+            fcc_rnd: {
+              status: "clean",
+              call_date: fcc.call_date,
+              checked_at: fcc.checked_at,
+              note: "Number not reassigned within FCC RND lookback period.",
+            },
+          },
+        );
+
+      case "reassigned":
+        return makeResult(
+          "phone",
+          ["fcc_rnd_reassigned"],
+          {
+            input: raw,
+            normalized,
+            fcc_rnd: {
+              status: "reassigned",
+              call_date: fcc.call_date,
+              last_assigned_date: fcc.last_assigned_date,
+              checked_at: fcc.checked_at,
+              note: "TCPA risk: number was reassigned after the consent lookback date. Operator must re-verify consent with current subscriber.",
+            },
+          },
+          [
+            `FCC RND: phone number ${normalized} was reassigned after ${fcc.call_date}. TCPA risk — operator must re-verify consent.`,
+          ],
+        );
+
+      case "invalid":
+        return makeResult(
+          "phone",
+          ["fcc_rnd_not_in_rnd"],
+          {
+            input: raw,
+            normalized,
+            fcc_rnd: { status: "not_in_rnd", note: fcc.note },
+          },
+          [`FCC RND: ${fcc.note}`],
+        );
+
+      case "unavailable":
+        return makeResult(
+          "phone",
+          ["fcc_rnd_unavailable", "phone_not_checked"],
+          {
+            input: raw,
+            normalized,
+            fcc_rnd: { status: "unavailable", note: fcc.note },
+          },
+          [`FCC RND unavailable: ${fcc.note}. TCPA reassignment check skipped.`],
+        );
+    }
+  } catch (err) {
+    logger.warn({ err }, "bg-hub: adaptPhone FCC check threw unexpectedly");
+    return makeResult(
+      "phone",
+      ["fcc_rnd_unavailable", "phone_not_checked"],
+      { input: raw, normalized },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

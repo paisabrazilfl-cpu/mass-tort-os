@@ -80,11 +80,12 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
       live_adapter_available: false,
     },
     {
-      name: "FCC Reassigned Numbers Database",
-      url: "https://www.reassigned.us/",
+      name: "FCC Reassigned Numbers Database (RND)",
+      url: "https://rnd.fcc.gov/",
       source_type: "federal",
       requires_api_key: true,
-      live_adapter_available: false,
+      live_adapter_available: true,
+      notes: "Live adapter wired. Free API key at rnd.fcc.gov — store as FCC_RND_API_KEY or vault provider fcc_rnd. When configured, a clean result yields PASS on the phone lane. Unconfigured → REVIEW_REQUIRED (honest stub, no silent PASS). TCPA critical: checks if number was reassigned within 90-day lookback.",
     },
   ],
 

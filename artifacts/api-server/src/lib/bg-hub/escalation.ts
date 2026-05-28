@@ -32,7 +32,16 @@ export const BACKGROUND_ESCALATION_RULES: Record<
 
   phone: {
     fail: ["missing_phone", "invalid_phone_format", "number_disconnected"],
-    review: ["phone_not_checked", "voip", "prepaid", "carrier_unknown"],
+    review: [
+      "phone_not_checked",
+      "voip",
+      "prepaid",
+      "carrier_unknown",
+      // FCC Reassigned Numbers Database flags (vault-gated, free key)
+      "fcc_rnd_reassigned",
+      "fcc_rnd_not_in_rnd",
+      "fcc_rnd_unavailable",
+    ],
   },
 
   phone_provenance: {
