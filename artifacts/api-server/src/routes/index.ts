@@ -47,6 +47,7 @@ import aiObserverRouter from "./ai-observer";
 import aiChatRouter from "./ai-chat";
 import dialerRouter from "./dialer";
 import vendorPortalRouter from "./vendor-portal";
+import mrrRouter from "./mrr";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -119,6 +120,7 @@ labelRouter(adminCompetitiveIntelRouter, "admin-competitive-intel");
 labelRouter(adminEventCatalogRouter, "admin-event-catalog");
 labelRouter(adminWebhookDeliveriesRouter, "admin-webhook-deliveries");
 labelRouter(formsApiDirectoryRouter, "forms-api-directory");
+labelRouter(mrrRouter, "mrr");
 
 const router: IRouter = Router();
 
@@ -196,5 +198,6 @@ router.use("/admin/forms-api-directory", formsApiDirectoryRouter);
 router.use("/automations", automationsRouter);
 router.use("/ai-observer", aiObserverRouter);
 router.use("/ai-chat", aiChatRouter);
+router.use("/mrr", mrrRouter);
 
 export default router;

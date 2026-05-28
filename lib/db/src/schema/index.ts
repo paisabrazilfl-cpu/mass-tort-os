@@ -43,5 +43,6 @@ export * from "./webhook_deliveries";
 export * from "./processed_webhook_events";
 export * from "./system_snapshots";
 export * from "./dialer";
+export * from "./medical_records_requests";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";

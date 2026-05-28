@@ -25,8 +25,8 @@
  * The pure classification + download logic lives in inbound-classify.ts
  * (no DB import) so it stays unit-testable without a database.
  */
-import { db, pool, faxResultsTable, documentsTable, jobQueueTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, pool, faxResultsTable, documentsTable, jobQueueTable, medicalRecordsRequestsTable } from "@workspace/db";
+import { eq, and, inArray, desc } from "drizzle-orm";
 import { saveFile } from "../vault";
 import { logger } from "../logger";
 import { auditLog } from "../audit";
@@ -243,6 +243,52 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
       documentId = doc?.id;
     }
 
+    // 5. Mark the most recent outstanding MRR request for this lead as fulfilled.
+    //    Uses a "most-recent-wins" heuristic: if multiple open requests exist
+    //    for this claimant, the newest one is assumed to be the one answered.
+    if (leadId) {
+      try {
+        const [openRequest] = await db
+          .select({
+            id: medicalRecordsRequestsTable.id,
+            fax_result_id: medicalRecordsRequestsTable.fax_result_id,
+          })
+          .from(medicalRecordsRequestsTable)
+          .where(
+            and(
+              eq(medicalRecordsRequestsTable.lead_id, leadId),
+              inArray(medicalRecordsRequestsTable.status, ["sent", "pending"]),
+            ),
+          )
+          .orderBy(desc(medicalRecordsRequestsTable.created_at))
+          .limit(1);
+
+        if (openRequest) {
+          await db
+            .update(medicalRecordsRequestsTable)
+            .set({
+              status: "fulfilled",
+              fulfilled_at: new Date(),
+              response_fax_result_id: faxRow.id,
+              updated_at: new Date(),
+            })
+            .where(eq(medicalRecordsRequestsTable.id, openRequest.id));
+
+          // Also mark the outbound fax as delivered so the poller stops and
+          // the lead's fax timeline shows the confirmed-received status.
+          if (openRequest.fax_result_id) {
+            await db
+              .update(faxResultsTable)
+              .set({ delivery_status: "delivered", delivery_checked_at: new Date() })
+              .where(eq(faxResultsTable.id, openRequest.fax_result_id));
+          }
+        }
+      } catch (err) {
+        // Non-fatal: don't let MRR update failure break the inbound fax pipeline.
+        logger.warn({ err, leadId }, "inbound fax: failed to mark MRR request fulfilled");
+      }
+    }
+
     await auditLog("fax", String(faxRow.id), "inbound_received", {
       provider: input.provider,
       external_fax_id: input.externalFaxId,
@@ -253,7 +299,7 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
       bytes: bytes.length,
     });
 
-    // 5. Fire the Stage-4 automation workflow. Only when a claimant was
+    // 6. Fire the Stage-4 automation workflow. Only when a claimant was
     //    matched — the workflow's nodes (medical_extract / add_note) all
     //    need a lead context. Unmatched faxes stay in the fax inbox for the
     //    operator to assign manually.

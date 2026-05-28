@@ -53,9 +53,10 @@ export const navigation: NavSection[] = [
   {
     section: "Documents",
     items: [
-      { name: "All Documents", href: "/documents",          icon: FileText      },
-      { name: "OCR Inbox",     href: "/ocr-inbox",          icon: Inbox         },
-      { name: "Doc Review",    href: "/doc-review",         icon: FileSearch    },
+      { name: "All Documents",   href: "/documents",          icon: FileText      },
+      { name: "OCR Inbox",       href: "/ocr-inbox",          icon: Inbox         },
+      { name: "Medical Records", href: "/medical-records",    icon: Stethoscope   },
+      { name: "Doc Review",      href: "/doc-review",         icon: FileSearch    },
       { name: "AI Drafting",   href: "/drafting",           icon: Wand2         },
       { name: "Templates",     href: "/document-templates", icon: FileSignature },
     ],

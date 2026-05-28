@@ -8,8 +8,9 @@
  *  - Persist a row in document_envelopes / fax_results so admin can audit
  *  - Use structured error returns from adapters; throw with a clear message on terminal errors
  */
-import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable, workflowSettingsTable } from "@workspace/db";
+import { db, leadsTable, documentTemplatesTable, documentEnvelopesTable, faxResultsTable, workflowSettingsTable, medicalRecordsRequestsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
+import { enqueueJob } from "./queue";
 import { logger } from "./logger";
 import { auditLog } from "./audit";
 import { resolveProvider, isResolved } from "./provider-router";
@@ -523,6 +524,7 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
       // `buildFaxResultsLikePattern`, so producer/consumer can never drift.
       source_file: FAX_SOURCE_FILE_TEMPLATE(lead_id, envelope_id),
       vault_path: "outbound:med_records_request",
+      lead_id,
       status: "processing",
     })
     .returning();
@@ -591,8 +593,40 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
       status: "done",
       raw_text: `Sent to ${targetFax} via ${resolved.provider} — external_id=${outcome.externalFaxId}`,
       processed_at: new Date(),
+      external_fax_id: outcome.externalFaxId ?? null,
+      provider: resolved.provider,
+      integration_id: resolved.integration_id,
+      delivery_status: "pending",
     })
     .where(eq(faxResultsTable.id, faxRow.id));
+
+  // Schedule delivery confirmation polling (5 min after send, then backoff).
+  if (outcome.externalFaxId) {
+    await enqueueJob("poll_fax_delivery", {
+      fax_result_id: faxRow.id,
+      external_fax_id: outcome.externalFaxId,
+      provider: resolved.provider,
+      integration_id: resolved.integration_id,
+      poll_count: 0,
+    }, { delaySeconds: 300 });
+  }
+
+  // Record the outbound request in the MRR tracking table so operators can
+  // monitor outstanding requests and the inbound handler can mark it fulfilled.
+  const now = new Date();
+  const expectedBy = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000); // 14-day SLA
+  await db.insert(medicalRecordsRequestsTable).values({
+    lead_id,
+    firm_id: lead.firm_id ?? null,
+    hospital_name: lead.hospital_name ?? null,
+    fax_number: targetFax,
+    envelope_id: envelope_id ?? null,
+    fax_result_id: faxRow.id,
+    status: "sent",
+    sent_at: now,
+    expected_by: expectedBy,
+    last_attempt_at: now,
+  });
 
   await auditLog("fax", String(faxRow.id), "sent", {
     lead_id,

@@ -12,7 +12,8 @@ export type JobType =
   | "send_workflow_email"
   | "send_workflow_sms"
   | "fasten_records_sync"
-  | "dialer_campaign_run";
+  | "dialer_campaign_run"
+  | "poll_fax_delivery";
 
 export interface JobPayload {
   create_case: { case_id: string; data: Record<string, unknown>; created_by_user_id?: number | null };
@@ -70,6 +71,14 @@ export interface JobPayload {
   /** Processes one batch of an active outbound dialing campaign. Self-re-enqueues until complete or paused. */
   dialer_campaign_run: {
     campaign_id: number;
+  };
+  /** Polls the fax provider for delivery confirmation on an outbound MRR fax. */
+  poll_fax_delivery: {
+    fax_result_id: number;
+    external_fax_id: string;
+    provider: string;
+    integration_id: number | null;
+    poll_count: number;
   };
 }
 
@@ -284,4 +293,27 @@ export async function getQueueStats() {
     stats[row.status] = row.count;
   }
   return stats;
+}
+
+export async function getFaxPollStats() {
+  const rows = await db
+    .select({
+      status: jobQueueTable.status,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(jobQueueTable)
+    .where(eq(jobQueueTable.job_type, "poll_fax_delivery"))
+    .groupBy(jobQueueTable.status);
+
+  const byStatus: Record<string, number> = {};
+  for (const row of rows) {
+    byStatus[row.status] = row.count;
+  }
+  return {
+    pending: byStatus["pending"] ?? 0,
+    processing: byStatus["processing"] ?? 0,
+    done: byStatus["done"] ?? 0,
+    dead_letter: byStatus["dead_letter"] ?? 0,
+    total: Object.values(byStatus).reduce((a, b) => a + b, 0),
+  };
 }
