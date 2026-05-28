@@ -21,10 +21,8 @@
  * (WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN).
  */
 import crypto from "node:crypto";
+import type { AuthenticatorTransportFuture } from "@simplewebauthn/server";
 import { pool } from "@workspace/db";
-
-// WebAuthn authenticator transport values from the W3C spec.
-type AuthenticatorTransportFuture = "ble" | "cable" | "hybrid" | "internal" | "nfc" | "smart-card" | "usb";
 import { resolveAppPublicUrl } from "./email-verification";
 
 function resolveRp(): { rpID: string; rpName: string; origin: string } {
