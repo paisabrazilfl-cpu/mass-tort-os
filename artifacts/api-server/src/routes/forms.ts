@@ -8,7 +8,6 @@ import { encryptLeadFields, decryptLeadFields, rebindLeadEncryptionAad } from ".
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
 import { runBackgroundCheck } from "../lib/background-check";
-import { provisionPortalInvite } from "../lib/portal-invite";
 import { searchPcl } from "../lib/pacer/pcl-client";
 import { runFullConflictCheck } from "../lib/conflict-engine";
 import { TORT_REGISTRY, validateTortClaim, getTortCategories } from "../lib/tort-engine";
@@ -32,7 +31,6 @@ import { findExistingLeadForIntake } from "../lib/lead-dedup";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { updateWebFormConfig } from "./web-forms";
 import { buildDefaultWebFormConfig } from "../lib/web-form-defaults";
-import { COMPREHENSIVE_FORM_DEFAULTS } from "../lib/comprehensive-form-defaults";
 import type { Request, Response } from "express";
 
 // Unified error envelope helpers — keep responses identical in shape to the
@@ -397,42 +395,6 @@ router.patch(
     } catch (err) {
       logger.error({ err }, "Failed to toggle web form");
       serverError(res, "Failed to toggle web form");
-    }
-  },
-);
-
-/**
- * POST /forms/web-config/seed-all
- * One-shot: write all 31 comprehensive form configs to the database.
- * Only updates rows that already exist (does NOT create new tort configs).
- * Safe to call multiple times — idempotent overwrite.
- */
-router.post(
-  "/web-config/seed-all",
-  authMiddleware,
-  requirePermission(Permission.FORMS_CONFIG_MANAGE),
-  auditAction("web_form_config_seed_all"),
-  async (_req, res) => {
-    try {
-      const results: { tort_id: string; status: "updated" | "not_found" }[] = [];
-
-      for (const [tortId, config] of COMPREHENSIVE_FORM_DEFAULTS) {
-        const existing = await getFormConfig(tortId);
-        if (!existing) {
-          results.push({ tort_id: tortId, status: "not_found" });
-          continue;
-        }
-        await updateWebFormConfig(tortId, config, null);
-        results.push({ tort_id: tortId, status: "updated" });
-      }
-
-      const updated = results.filter(r => r.status === "updated").length;
-      const notFound = results.filter(r => r.status === "not_found").length;
-
-      res.json({ ok: true, updated, not_found: notFound, results });
-    } catch (err) {
-      logger.error({ err }, "Failed to seed all web form configs");
-      serverError(res, "Failed to seed web form configs");
     }
   },
 );
@@ -1027,10 +989,6 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
           updated_at: new Date(),
         })
         .where(eq(leadsTable.id, lead.id));
-
-      if (bgCheck.status === "clean") {
-        void provisionPortalInvite(lead.id);
-      }
     } catch (bgErr) {
       logger.warn({ err: bgErr, leadId: lead.id }, "Background check failed post-insert");
     }
@@ -1375,19 +1333,6 @@ interface EmbedConfig {
   exposure_fields: string[];
   intro_text: string | null;
   custom_fields: CustomField[];
-  // When the admin has seeded a comprehensive WebFormConfig, pass its
-  // fields here so the public embed renders the per-tort question set
-  // instead of falling back to the hard-coded three sections.
-  web_form_fields?: Array<{
-    key: string;
-    label: string;
-    type: string;
-    section?: string;
-    required?: boolean;
-    options?: Array<string | { value: string; label: string }>;
-    placeholder?: string;
-    help_text?: string;
-  }>;
 }
 
 export function escapeJs(s: string): string {
@@ -1399,7 +1344,6 @@ export function generateEmbedScript(tortId: string, config: EmbedConfig, baseUrl
   const extraFields = [...config.extra_fields, ...config.exposure_fields];
   const customFieldsJson = JSON.stringify(config.custom_fields ?? []);
   const introText = config.intro_text ? escapeJs(config.intro_text) : "Complete all required fields to submit your claim for review.";
-  const webFormFieldsJson = JSON.stringify(config.web_form_fields ?? []);
 
   // Embed runs on third-party host sites with no CRM session. It MUST hit the
   // public surface only — both submit and pre-submit validators live under
@@ -1413,7 +1357,6 @@ var TORT_LABEL="${escapeJs(config.label)}";
 var TORT_INTRO="${introText}";
 var EXTRA_FIELDS=${JSON.stringify(extraFields)};
 var CUSTOM_FIELDS=${customFieldsJson};
-var WEB_FORM_FIELDS=${webFormFieldsJson};
 
 function el(tag,attrs,children){
   var e=document.createElement(tag);
@@ -1446,7 +1389,6 @@ function input(name,label,type,opts){
   } else if(type==="checkbox"){
     var cw=el("div",{style:{display:"flex",alignItems:"flex-start",gap:"8px"}});
     inp=el("input",{type:"checkbox",name:name,style:{marginTop:"3px"}});
-    if(!opts.optional)inp.setAttribute("required","");
     cw.appendChild(inp);
     cw.appendChild(el("span",{style:{fontSize:"13px",lineHeight:"1.4"}},opts.checkLabel||label));
     wrap.appendChild(cw);
@@ -1522,66 +1464,6 @@ var form=el("form",{id:"mtos-intake-form",style:{maxWidth:"700px",fontFamily:"-a
 form.appendChild(el("h2",{style:{fontSize:"22px",fontWeight:"700",marginBottom:"4px"}},"Claim Intake: "+TORT_LABEL));
 form.appendChild(el("p",{style:{fontSize:"14px",color:"#6b7280",marginBottom:"20px"}},"Complete all required fields to submit your claim for review."));
 
-// Dynamic per-tort fields from the admin-managed WebFormConfig. When the
-// admin has seeded a comprehensive form for this tort we render those
-// questions and skip the hard-coded fallback sections below.
-if(WEB_FORM_FIELDS && WEB_FORM_FIELDS.length > 0){
-  var SECTION_TITLES = {
-    eligibility: "Eligibility",
-    contact: "Contact Information",
-    story: "About Your Claim",
-    treatment: "Treatment",
-    damages: "Damages",
-    description: "Additional Details",
-    consent: "Consent",
-  };
-  var groups = {};
-  var order = [];
-  function renderRadioGroup(f){
-    var wrap = el("div",{style:{marginBottom:"12px"}});
-    wrap.appendChild(el("label",{style:{display:"block",fontWeight:"600",marginBottom:"6px",fontSize:"14px"}}, f.label + (f.required ? " *" : "")));
-    (f.options || []).forEach(function(o){
-      var val = (typeof o === "object") ? o.value : o;
-      var lab = (typeof o === "object") ? o.label : o;
-      var row = el("label",{style:{display:"flex",alignItems:"center",gap:"8px",fontSize:"14px",marginBottom:"4px",cursor:"pointer"}});
-      var inp = el("input",{type:"radio",name:f.key,value:String(val)});
-      if(f.required) inp.required = true;
-      row.appendChild(inp);
-      row.appendChild(el("span",null,String(lab)));
-      wrap.appendChild(row);
-    });
-    return wrap;
-  }
-  WEB_FORM_FIELDS.forEach(function(f){
-    var sec = f.section || "story";
-    if(!groups[sec]){ groups[sec] = []; order.push(sec); }
-    var t = f.type;
-    var node;
-    if(t === "radio"){
-      node = renderRadioGroup(f);
-    } else {
-      var opts = { optional: !f.required };
-      if(f.placeholder) opts.placeholder = f.placeholder;
-      if(f.options) opts.options = f.options;
-      if(t === "select_one") t = "select";
-      if(t === "boolean" || t === "checkbox" || t === "consent") {
-        t = "checkbox";
-        opts.checkLabel = f.label;
-      }
-      if(t === "long_text") t = "textarea";
-      node = input(f.key, f.label, t, opts);
-    }
-    if(f.help_text){
-      var help = el("p",{style:{fontSize:"12px",color:"#6b7280",marginTop:"-6px",marginBottom:"8px"}}, f.help_text);
-      node.appendChild(help);
-    }
-    groups[sec].push(node);
-  });
-  order.forEach(function(sec){
-    form.appendChild(section(SECTION_TITLES[sec] || sec.replace(/_/g," ").replace(/\\b\\w/g,function(c){return c.toUpperCase();}), groups[sec]));
-  });
-} else {
-
 form.appendChild(section("Personal Information",[
   input("first_name","First Name"),
   input("last_name","Last Name"),
@@ -1639,7 +1521,7 @@ form.appendChild(section("Physician Information",[
 
 form.appendChild(section("Hospital Information",[
   input("hospital_name","Hospital Name"),
-  (function _hospitalFaxField(){
+  (function(){
     var node=input("hospital_fax","Hospital Fax","tel",{placeholder:"555-555-0100",optional:true});
     var inp=node.querySelector('input[name="hospital_fax"]');
     if(inp){
@@ -1672,11 +1554,9 @@ form.appendChild(section("Hospital Information",[
   input("hospital_contact_info","Hospital Contact","text",{placeholder:"Phone, email, or contact person"}),
 ],{accent:"#dc2626",note:"All hospital fields are mandatory. Leads without complete hospital information will be rejected."}));
 
-}  // end fallback (no WEB_FORM_FIELDS)
-
-var _hasTcpa=WEB_FORM_FIELDS.some(function(f){return f.key==="tcpa_consent";});
-var _compChildren=_hasTcpa?[]:[ input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:"I consent to being contacted via phone, SMS, and email regarding my legal claim. I understand that this is not a condition of service."}) ];
-var compSection=section("Compliance",_compChildren,{accent:"#2563eb"});
+var compSection=section("Compliance",[
+  input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:"I consent to being contacted via phone, SMS, and email regarding my legal claim. I understand that this is not a condition of service."}),
+],{accent:"#2563eb"});
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormCertUrl",id:"xxTrustedFormCertUrl_0",value:""}));
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormPingUrl",id:"xxTrustedFormPingUrl_0",value:""}));
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormCertToken",id:"xxTrustedFormCertToken_0",value:""}));
@@ -1702,9 +1582,9 @@ form.addEventListener("submit",function(e){
   var fd=new FormData(form);
   var payload={};
   fd.forEach(function(v,k){payload[k]=v;});
-  var _t=form.querySelector('[name=tcpa_consent]');payload.tcpa_consent=_t?!!_t.checked:false;
-  var _d=form.querySelector('[name=diagnosis_confirmed]');if(_d)payload.diagnosis_confirmed=!!_d.checked;
-  var _w=form.querySelector('[name=was_at_location]');if(_w)payload.was_at_location=!!_w.checked;
+  payload.tcpa_consent=!!form.querySelector('[name=tcpa_consent]').checked;
+  payload.diagnosis_confirmed=!!form.querySelector('[name=diagnosis_confirmed]').checked;
+  payload.was_at_location=!!form.querySelector('[name=was_at_location]').checked;
 
   var tfCert=document.getElementById("xxTrustedFormCertUrl_0");
   if(tfCert&&tfCert.value)payload.trustedform_cert_url=tfCert.value;
