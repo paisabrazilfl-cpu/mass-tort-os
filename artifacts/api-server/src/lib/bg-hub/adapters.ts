@@ -6,10 +6,15 @@ import { validateAddress as validateAddressInternal } from "../address-validator
 import { validateEmail as validateEmailInternal } from "../email-validator";
 import { logger } from "../logger";
 import { searchPcl } from "../pacer/pcl-client";
+import { searchEdgar } from "./sec-edgar";
+import { searchClAttorney } from "./courtlistener-attorney";
 
 import { BACKGROUND_SOURCES } from "./sources";
 import { statusFromFlags } from "./escalation";
 import type { BackgroundLane, BackgroundLaneResult, LeadLike } from "./types";
+
+const CENSUS_TIMEOUT_MS = Number(process.env["CENSUS_GEOCODER_TIMEOUT_MS"] ?? 8_000);
+const BOP_TIMEOUT_MS = Number(process.env["BOP_TIMEOUT_MS"] ?? 10_000);
 
 // Adapters wrap (don't replace) existing real validators where we have them,
 // and provide honest stubs for lanes where we have no live data source. Every
@@ -153,24 +158,96 @@ export async function adaptPhone(lead: LeadLike): Promise<BackgroundLaneResult> 
 }
 
 // ---------------------------------------------------------------------------
-// Residency — honest stub. We have no live county-property-records adapter.
+// Residency — US Census Geocoder (free, no API key) confirms the address
+// exists in the Census TIGER/Line dataset. Not proof of residency — county
+// property/tax-assessor records still required for final confirmation — but
+// removes the "we didn't even look" problem and catches completely fabricated
+// addresses. Falls back to the honest stub when the Geocoder is unreachable.
 // ---------------------------------------------------------------------------
 export async function adaptResidency(lead: LeadLike): Promise<BackgroundLaneResult> {
-  const haveAddress = Boolean(lead.address && lead.city && lead.state);
-  const flags = haveAddress ? ["no_residency_corroboration"] : ["residency_not_checked"];
-  return makeResult(
-    "residency",
-    flags,
-    {
-      address: lead.address,
-      city: lead.city,
-      state: lead.state,
-      zip: lead.zip,
-    },
-    haveAddress
-      ? ["Operator: confirm via county property/tax assessor lookup."]
-      : ["Address incomplete — residency cannot be checked."],
-  );
+  const { address, city, state, zip } = lead;
+
+  if (!address && !city && !state) {
+    return makeResult(
+      "residency",
+      ["residency_not_checked"],
+      { address, city, state, zip },
+      ["Address incomplete — residency cannot be checked."],
+    );
+  }
+
+  const parts = [address, city, state && zip ? `${state} ${zip}` : (state ?? zip)].filter(Boolean);
+  const fullAddress = parts.join(", ");
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CENSUS_TIMEOUT_MS);
+  try {
+    const url =
+      `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress` +
+      `?address=${encodeURIComponent(fullAddress)}&benchmark=2020&format=json`;
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { "User-Agent": "mass-tort-os/bg-hub-residency", Accept: "application/json" },
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      return makeResult(
+        "residency",
+        ["geocode_unavailable"],
+        { address: fullAddress },
+        [`Census Geocoder returned HTTP ${res.status}. Operator: verify address manually.`],
+      );
+    }
+
+    const data = (await res.json()) as {
+      result?: { addressMatches?: Array<{ matchedAddress?: string; coordinates?: { x?: number; y?: number } }> };
+    };
+    const matches = data.result?.addressMatches ?? [];
+
+    if (matches.length === 0) {
+      return makeResult(
+        "residency",
+        ["geocode_no_match"],
+        { searched_address: fullAddress },
+        [
+          "Census Geocoder found no match for this address. May be a new development, PO box, or fabricated address. Operator: verify via county property/tax-assessor records.",
+        ],
+      );
+    }
+
+    const top = matches[0]!;
+    return makeResult(
+      "residency",
+      ["geocode_match"],
+      {
+        searched_address: fullAddress,
+        matched_address: top.matchedAddress,
+        coordinates: top.coordinates,
+        match_count: matches.length,
+      },
+      [
+        `Address geocoded: ${top.matchedAddress ?? ""}. Coordinates: (${top.coordinates?.x ?? "?"}, ${top.coordinates?.y ?? "?"}). Operator: confirm residency via county property/tax-assessor records.`,
+      ],
+    );
+  } catch (err) {
+    clearTimeout(timer);
+    if ((err as { name?: string }).name === "AbortError") {
+      return makeResult(
+        "residency",
+        ["geocode_unavailable"],
+        { address: fullAddress },
+        [`Census Geocoder timed out after ${CENSUS_TIMEOUT_MS}ms. Operator: verify address manually.`],
+      );
+    }
+    logger.warn({ err }, "bg-hub: Census Geocoder failed");
+    return makeResult(
+      "residency",
+      ["geocode_unavailable"],
+      { address: fullAddress },
+      [`Census Geocoder unavailable: ${err instanceof Error ? err.message : String(err)}`],
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -252,18 +329,145 @@ export async function adaptCriminalCourt(lead: LeadLike): Promise<BackgroundLane
 }
 
 // ---------------------------------------------------------------------------
-// Incarceration — honest stub. Federal BOP has no stable JSON API.
+// Incarceration — Federal BOP JSON API (live, free, no key needed).
+// Searches the Federal Bureau of Prisons inmate locator for the lead's name.
+// Scope is federal only — state DOC and county jails are not checked.
+// BOP returns CAPTCHA challenges under bot-detection; when that triggers the
+// adapter returns REVIEW_REQUIRED rather than a false PASS.
 // ---------------------------------------------------------------------------
 export async function adaptIncarceration(lead: LeadLike): Promise<BackgroundLaneResult> {
-  return makeResult(
-    "incarceration",
-    ["incarceration_check_not_run"],
-    {
-      searched_name: fullName(lead),
-      manual_sources: ["Federal BOP Inmate Locator", "State DOC", "County jail lookup"],
-    },
-    ["Operator: BOP/DOC lookups must be done by hand — no live adapter wired."],
-  );
+  const firstName = (lead.first_name ?? "").trim();
+  const lastName = (lead.last_name ?? "").trim();
+  const searched = fullName(lead);
+
+  if (!firstName || !lastName) {
+    return makeResult(
+      "incarceration",
+      ["incarceration_check_not_run"],
+      { searched_name: searched, reason: "lead missing first_name or last_name" },
+      ["Cannot run BOP check without first/last name."],
+    );
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), BOP_TIMEOUT_MS);
+  try {
+    const params = new URLSearchParams({
+      todo: "query",
+      output: "json",
+      nameFirst: firstName,
+      nameLast: lastName,
+      Middle: "",
+      Race: "U",
+      Sex: "U",
+      Age: "",
+    });
+    const url = `https://www.bop.gov/PublicInfo/execute/inmateloc?${params.toString()}`;
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { "User-Agent": "mass-tort-os/bg-hub-incarceration", Accept: "application/json" },
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      return makeResult(
+        "incarceration",
+        ["bop_source_unavailable"],
+        { searched_name: searched },
+        [`BOP HTTP ${res.status}. Operator: check https://www.bop.gov/inmateloc/ manually.`],
+      );
+    }
+
+    const data = (await res.json()) as {
+      Captcha?: boolean | string;
+      InmateLocator?: Array<{
+        inmateNum?: string;
+        nameFirst?: string;
+        nameLast?: string;
+        nameMiddle?: string;
+        sex?: string;
+        race?: string;
+        age?: number;
+        releaseDate?: string;
+        releaseDateType?: string;
+        facilityCode?: string;
+        facilityName?: string;
+      }>;
+    };
+
+    // BOP can return a CAPTCHA challenge under bot-detection. When triggered,
+    // never claim the lead is clean — surface as REVIEW_REQUIRED.
+    if (data.Captcha === true || data.Captcha === "true" || data.Captcha === "1") {
+      return makeResult(
+        "incarceration",
+        ["bop_captcha_required"],
+        { searched_name: searched },
+        [
+          "BOP inmate locator returned a CAPTCHA challenge — automated search blocked. Operator: check https://www.bop.gov/inmateloc/ manually.",
+        ],
+      );
+    }
+
+    const inmates = data.InmateLocator ?? [];
+
+    if (inmates.length === 0) {
+      return makeResult(
+        "incarceration",
+        ["bop_no_records_found"],
+        {
+          searched_name: searched,
+          searched_first: firstName,
+          searched_last: lastName,
+          scope: "Federal BOP only (state DOC / county jails not checked)",
+        },
+        [
+          "No BOP federal inmate records found. Note: BOP covers federal facilities only — state prisons and county jails are not included.",
+        ],
+      );
+    }
+
+    // Hits found — REVIEW_REQUIRED: operator must confirm identity via inmate
+    // number before treating as a match.
+    return makeResult(
+      "incarceration",
+      ["bop_records_found_review"],
+      {
+        searched_name: searched,
+        record_count: inmates.length,
+        records: inmates.slice(0, 5).map((i) => ({
+          inmate_number: i.inmateNum,
+          name: `${i.nameFirst ?? ""} ${i.nameLast ?? ""}`.trim(),
+          age: i.age,
+          sex: i.sex,
+          race: i.race,
+          facility: i.facilityName ?? i.facilityCode,
+          release_date: i.releaseDate,
+          release_date_type: i.releaseDateType,
+        })),
+        scope: "Federal BOP only",
+      },
+      [
+        `BOP found ${inmates.length} record(s) matching this name. Operator: confirm identity via inmate number before treating as a match. BOP covers federal facilities only.`,
+      ],
+    );
+  } catch (err) {
+    clearTimeout(timer);
+    if ((err as { name?: string }).name === "AbortError") {
+      return makeResult(
+        "incarceration",
+        ["bop_source_unavailable"],
+        { searched_name: searched },
+        [`BOP inmate locator timed out after ${BOP_TIMEOUT_MS}ms. Operator: check https://www.bop.gov/inmateloc/ manually.`],
+      );
+    }
+    logger.warn({ err }, "bg-hub: BOP inmate locator fetch failed");
+    return makeResult(
+      "incarceration",
+      ["bop_source_unavailable"],
+      { searched_name: searched },
+      [`BOP unavailable: ${err instanceof Error ? err.message : String(err)}`],
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -286,18 +490,96 @@ export async function adaptNSOPW(lead: LeadLike): Promise<BackgroundLaneResult> 
 }
 
 // ---------------------------------------------------------------------------
-// Attorney — honest stub. State bar lookups vary state-to-state.
+// Attorney — CourtListener RECAP search (live, free, no API key needed).
+//
+// Searches the public CourtListener RECAP index for the lead's name appearing
+// in the attorney-of-record field. If a claimant is a licensed attorney who
+// has appeared as counsel in federal cases, the operator must review for
+// conflict-of-interest or intelligence-gathering risk.
+//
+// Coverage: federal courts only (via PACER/RECAP). State bar membership is
+// NOT checked — smart links to state bar lookups are always included.
+// Vault-stored courtlistener token unlocks the /attorneys/ endpoint for
+// higher-fidelity name matching and better rate limits.
 // ---------------------------------------------------------------------------
 export async function adaptAttorney(lead: LeadLike): Promise<BackgroundLaneResult> {
-  return makeResult(
-    "attorney",
-    ["attorney_not_checked"],
-    {
-      searched_name: fullName(lead),
-      manual_source:
-        "State bar lookup required only if the lead claims attorney status or legal-entity connection.",
-    },
-  );
+  const firstName = (lead.first_name ?? "").trim();
+  const lastName = (lead.last_name ?? "").trim();
+
+  if (!firstName || !lastName) {
+    return makeResult(
+      "attorney",
+      ["attorney_not_checked"],
+      {
+        searched_name: fullName(lead),
+        reason: "lead missing first_name or last_name",
+      },
+      ["Cannot run attorney check without first/last name."],
+    );
+  }
+
+  try {
+    const result = await searchClAttorney(firstName, lastName);
+
+    if (result.status === "source_unavailable") {
+      return makeResult(
+        "attorney",
+        ["attorney_check_source_unavailable"],
+        { searched_name: fullName(lead) },
+        [
+          `CourtListener unavailable: ${result.note}. Operator: check state bar manually.`,
+        ],
+      );
+    }
+
+    if (result.status === "not_found") {
+      return makeResult(
+        "attorney",
+        ["attorney_search_ran_no_hits"],
+        {
+          searched_name: result.search_name,
+          checked_at: result.checked_at,
+          scope: "CourtListener federal RECAP index (state bar NOT checked)",
+        },
+        [
+          "CourtListener found no federal attorney-of-record appearances for this name. State bar membership is not checked — use the smart link to verify if needed.",
+        ],
+      );
+    }
+
+    // result.status === "ok" — hits found
+    return makeResult(
+      "attorney",
+      ["possible_attorney_hit"],
+      {
+        searched_name: result.search_name,
+        checked_at: result.checked_at,
+        case_count: result.hits.length,
+        cases: result.hits.map((h) => ({
+          case_name: h.case_name,
+          docket_number: h.docket_number,
+          court: h.court,
+          date_filed: h.date_filed,
+          attorney_name: h.attorney_name,
+          firm: h.firm,
+          docket_url: h.docket_url,
+        })),
+        scope: "CourtListener federal RECAP index",
+      },
+      [
+        `CourtListener found ${result.hits.length} case(s) where this name appears as attorney of record. Operator: confirm whether this claimant is a licensed attorney and assess conflict-of-interest risk.`,
+      ],
+    );
+  } catch (err) {
+    logger.warn({ err }, "bg-hub: adaptAttorney caught unexpected error");
+    return makeResult(
+      "attorney",
+      ["attorney_check_source_unavailable"],
+      { searched_name: fullName(lead) },
+      ["Attorney check failed unexpectedly — see error field."],
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -487,13 +769,20 @@ export async function adaptPacer(lead: LeadLike): Promise<BackgroundLaneResult> 
 }
 
 // ---------------------------------------------------------------------------
-// Business entity — honest stub. SAM.gov and Secretary-of-State searches
-// are not wired. Skipped entirely (NOT_RUN) when the lead has no business name.
+// Business entity — SEC EDGAR live search + SoS smart links.
+//
+// SEC EDGAR (data.sec.gov) is free, no API key, covers ~10 K publicly-traded
+// and SEC-registered entities. Small private LLCs are NOT in EDGAR — for
+// those the operator uses the Secretary-of-State smart link baked into the
+// hub card. EDGAR is cached in-process (refreshed every 24 h) so the lookup
+// is near-instant after the first server boot.
+//
+// Skipped entirely (NOT_RUN) when the lead has no business name.
 // ---------------------------------------------------------------------------
 export async function adaptBusiness(lead: LeadLike): Promise<BackgroundLaneResult> {
-  if (!lead.business_name?.trim()) {
-    // Use NOT_RUN directly because the precondition isn't met. Bypass
-    // the flag taxonomy here — there are no flags to score.
+  const bizName = lead.business_name?.trim() ?? "";
+
+  if (!bizName) {
     return {
       lane: "business_entity",
       status: "NOT_RUN",
@@ -505,12 +794,62 @@ export async function adaptBusiness(lead: LeadLike): Promise<BackgroundLaneResul
       raw: { business_name: null },
     };
   }
-  return makeResult(
-    "business_entity",
-    ["manual_entity_check_required"],
-    {
-      business_name: lead.business_name,
-      manual_sources: ["Secretary of State (NASS directory)", "SAM.gov", "OpenCorporates"],
-    },
-  );
+
+  try {
+    const edgar = await searchEdgar(bizName);
+
+    if (edgar.status === "error") {
+      return makeResult(
+        "business_entity",
+        ["sec_edgar_unavailable"],
+        { business_name: bizName, edgar_note: edgar.note },
+        [
+          `SEC EDGAR unavailable: ${edgar.note ?? "unknown error"}. Operator: verify via Secretary of State directory.`,
+        ],
+      );
+    }
+
+    if (edgar.matches.length === 0) {
+      return makeResult(
+        "business_entity",
+        ["entity_not_found_sec_edgar"],
+        {
+          business_name: bizName,
+          edgar_fetched_at: edgar.fetched_at,
+          note: "Not found in SEC EDGAR — likely a private LLC or sole proprietor.",
+        },
+        [
+          "Entity not found in SEC EDGAR (10 K+ public/SEC-registered companies). This is normal for private LLCs and sole proprietors. Operator: verify via Secretary of State directory.",
+        ],
+      );
+    }
+
+    return makeResult(
+      "business_entity",
+      ["sec_edgar_found"],
+      {
+        business_name: bizName,
+        edgar_fetched_at: edgar.fetched_at,
+        match_count: edgar.matches.length,
+        matches: edgar.matches.map((m) => ({
+          cik: m.cik,
+          ticker: m.ticker,
+          title: m.title,
+          edgar_url: m.edgar_url,
+        })),
+      },
+      [
+        `Found ${edgar.matches.length} SEC EDGAR match(es) for "${bizName}". Operator: confirm this is the correct entity and review recent filings on the EDGAR page.`,
+      ],
+    );
+  } catch (err) {
+    logger.warn({ err }, "bg-hub: SEC EDGAR adaptBusiness error");
+    return makeResult(
+      "business_entity",
+      ["sec_edgar_unavailable"],
+      { business_name: bizName },
+      ["SEC EDGAR check failed unexpectedly — see error field."],
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }

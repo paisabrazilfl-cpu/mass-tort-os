@@ -75,28 +75,36 @@ describe("bg-hub: source registry", () => {
   });
 
   test("lanes with live adapters declare live_adapter_available=true on at least one source", () => {
-    // address, email, phone, criminal_court, pacer_federal are the live lanes.
-    for (const lane of ["address", "email", "phone", "criminal_court", "pacer_federal"] as const) {
+    // Live lanes: address, email, phone, criminal_court, pacer_federal (original set)
+    // + residency (Census Geocoder), incarceration (BOP), attorney (CourtListener RECAP),
+    //   business_entity (SEC EDGAR) — all upgraded from stubs in commit 2e1b6bf.
+    for (const lane of [
+      "address",
+      "email",
+      "phone",
+      "criminal_court",
+      "pacer_federal",
+      "residency",
+      "incarceration",
+      "attorney",
+      "business_entity",
+    ] as const) {
       const sources = BACKGROUND_SOURCES[lane];
       const hasLive = sources.some((s) => s.live_adapter_available);
       assert.ok(hasLive, `lane ${lane} should have at least one live source`);
     }
   });
 
-  test("honest-stub lanes do NOT claim live_adapter_available", () => {
-    for (const lane of [
-      "residency",
-      "incarceration",
-      "sex_offender_nsopw",
-      "attorney",
-      "business_entity",
-    ] as const) {
+  test("remaining stub lane (sex_offender_nsopw) does NOT claim live_adapter_available", () => {
+    // NSOPW prohibits automated scraping — only honest smart-link remains.
+    // phone_provenance is also a stub but has no live sources at all (correct).
+    for (const lane of ["sex_offender_nsopw"] as const) {
       const sources = BACKGROUND_SOURCES[lane];
       const hasLive = sources.some((s) => s.live_adapter_available);
       assert.equal(
         hasLive,
         false,
-        `lane ${lane} should NOT claim a live adapter — these are honest stubs`,
+        `lane ${lane} should NOT claim a live adapter — honest stub with no scraping permission`,
       );
     }
   });
@@ -165,11 +173,18 @@ describe("bg-hub: full pipeline", () => {
   });
 
   test("business_entity is REVIEW when business_name present", async () => {
+    // SEC EDGAR live adapter: either sec_edgar_found or entity_not_found_sec_edgar
+    // (both route to REVIEW_REQUIRED). manual_entity_check_required was the old
+    // stub flag — replaced by EDGAR-specific flags in commit 2e1b6bf.
     const result = await runBackgroundCheckHub({ ...baseLead, business_name: "Acme Corp" });
     const biz = result.results.find((r) => r.lane === "business_entity");
     assert.ok(biz);
     assert.equal(biz.status, "REVIEW_REQUIRED");
-    assert.ok(biz.flags.includes("manual_entity_check_required"));
+    const edgarFlags = ["sec_edgar_found", "entity_not_found_sec_edgar", "sec_edgar_unavailable"];
+    assert.ok(
+      biz.flags.some((f) => edgarFlags.includes(f)),
+      `Expected one of [${edgarFlags.join(", ")}] but got: [${biz.flags.join(", ")}]`,
+    );
   });
 
   test("missing email surfaces as missing_email and contributes to REVIEW final", async () => {
@@ -182,11 +197,14 @@ describe("bg-hub: full pipeline", () => {
     assert.equal(result.final_status, "FAIL");
   });
 
-  test("final status is REVIEW_REQUIRED for a clean-input lead (because honest stubs)", async () => {
+  test("final status is REVIEW_REQUIRED for a clean-input lead (live adapters all say review)", async () => {
     const result = await runBackgroundCheckHub(baseLead);
-    // Even with valid inputs, residency/incarceration/nsopw/attorney lanes
-    // are honest stubs that emit *_not_checked → REVIEW_REQUIRED. So a
-    // clean lead never auto-PASSes the hub. This is intentional.
+    // Even with valid inputs the hub always resolves to REVIEW_REQUIRED:
+    // - residency  → geocode_match or geocode_no_match (Census Geocoder, REVIEW)
+    // - incarceration → bop_no_records_found (federal only, REVIEW — state not checked)
+    // - attorney   → attorney_search_ran_no_hits (federal RECAP, REVIEW — state bar not checked)
+    // - nsopw      → nsopw_manual_check_required (honest stub, REVIEW)
+    // No live adapter ever auto-passes a mass-tort lead — intentional design.
     assert.equal(result.final_status, "REVIEW_REQUIRED");
   });
 

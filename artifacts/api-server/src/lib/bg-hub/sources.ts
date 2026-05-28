@@ -90,12 +90,20 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
 
   residency: [
     {
+      name: "US Census Geocoder",
+      url: "https://geocoding.geo.census.gov/geocoder/",
+      source_type: "federal",
+      requires_api_key: false,
+      live_adapter_available: true,
+      notes: "Free federal geocoder — confirms address exists in TIGER/Line dataset. Not proof of residency, but catches fabricated addresses. No API key required.",
+    },
+    {
       name: "County Property Records Directory",
       url: "https://publicrecords.netronline.com/",
       source_type: "directory",
       requires_api_key: false,
       live_adapter_available: false,
-      notes: "No live adapter — operator must look up county property/tax records by hand.",
+      notes: "No live adapter — operator must confirm residency via county property/tax records by hand.",
     },
     {
       name: "Vote.gov",
@@ -142,12 +150,12 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
 
   incarceration: [
     {
-      name: "Federal BOP Inmate Locator",
+      name: "Federal BOP Inmate Locator (JSON API)",
       url: "https://www.bop.gov/inmateloc/",
       source_type: "federal",
       requires_api_key: false,
-      live_adapter_available: false,
-      notes: "HTML-only public portal; no stable JSON API. Manual lookup required.",
+      live_adapter_available: true,
+      notes: "Free live adapter — searches federal inmates by first/last name. Covers federal facilities only. State DOC and county jails require manual lookup. CAPTCHA-guarded under bot-detection; adapter returns REVIEW_REQUIRED if triggered.",
     },
     {
       name: "USA.gov State Corrections Directory",
@@ -155,6 +163,7 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
       source_type: "directory",
       requires_api_key: false,
       live_adapter_available: false,
+      notes: "State prisons and county jails — no unified API. Manual lookup required.",
     },
   ],
 
@@ -172,12 +181,28 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
 
   attorney: [
     {
+      name: "CourtListener RECAP (federal attorney-of-record)",
+      url: "https://www.courtlistener.com/api/rest/v4/search/",
+      source_type: "federal",
+      requires_api_key: false,
+      live_adapter_available: true,
+      notes: "Free live adapter — searches public RECAP index for the lead's name in attorney-of-record fields. No API key required for public search. Adding a vault-stored CourtListener token (provider=courtlistener) unlocks the /attorneys/ endpoint for higher-fidelity matching. Covers federal courts only.",
+    },
+    {
+      name: "CourtListener /attorneys/ endpoint",
+      url: "https://www.courtlistener.com/api/rest/v4/attorneys/",
+      source_type: "federal",
+      requires_api_key: true,
+      live_adapter_available: true,
+      notes: "Enhanced attorney lookup via authenticated endpoint. Free API token available at courtlistener.com. Automatically used when courtlistener integration is configured in the vault.",
+    },
+    {
       name: "ABA Lawyer Licensing Directory",
       url: "https://www.americanbar.org/groups/legal_services/flh-home/flh-lawyer-licensing/",
       source_type: "directory",
       requires_api_key: false,
       live_adapter_available: false,
-      notes: "State-by-state bar lookups — no national live adapter.",
+      notes: "State-by-state bar lookups — no national live adapter. Smart links wired for CA, NY, TX, FL, IL, PA, OH, GA, NC, WA.",
     },
   ],
 
@@ -203,11 +228,20 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
 
   business_entity: [
     {
+      name: "SEC EDGAR (company_tickers index)",
+      url: "https://www.sec.gov/cgi-bin/browse-edgar",
+      source_type: "federal",
+      requires_api_key: false,
+      live_adapter_available: true,
+      notes: "Free live adapter — searches SEC's 10K+ company ticker index (public companies, large LLCs, Reg-D filers). Cached daily. Does NOT cover small private LLCs — use SoS smart link for those.",
+    },
+    {
       name: "NASS Corporate Registration Directory",
       url: "https://www.nass.org/business-services/corporate-registration",
       source_type: "directory",
       requires_api_key: false,
       live_adapter_available: false,
+      notes: "Secretary of State lookups — smart links wired for CA, DE, NY, TX, FL, IL.",
     },
     {
       name: "SAM.gov Entity Search",
@@ -215,13 +249,15 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
       source_type: "federal",
       requires_api_key: true,
       live_adapter_available: false,
+      notes: "Federal contractor/entity registry. Free API key at beta.sam.gov. Not yet wired.",
     },
     {
       name: "OpenCorporates",
       url: "https://opencorporates.com/",
       source_type: "secondary",
-      requires_api_key: false,
+      requires_api_key: true,
       live_adapter_available: false,
+      notes: "Paid API token required.",
     },
   ],
 

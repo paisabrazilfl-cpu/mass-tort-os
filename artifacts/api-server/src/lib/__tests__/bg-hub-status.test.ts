@@ -12,8 +12,12 @@ import assert from "node:assert/strict";
 import { statusFromFlags, STUB_LANES } from "../bg-hub/escalation";
 
 describe("statusFromFlags — STUB_LANES pin", () => {
-  test("residency with zero flags resolves REVIEW_REQUIRED (not PASS)", () => {
-    const r = statusFromFlags("residency", []);
+  test("phone_provenance (remaining stub) with zero flags resolves REVIEW_REQUIRED (not PASS)", () => {
+    // Residency, incarceration, attorney, and business_entity were promoted to
+    // live adapters in commit 2e1b6bf — their adapters always emit a real flag,
+    // so empty-flag PASS is unreachable in practice. phone_provenance remains
+    // the last stub lane.
+    const r = statusFromFlags("phone_provenance", []);
     assert.equal(r.status, "REVIEW_REQUIRED");
   });
 

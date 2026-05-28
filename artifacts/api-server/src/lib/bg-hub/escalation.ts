@@ -42,7 +42,14 @@ export const BACKGROUND_ESCALATION_RULES: Record<
 
   residency: {
     fail: ["hard_address_mismatch"],
-    review: ["residency_not_checked", "no_residency_corroboration"],
+    review: [
+      "residency_not_checked",
+      "no_residency_corroboration",
+      // Census Geocoder live adapter flags
+      "geocode_match",
+      "geocode_no_match",
+      "geocode_unavailable",
+    ],
   },
 
   criminal_court: {
@@ -68,7 +75,15 @@ export const BACKGROUND_ESCALATION_RULES: Record<
 
   incarceration: {
     fail: ["active_incarceration"],
-    review: ["incarceration_check_not_run", "possible_custody_match"],
+    review: [
+      "incarceration_check_not_run",
+      "possible_custody_match",
+      // BOP JSON API live adapter flags
+      "bop_records_found_review",
+      "bop_no_records_found",
+      "bop_captcha_required",
+      "bop_source_unavailable",
+    ],
   },
 
   sex_offender_nsopw: {
@@ -82,7 +97,15 @@ export const BACKGROUND_ESCALATION_RULES: Record<
 
   attorney: {
     fail: ["bar_suspended", "bar_inactive", "bar_not_found"],
-    review: ["attorney_not_checked", "discipline_possible", "manual_bar_check_required"],
+    review: [
+      "attorney_not_checked",
+      "discipline_possible",
+      "manual_bar_check_required",
+      // CourtListener live adapter flags
+      "possible_attorney_hit",
+      "attorney_search_ran_no_hits",
+      "attorney_check_source_unavailable",
+    ],
   },
 
   business_entity: {
@@ -91,6 +114,10 @@ export const BACKGROUND_ESCALATION_RULES: Record<
       "business_not_checked",
       "entity_name_partial_match",
       "manual_entity_check_required",
+      // SEC EDGAR live adapter flags
+      "sec_edgar_found",
+      "entity_not_found_sec_edgar",
+      "sec_edgar_unavailable",
     ],
   },
 
@@ -119,21 +146,40 @@ export interface FlagEvaluation {
   notes: string[];
 }
 
+// Per-lane "skip" flags signal that a sub-source was never configured or
+// attempted — NOT that it tried and failed. When a skip flag is the only
+// signal the lane returns NOT_RUN (not REVIEW). Any real REVIEW or FAIL flag
+// present alongside a skip flag takes precedence.
+const LANE_SKIP_FLAGS: Partial<Record<BackgroundLane, readonly string[]>> = {
+  criminal_court: ["ofac_unconfigured"],
+};
+
 // Stub lanes are not yet fully implemented — their adapters may emit zero
 // flags on an inconclusive run, which the arbiter must treat as REVIEW_REQUIRED
 // rather than silently passing. Listed explicitly so adding a live adapter
 // promotes a lane out of STUB_LANES in one place.
+//
+// Promoted out of STUB_LANES:
+//   - "residency"    → Census Geocoder live adapter (geocode_match / geocode_no_match)
+//   - "attorney"     → CourtListener RECAP live adapter (possible_attorney_hit / attorney_search_ran_no_hits)
+//   - "incarceration" → BOP JSON API live adapter (bop_records_found_review / bop_no_records_found)
+//   - "business_entity" → SEC EDGAR live adapter (sec_edgar_found / entity_not_found_sec_edgar)
 export const STUB_LANES: readonly BackgroundLane[] = [
-  "residency",
-  "attorney",
   "phone_provenance",
 ];
 
 // Translate a set of observed flags into a status + score for one lane.
-// Precedence is: any FAIL flag → FAIL; otherwise any REVIEW flag → REVIEW;
-// otherwise any UNKNOWN flag → REVIEW (because we don't trust silent drift);
-// stub lanes with zero flags → REVIEW_REQUIRED (never silently pass);
-// otherwise PASS.
+//
+// Precedence (highest → lowest):
+//   1. Any FAIL flag           → FAIL
+//   2. Any REVIEW flag         → REVIEW_REQUIRED
+//   3. Any UNKNOWN flag        → REVIEW_REQUIRED (drift guard — never silent PASS)
+//   4. Stub lane, zero flags   → REVIEW_REQUIRED (no adapter output)
+//   5. Skip flags only         → NOT_RUN (sub-source not configured, not attempted)
+//   6. No flags                → PASS
+//
+// Skip flags (LANE_SKIP_FLAGS) signal that a sub-source was entirely absent
+// from the run — e.g. OFAC not configured. They lose to any real signal.
 export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEvaluation {
   const rules = BACKGROUND_ESCALATION_RULES[lane];
   if (!rules) {
@@ -143,17 +189,32 @@ export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEval
       notes: [`No escalation rule for lane "${lane}" — treated as review.`],
     };
   }
-  const failHits = flags.filter((f) => rules.fail.includes(f));
-  const reviewHits = flags.filter((f) => rules.review.includes(f));
-  const unknownHits = flags.filter((f) => !rules.fail.includes(f) && !rules.review.includes(f));
 
-  if (failHits.length === 0 && reviewHits.length === 0 && unknownHits.length === 0 && (STUB_LANES as readonly string[]).includes(lane)) {
+  // Partition flags into skip vs real before scoring.
+  const skipSet = new Set(LANE_SKIP_FLAGS[lane] ?? []);
+  const skipHits = flags.filter((f) => skipSet.has(f));
+  const realFlags = flags.filter((f) => !skipSet.has(f));
+
+  const failHits = realFlags.filter((f) => rules.fail.includes(f));
+  const reviewHits = realFlags.filter((f) => rules.review.includes(f));
+  const unknownHits = realFlags.filter(
+    (f) => !rules.fail.includes(f) && !rules.review.includes(f),
+  );
+
+  // Stub lanes with zero real flags → always REVIEW_REQUIRED.
+  if (
+    failHits.length === 0 &&
+    reviewHits.length === 0 &&
+    unknownHits.length === 0 &&
+    (STUB_LANES as readonly string[]).includes(lane)
+  ) {
     return {
       status: "REVIEW_REQUIRED",
       score: 50,
       notes: [`Stub lane "${lane}" — no adapter output; queued for manual review.`],
     };
   }
+
   if (failHits.length > 0) {
     return {
       status: "FAIL",
@@ -175,6 +236,17 @@ export function statusFromFlags(lane: BackgroundLane, flags: string[]): FlagEval
       notes: [`Unknown flags require review: ${unknownHits.join(", ")}`],
     };
   }
+
+  // No real adverse signals. If only skip flags fired, report NOT_RUN so the
+  // operator knows a sub-source was absent — don't claim a clean PASS.
+  if (skipHits.length > 0) {
+    return {
+      status: "NOT_RUN",
+      score: 0,
+      notes: [`Sub-source skipped: ${skipHits.join(", ")}`],
+    };
+  }
+
   return {
     status: "PASS",
     score: 100,
