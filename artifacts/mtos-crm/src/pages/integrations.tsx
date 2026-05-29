@@ -36,6 +36,7 @@ interface Preset {
    *  "vault_only"    — preset accepts credentials but no code uses them yet. */
   wired?: "live" | "live_no_vault" | "vault_only";
   wiring_note?: string | null;
+  prefill?: Record<string, string>;
 }
 
 interface Integration {
@@ -178,9 +179,16 @@ export default function Integrations() {
   const connectPreset = (p: Preset) => {
     setSelectedPreset(p);
     setFormData({
-      name: p.name, api_key: "", api_url: "", webhook_url: "",
-      client_id: "", client_secret: "", account_sid: "",
-      sync_direction: "bidirectional", type: p.type, provider: p.provider,
+      name: p.name,
+      api_key: "",
+      api_url: p.prefill?.api_url ?? "",
+      webhook_url: p.prefill?.webhook_url ?? "",
+      client_id: "",
+      client_secret: "",
+      account_sid: "",
+      sync_direction: "bidirectional",
+      type: p.type,
+      provider: p.provider,
     });
     setAddOpen(true);
   };
