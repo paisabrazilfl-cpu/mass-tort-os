@@ -14,11 +14,8 @@
  * The vault uses field `api_key` (signing) + optional `client_secret`
  * (static bearer for tool callbacks).
  */
-import { db, integrationsTable } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
 import crypto from "crypto";
-import { getIntegrationCredentialsById } from "../../routes/integrations";
-import { logger } from "../logger";
+import { resolveProvider, isResolved } from "../provider-router";
 
 export interface VapiCredentials {
   apiKey: string;
@@ -26,36 +23,28 @@ export interface VapiCredentials {
   integrationId: number;
 }
 
+/**
+ * Load the active Vapi credentials. Resolution goes through the provider
+ * router (`resolveProvider("voice")`) — the SAME path tort-agent provisioning
+ * uses to pick the integration row and bake the callback bearer. This is
+ * critical: webhook/tool-callback verification (verifyVapiSignature,
+ * verifyVapiToolBearer, checkBearer) must validate against the exact same
+ * integration row whose `client_secret` was embedded in the provisioned
+ * assistant. Selecting "the first active vapi row" here would silently
+ * mismatch in multi-integration setups and 401 every tool callback.
+ */
 export async function loadVapiCredentials(): Promise<VapiCredentials | null> {
-  const rows = await db
-    .select({ id: integrationsTable.id })
-    .from(integrationsTable)
-    .where(
-      and(
-        eq(integrationsTable.provider, "vapi"),
-        eq(integrationsTable.status, "active"),
-      ),
-    )
-    .limit(1);
-  const row = rows[0];
-  if (!row) return null;
+  const resolved = await resolveProvider("voice");
+  if (!isResolved(resolved) || resolved.provider !== "vapi") return null;
 
-  const creds = await getIntegrationCredentialsById(row.id);
-  if (!creds) return null;
-  if (creds._decryption_errors && creds._decryption_errors.length) {
-    logger.error(
-      { fields: creds._decryption_errors, integration_id: row.id },
-      "vapi credential decryption failed",
-    );
-    return null;
-  }
+  const creds = resolved.credentials as Record<string, unknown>;
   const apiKey = typeof creds.api_key === "string" ? creds.api_key.trim() : "";
   if (!apiKey) return null;
   const toolBearer =
     typeof creds.client_secret === "string" && creds.client_secret.trim().length > 0
       ? creds.client_secret.trim()
       : null;
-  return { apiKey, toolBearer, integrationId: row.id };
+  return { apiKey, toolBearer, integrationId: resolved.integration_id };
 }
 
 export interface SignatureCheckResult {
