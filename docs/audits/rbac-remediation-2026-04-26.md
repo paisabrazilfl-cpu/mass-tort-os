@@ -581,13 +581,16 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **298 checked / 44 public / 254 protected / 0 unprotected.**
+Boot-time count: **301 checked / 44 public / 257 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
+| (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
+| (root) | POST | `/api/chat` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | GET | `/api/navigation` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | GET | `/api/pages` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | POST | `/api/` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | GET | `/api/snapshot` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
+| (root) | GET | `/api/tools` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | admin-ai-constitution | GET | `/api/admin-ai-constitution/` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | admin-api-keys | GET | `/api/admin-api-keys/_meta/scopes` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-api-keys | GET | `/api/admin-api-keys/:id/audit` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |

@@ -158,7 +158,7 @@ const EXPECTED_SECTIONS = [
   "Leads & Cases",
   "Documents",
   "Operations",
-  "Lead Gen",
+  "Lead Gen & Research",
   "AI & Clinical",
   "Automation",
   "Settings",
