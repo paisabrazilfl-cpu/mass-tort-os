@@ -4,7 +4,7 @@ import { format } from "date-fns";
 import {
   Stethoscope, Clock, CheckCircle2, AlertCircle, XCircle,
   RefreshCw, RotateCcw, ChevronLeft, ChevronRight, ExternalLink, Signal,
-  Inbox, Eye,
+  Inbox, Eye, Server, Activity, Power,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
-import { apiFetch } from "@/lib/api-fetch";
+import { apiFetch, ApiError } from "@/lib/api-fetch";
 import { useToast } from "@/hooks/use-toast";
 
 interface MrrRow {
@@ -70,6 +70,23 @@ interface MrrPage {
   page_size: number;
   has_more: boolean;
 }
+
+// Global per-status counts for the pipeline summary (summed from count queries).
+type StatusCounts = {
+  pending: number; sent: number; failed: number; fulfilled: number; cancelled: number; total: number;
+};
+
+// Subset of GET /api/workflow-settings/:scope used by the system-status panel.
+type FaxSettings = {
+  fax_provider_integration_id: number | null;
+  default_fax_from_number: string | null;
+  auto_fax_doctor_on_signed_hipaa: boolean;
+  max_send_retries: number;
+};
+
+// Subset of GET /api/workflow-settings/_options/providers (fax category only).
+type ProviderOption = { id: number; name: string; provider: string; adapter_implemented: boolean };
+type ProviderOptions = { fax: ProviderOption[] };
 
 function StatusBadge({ row }: { row: MrrRow }) {
   const overdue = row.status === "sent" && row.expected_by && new Date(row.expected_by) < new Date();
@@ -128,6 +145,20 @@ interface PollStats {
   total: number;
 }
 
+// Translate raw poll-queue counts into an at-a-glance health pill.
+function workerHealth(ps: PollStats | null): { label: string; cls: string; dot: string } {
+  if (!ps || ps.total === 0) {
+    return { label: "Idle", cls: "bg-slate-50 text-slate-600 border-slate-200", dot: "bg-slate-400" };
+  }
+  if (ps.dead_letter > 0) {
+    return { label: "Degraded", cls: "bg-red-50 text-red-700 border-red-200", dot: "bg-red-500" };
+  }
+  if (ps.processing > 0) {
+    return { label: "Running", cls: "bg-blue-50 text-blue-700 border-blue-200", dot: "bg-blue-500 animate-pulse" };
+  }
+  return { label: "Healthy", cls: "bg-emerald-50 text-emerald-700 border-emerald-200", dot: "bg-emerald-500" };
+}
+
 export default function MedicalRecordsPage() {
   const [data, setData] = useState<MrrPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -136,6 +167,20 @@ export default function MedicalRecordsPage() {
   const [resending, setResending] = useState<number | null>(null);
   const [cancelling, setCancelling] = useState<number | null>(null);
   const [pollStats, setPollStats] = useState<PollStats | null>(null);
+  // System-status panel state. faxSettings: undefined = loading, null = no
+  // access (the workflow-settings endpoints require elevated permissions).
+  const [counts, setCounts] = useState<StatusCounts | null>(null);
+  const [countsError, setCountsError] = useState(false);
+  const [faxSettings, setFaxSettings] = useState<FaxSettings | null | undefined>(undefined);
+  // When faxSettings is null we distinguish a true auth denial (403/401 →
+  // "restricted") from a transient failure (→ "couldn't load") so we never
+  // claim a permission problem the operator doesn't actually have.
+  const [faxSettingsRestricted, setFaxSettingsRestricted] = useState(false);
+  const [faxProviders, setFaxProviders] = useState<ProviderOptions | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(true);
+  // Guards against out-of-order overview responses (mount + manual refresh can
+  // overlap); only the latest request is allowed to write state.
+  const overviewReqRef = useRef(0);
   const [detail, setDetail] = useState<MrrRow | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -186,7 +231,58 @@ export default function MedicalRecordsPage() {
     }
   }, [page, statusFilter, toast]);
 
+  // Overview = global status counts + the "what system is running" panel.
+  // Independent of the table's page/filter, so it's loaded separately and only
+  // refreshed on mount or manual refresh. Elevated endpoints fail soft.
+  const loadOverview = useCallback(async () => {
+    const token = ++overviewReqRef.current;
+    setOverviewLoading(true);
+    try {
+      const statuses = ["pending", "sent", "failed", "fulfilled", "cancelled"] as const;
+      // allSettled so we can tell apart a real 0 from a failed fetch — a failed
+      // count must never be rendered as a genuine zero.
+      const [countSettled, fsWrapped, fp] = await Promise.all([
+        Promise.allSettled(
+          statuses.map((s) =>
+            apiFetch<MrrPage>(`/api/mrr?status=${s}&page_size=1`).then((r) => r.total),
+          ),
+        ),
+        apiFetch<FaxSettings>("/api/workflow-settings/global")
+          .then((value) => ({ ok: true as const, value }))
+          .catch((error: unknown) => ({ ok: false as const, error })),
+        apiFetch<ProviderOptions>("/api/workflow-settings/_options/providers").catch(() => null),
+      ]);
+      if (overviewReqRef.current !== token) return; // a newer refresh superseded us
+      const anyFailed = countSettled.some((r) => r.status === "rejected");
+      if (anyFailed) {
+        setCounts(null);
+        setCountsError(true);
+      } else {
+        const [pending, sent, failed, fulfilled, cancelled] = countSettled.map(
+          (r) => (r as PromiseFulfilledResult<number>).value,
+        );
+        setCounts({
+          pending, sent, failed, fulfilled, cancelled,
+          total: pending + sent + failed + fulfilled + cancelled,
+        });
+        setCountsError(false);
+      }
+      if (fsWrapped.ok) {
+        setFaxSettings(fsWrapped.value);
+        setFaxSettingsRestricted(false);
+      } else {
+        const status = fsWrapped.error instanceof ApiError ? fsWrapped.error.status : undefined;
+        setFaxSettings(null);
+        setFaxSettingsRestricted(status === 401 || status === 403);
+      }
+      setFaxProviders(fp);
+    } finally {
+      if (overviewReqRef.current === token) setOverviewLoading(false);
+    }
+  }, []);
+
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void loadOverview(); }, [loadOverview]);
 
   async function handleResend(id: number) {
     setResending(id);
@@ -194,6 +290,7 @@ export default function MedicalRecordsPage() {
       await apiFetch(`/api/mrr/${id}/resend`, { method: "POST" });
       toast({ title: "Resend queued", description: "The fax job has been re-enqueued." });
       void load();
+      void loadOverview();
     } catch {
       toast({ title: "Resend failed", variant: "destructive" });
     } finally {
@@ -207,6 +304,7 @@ export default function MedicalRecordsPage() {
       await apiFetch(`/api/mrr/${id}/cancel`, { method: "PATCH" });
       toast({ title: "Request cancelled" });
       void load();
+      void loadOverview();
     } catch {
       toast({ title: "Cancel failed", variant: "destructive" });
     } finally {
@@ -221,28 +319,151 @@ export default function MedicalRecordsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Medical Records Requests</h1>
           <p className="text-muted-foreground text-sm mt-1">Track all outbound records requests and their delivery status.</p>
         </div>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-          <RotateCcw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => { void load(); void loadOverview(); }}
+          disabled={loading || overviewLoading}
+        >
+          <RotateCcw className={`h-4 w-4 mr-2 ${loading || overviewLoading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
       </div>
 
-      {/* Delivery poll health strip */}
-      {pollStats && pollStats.total > 0 && (
-        <div className="grid grid-cols-4 gap-3">
-          {[
-            { label: "Polls pending", value: pollStats.pending, color: "text-blue-600" },
-            { label: "Processing", value: pollStats.processing, color: "text-amber-600" },
-            { label: "Completed", value: pollStats.done, color: "text-emerald-600" },
-            { label: "Dead-lettered", value: pollStats.dead_letter, color: pollStats.dead_letter > 0 ? "text-red-600 font-semibold" : "text-slate-400" },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-center shadow-sm">
-              <p className={`text-2xl font-bold ${color}`}>{value}</p>
+      {/* ── Pipeline summary — global counts per status ─────────────────── */}
+      <div className="space-y-2">
+        {countsError && (
+          <p className="text-xs text-amber-600 flex items-center gap-1">
+            <AlertCircle className="h-3.5 w-3.5" /> Some totals couldn't be loaded — showing “—” instead of a possibly-wrong number.
+          </p>
+        )}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {([
+            { key: "total",     label: "Total requests", value: counts?.total,     color: "text-slate-900",  icon: Stethoscope },
+            { key: "pending",   label: "Pending",        value: counts?.pending,   color: "text-slate-600",  icon: Clock },
+            { key: "sent",      label: "Awaiting reply", value: counts?.sent,      color: "text-blue-600",   icon: Signal },
+            { key: "fulfilled", label: "Fulfilled",      value: counts?.fulfilled, color: "text-emerald-600", icon: CheckCircle2 },
+            { key: "failed",    label: "Failed",         value: counts?.failed,    color: "text-red-600",    icon: XCircle },
+            { key: "cancelled", label: "Cancelled",      value: counts?.cancelled, color: "text-slate-400",  icon: AlertCircle },
+          ] as const).map(({ key, label, value, color, icon: Icon }) => (
+            <div key={key} className="bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-sm">
+              <Icon className="h-4 w-4 text-slate-400" />
+              {overviewLoading && !counts && !countsError
+                ? <Skeleton className="h-7 w-12 mt-1.5" />
+                : <p className={`text-2xl font-bold mt-1 ${countsError ? "text-slate-300" : color}`}>
+                    {countsError ? "—" : (value ?? 0)}
+                  </p>}
               <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
             </div>
           ))}
         </div>
-      )}
+      </div>
+
+      {/* ── System status — fax provider + delivery poll worker ─────────── */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* Fax delivery system */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Server className="h-4 w-4" /> Fax delivery system
+            </CardTitle>
+            <CardDescription>Which provider sends and tracks these requests.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            {faxSettings === undefined ? (
+              <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-5 w-full" />)}</div>
+            ) : faxSettings === null ? (
+              <p className="text-muted-foreground text-xs">
+                {faxSettingsRestricted
+                  ? "Provider configuration is restricted to workflow-settings administrators."
+                  : "Couldn't load the delivery-system settings right now. Try refreshing."}
+              </p>
+            ) : (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-muted-foreground">Active provider</span>
+                  {(() => {
+                    const id = faxSettings.fax_provider_integration_id;
+                    if (id == null) {
+                      return (
+                        <Badge variant="outline" className="text-amber-700 border-amber-200 bg-amber-50">
+                          Environment default
+                        </Badge>
+                      );
+                    }
+                    const p = faxProviders?.fax.find((x) => x.id === id) ?? null;
+                    return (
+                      <span className="flex items-center gap-2">
+                        <span className="font-medium">{p?.name ?? `Integration #${id}`}</span>
+                        {p && (
+                          <Badge className={p.adapter_implemented
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : "bg-amber-50 text-amber-700 border-amber-200"}>
+                            {p.adapter_implemented ? "Adapter live" : "No adapter"}
+                          </Badge>
+                        )}
+                      </span>
+                    );
+                  })()}
+                </div>
+                <div className="flex items-center justify-between gap-2 border-t pt-3">
+                  <span className="text-muted-foreground">Default fax number</span>
+                  <span className="font-mono text-xs">{faxSettings.default_fax_from_number || "—"}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2 border-t pt-3">
+                  <span className="text-muted-foreground">Auto-fax on signed HIPAA</span>
+                  <Badge variant="outline" className={faxSettings.auto_fax_doctor_on_signed_hipaa
+                    ? "text-emerald-700 border-emerald-200 bg-emerald-50"
+                    : "text-slate-500"}>
+                    <Power className="h-3 w-3 mr-1" />{faxSettings.auto_fax_doctor_on_signed_hipaa ? "On" : "Off"}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between gap-2 border-t pt-3">
+                  <span className="text-muted-foreground">Max send retries</span>
+                  <span className="font-medium">{faxSettings.max_send_retries ?? "—"}</span>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Delivery poll worker */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Activity className="h-4 w-4" /> Delivery poll worker
+              {(() => {
+                const h = workerHealth(pollStats);
+                return (
+                  <span className={`ml-auto inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${h.cls}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${h.dot}`} />{h.label}
+                  </span>
+                );
+              })()}
+            </CardTitle>
+            <CardDescription>Background jobs that confirm fax delivery and inbound replies.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!pollStats ? (
+              <p className="text-muted-foreground text-xs">Worker statistics are not available right now.</p>
+            ) : (
+              <div className="grid grid-cols-4 gap-3">
+                {[
+                  { label: "Pending", value: pollStats.pending, color: "text-blue-600" },
+                  { label: "Processing", value: pollStats.processing, color: "text-amber-600" },
+                  { label: "Completed", value: pollStats.done, color: "text-emerald-600" },
+                  { label: "Dead-lettered", value: pollStats.dead_letter, color: pollStats.dead_letter > 0 ? "text-red-600 font-semibold" : "text-slate-400" },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="text-center">
+                    <p className={`text-2xl font-bold ${color}`}>{value}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
