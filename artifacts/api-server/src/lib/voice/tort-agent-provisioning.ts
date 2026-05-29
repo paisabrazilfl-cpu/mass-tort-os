@@ -451,6 +451,25 @@ export async function provisionAllTortAgents(): Promise<TortAgentSyncResult[]> {
 }
 
 /**
+ * Re-sync ONLY the agents currently flagged out_of_date (drifted fingerprint
+ * on an otherwise-active assistant). Lets an operator act on stale agents in
+ * bulk after a prompt/contract change without re-provisioning all torts.
+ *
+ * Each tort is attempted independently; one failure never aborts the batch.
+ * The out-of-date set is read once up front via listTortAgentStatus so the
+ * batch targets exactly what the UI showed the operator.
+ */
+export async function provisionOutOfDateTortAgents(): Promise<TortAgentSyncResult[]> {
+  const statuses = await listTortAgentStatus();
+  const staleTortIds = statuses.filter((s) => s.out_of_date).map((s) => s.tort_id);
+  const results: TortAgentSyncResult[] = [];
+  for (const tortId of staleTortIds) {
+    results.push(await provisionTortAgent(tortId));
+  }
+  return results;
+}
+
+/**
  * Read the per-tort status across all registry torts, joining the live
  * generated fingerprint against the stored one to flag drift.
  */

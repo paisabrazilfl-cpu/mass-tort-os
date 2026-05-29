@@ -35,6 +35,7 @@ import {
   listTortAgentStatus,
   provisionTortAgent,
   provisionAllTortAgents,
+  provisionOutOfDateTortAgents,
 } from "../lib/voice/tort-agent-provisioning";
 
 const router = Router();
@@ -1011,6 +1012,24 @@ router.post(
   requirePermission(Permission.CALLS_MANAGE),
   async (_req, res) => {
     const results = await provisionAllTortAgents();
+    const summary = {
+      total: results.length,
+      created: results.filter((r) => r.outcome === "created").length,
+      updated: results.filter((r) => r.outcome === "updated").length,
+      in_sync: results.filter((r) => r.outcome === "in_sync").length,
+      errors: results.filter((r) => r.outcome === "error").length,
+    };
+    res.json({ summary, results });
+  },
+);
+
+// Re-sync ONLY the agents currently flagged out_of_date. Targets exactly the
+// stale set the operator sees on the Voice Agents page, instead of all 71.
+router.post(
+  "/tort-agents/sync-out-of-date",
+  requirePermission(Permission.CALLS_MANAGE),
+  async (_req, res) => {
+    const results = await provisionOutOfDateTortAgents();
     const summary = {
       total: results.length,
       created: results.filter((r) => r.outcome === "created").length,

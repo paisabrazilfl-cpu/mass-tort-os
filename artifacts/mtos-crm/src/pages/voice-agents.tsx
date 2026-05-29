@@ -105,6 +105,24 @@ export default function VoiceAgentsPage() {
     onError: (e: Error) => toast({ title: "Provisioning failed", description: e.message, variant: "destructive" }),
   });
 
+  const syncOutOfDate = useMutation({
+    mutationFn: () => apiFetch<{ summary: Record<string, number> }>("/tort-agents/sync-out-of-date", { method: "POST" }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["tort-agents"] });
+      const s = res.summary;
+      if (s.total === 0) {
+        toast({ title: "Nothing to sync", description: "All agents are already up to date." });
+        return;
+      }
+      toast({
+        title: "Out-of-date agents synced",
+        description: `${s.total} targeted · ${s.created} created · ${s.updated} updated · ${s.in_sync} in sync · ${s.errors} errors`,
+        ...(s.errors > 0 ? { variant: "destructive" as const } : {}),
+      });
+    },
+    onError: (e: Error) => toast({ title: "Sync failed", description: e.message, variant: "destructive" }),
+  });
+
   const agents: TortAgent[] = data?.agents ?? [];
   const filtered = agents.filter(
     (a) =>
@@ -130,14 +148,29 @@ export default function VoiceAgentsPage() {
             One dedicated Vapi assistant per tort, provisioned with a tort-specific prompt and eligibility logic.
           </p>
         </div>
-        <Button onClick={() => provisionAll.mutate()} disabled={provisionAll.isPending}>
-          {provisionAll.isPending ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4 mr-2" />
-          )}
-          Provision All
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => syncOutOfDate.mutate()}
+            disabled={syncOutOfDate.isPending || provisionAll.isPending || counts.outOfDate === 0}
+            title={counts.outOfDate === 0 ? "No agents are out of date" : undefined}
+          >
+            {syncOutOfDate.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <AlertTriangle className="h-4 w-4 mr-2" />
+            )}
+            Sync out-of-date{counts.outOfDate > 0 ? ` (${counts.outOfDate})` : ""}
+          </Button>
+          <Button onClick={() => provisionAll.mutate()} disabled={provisionAll.isPending || syncOutOfDate.isPending}>
+            {provisionAll.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-2" />
+            )}
+            Provision All
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
