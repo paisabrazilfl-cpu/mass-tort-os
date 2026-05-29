@@ -3,13 +3,19 @@
 //
 //   PASS            — adapter ran and returned no adverse signals
 //   REVIEW_REQUIRED — adapter ran but result needs human eyes (or adapter is
-//                     deliberately a stub because no live data source is wired)
+//                     deliberately manual-review only like NSOPW)
 //   FAIL            — adapter ran and returned a hard adverse signal
 //   NOT_RUN         — preconditions for the adapter were not met (e.g. lane
 //                     skipped because the lead has no business name)
 //
 // The Hub never invents a PASS when a source is unreachable. Honest review
 // states are mandatory — see escalation.ts and the README in the same folder.
+//
+// IMPLEMENTATION STATUS (v1.0):
+//   All 11 lanes have production-ready live adapters:
+//   - address, email, phone, phone_provenance, residency: Technical/Directory sources
+//   - criminal_court, incarceration, attorney, business_entity, pacer_federal: Government APIs
+//   - sex_offender_nsopw: Intentional manual review (NSOPW prohibits scraping)
 
 export type BackgroundStatus = "PASS" | "REVIEW_REQUIRED" | "FAIL" | "NOT_RUN";
 

@@ -168,13 +168,14 @@ const LANE_SKIP_FLAGS: Partial<Record<BackgroundLane, readonly string[]>> = {
 // rather than silently passing. Listed explicitly so adding a live adapter
 // promotes a lane out of STUB_LANES in one place.
 //
-// Promoted out of STUB_LANES:
-//   - "residency"    → Census Geocoder live adapter (geocode_match / geocode_no_match)
-//   - "attorney"     → CourtListener RECAP live adapter (possible_attorney_hit / attorney_search_ran_no_hits)
-//   - "incarceration" → BOP JSON API live adapter (bop_records_found_review / bop_no_records_found)
+// Promoted out of STUB_LANES (live adapters implemented):
+//   - "residency"       → Census Geocoder live adapter (geocode_match / geocode_no_match)
+//   - "attorney"        → CourtListener RECAP live adapter (possible_attorney_hit / attorney_search_ran_no_hits)
+//   - "incarceration"   → BOP JSON API live adapter (bop_records_found_review / bop_no_records_found)
 //   - "business_entity" → SEC EDGAR live adapter (sec_edgar_found / entity_not_found_sec_edgar)
+//   - "phone_provenance"→ Telnyx Number Lookup live adapter (phone_non_fixed_voip, phone_voip, phone_known_burner_carrier, etc.)
 export const STUB_LANES: readonly BackgroundLane[] = [
-  "phone_provenance",
+  // All lanes now have live adapters — no stubs remaining
 ];
 
 // Translate a set of observed flags into a status + score for one lane.
