@@ -1,12 +1,6 @@
 import assert from "node:assert";
 import test from "node:test";
-import {
-  levenshtein,
-  similarity,
-  similarityName,
-  normalize,
-  normalizeName,
-} from "../string-similarity";
+import { levenshtein, similarity, similarityName, normalize, normalizeName } from "../string-similarity";
 
 test("levenshtein", () => {
   assert.strictEqual(levenshtein("", ""), 0);
