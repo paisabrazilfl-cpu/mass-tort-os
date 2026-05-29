@@ -28,7 +28,7 @@ const VAPI_BASE = "https://api.vapi.ai";
 // is unchanged. The stored fingerprint folds this version + the public API
 // base + the prompt fingerprint, so drift is detected for ALL of: prompt
 // edits, tool-wiring changes, and a newly-configured PUBLIC_API_BASE.
-const TORT_AGENT_PAYLOAD_VERSION = "1.0.0";
+const TORT_AGENT_PAYLOAD_VERSION = "1.1.0";
 
 /**
  * Composite fingerprint for drift detection. Covers the full provisioning
@@ -225,30 +225,29 @@ export function buildVapiAssistantPayload(
   const prompt = buildTortAgentPrompt(tort);
   const apiBase = getPublicApiBase();
 
-  const bitdeerKey = process.env["BITDEER_API_KEY"]?.trim() ?? "";
   const tools = apiBase ? buildTortTools(tort, apiBase, toolBearer) : [];
 
-  // Model: prefer BitDeer Qwen custom-llm (matches the existing generic
-  // assistant); when no BitDeer key is present fall back to Vapi's default
-  // OpenAI model so provisioning still works in a bare environment.
-  const model: Record<string, unknown> = bitdeerKey
-    ? {
-        provider: "custom-llm",
-        url: "https://api-inference.bitdeer.ai/v1/chat/completions",
-        model: "Qwen/Qwen3-235B-A22B",
-        authorizationHeader: `Bearer ${bitdeerKey}`,
-        messages: [{ role: "system", content: prompt.systemPrompt }],
-        ...(tools.length ? { tools } : {}),
-      }
-    : {
-        provider: "openai",
-        model: "gpt-4o-mini",
-        messages: [{ role: "system", content: prompt.systemPrompt }],
-        ...(tools.length ? { tools } : {}),
-      };
+  // Vapi's current API only accepts native model providers on the assistant
+  // payload. An inline `authorizationHeader` for a custom-llm (e.g. BitDeer
+  // Qwen) is rejected outright ("model.property authorizationHeader should not
+  // exist"); wiring a custom LLM now requires a Vapi-stored credential
+  // (POST /credential + credentialId), which is out of scope for basic per-tort
+  // provisioning. Use Vapi's native OpenAI model so every tort agent provisions
+  // and runs reliably.
+  const model: Record<string, unknown> = {
+    provider: "openai",
+    model: "gpt-4o-mini",
+    messages: [{ role: "system", content: prompt.systemPrompt }],
+    ...(tools.length ? { tools } : {}),
+  };
+
+  // Vapi caps the assistant name at 40 chars. Keep it human-readable (the tort
+  // label) and clamp; identity/lookup is driven by metadata + the
+  // tort_voice_agents row, not the display name.
+  const name = `MTOS ${tort.label}`.slice(0, 40);
 
   return {
-    name: `MTOS — ${tort.label} (${tort.id})`,
+    name,
     model,
     voice: { provider: "openai", voiceId: "alloy" },
     transcriber: { provider: "deepgram", model: "nova-2", language: "en-US" },
