@@ -21,6 +21,7 @@ interface MrrRow {
   id: number;
   lead_id: number;
   lead_name: string | null;
+  tort_type: string | null;
   hospital_name: string | null;
   fax_number: string;
   status: string;
@@ -504,7 +505,7 @@ export default function MedicalRecordsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-xs text-muted-foreground uppercase tracking-wide">
-                    <th className="text-left py-2 pr-4 font-medium">Claimant</th>
+                    <th className="text-left py-2 pr-4 font-medium">Claimant / Tort</th>
                     <th className="text-left py-2 pr-4 font-medium">Facility</th>
                     <th className="text-left py-2 pr-4 font-medium">Fax #</th>
                     <th className="text-left py-2 pr-4 font-medium">Status</th>
@@ -525,6 +526,11 @@ export default function MedicalRecordsPage() {
                             {row.lead_name || `Lead #${row.lead_id}`}
                             <ExternalLink className="h-3 w-3 opacity-60" />
                           </Link>
+                          {row.tort_type && (
+                            <Badge variant="outline" className="mt-1 text-[10px] font-normal text-slate-500 px-1.5 py-0">
+                              {row.tort_type}
+                            </Badge>
+                          )}
                         </td>
                         <td className="py-3 pr-4 text-slate-700">{row.hospital_name || "—"}</td>
                         <td className="py-3 pr-4 font-mono text-xs text-slate-600">{row.fax_number}</td>
@@ -651,6 +657,7 @@ export default function MedicalRecordsPage() {
                     <ExternalLink className="h-3 w-3 opacity-60" />
                   </Link>
                 </DetailField>
+                <DetailField label="Tort / case" className="col-span-3">{detail.tort_type || "—"}</DetailField>
                 <DetailField label="Facility">{detail.hospital_name || "—"}</DetailField>
                 <DetailField label="Facility NPI">{detail.hospital_npi || "—"}</DetailField>
                 <DetailField label="Fax number"><span className="font-mono text-xs">{detail.fax_number}</span></DetailField>
