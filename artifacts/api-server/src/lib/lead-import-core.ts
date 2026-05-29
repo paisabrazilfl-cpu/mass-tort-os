@@ -393,18 +393,18 @@ export async function processImportBatch(
           importWarnings && importWarnings.length > 0 ? `warnings: ${importWarnings.join("; ")}` : null,
         processed_at: new Date(),
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error({ err, batch_id: batchId, row: rowNum }, "Import row failed");
       await db.insert(importRowsTable).values({
         batch_id: batchId,
         row_number: rowNum,
         status: "error",
         raw_data: rows[i],
-        error_message: err.message || "Unknown error during import",
+        error_message: err instanceof Error ? err.message : "Unknown error during import",
         processed_at: new Date(),
       }).catch(async (insertErr) => {
         logger.warn(
-          { err: insertErr, original_err: err?.message, batch_id: batchId, row: rowNum },
+          { err: insertErr, original_err: err instanceof Error ? err.message : String(err), batch_id: batchId, row: rowNum },
           "Failed to record import error row",
         );
       });

@@ -254,7 +254,8 @@ router.post("/highlight", requirePermission(Permission.DOCUMENTS_UPDATE), async 
     const pdfBytes = Buffer.from(pdf_base64, "base64");
     const highlighted = await highlightPdfRegions(pdfBytes, highlights || []);
     res.json({ pdf_base64: Buffer.from(highlighted).toString("base64"), pages: await getPdfPageCount(highlighted) });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    req.log.error({ err }, "PDF highlighting failed");
     serverError(res, "PDF highlighting failed");
   }
 });

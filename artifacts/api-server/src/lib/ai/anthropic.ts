@@ -68,14 +68,14 @@ export const anthropicAdapter: LlmAdapter = {
           output_tokens: response.usage?.output_tokens,
         },
       };
-    } catch (err: any) {
-      const status = err?.status ?? 0;
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status ?? 0;
       logger.error({ err, status, provider: "anthropic" }, "anthropic complete failed");
       return {
         ok: false,
         retryable: status === 429 || status >= 500,
         code: status ? `http_${status}` : "sdk_error",
-        message: String(err?.message ?? err),
+        message: err instanceof Error ? err.message : String(err),
       };
     }
   },
@@ -119,14 +119,14 @@ export const anthropicAdapter: LlmAdapter = {
           output_tokens: response.usage?.output_tokens,
         },
       };
-    } catch (err: any) {
-      const status = err?.status ?? 0;
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status ?? 0;
       logger.error({ err, status, provider: "anthropic" }, "anthropic chat failed");
       return {
         ok: false,
         retryable: status === 429 || status >= 500,
         code: status ? `http_${status}` : "sdk_error",
-        message: String(err?.message ?? err),
+        message: err instanceof Error ? err.message : String(err),
       };
     }
   },

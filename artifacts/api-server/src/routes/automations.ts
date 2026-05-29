@@ -169,8 +169,8 @@ router.post("/:id/run", requirePermission(Permission.AUTOMATIONS_EXECUTE), async
       startedByUserId: userId ?? null,
     });
     res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message ?? "Run failed" });
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Run failed" });
   }
 });
 
@@ -402,11 +402,11 @@ router.post("/assist", requirePermission(Permission.AUTOMATIONS_MANAGE), async (
         prompt: attemptUserPrompt,
         maxTokens: 2500,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       return {
         ok: false,
         errorCode: "llm_unavailable",
-        errorMessage: err?.message ?? "AI provider unreachable",
+        errorMessage: err instanceof Error ? err.message : "AI provider unreachable",
       };
     }
 

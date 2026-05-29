@@ -183,7 +183,8 @@ router.get("/predictive/lead/:id", requirePermission(Permission.ANALYTICS_PREDIC
     // lead belongs to a different firm, preventing cross-tenant IDOR.
     const score = await scoreLeadPredictive(id, req.user!.firm_id);
     res.json(score);
-  } catch (err: any) {
+  } catch (err: unknown) {
+    req.log.error({ err, leadId: id }, "predictive lead scoring failed");
     notFound(res, "Lead not found or scoring failed");
   }
 });

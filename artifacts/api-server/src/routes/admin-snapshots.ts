@@ -292,8 +292,8 @@ router.get("/", requirePermission(Permission.SNAPSHOT_MANAGE), async (req, res) 
       .orderBy(sql`${systemSnapshotsTable.created_at} DESC`)
       .limit(100);
     res.json({ snapshots: rows });
-  } catch (err: any) {
-    logger.error({ err: err?.message }, "admin/snapshots GET / failed");
+  } catch (err: unknown) {
+    logger.error({ err }, "admin/snapshots GET / failed");
     serverError(res, "Failed to list snapshots");
   }
 });
@@ -347,8 +347,8 @@ router.post(
           created_at: row.created_at,
         },
       });
-    } catch (err: any) {
-      logger.error({ err: err?.message }, "admin/snapshots POST / failed");
+    } catch (err: unknown) {
+      logger.error({ err }, "admin/snapshots POST / failed");
       serverError(res, "Failed to create snapshot");
     }
   },
@@ -374,8 +374,8 @@ router.get("/:id", requirePermission(Permission.SNAPSHOT_MANAGE), async (req, re
       return;
     }
     res.json({ snapshot: row });
-  } catch (err: any) {
-    logger.error({ err: err?.message, id: parsed.data.id }, "admin/snapshots GET /:id failed");
+  } catch (err: unknown) {
+    logger.error({ err, id: parsed.data.id }, "admin/snapshots GET /:id failed");
     serverError(res, "Failed to load snapshot");
   }
 });
@@ -425,8 +425,8 @@ router.post(
         dry_run: bodyParse.data.dry_run,
         plans,
       });
-    } catch (err: any) {
-      logger.error({ err: err?.message }, "admin/snapshots restore failed");
+    } catch (err: unknown) {
+      logger.error({ err }, "admin/snapshots restore failed");
       serverError(res, "Failed to restore snapshot");
     }
   },
@@ -448,8 +448,8 @@ router.delete(
         .returning({ id: systemSnapshotsTable.id });
       if (deleted.length === 0) { notFound(res, "Snapshot not found"); return; }
       res.status(204).end();
-    } catch (err: any) {
-      logger.error({ err: err?.message }, "admin/snapshots DELETE failed");
+    } catch (err: unknown) {
+      logger.error({ err }, "admin/snapshots DELETE failed");
       serverError(res, "Failed to delete snapshot");
     }
   },

@@ -83,13 +83,13 @@ export const serpapiAdapter: SearchAdapter = {
         results,
         raw: { search_metadata: json?.search_metadata, total: organic.length },
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error({ err, provider: "serpapi" }, "serpapi search failed");
       return {
         ok: false,
         retryable: true,
         code: "network_error",
-        message: String(err?.message ?? err),
+        message: err instanceof Error ? err.message : String(err),
       };
     }
   },

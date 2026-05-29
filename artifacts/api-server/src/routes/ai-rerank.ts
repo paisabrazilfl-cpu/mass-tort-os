@@ -31,8 +31,8 @@ router.get("/rerank/config", requirePermission(Permission.AI_RERANK), async (req
   try {
     const firmId = requireFirmId(req);
     res.json({ configured: await isRerankerConfigured(firmId) });
-  } catch (err: any) {
-    logger.error({ err: err?.message }, "ai/rerank config check failed");
+  } catch (err: unknown) {
+    logger.error({ err }, "ai/rerank config check failed");
     serverError(res, "Failed to check reranker config");
   }
 });
@@ -48,7 +48,7 @@ router.post("/rerank", requirePermission(Permission.AI_RERANK), async (req, res)
       model: parsed.data.model,
     });
     res.json({ results, count: results.length });
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err instanceof RerankerError) {
       res.status(err.status >= 400 && err.status < 600 ? err.status : 502).json({
         status: "error",
@@ -57,7 +57,7 @@ router.post("/rerank", requirePermission(Permission.AI_RERANK), async (req, res)
       });
       return;
     }
-    logger.error({ err: err?.message }, "ai/rerank failed");
+    logger.error({ err }, "ai/rerank failed");
     serverError(res, "Rerank failed");
   }
 });

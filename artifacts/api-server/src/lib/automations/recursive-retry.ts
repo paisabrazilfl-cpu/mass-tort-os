@@ -164,14 +164,14 @@ export async function recursiveRetry<T>(
     let outcome: AttemptOutcome<T>;
     try {
       outcome = await opts.attempt(ctx);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Defensive: callers SHOULD return structured failures, but if one
       // throws we treat it as a generic failure so the loop can continue
       // to the next perspective. Stack is not surfaced to operators.
       outcome = {
         ok: false,
         errorCode: "unknown_error",
-        errorMessage: String(err?.message ?? err ?? "attempt threw"),
+        errorMessage: err instanceof Error ? err.message : String(err ?? "attempt threw"),
       };
     }
     const durationMs = Date.now() - attemptStart;

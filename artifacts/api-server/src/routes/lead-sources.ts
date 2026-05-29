@@ -42,8 +42,8 @@ router.post("/", requirePermission(Permission.LEAD_SOURCES_MANAGE), async (req, 
       })
       .returning();
     res.status(201).json(row);
-  } catch (e: any) {
-    if (String(e?.message || "").includes("duplicate")) {
+  } catch (e: unknown) {
+    if ((e instanceof Error ? e.message : "").includes("duplicate")) {
       conflict(res, "name_taken", "A lead source with this name already exists");
       return;
     }

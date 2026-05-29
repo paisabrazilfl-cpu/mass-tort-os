@@ -34,8 +34,8 @@ router.post("/webhook/:slugOrId", async (req, res) => {
       [slugOrId]
     );
     wf = raw.rows[0] ?? null;
-  } catch (err: any) {
-    logger.error({ err: err?.message }, "automations webhook lookup failed");
+  } catch (err: unknown) {
+    logger.error({ err }, "automations webhook lookup failed");
     res.json({ ok: true }); // fail silently — don't leak DB errors
     return;
   }
@@ -94,8 +94,8 @@ router.post("/webhook/:slugOrId", async (req, res) => {
     }).catch((err: unknown) => {
       logger.error({ err, workflowId: wf!.id }, "webhook dispatch failed");
     });
-  } catch (err: any) {
-    logger.error({ err: err?.message }, "webhook dispatch import failed");
+  } catch (err: unknown) {
+    logger.error({ err }, "webhook dispatch import failed");
   }
 });
 

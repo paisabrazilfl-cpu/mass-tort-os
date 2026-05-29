@@ -137,8 +137,8 @@ router.post("/upload", requirePermission(Permission.TEMPLATES_MANAGE), auditActi
     }
     const stored = await uploadTemplate(buf, fileName);
     res.status(201).json(stored);
-  } catch (err: any) {
-    res.status(500).json({ error: "upload_failed", message: String(err?.message || err) });
+  } catch (err: unknown) {
+    res.status(500).json({ error: "upload_failed", message: err instanceof Error ? err.message : String(err) });
   }
 });
 
