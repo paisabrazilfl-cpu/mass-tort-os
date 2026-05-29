@@ -20,7 +20,14 @@ import {
   callLogsTable,
   leadsTable,
   tortVoiceAgentsTable,
+  importBatchesTable,
 } from "@workspace/db";
+import { auditLog } from "../lib/audit";
+import {
+  parseCSV,
+  autoMapColumns,
+  processImportBatch,
+} from "../lib/lead-import-core";
 import {
   eq, and, desc, asc, sql, ilike, or, inArray, count,
   gte, lte, ne, isNotNull,
@@ -411,6 +418,176 @@ router.post(
       .set({ total_leads: sql`total_leads + ${lead_ids.length}`, updated_at: new Date() })
       .where(eq(dialerCampaignsTable.id, id));
     res.json({ added: lead_ids.length });
+  },
+);
+
+// ─── UPLOAD & DIAL ───────────────────────────────────────────────────────────
+//
+// One-shot CSV → auto-dial bridge. Takes a raw CSV, runs every row through the
+// SAME lead-import pipeline (dedup + encryption + conflict-check) so uploaded
+// rows become full CRM leads, links the freshly-created leads to a brand-new
+// dialer campaign (auto-picking the tort's dedicated Vapi agent), and — when
+// auto_start is set — flips the campaign active so the worker begins dialing
+// each lead through Vapi.
+const uploadDialSchema = campaignSchema.extend({
+  csv_data: z.string().min(1),
+  column_mapping: z.record(z.string(), z.string()).optional(),
+  filename: z.string().max(200).default("dialer-upload.csv"),
+  auto_start: z.boolean().default(true),
+});
+
+router.post(
+  "/campaigns/upload-dial",
+  requirePermission(Permission.CALLS_MANAGE),
+  requirePermission(Permission.LEAD_IMPORT_EXECUTE),
+  async (req, res) => {
+    const parsed = uploadDialSchema.safeParse(req.body);
+    if (!parsed.success) {
+      badRequest(res, "Invalid upload-dial data", parsed.error.issues);
+      return;
+    }
+
+    const firmId = await getFirmId(req.user!.id);
+    if (!firmId && req.user!.id > 0) {
+      res.status(403).json({ code: "NO_FIRM", message: "User not linked to a firm." });
+      return;
+    }
+
+    const {
+      tort,
+      csv_data,
+      column_mapping,
+      filename,
+      auto_start,
+      ...campaignData
+    } = parsed.data;
+
+    // Parse + bound the CSV up front so the operator gets immediate feedback
+    // instead of a campaign that silently imports nothing.
+    const { headers, rows } = parseCSV(csv_data);
+    if (headers.length === 0) { badRequest(res, "No valid CSV headers found"); return; }
+    if (rows.length === 0) { badRequest(res, "No data rows found in CSV"); return; }
+    const maxRows = 5000;
+    if (rows.length > maxRows) {
+      badRequest(res, `Upload limited to ${maxRows} rows per batch. This file has ${rows.length} rows.`);
+      return;
+    }
+    const mapping = column_mapping ?? autoMapColumns(headers);
+
+    // Auto-link the tort's dedicated voice agent (mirrors POST /campaigns).
+    let assistantId = campaignData.vapi_assistant_id;
+    if (!assistantId && tort) {
+      const [agent] = await db
+        .select()
+        .from(tortVoiceAgentsTable)
+        .where(eq(tortVoiceAgentsTable.tort_id, tort))
+        .limit(1);
+      if (agent?.vapi_assistant_id && agent.status === "active") {
+        assistantId = agent.vapi_assistant_id;
+      }
+    }
+
+    // Create the campaign in `draft` — it only flips `active` after the import
+    // finishes and at least one lead is linked, so the worker never wakes on an
+    // empty queue.
+    const [campaign] = await db
+      .insert(dialerCampaignsTable)
+      .values({
+        ...campaignData,
+        status: "draft",
+        vapi_assistant_id: assistantId,
+        firm_id: firmId ?? 0,
+        created_by: req.user!.id,
+      })
+      .returning();
+
+    const [batch] = await db
+      .insert(importBatchesTable)
+      .values({
+        filename,
+        status: "processing",
+        total_rows: rows.length,
+        column_mapping: mapping,
+        created_by: req.user!.email,
+      })
+      .returning();
+
+    await auditLog("dialer_campaign", String(campaign.id), "upload_dial_started", {
+      batch_id: batch.id,
+      filename,
+      total_rows: rows.length,
+      tort: tort ?? null,
+      vapi_assistant_id: assistantId ?? null,
+      auto_start,
+      user_email: req.user!.email,
+    });
+
+    logger.info(
+      { campaignId: campaign.id, batchId: batch.id, totalRows: rows.length },
+      "dialer upload-dial accepted",
+    );
+
+    res.status(202).json({
+      campaign,
+      batch_id: batch.id,
+      total_rows: rows.length,
+      message:
+        "Upload accepted. Leads are being validated, deduped, and conflict-checked, then linked to the campaign.",
+    });
+
+    // Fire-and-forget: import the leads, link them, and (optionally) start the
+    // campaign. Mirrors lead-import's async execute pattern — the operator
+    // polls campaign progress / import batch for status.
+    void (async () => {
+      try {
+        const summary = await processImportBatch(batch.id, rows, mapping, firmId ?? 0);
+        const leadIds = summary.createdLeadIds;
+
+        if (leadIds.length > 0) {
+          await db
+            .insert(dialerCampaignLeadsTable)
+            .values(leadIds.map((lid) => ({ campaign_id: campaign.id, lead_id: lid })))
+            .onConflictDoNothing();
+          await db
+            .update(dialerCampaignsTable)
+            .set({ total_leads: sql`total_leads + ${leadIds.length}`, updated_at: new Date() })
+            .where(eq(dialerCampaignsTable.id, campaign.id));
+
+          if (auto_start) {
+            await db
+              .update(dialerCampaignsTable)
+              .set({ status: "active", updated_at: new Date() })
+              .where(eq(dialerCampaignsTable.id, campaign.id));
+            await enqueueJob("dialer_campaign_run", { campaign_id: campaign.id });
+          }
+        }
+
+        await auditLog("dialer_campaign", String(campaign.id), "upload_dial_completed", {
+          batch_id: batch.id,
+          leads_created: leadIds.length,
+          duplicates: summary.duplicateCount,
+          errors: summary.errorCount,
+          conflicts: summary.conflictCount,
+          auto_started: auto_start && leadIds.length > 0,
+        });
+        logger.info(
+          { campaignId: campaign.id, batchId: batch.id, leadsCreated: leadIds.length },
+          "dialer upload-dial completed",
+        );
+      } catch (err) {
+        logger.error({ err, campaignId: campaign.id, batchId: batch.id }, "dialer upload-dial failed");
+        await db
+          .update(importBatchesTable)
+          .set({ status: "failed", completed_at: new Date() })
+          .where(eq(importBatchesTable.id, batch.id))
+          .catch(() => undefined);
+        await auditLog("dialer_campaign", String(campaign.id), "upload_dial_failed", {
+          batch_id: batch.id,
+          error: err instanceof Error ? err.message : String(err),
+          severity: "high",
+        }).catch(() => undefined);
+      }
+    })();
   },
 );
 

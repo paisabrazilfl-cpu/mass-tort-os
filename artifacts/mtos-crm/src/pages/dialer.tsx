@@ -537,6 +537,267 @@ function CampaignsTab() {
   );
 }
 
+// ─── UPLOAD & DIAL ───────────────────────────────────────────────────────────
+
+function UploadDialTab() {
+  const { toast } = useToast();
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<any>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [form, setForm] = useState({
+    name: "", type: "preview", caller_id: "",
+    max_concurrent_calls: 1, call_window_start: "09:00", call_window_end: "20:00",
+    timezone: "America/New_York", notes: "",
+    tort: "", vapi_assistant_id: "", vapi_phone_number_id: "",
+    auto_start: true,
+  });
+
+  const { data: vapiCfg } = useQuery({
+    queryKey: ["dialer-vapi-config"],
+    queryFn: () => apiFetch<any>("/vapi-config"),
+    retry: false,
+  });
+  const { data: vapiPhones } = useQuery({
+    queryKey: ["dialer-vapi-phones"],
+    queryFn: () => apiFetch<any>("/vapi-phones"),
+    retry: false,
+  });
+  const { data: tortAgentsData } = useQuery({
+    queryKey: ["dialer-tort-agents"],
+    queryFn: () => apiFetch<any>("/tort-agents"),
+    retry: false,
+  });
+
+  const assistants: any[] = vapiCfg?.assistants ?? [];
+  const phoneNumbers: any[] = vapiPhones?.phone_numbers ?? [];
+  const tortAgents: any[] = tortAgentsData?.agents ?? [];
+
+  const onTortChange = (tortId: string) => {
+    const agent = tortAgents.find((a) => a.tort_id === tortId);
+    setForm((f) => ({
+      ...f,
+      tort: tortId,
+      vapi_assistant_id:
+        agent?.vapi_assistant_id && agent.status === "active"
+          ? agent.vapi_assistant_id
+          : f.vapi_assistant_id,
+    }));
+  };
+
+  const uploadMut = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error("Choose a CSV file first");
+      const csv_data = await file.text();
+      return apiFetch<any>("/campaigns/upload-dial", {
+        method: "POST",
+        body: JSON.stringify({ ...form, filename: file.name, csv_data }),
+      });
+    },
+    onSuccess: (data: any) => {
+      setResult(data);
+      toast({
+        title: "Upload accepted",
+        description: `${data.total_rows} row${data.total_rows !== 1 ? "s" : ""} are being imported and queued for dialing.`,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
+  });
+
+  const resetForm = () => {
+    setFile(null);
+    setResult(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setForm({
+      name: "", type: "preview", caller_id: "",
+      max_concurrent_calls: 1, call_window_start: "09:00", call_window_end: "20:00",
+      timezone: "America/New_York", notes: "",
+      tort: "", vapi_assistant_id: "", vapi_phone_number_id: "",
+      auto_start: true,
+    });
+  };
+
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Upload className="h-4 w-4" /> Upload &amp; Dial
+          </CardTitle>
+          <CardDescription>
+            Upload a CSV of contacts. Each row becomes a full CRM lead (deduped, encrypted,
+            and conflict-checked), gets linked to a new campaign that auto-picks the tort's
+            voice agent, and is auto-dialed through Vapi.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <Label>CSV File</Label>
+            <Input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }}
+            />
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Columns are auto-mapped (first_name, last_name, email, phone, state, tort_type, …). Up to 5,000 rows.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Campaign Name</Label>
+              <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Roundup CSV — May" />
+            </div>
+            <div>
+              <Label>Type</Label>
+              <Select value={form.type} onValueChange={(v) => setForm((f) => ({ ...f, type: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CAMPAIGN_TYPES.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <Label>Caller ID</Label>
+              <Input value={form.caller_id} onChange={(e) => setForm((f) => ({ ...f, caller_id: e.target.value }))} placeholder="+15551234567" />
+            </div>
+            <div>
+              <Label>Concurrent Calls</Label>
+              <Input type="number" min={1} max={50} value={form.max_concurrent_calls} onChange={(e) => setForm((f) => ({ ...f, max_concurrent_calls: parseInt(e.target.value) || 1 }))} />
+            </div>
+            <div>
+              <Label>Timezone</Label>
+              <Select value={form.timezone} onValueChange={(v) => setForm((f) => ({ ...f, timezone: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Phoenix"].map((tz) => (
+                    <SelectItem key={tz} value={tz}>{tz.replace("America/", "")}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Call Window Start</Label>
+              <Input type="time" value={form.call_window_start} onChange={(e) => setForm((f) => ({ ...f, call_window_start: e.target.value }))} />
+            </div>
+            <div>
+              <Label>Call Window End</Label>
+              <Input type="time" value={form.call_window_end} onChange={(e) => setForm((f) => ({ ...f, call_window_end: e.target.value }))} />
+            </div>
+          </div>
+
+          <div className="border-t pt-3">
+            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Vapi Auto-Dialing</p>
+            {tortAgents.length > 0 && (
+              <div className="mb-3">
+                <Label>Tort (auto-links voice agent)</Label>
+                <Select value={form.tort} onValueChange={onTortChange}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a tort to auto-assign its agent" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {tortAgents.map((t: any) => (
+                      <SelectItem key={t.tort_id} value={t.tort_id}>
+                        {t.tort_label}
+                        {t.status === "active" ? "" : " — no agent yet"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-0.5">Picks the tort's dedicated agent when provisioned</p>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Vapi Assistant</Label>
+                <Select value={form.vapi_assistant_id} onValueChange={(v) => setForm((f) => ({ ...f, vapi_assistant_id: v }))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={assistants.length === 0 ? "No assistants yet" : "Select assistant"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {assistants.map((a: any) => (
+                      <SelectItem key={a.id} value={a.id}>{a.name ?? a.id}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-0.5">Required to auto-dial — auto-filled by tort</p>
+              </div>
+              <div>
+                <Label>Vapi Phone Number</Label>
+                <Select value={form.vapi_phone_number_id} onValueChange={(v) => setForm((f) => ({ ...f, vapi_phone_number_id: v }))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={phoneNumbers.length === 0 ? "None (use caller ID)" : "Select number"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {phoneNumbers.map((p: any) => (
+                      <SelectItem key={p.id} value={p.id}>{p.number ?? p.id}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-0.5">Optional — defaults to Caller ID above</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 border-t pt-3">
+            <input
+              id="auto-start"
+              type="checkbox"
+              className="h-4 w-4"
+              checked={form.auto_start}
+              onChange={(e) => setForm((f) => ({ ...f, auto_start: e.target.checked }))}
+            />
+            <Label htmlFor="auto-start" className="cursor-pointer">
+              Start dialing automatically once leads finish importing
+            </Label>
+          </div>
+
+          <div>
+            <Label>Notes</Label>
+            <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={resetForm} disabled={uploadMut.isPending}>Reset</Button>
+            <Button
+              disabled={!file || !form.name || uploadMut.isPending}
+              onClick={() => uploadMut.mutate()}
+            >
+              {uploadMut.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Upload className="h-4 w-4 mr-1" />}
+              Upload &amp; Dial
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {result && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <CheckCircle className="h-4 w-4 text-green-500" /> Upload Accepted
+            </CardTitle>
+            <CardDescription>{result.message}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            <div className="flex justify-between"><span className="text-muted-foreground">Campaign</span><span className="font-medium">{result.campaign?.name}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Rows submitted</span><span className="font-medium">{result.total_rows}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Import batch</span><span className="font-mono text-xs">{result.batch_id}</span></div>
+            <p className="text-xs text-muted-foreground pt-2">
+              Track live progress on the Campaigns tab — leads appear as they import, then dialing begins.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 // ─── MANUAL DIAL ─────────────────────────────────────────────────────────────
 
 type CallState = "idle" | "connecting" | "active" | "ended";
@@ -1694,6 +1955,7 @@ export default function DialerPage() {
         <TabsList className="flex-wrap h-auto gap-1">
           <TabsTrigger value="dashboard" className="gap-1.5"><BarChart3 className="h-3.5 w-3.5" />Dashboard</TabsTrigger>
           <TabsTrigger value="campaigns" className="gap-1.5"><Play className="h-3.5 w-3.5" />Campaigns</TabsTrigger>
+          <TabsTrigger value="upload-dial" className="gap-1.5"><Upload className="h-3.5 w-3.5" />Upload & Dial</TabsTrigger>
           <TabsTrigger value="manual" className="gap-1.5"><Phone className="h-3.5 w-3.5" />Manual Dial</TabsTrigger>
           <TabsTrigger value="scripts" className="gap-1.5"><FileText className="h-3.5 w-3.5" />Call Scripts</TabsTrigger>
           <TabsTrigger value="dnc" className="gap-1.5"><ShieldOff className="h-3.5 w-3.5" />DNC Manager</TabsTrigger>
@@ -1704,6 +1966,7 @@ export default function DialerPage() {
 
         <TabsContent value="dashboard"><StatsTab /></TabsContent>
         <TabsContent value="campaigns"><CampaignsTab /></TabsContent>
+        <TabsContent value="upload-dial"><UploadDialTab /></TabsContent>
         <TabsContent value="manual"><ManualDialTab /></TabsContent>
         <TabsContent value="scripts"><ScriptsTab /></TabsContent>
         <TabsContent value="dnc"><DncTab /></TabsContent>

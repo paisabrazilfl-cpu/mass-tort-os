@@ -19,6 +19,7 @@ import { auditLog } from "./lib/audit";
 import { preprocessFaxBuffer, base64ToBuffer, detectMimeType } from "./lib/ocr-preprocess";
 import { extractOcrData, extractOcrDataFromText } from "./lib/ai-ocr";
 import { extractPdfText } from "./lib/pdf-extract";
+import { decrypt } from "./lib/encryption";
 import { withErrorFallback, createLoopGuard, DEFAULT_LIMITS } from "./lib/error-fallback";
 import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail, handleSendWorkflowSms } from "./lib/workflow-handlers";
 import { handleFastenRecordsSync, auditStaleFastenPartials } from "./lib/fasten-job";
@@ -430,6 +431,7 @@ async function processJob(job: {
         cl_lead_id: dialerCampaignLeadsTable.lead_id,
         cl_attempts: dialerCampaignLeadsTable.attempts,
         phone: leadsTable.phone,
+        phone_primary: leadsTable.phone_primary,
         first_name: leadsTable.first_name,
         tort_type: leadsTable.tort_type,
       })
@@ -455,8 +457,24 @@ async function processJob(job: {
     let dialedInBatch = 0;
 
     for (const row of pendingRows) {
-      // No phone number — skip
-      if (!row.phone) {
+      // `phone` (and the `phone_primary` fallback) are stored encrypted at rest
+      // (see ENCRYPTED_FIELDS in lib/encryption). Decrypt before any dialing.
+      // decrypt() MUST receive the field name + entity id so its AAD chain can
+      // verify (field+id) → (field) → (none); without them only the no-AAD
+      // variant is tried and AAD-bound rows fail. It is a no-op on plaintext
+      // and returns "[DECRYPTION_ERROR]" on genuine failure. Fall back to
+      // phone_primary only AFTER phone fails to decrypt, so a corrupt primary
+      // phone doesn't hide a usable secondary number.
+      const leadIdStr = String(row.cl_lead_id);
+      const decode = (raw: string | null, field: "phone" | "phone_primary") => {
+        if (!raw) return null;
+        const out = decrypt(raw, field, leadIdStr);
+        return out && out !== "[DECRYPTION_ERROR]" ? out : null;
+      };
+      const phone = decode(row.phone, "phone") ?? decode(row.phone_primary, "phone_primary");
+
+      // No usable phone number (missing, or decryption failed) — skip
+      if (!phone || phone === "[DECRYPTION_ERROR]") {
         await db.update(dialerCampaignLeadsTable)
           .set({ status: "failed", disposition: "no_phone", updated_at: new Date() })
           .where(eq(dialerCampaignLeadsTable.id, row.cl_id));
@@ -464,7 +482,7 @@ async function processJob(job: {
       }
 
       // DNC check
-      const normalised = row.phone.replace(/\D/g, "");
+      const normalised = phone.replace(/\D/g, "");
       const [dncHit] = await db
         .select({ id: dialerDncTable.id })
         .from(dialerDncTable)
@@ -472,7 +490,7 @@ async function processJob(job: {
           and(
             eq(dialerDncTable.firm_id, campaign.firm_id),
             or(
-              eq(dialerDncTable.phone_number, row.phone),
+              eq(dialerDncTable.phone_number, phone),
               eq(dialerDncTable.phone_number, normalised),
             ),
           ),
@@ -501,7 +519,7 @@ async function processJob(job: {
         firm_id: campaign.firm_id,
         lead_id: row.cl_lead_id,
         direction: "outbound",
-        to_number: row.phone,
+        to_number: phone,
         from_number: campaign.caller_id,
         vapi_assistant_id: campaign.vapi_assistant_id,
         tort_type: row.tort_type,
@@ -515,7 +533,7 @@ async function processJob(job: {
         const callPayload: Record<string, unknown> = {
           assistantId: campaign.vapi_assistant_id,
           customer: {
-            number: row.phone,
+            number: phone,
             ...(row.first_name ? { name: row.first_name } : {}),
           },
           metadata: {

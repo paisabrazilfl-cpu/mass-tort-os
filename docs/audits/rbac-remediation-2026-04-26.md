@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **307 checked / 44 public / 263 protected / 0 unprotected.**
+Boot-time count: **308 checked / 44 public / 264 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -696,6 +696,7 @@ Boot-time count: **307 checked / 44 public / 263 protected / 0 unprotected.**
 | dialer | DELETE | `/api/dialer/campaigns/:id` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | GET | `/api/dialer/campaigns/:id` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | PATCH | `/api/dialer/campaigns/:id` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | POST | `/api/dialer/campaigns/upload-dial` | ✓ | ✓ |  |  |  | — | `calls:manage`, `lead_import:execute` | ✓ |
 | dialer | GET | `/api/dialer/campaigns` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | POST | `/api/dialer/campaigns` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | DELETE | `/api/dialer/dnc/:id` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
