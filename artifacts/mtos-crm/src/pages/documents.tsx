@@ -1,16 +1,56 @@
-import { useListDocuments, getListDocumentsQueryKey } from "@workspace/api-client-react";
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useListDocuments, getListDocumentsQueryKey, useDeleteDocument } from "@workspace/api-client-react";
+import type { Document } from "@workspace/api-client-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
-import { FileText, Eye } from "lucide-react";
+import { FileText, Eye, Download, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
+import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/auth-context";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
+const ROLES_CAN_DELETE = new Set(["super_admin", "admin", "attorney"]);
 
 export default function Documents() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const canDelete = !!user && ROLES_CAN_DELETE.has(user.role);
+
+  const [pendingDelete, setPendingDelete] = useState<Document | null>(null);
+
   const { data: documents, isLoading } = useListDocuments({}, {
     query: { queryKey: getListDocumentsQueryKey({}) }
   });
+
+  const deleteDocument = useDeleteDocument({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getListDocumentsQueryKey({}) });
+        toast({ title: "Document deleted" });
+        setPendingDelete(null);
+      },
+      onError: () => {
+        toast({ title: "Delete failed", description: "You may not have permission to delete this document.", variant: "destructive" });
+      },
+    },
+  });
+
+  const viewHref = (id: number, download = false) =>
+    `${import.meta.env.BASE_URL}api/documents/${id}/view${download ? "?download=1" : ""}`.replace(/([^:]\/)\/+/g, "$1");
 
   return (
     <div className="space-y-6">
@@ -72,17 +112,42 @@ export default function Documents() {
                     {format(new Date(doc.created_at), "yyyy-MM-dd")}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" asChild data-testid={`button-view-document-${doc.id}`}>
-                      <a
-                        href={`${import.meta.env.BASE_URL}api/documents/${doc.id}/view`.replace(/\/+/g, "/")}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="View document"
-                      >
-                        <Eye className="h-4 w-4 mr-1" />
-                        View
-                      </a>
-                    </Button>
+                    <div className="flex items-center justify-end gap-1">
+                      <Button variant="ghost" size="sm" asChild data-testid={`button-view-document-${doc.id}`}>
+                        <a
+                          href={viewHref(doc.id)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="View document"
+                        >
+                          <Eye className="h-4 w-4 mr-1" />
+                          View
+                        </a>
+                      </Button>
+                      <Button variant="ghost" size="sm" asChild data-testid={`button-download-document-${doc.id}`}>
+                        <a
+                          href={viewHref(doc.id, true)}
+                          download={doc.file_name}
+                          title="Download document"
+                        >
+                          <Download className="h-4 w-4 mr-1" />
+                          Download
+                        </a>
+                      </Button>
+                      {canDelete && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => setPendingDelete(doc)}
+                          title="Delete document"
+                          data-testid={`button-delete-document-${doc.id}`}
+                        >
+                          <Trash2 className="h-4 w-4 mr-1" />
+                          Delete
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -90,6 +155,32 @@ export default function Documents() {
           </TableBody>
         </Table>
       </div>
+
+      <AlertDialog open={!!pendingDelete} onOpenChange={(open) => { if (!open) setPendingDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this document?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete ? (
+                <>This will permanently remove <span className="font-medium">{pendingDelete.file_name}</span> (lead #{pendingDelete.lead_id}). This action cannot be undone.</>
+              ) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteDocument.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteDocument.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                if (pendingDelete) deleteDocument.mutate({ id: pendingDelete.id });
+              }}
+            >
+              {deleteDocument.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

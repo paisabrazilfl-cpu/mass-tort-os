@@ -100,6 +100,11 @@ router.get("/:id/view", requirePermission(Permission.DOCUMENTS_VIEW), async (req
     return;
   }
 
+  // ?download=1 forces an attachment disposition so the browser saves the
+  // file instead of rendering it inline.
+  const asDownload = req.query.download === "1" || req.query.download === "true";
+  const disposition = asDownload ? "attachment" : "inline";
+
   const url = doc.file_url?.trim();
   if (url && /^https?:\/\//i.test(url)) {
     // External file_url — let the browser fetch it directly. We don't proxy
@@ -114,7 +119,7 @@ router.get("/:id/view", requirePermission(Permission.DOCUMENTS_VIEW), async (req
   try {
     const pdfBytes = await renderPlaceholderPdf(doc);
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${doc.file_name.replace(/[^a-zA-Z0-9._-]/g, "_")}"`);
+    res.setHeader("Content-Disposition", `${disposition}; filename="${doc.file_name.replace(/[^a-zA-Z0-9._-]/g, "_")}"`);
     res.setHeader("Cache-Control", "private, no-store");
     res.send(Buffer.from(pdfBytes));
   } catch (err) {
