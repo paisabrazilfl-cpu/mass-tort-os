@@ -214,9 +214,23 @@ router.patch(
     const parsed = campaignSchema.partial().safeParse(req.body);
     if (!parsed.success) { badRequest(res, "Invalid data", parsed.error.issues); return; }
     const firmId = await getFirmId(req.user!.id);
+    // `tort` is a request-only hint, not a column. Strip it out and use it to
+    // auto-link the tort's dedicated voice agent when the edit did not set an
+    // assistant explicitly — mirrors create-time behavior (Task #90).
+    const { tort, ...campaignData } = parsed.data;
+    if (campaignData.vapi_assistant_id == null && tort) {
+      const [agent] = await db
+        .select()
+        .from(tortVoiceAgentsTable)
+        .where(eq(tortVoiceAgentsTable.tort_id, tort))
+        .limit(1);
+      if (agent?.vapi_assistant_id && agent.status === "active") {
+        campaignData.vapi_assistant_id = agent.vapi_assistant_id;
+      }
+    }
     const [row] = await db
       .update(dialerCampaignsTable)
-      .set({ ...parsed.data, updated_at: new Date() })
+      .set({ ...campaignData, updated_at: new Date() })
       .where(
         and(
           eq(dialerCampaignsTable.id, id),

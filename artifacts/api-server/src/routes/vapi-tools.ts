@@ -79,7 +79,12 @@ type TortScope =
  * back to the body value, then to "unknown".
  */
 function resolveTortType(req: Request, bodyTort: string | null | undefined): TortScope {
-  const fromBody = typeof bodyTort === "string" ? bodyTort.trim() : "";
+  const rawBody = typeof bodyTort === "string" ? bodyTort.trim() : "";
+  // "unknown" is the schema-level placeholder the model emits when it has no
+  // real tort to report; treat it as absent so a query-scoped agent is never
+  // rejected just because the model omitted (and the schema defaulted) the
+  // body tort. Only a *real, different* body tort counts as a scope conflict.
+  const fromBody = rawBody.toLowerCase() === "unknown" ? "" : rawBody;
   const q = req.query?.tort;
   const fromQuery = typeof q === "string" ? q.trim() : "";
   if (fromQuery) {

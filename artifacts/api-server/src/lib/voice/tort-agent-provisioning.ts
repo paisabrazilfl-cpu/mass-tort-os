@@ -20,6 +20,7 @@ import { logger } from "../logger";
 import { resolveProvider, isResolved } from "../provider-router";
 import { TORT_REGISTRY, type TortDefinition } from "../tort-engine";
 import { buildTortAgentPrompt } from "./tort-agent-prompt";
+import { loadVapiCredentials } from "./vapi-webhook";
 
 const VAPI_BASE = "https://api.vapi.ai";
 
@@ -128,9 +129,18 @@ function getPublicApiBase(): string {
  * Either path yields the correct tort, so a single missing channel never
  * silently downgrades the agent to the generic "unknown" tort.
  */
-function buildTortTools(tort: TortDefinition, apiBase: string): Record<string, unknown>[] {
+function buildTortTools(
+  tort: TortDefinition,
+  apiBase: string,
+  toolBearer: string | null,
+): Record<string, unknown>[] {
   const toolUrl = (tool: string) =>
     `${apiBase}/api/vapi-tools/${tool}?tort=${encodeURIComponent(tort.id)}`;
+  // Every /api/vapi-tools/* callback is bearer-gated (checkBearer expects
+  // `Authorization: Bearer <toolBearer>`). Bake that header into each tool's
+  // server config so provisioned assistants authenticate; without it the
+  // callbacks return 401 and the agent cannot look up / create leads.
+  const serverHeaders = toolBearer ? { Authorization: `Bearer ${toolBearer}` } : undefined;
   const tortParam = {
     type: "string",
     description: `Tort identifier. Always "${tort.id}" for this agent.`,
@@ -148,7 +158,7 @@ function buildTortTools(tort: TortDefinition, apiBase: string): Record<string, u
       description,
       parameters: { type: "object", properties: { ...properties, tort_type: tortParam }, required },
     },
-    server: { url: toolUrl(name) },
+    server: serverHeaders ? { url: toolUrl(name), headers: serverHeaders } : { url: toolUrl(name) },
   });
 
   return [
@@ -193,12 +203,15 @@ function buildTortTools(tort: TortDefinition, apiBase: string): Record<string, u
   ];
 }
 
-export function buildVapiAssistantPayload(tort: TortDefinition): Record<string, unknown> {
+export function buildVapiAssistantPayload(
+  tort: TortDefinition,
+  toolBearer: string | null = null,
+): Record<string, unknown> {
   const prompt = buildTortAgentPrompt(tort);
   const apiBase = getPublicApiBase();
 
   const bitdeerKey = process.env["BITDEER_API_KEY"]?.trim() ?? "";
-  const tools = apiBase ? buildTortTools(tort, apiBase) : [];
+  const tools = apiBase ? buildTortTools(tort, apiBase, toolBearer) : [];
 
   // Model: prefer BitDeer Qwen custom-llm (matches the existing generic
   // assistant); when no BitDeer key is present fall back to Vapi's default
@@ -297,7 +310,8 @@ export async function provisionTortAgent(tortId: string): Promise<TortAgentSyncR
     };
   }
 
-  const payload = buildVapiAssistantPayload(tort);
+  const toolBearer = (await loadVapiCredentials())?.toolBearer ?? null;
+  const payload = buildVapiAssistantPayload(tort, toolBearer);
 
   try {
     let assistantId = existing?.vapi_assistant_id ?? null;
