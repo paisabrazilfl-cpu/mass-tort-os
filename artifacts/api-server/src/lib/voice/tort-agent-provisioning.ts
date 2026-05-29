@@ -20,7 +20,6 @@ import { logger } from "../logger";
 import { resolveProvider, isResolved } from "../provider-router";
 import { TORT_REGISTRY, type TortDefinition } from "../tort-engine";
 import { buildTortAgentPrompt } from "./tort-agent-prompt";
-import { loadVapiCredentials } from "./vapi-webhook";
 
 const VAPI_BASE = "https://api.vapi.ai";
 
@@ -73,15 +72,22 @@ export interface TortAgentSyncResult {
 
 export interface VapiCreds {
   apiKey: string;
+  toolBearer: string;
 }
 
 /**
- * Resolve the active Vapi api_key from the integrations vault via the
- * provider router. Returns a structured miss the caller can surface to
- * the operator rather than throwing.
+ * Resolve the active Vapi credentials from the integrations vault via the
+ * provider router. Both the api_key (used to call the Vapi management API)
+ * and the tool bearer (`client_secret`, sent as `Authorization: Bearer` on
+ * tool callbacks so they pass `checkBearer`) are read from the SAME resolved
+ * integration row — this guarantees the assistant we create and the bearer
+ * its callbacks present belong to one credential set, so multi-integration
+ * setups can never create an assistant under one row and authenticate
+ * callbacks against another. Returns a structured miss the caller can
+ * surface to the operator rather than throwing.
  */
 export async function resolveVapiApiKey(): Promise<
-  { ok: true; apiKey: string } | { ok: false; code: string; message: string }
+  { ok: true; apiKey: string; toolBearer: string } | { ok: false; code: string; message: string }
 > {
   const resolved = await resolveProvider("voice");
   if (!isResolved(resolved)) {
@@ -99,7 +105,16 @@ export async function resolveVapiApiKey(): Promise<
   if (!apiKey) {
     return { ok: false, code: "NO_VAPI_KEY", message: "Vapi api_key missing from the integration." };
   }
-  return { ok: true, apiKey };
+  const toolBearer = typeof creds.client_secret === "string" ? creds.client_secret.trim() : "";
+  if (!toolBearer) {
+    return {
+      ok: false,
+      code: "NO_VAPI_TOOL_BEARER",
+      message:
+        "Vapi tool bearer (client_secret) missing from the integration — tool callbacks would be unauthenticated. Set the client_secret on the Vapi integration before provisioning.",
+    };
+  }
+  return { ok: true, apiKey, toolBearer };
 }
 
 /**
@@ -205,7 +220,7 @@ function buildTortTools(
 
 export function buildVapiAssistantPayload(
   tort: TortDefinition,
-  toolBearer: string | null = null,
+  toolBearer: string,
 ): Record<string, unknown> {
   const prompt = buildTortAgentPrompt(tort);
   const apiBase = getPublicApiBase();
@@ -310,8 +325,7 @@ export async function provisionTortAgent(tortId: string): Promise<TortAgentSyncR
     };
   }
 
-  const toolBearer = (await loadVapiCredentials())?.toolBearer ?? null;
-  const payload = buildVapiAssistantPayload(tort, toolBearer);
+  const payload = buildVapiAssistantPayload(tort, keyResult.toolBearer);
 
   try {
     let assistantId = existing?.vapi_assistant_id ?? null;
