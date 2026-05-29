@@ -55,7 +55,7 @@ router.post("/", requirePermission(Permission.BUYERS_MANAGE), auditAction("creat
     const [row] = await db.insert(buyersTable).values(parsed.data as any).returning();
     res.status(201).json(row);
   } catch (e: unknown) {
-    if ((e instanceof Error ? e.message : "").includes("duplicate")) {
+    if (String((e as { message?: unknown })?.message ?? "").includes("duplicate")) {
       conflict(res, "name_taken", "A buyer with this name already exists");
       return;
     }
