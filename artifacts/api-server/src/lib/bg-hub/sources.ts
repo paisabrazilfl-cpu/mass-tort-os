@@ -268,8 +268,8 @@ export const BACKGROUND_SOURCES: Record<BackgroundLane, readonly BackgroundSourc
       url: "https://developers.telnyx.com/api/lookup",
       source_type: "technical",
       requires_api_key: true,
-      live_adapter_available: false,
-      notes: "Stub lane — live adapter not yet implemented.",
+      live_adapter_available: true,
+      notes: "Live adapter wired — uses Telnyx API to determine line type (mobile/landline/VoIP), carrier, and porting history. Derives burner-risk signal: non_fixed_voip → high risk, fixed_voip/toll_free → moderate risk, recently_ported → moderate risk, known burner carriers (TextNow/Google Voice) → high risk. Requires TELNYX_API_KEY env var or vault integration.",
     },
   ],
 };

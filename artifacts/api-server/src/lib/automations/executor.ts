@@ -102,8 +102,9 @@ async function assertSafeOutboundUrl(raw: string): Promise<URL> {
     for (const r of records) {
       if (isBlockedIp(r.address)) throw new Error(`Host ${host} resolves to private/internal IP ${r.address}.`);
     }
-  } catch (e: any) {
-    throw new Error(`DNS lookup failed for ${host}: ${e?.message ?? String(e)}`);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`DNS lookup failed for ${host}: ${message}`);
   }
   return u;
 }
@@ -582,8 +583,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     vm.createContext(sandbox);
     try {
       vm.runInContext(`result = (function(input, vars){ ${code} })(input, vars);`, sandbox, { timeout: timeoutMs });
-    } catch (err: any) {
-      throw new Error(`script.javascript: ${err.message}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`script.javascript: ${message}`);
     }
     return sandbox.result;
   },
@@ -1167,8 +1169,8 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
           to: result.to,
         },
       };
-    } catch (err: any) {
-      const message = err?.message ?? String(err);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       // Try to parse the fax_results.id we appended to the error message
       // so downstream nodes can still link to the timeline row.
       const m = /fax_results\.id=(\d+)/.exec(message);
@@ -1303,8 +1305,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
         maxTokens: 1000,
       });
       return { __branch: "success", value: { output, stepsRun: 1 } };
-    } catch (err: any) {
-      return { __branch: "error", value: { error: err?.message ?? String(err) } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { __branch: "error", value: { error: message } };
     }
   },
   "ai.classify": async (s) => {
@@ -1552,8 +1555,8 @@ export async function runWorkflow(opts: ExecutorOptions): Promise<RunResult> {
             );
           }
         }
-      } catch (err: any) {
-        status = "error"; stepError = err?.message ?? String(err);
+      } catch (err) {
+        status = "error"; stepError = err instanceof Error ? err.message : String(err);
       }
       const finishedAt = new Date().toISOString();
       steps.push({ node_id: node.id, type: node.type, label: node.data?.label, started_at: startedAt, finished_at: finishedAt, status, branch, output: status === "ok" ? safeOutput(output) : undefined, error: stepError });
@@ -1564,9 +1567,9 @@ export async function runWorkflow(opts: ExecutorOptions): Promise<RunResult> {
       const next = graph.edges.find((e) => e.source === node.id && (branch ? (e.sourceHandle === branch) : (e.sourceHandle == null || e.sourceHandle === "out")));
       currentId = next?.target ?? null;
     }
-  } catch (err: any) {
+  } catch (err) {
     runStatus = "failed";
-    errorMessage = err?.message ?? String(err);
+    errorMessage = err instanceof Error ? err.message : String(err);
   }
 
   await db.update(automationRunsTable).set({

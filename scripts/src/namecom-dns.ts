@@ -79,8 +79,9 @@ async function dumpPage(page: Page, label: string) {
     await page.goto(`https://www.name.com/domain/${DOMAIN}/dns`, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await dumpPage(page, "05-dns-page");
 
-  } catch (e: any) {
-    console.error("FATAL:", e.message);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("FATAL:", message);
     await snap(page, "fatal");
   } finally {
     await browser.close();

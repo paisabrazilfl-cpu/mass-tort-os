@@ -13,6 +13,11 @@ import {
   perspectiveCue,
   type AttemptOutcome,
 } from "../lib/automations/recursive-retry";
+import {
+  resilientRetry,
+  isResiliencyV2Enabled,
+  type ResilientRetryOptions,
+} from "../lib/ai/resilient-retry";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -454,16 +459,20 @@ router.post("/assist", requirePermission(Permission.AUTOMATIONS_MANAGE), async (
     };
   };
 
-  const result = await recursiveRetry({
-    attempt: runOneAttempt,
-    // 4 total attempts (original + 3 retries). The hard ceiling in
-    // recursive-retry.ts caps anything beyond 6, so even if we bump
-    // this we cannot accidentally loop forever.
-    maxAttempts: 4,
-    // 30s wall-clock cap across all attempts — protects request budget
-    // and prevents a slow LLM from holding the connection open.
-    maxTotalMs: 30_000,
-  });
+  const result = await (isResiliencyV2Enabled()
+    ? resilientRetry({
+        attempt: runOneAttempt,
+        provider: "automation-assist",
+        callId: `automation-${Date.now()}`,
+        attemptTimeoutMs: 8_000,
+        maxAttempts: 4,
+        maxTotalMs: 30_000,
+      })
+    : recursiveRetry({
+        attempt: runOneAttempt,
+        maxAttempts: 4,
+        maxTotalMs: 30_000,
+      }));
 
   if (!result.ok) {
     // Map the last error code to an HTTP status: transport failures
