@@ -10,6 +10,11 @@ export interface IntegrationPreset {
   recommended?: boolean;
   pricing: "free" | "freemium" | "usage" | "subscription" | "enterprise";
   notes?: string;
+  /** Non-secret fields that should be pre-populated when the user opens the
+   *  connect dialog — e.g. known API base URLs and inbound webhook endpoints.
+   *  Secret fields (api_key, client_secret, public_key, account_sid, client_id)
+   *  must never appear here. */
+  prefill?: Partial<Record<"api_url" | "webhook_url" | "from_email" | "from_name" | "fax_number" | "sender_email", string>>;
 }
 
 export const PRESET_INTEGRATIONS: IntegrationPreset[] = [
@@ -37,7 +42,7 @@ export const PRESET_INTEGRATIONS: IntegrationPreset[] = [
   { provider: "documenso", name: "Documenso", type: "esign", category: "E-Signature", description: "Open-source DocuSign alternative — self-host for full data control.", docs_url: "https://documenso.com/docs", fields: ["api_key", "api_url"], score: 6, pricing: "free" },
 
   // ──────────────────────────── VOICE AI AGENTS ────────────────────────────
-  { provider: "vapi", name: "Vapi", type: "voice_ai", category: "Voice AI Agent", description: "Build production phone agents — inbound intake, outbound qualification, callbacks.", docs_url: "https://docs.vapi.ai", fields: ["api_key", "public_key", "client_secret"], score: 9, recommended: true, pricing: "usage", notes: "api_key = Vapi server-side API key (also used to verify HMAC-SHA256 of webhook bodies). public_key = Vapi browser/Web SDK public key (from dashboard → API Keys). client_secret = the static bearer the assistant sends to /api/vapi-tools/* tool callbacks; if blank, tool callbacks are denied." },
+  { provider: "vapi", name: "Vapi", type: "voice_ai", category: "Voice AI Agent", description: "Build production phone agents — inbound intake, outbound qualification, callbacks.", docs_url: "https://docs.vapi.ai", fields: ["api_key", "public_key", "client_secret", "webhook_url", "api_url"], score: 9, recommended: true, pricing: "usage", notes: "api_key = Vapi server-side API key (also used to verify HMAC-SHA256 of webhook bodies). public_key = Vapi browser/Web SDK public key (from dashboard → API Keys). client_secret = the static bearer the assistant sends to /api/vapi-tools/* tool callbacks; if blank, tool callbacks are denied.", prefill: { api_url: "https://api.vapi.ai", webhook_url: "https://mtosvelocity.com/api/webhooks/voice/vapi" } },
   { provider: "retell_ai", name: "Retell AI", type: "voice_ai", category: "Voice AI Agent", description: "Sub-second latency voice agents with built-in turn detection.", docs_url: "https://docs.retellai.com", fields: ["api_key", "client_secret"], score: 9, recommended: true, pricing: "usage", notes: "api_key = Retell server-side key. client_secret = the webhook signing secret used to verify HMAC-SHA256 of inbound /api/webhooks/voice/retell_ai callbacks; if blank, status updates are dropped." },
   { provider: "bland_ai", name: "Bland AI", type: "voice_ai", category: "Voice AI Agent", description: "Phone-first AI agents — easiest setup, batched outbound campaigns.", docs_url: "https://docs.bland.ai", fields: ["api_key", "client_secret"], score: 8, pricing: "usage", notes: "api_key = Bland API key. client_secret = optional webhook signing secret (HMAC-SHA256 of rawBody). Without it, inbound webhooks are audit-only." },
   { provider: "elevenlabs", name: "ElevenLabs Conversational", type: "voice_ai", category: "Voice AI Agent", description: "Best-in-class voices + full conversational agent platform.", docs_url: "https://elevenlabs.io/docs", fields: ["api_key", "client_secret"], score: 8, recommended: true, pricing: "usage", notes: "api_key = ElevenLabs API key. client_secret = the webhook signing secret used to verify inbound /api/webhooks/voice/elevenlabs callbacks." },
