@@ -576,6 +576,25 @@ function ManualDialTab() {
     staleTime: 30_000,
   });
 
+  // Per-tort dedicated agents. Picking a tort selects its provisioned agent
+  // so staff dial a lead with that tort's voice agent.
+  const { data: tortAgentsData } = useQuery<{ agents: any[] }>({
+    queryKey: ["dialer-tort-agents"],
+    queryFn: () => apiFetch<{ agents: any[] }>("/tort-agents"),
+    staleTime: 30_000,
+  });
+  const activeTortAgents: any[] = (tortAgentsData?.agents ?? []).filter(
+    (a) => a.vapi_assistant_id && a.status === "active",
+  );
+
+  const selectTortAgent = useCallback(
+    (tortId: string) => {
+      const agent = activeTortAgents.find((a) => a.tort_id === tortId);
+      if (agent?.vapi_assistant_id) setSelectedAssistant(agent.vapi_assistant_id);
+    },
+    [activeTortAgents],
+  );
+
   const setupMut = useMutation({
     mutationFn: () =>
       apiFetch<any>("/vapi-assistant", {
@@ -746,6 +765,25 @@ function ManualDialTab() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Tort agent quick-pick — dials with the tort's dedicated agent */}
+            {activeTortAgents.length > 0 && (
+              <div className="space-y-1">
+                <Label className="text-[11px] text-muted-foreground">Tort agent</Label>
+                <Select onValueChange={selectTortAgent} disabled={inCall}>
+                  <SelectTrigger className="text-xs h-8">
+                    <SelectValue placeholder="Pick a tort's dedicated agent…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeTortAgents.map((a) => (
+                      <SelectItem key={a.tort_id} value={a.tort_id} className="text-xs">
+                        {a.tort_label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             {/* Assistant selector */}
             {vapiConfig?.assistants && vapiConfig.assistants.length > 0 && (
               <Select value={selectedAssistant} onValueChange={setSelectedAssistant} disabled={inCall}>

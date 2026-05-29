@@ -431,6 +431,7 @@ async function processJob(job: {
         cl_attempts: dialerCampaignLeadsTable.attempts,
         phone: leadsTable.phone,
         first_name: leadsTable.first_name,
+        tort_type: leadsTable.tort_type,
       })
       .from(dialerCampaignLeadsTable)
       .leftJoin(leadsTable, eq(dialerCampaignLeadsTable.lead_id, leadsTable.id))
@@ -502,6 +503,8 @@ async function processJob(job: {
         direction: "outbound",
         to_number: row.phone,
         from_number: campaign.caller_id,
+        vapi_assistant_id: campaign.vapi_assistant_id,
+        tort_type: row.tort_type,
         status: "queued",
         transcript: [],
         events: [],

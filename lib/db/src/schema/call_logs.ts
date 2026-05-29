@@ -27,6 +27,11 @@ export const callLogsTable = pgTable(
     firm_id: integer("firm_id"),
     lead_id: integer("lead_id"),
     vapi_call_id: varchar("vapi_call_id", { length: 100 }),
+    // Which voice assistant placed/handled this call, and the tort whose
+    // dedicated agent it belongs to. Recorded for outbound calls so the UI
+    // and audits can show that a lead was dialed with its tort's agent.
+    vapi_assistant_id: varchar("vapi_assistant_id", { length: 100 }),
+    tort_type: varchar("tort_type", { length: 100 }),
     direction: varchar("direction", { length: 10 }).notNull().default("inbound"),
     from_number: varchar("from_number", { length: 32 }),
     to_number: varchar("to_number", { length: 32 }),

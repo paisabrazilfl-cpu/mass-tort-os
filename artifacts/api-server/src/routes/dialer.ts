@@ -672,6 +672,10 @@ router.post(
       lead_id: z.number().int().positive().optional(),
       campaign_id: z.number().int().positive().optional(),
       caller_id: z.string().max(32).optional(),
+      // Optional explicit overrides. When omitted the per-tort agent is
+      // resolved automatically from the campaign / lead's tort.
+      vapi_assistant_id: z.string().max(100).optional(),
+      tort: z.string().max(100).optional(),
     }).safeParse(req.body);
     if (!parsed.success) { badRequest(res, "Invalid data", parsed.error.issues); return; }
 
@@ -697,11 +701,59 @@ router.post(
       return;
     }
 
+    // ── Resolve which tort agent should handle this call ──────────────────────
+    // Priority: explicit assistant id → campaign's linked agent → explicit
+    // tort hint → the lead's own tort. We track the resolved tort alongside
+    // the assistant so the call log records which tort agent handled the call.
+    let assistantId = parsed.data.vapi_assistant_id?.trim() || null;
+    let tortType = parsed.data.tort?.trim() || null;
+    let callerId = parsed.data.caller_id ?? null;
+
+    if (parsed.data.campaign_id) {
+      const [campaign] = await db
+        .select()
+        .from(dialerCampaignsTable)
+        .where(
+          and(
+            eq(dialerCampaignsTable.id, parsed.data.campaign_id),
+            firmId != null ? eq(dialerCampaignsTable.firm_id, firmId) : sql`true`,
+          ),
+        )
+        .limit(1);
+      if (campaign) {
+        if (!assistantId && campaign.vapi_assistant_id) assistantId = campaign.vapi_assistant_id;
+        if (!callerId && campaign.caller_id) callerId = campaign.caller_id;
+      }
+    }
+
+    // Fall back to the lead's tort when no explicit tort was supplied.
+    if (!tortType && parsed.data.lead_id) {
+      const [lead] = await db
+        .select({ tort_type: leadsTable.tort_type })
+        .from(leadsTable)
+        .where(eq(leadsTable.id, parsed.data.lead_id))
+        .limit(1);
+      if (lead?.tort_type) tortType = lead.tort_type;
+    }
+
+    // Resolve the tort's dedicated agent when we still have no assistant id.
+    if (!assistantId && tortType) {
+      const [agent] = await db
+        .select()
+        .from(tortVoiceAgentsTable)
+        .where(eq(tortVoiceAgentsTable.tort_id, tortType))
+        .limit(1);
+      if (agent?.vapi_assistant_id && agent.status === "active") {
+        assistantId = agent.vapi_assistant_id;
+      }
+    }
+
     // Resolve the configured voice provider (voice has no per-buyer override)
     const resolved = await resolveProvider("voice");
     const hasProvider = isResolved(resolved);
 
-    // Log the call attempt regardless of provider availability
+    // Log the call attempt regardless of provider availability, recording the
+    // resolved tort agent so the call history shows which agent handled it.
     const [callLog] = await db
       .insert(callLogsTable)
       .values({
@@ -709,7 +761,9 @@ router.post(
         lead_id: parsed.data.lead_id,
         direction: "outbound",
         to_number: parsed.data.to_number,
-        from_number: parsed.data.caller_id ?? null,
+        from_number: callerId,
+        vapi_assistant_id: assistantId,
+        tort_type: tortType,
         status: "queued",
         transcript: [],
         events: [],
@@ -727,21 +781,66 @@ router.post(
       return;
     }
 
-    try {
-      const adapter = getVoiceAdapter(resolved.provider);
-      if (adapter && typeof (adapter as any).initiateOutbound === "function") {
-        await (adapter as any).initiateOutbound(resolved.credentials, {
-          to: parsed.data.to_number,
-          from: parsed.data.caller_id,
-          callLogId: callLog.id,
-        });
-      }
+    // An outbound Vapi call requires an assistant. If we could not resolve a
+    // tort agent, fail honestly rather than dialing with no agent.
+    if (resolved.provider === "vapi" && !assistantId) {
       await db
         .update(callLogsTable)
-        .set({ status: "in_progress", updated_at: new Date() })
+        .set({ status: "failed", error: "no_assistant_resolved", updated_at: new Date() })
+        .where(eq(callLogsTable.id, callLog.id));
+      res.status(422).json({
+        code: "NO_ASSISTANT",
+        message:
+          "No voice agent could be resolved for this call. Provide a tort with a provisioned agent, a campaign, or an explicit assistant id.",
+        call_log_id: callLog.id,
+      });
+      return;
+    }
+
+    try {
+      const adapter = getVoiceAdapter(resolved.provider);
+      if (!adapter || typeof adapter.startCall !== "function") {
+        throw new Error(`Voice provider ${resolved.provider} does not support outbound calls.`);
+      }
+      const outcome = await adapter.startCall(resolved.credentials, {
+        to: parsed.data.to_number,
+        from: callerId ?? undefined,
+        assistantId: assistantId ?? "",
+        metadata: {
+          call_log_id: String(callLog.id),
+          ...(firmId != null ? { firm_id: String(firmId) } : {}),
+          ...(parsed.data.lead_id ? { lead_id: String(parsed.data.lead_id) } : {}),
+          ...(tortType ? { tort_type: tortType } : {}),
+        },
+      });
+
+      if (!outcome.ok) {
+        await db
+          .update(callLogsTable)
+          .set({ status: "failed", error: outcome.message, updated_at: new Date() })
+          .where(eq(callLogsTable.id, callLog.id));
+        res.status(502).json({
+          code: "PROVIDER_ERROR",
+          message: "Voice provider failed to initiate the call.",
+          detail: outcome.message,
+          call_log_id: callLog.id,
+        });
+        return;
+      }
+
+      await db
+        .update(callLogsTable)
+        .set({ status: "in_progress", vapi_call_id: outcome.externalCallId, updated_at: new Date() })
         .where(eq(callLogsTable.id, callLog.id));
 
-      res.json({ call_log_id: callLog.id, status: "in_progress", provider: resolved.provider });
+      res.json({
+        call_log_id: callLog.id,
+        status: "in_progress",
+        provider: resolved.provider,
+        vapi_assistant_id: assistantId,
+        tort: tortType,
+        vapi_call_id: outcome.externalCallId,
+      });
     } catch (err) {
       logger.error({ err, callLogId: callLog.id }, "dialer: outbound call initiation failed");
       await db
