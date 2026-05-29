@@ -218,7 +218,9 @@ router.patch(
     // auto-link the tort's dedicated voice agent when the edit did not set an
     // assistant explicitly — mirrors create-time behavior (Task #90).
     const { tort, ...campaignData } = parsed.data;
-    if (campaignData.vapi_assistant_id == null && tort) {
+    // Falsy-safe (matches create): an empty-string assistant id from the UI
+    // should still trigger tort-based defaulting, not be treated as "set".
+    if (!campaignData.vapi_assistant_id && tort) {
       const [agent] = await db
         .select()
         .from(tortVoiceAgentsTable)

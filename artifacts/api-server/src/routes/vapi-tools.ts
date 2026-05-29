@@ -78,7 +78,7 @@ type TortScope =
  * When no URL hint is present (e.g. the legacy generic assistant), we fall
  * back to the body value, then to "unknown".
  */
-function resolveTortType(req: Request, bodyTort: string | null | undefined): TortScope {
+export function resolveTortType(req: Request, bodyTort: string | null | undefined): TortScope {
   const rawBody = typeof bodyTort === "string" ? bodyTort.trim() : "";
   // "unknown" is the schema-level placeholder the model emits when it has no
   // real tort to report; treat it as absent so a query-scoped agent is never
@@ -95,6 +95,35 @@ function resolveTortType(req: Request, bodyTort: string | null | undefined): Tor
   }
   if (fromBody) return { ok: true, tort: fromBody };
   return { ok: true, tort: "unknown" };
+}
+
+/**
+ * Conflict-resolution guard for callbacks that operate on an existing lead
+ * (check-eligibility, escalate-to-human). A per-tort agent bakes `?tort=<id>`
+ * into its tool URLs, so a request that targets a lead belonging to a
+ * DIFFERENT tort is a cross-tort scope violation (model hallucinated a
+ * lead_id, or a misconfigured assistant). We fail closed rather than acting
+ * on another tort's lead.
+ *
+ * Returns:
+ *   - { ok: true }                  lead matches the scoped tort (or no scope)
+ *   - { ok: false, code: ... }      mismatch / lead missing
+ */
+async function assertLeadInScope(
+  leadId: number,
+  scopeTort: string,
+): Promise<{ ok: true } | { ok: false; code: "CROSS_TORT" | "LEAD_NOT_FOUND" }> {
+  // No real scope to enforce (legacy generic assistant or unscoped call).
+  if (!scopeTort || scopeTort === "unknown") return { ok: true };
+  const rows = await db
+    .select({ tort_type: leadsTable.tort_type })
+    .from(leadsTable)
+    .where(eq(leadsTable.id, leadId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return { ok: false, code: "LEAD_NOT_FOUND" };
+  if (row.tort_type !== scopeTort) return { ok: false, code: "CROSS_TORT" };
+  return { ok: true };
 }
 
 function normalizePhone(raw: string): string {
@@ -282,6 +311,7 @@ router.post("/create-lead", async (req, res) => {
 
 const eligibilitySchema = z.object({
   lead_id: z.coerce.number().int().positive(),
+  tort_type: z.string().min(1).max(100).optional().nullable(),
 });
 
 /**
@@ -339,7 +369,23 @@ router.post("/check-eligibility", async (req, res) => {
     res.status(200).json({ ok: false, code: "BAD_REQUEST", issues: parsed.error.issues });
     return;
   }
+  const scope = resolveTortType(req, parsed.data.tort_type);
+  if (!scope.ok) {
+    res.status(200).json({ ok: false, code: scope.code });
+    return;
+  }
   try {
+    const inScope = await assertLeadInScope(parsed.data.lead_id, scope.tort);
+    if (!inScope.ok) {
+      // Fail closed: never score a lead outside this agent's tort.
+      res.status(200).json({
+        ok: true,
+        result: "abort",
+        reason: inScope.code === "CROSS_TORT" ? "cross_tort_scope" : "lead_not_found",
+        disqualifiers: [inScope.code === "CROSS_TORT" ? "cross_tort_scope" : "lead_not_found"],
+      });
+      return;
+    }
     const result = await computeAndPersistLeadScore(parsed.data.lead_id);
     if (!result) {
       res.status(200).json({
@@ -367,6 +413,7 @@ const escalateSchema = z.object({
   lead_id: z.coerce.number().int().positive().optional().nullable(),
   call_id: z.string().min(1).max(100).optional().nullable(),
   reason: z.string().max(500).default("vapi_escalation"),
+  tort_type: z.string().min(1).max(100).optional().nullable(),
 });
 
 router.post("/escalate-to-human", async (req, res) => {
@@ -379,8 +426,18 @@ router.post("/escalate-to-human", async (req, res) => {
     res.status(200).json({ ok: false, code: "BAD_REQUEST", issues: parsed.error.issues });
     return;
   }
+  const scope = resolveTortType(req, parsed.data.tort_type);
+  if (!scope.ok) {
+    res.status(200).json({ ok: false, code: scope.code });
+    return;
+  }
   try {
     if (parsed.data.lead_id) {
+      const inScope = await assertLeadInScope(parsed.data.lead_id, scope.tort);
+      if (!inScope.ok) {
+        res.status(200).json({ ok: false, code: inScope.code });
+        return;
+      }
       // Pull firm_id off the lead so disposition row joins correctly.
       const lead = await db
         .select({ id: leadsTable.id, firm_id: leadsTable.firm_id })

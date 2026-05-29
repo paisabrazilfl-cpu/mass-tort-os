@@ -37,11 +37,11 @@ args = "db-drift"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "rbac-test"
+args = "MTOS Playwright Monitor"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "MTOS Playwright Monitor"
+args = "rbac-test"
 
 [[workflows.workflow]]
 name = "MTOS Worker: Job Processor"
@@ -77,17 +77,6 @@ args = "pnpm --filter @workspace/db run drift"
 isValidation = true
 
 [[workflows.workflow]]
-name = "rbac-test"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts src/lib/__tests__/rbac-route-matrix.test.ts src/lib/__tests__/rbac-route-matrix-headline.test.ts src/lib/__tests__/firm-context.test.ts src/lib/__tests__/firm-invites.test.ts src/lib/__tests__/fasten-webhook.test.ts src/lib/__tests__/fasten-job.test.ts src/routes/__tests__/vapi-tools-eligibility-mapping.test.ts src/routes/__tests__/leads-fax-results-route.test.ts src/routes/__tests__/auth-register-route.test.ts src/routes/__tests__/users-route.test.ts src/routes/__tests__/fasten-route.test.ts src/routes/__tests__/admin-api-keys-route.test.ts"
-
-[workflows.workflow.metadata]
-isValidation = true
-
-[[workflows.workflow]]
 name = "MTOS Playwright Monitor"
 author = "agent"
 
@@ -97,6 +86,17 @@ outputType = "console"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium MONITOR_PASSWORD='1Giselle!' pnpm --filter @workspace/scripts run monitor"
+
+[[workflows.workflow]]
+name = "rbac-test"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts src/lib/__tests__/rbac-route-matrix.test.ts src/lib/__tests__/rbac-route-matrix-headline.test.ts src/lib/__tests__/firm-context.test.ts src/lib/__tests__/firm-invites.test.ts src/lib/__tests__/fasten-webhook.test.ts src/lib/__tests__/fasten-job.test.ts src/routes/__tests__/vapi-tools-eligibility-mapping.test.ts src/routes/__tests__/vapi-tools-tort-scope.test.ts src/routes/__tests__/leads-fax-results-route.test.ts src/routes/__tests__/auth-register-route.test.ts src/routes/__tests__/users-route.test.ts src/routes/__tests__/fasten-route.test.ts src/routes/__tests__/admin-api-keys-route.test.ts"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [nix]
 channel = "stable-25_05"

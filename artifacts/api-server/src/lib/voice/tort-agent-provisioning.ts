@@ -259,19 +259,65 @@ export function buildVapiAssistantPayload(
   };
 }
 
+const VAPI_TIMEOUT_MS = 15000;
+const VAPI_MAX_ATTEMPTS = 3;
+
+function isTransientStatus(status: number): boolean {
+  // Retry rate limits and upstream/server faults; never retry 4xx auth/
+  // validation errors (they will fail identically) or 404 (caller handles
+  // it as a recreate signal).
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Call the Vapi management API with a hard timeout and bounded retry/backoff
+ * for transient failures (network errors, 429, 5xx). Non-transient HTTP
+ * responses (including 404) are returned to the caller on the first attempt
+ * so the provisioning state machine can react (e.g. 404 → recreate).
+ */
 async function vapiFetch(
   apiKey: string,
   path: string,
   method: string,
   body?: unknown,
 ): Promise<{ ok: boolean; status: number; json: Record<string, unknown> }> {
-  const resp = await fetch(`${VAPI_BASE}${path}`, {
-    method,
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const json = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-  return { ok: resp.ok, status: resp.status, json };
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= VAPI_MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), VAPI_TIMEOUT_MS);
+    try {
+      const resp = await fetch(`${VAPI_BASE}${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      const json = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!resp.ok && isTransientStatus(resp.status) && attempt < VAPI_MAX_ATTEMPTS) {
+        logger.warn(
+          { path, method, status: resp.status, attempt },
+          "vapi transient HTTP error — retrying",
+        );
+        await sleep(250 * 2 ** (attempt - 1));
+        continue;
+      }
+      return { ok: resp.ok, status: resp.status, json };
+    } catch (err) {
+      // Network error or timeout (AbortError). Retry with backoff.
+      lastErr = err;
+      if (attempt < VAPI_MAX_ATTEMPTS) {
+        logger.warn({ path, method, attempt, err }, "vapi network error — retrying");
+        await sleep(250 * 2 ** (attempt - 1));
+        continue;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new Error(`Vapi request failed after ${VAPI_MAX_ATTEMPTS} attempts: ${msg}`);
 }
 
 function resolveTort(tortId: string): TortDefinition | null {
