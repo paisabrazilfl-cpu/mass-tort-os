@@ -62,6 +62,36 @@ async function checkBearer(req: Request): Promise<boolean> {
   return constantTimeEqual(provided, creds.toolBearer);
 }
 
+type TortScope =
+  | { ok: true; tort: string }
+  | { ok: false; code: "BAD_TORT_SCOPE" };
+
+/**
+ * Resolve (and enforce) the tort for a tool call. Per-tort agents (Task #90)
+ * bake a `?tort=<id>` hint into each tool's server URL. That URL is owned by
+ * the provisioner, not the caller, so it is AUTHORITATIVE — the model cannot
+ * widen its own scope by sending a different tort_type in the body. If the
+ * body disagrees with the URL hint we reject (BAD_TORT_SCOPE) rather than
+ * silently trusting model-supplied args, which preserves the "one dedicated
+ * agent per tort" isolation guarantee.
+ *
+ * When no URL hint is present (e.g. the legacy generic assistant), we fall
+ * back to the body value, then to "unknown".
+ */
+function resolveTortType(req: Request, bodyTort: string | null | undefined): TortScope {
+  const fromBody = typeof bodyTort === "string" ? bodyTort.trim() : "";
+  const q = req.query?.tort;
+  const fromQuery = typeof q === "string" ? q.trim() : "";
+  if (fromQuery) {
+    if (fromBody && fromBody !== fromQuery) {
+      return { ok: false, code: "BAD_TORT_SCOPE" };
+    }
+    return { ok: true, tort: fromQuery };
+  }
+  if (fromBody) return { ok: true, tort: fromBody };
+  return { ok: true, tort: "unknown" };
+}
+
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D+/g, "");
   if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
@@ -102,7 +132,12 @@ router.post("/lookup-lead", async (req, res) => {
     res.status(200).json({ ok: false, code: "BAD_PHONE" });
     return;
   }
-  const tortType = (parsed.data.tort_type ?? "unknown").trim() || "unknown";
+  const scope = resolveTortType(req, parsed.data.tort_type);
+  if (!scope.ok) {
+    res.status(200).json({ ok: false, code: scope.code });
+    return;
+  }
+  const tortType = scope.tort;
   try {
     // Use the shared dedup pipeline. It tries (tort|email|phone10) hash
     // first, then exact email, then a phone-decrypt scan — exactly what
@@ -172,16 +207,22 @@ router.post("/create-lead", async (req, res) => {
     return;
   }
   const dob = parsed.data.date_of_birth ?? null;
+  const scope = resolveTortType(req, parsed.data.tort_type);
+  if (!scope.ok) {
+    res.status(200).json({ ok: false, code: scope.code });
+    return;
+  }
+  const tortType = scope.tort;
   // Canonical hash (matches CSV / form / public-leads). May be null when
   // email is missing — that is correct: lookup_hash is intentionally NOT
   // populated for partial inputs to avoid (tort, email, "")(tort, email, phone)
   // collisions silently deduping unrelated rows.
-  const hash = leadLookupHash(parsed.data.tort_type, parsed.data.email ?? null, phoneE164);
+  const hash = leadLookupHash(tortType, parsed.data.email ?? null, phoneE164);
   try {
     // Dedupe through the shared pipeline so we hit the same matches every
     // other ingestion surface would.
     const existing = await findExistingLeadForIntake({
-      tortType: parsed.data.tort_type,
+      tortType,
       email: parsed.data.email ?? null,
       phone: phoneE164,
     });
@@ -217,7 +258,7 @@ router.post("/create-lead", async (req, res) => {
       "name" | "first_name" | "last_name" | "phone" | "email" | "date_of_birth" | "notes"
     >;
     const insertRow: typeof leadsTable.$inferInsert = {
-      tort_type: parsed.data.tort_type,
+      tort_type: tortType,
       source: parsed.data.source,
       status: "new",
       lookup_hash: hash,

@@ -261,7 +261,7 @@ function CampaignsTab() {
     name: "", type: "preview", caller_id: "", retry_attempts: 3,
     max_concurrent_calls: 1, call_window_start: "09:00", call_window_end: "20:00",
     timezone: "America/New_York", notes: "",
-    vapi_assistant_id: "", vapi_phone_number_id: "",
+    tort: "", vapi_assistant_id: "", vapi_phone_number_id: "",
   });
 
   const { data, isLoading, refetch: refetchCampaigns } = useQuery({
@@ -285,8 +285,29 @@ function CampaignsTab() {
     retry: false,
   });
 
+  const { data: tortAgentsData } = useQuery({
+    queryKey: ["dialer-tort-agents"],
+    queryFn: () => apiFetch<any>("/tort-agents"),
+    retry: false,
+  });
+
   const assistants: any[] = vapiCfg?.assistants ?? [];
   const phoneNumbers: any[] = vapiPhones?.phone_numbers ?? [];
+  const tortAgents: any[] = tortAgentsData?.agents ?? [];
+
+  // Task #90: selecting a tort auto-links the campaign to that tort's
+  // dedicated voice agent when one is provisioned and active.
+  const onTortChange = (tortId: string) => {
+    const agent = tortAgents.find((a) => a.tort_id === tortId);
+    setForm((f) => ({
+      ...f,
+      tort: tortId,
+      vapi_assistant_id:
+        agent?.vapi_assistant_id && agent.status === "active"
+          ? agent.vapi_assistant_id
+          : f.vapi_assistant_id,
+    }));
+  };
 
   const createMut = useMutation({
     mutationFn: (body: typeof form) => apiFetch("/campaigns", { method: "POST", body: JSON.stringify(body) }),
@@ -448,6 +469,25 @@ function CampaignsTab() {
             </div>
             <div className="border-t pt-3">
               <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Vapi Auto-Dialing</p>
+              {tortAgents.length > 0 && (
+                <div className="mb-3">
+                  <Label>Tort (auto-links voice agent)</Label>
+                  <Select value={form.tort} onValueChange={onTortChange}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a tort to auto-assign its agent" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {tortAgents.map((t: any) => (
+                        <SelectItem key={t.tort_id} value={t.tort_id}>
+                          {t.tort_label}
+                          {t.status === "active" ? "" : " — no agent yet"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-0.5">Picks the tort's dedicated agent when provisioned</p>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label>Vapi Assistant</Label>

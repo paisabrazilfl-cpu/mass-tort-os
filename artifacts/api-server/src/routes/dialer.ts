@@ -19,6 +19,7 @@ import {
   dialerScriptsTable,
   callLogsTable,
   leadsTable,
+  tortVoiceAgentsTable,
 } from "@workspace/db";
 import {
   eq, and, desc, asc, sql, ilike, or, inArray, count,
@@ -30,6 +31,11 @@ import { getFirmIdForUser } from "../lib/subscription-gate";
 import { logger } from "../lib/logger";
 import { resolveProvider, isResolved } from "../lib/provider-router";
 import { getVoiceAdapter } from "../lib/voice";
+import {
+  listTortAgentStatus,
+  provisionTortAgent,
+  provisionAllTortAgents,
+} from "../lib/voice/tort-agent-provisioning";
 
 const router = Router();
 
@@ -114,6 +120,11 @@ const campaignSchema = z.object({
   call_window_end: z.string().regex(/^\d{2}:\d{2}$/).default("20:00"),
   timezone: z.string().max(60).default("America/New_York"),
   notes: z.string().max(2000).optional(),
+  vapi_assistant_id: z.string().max(100).optional(),
+  vapi_phone_number_id: z.string().max(100).optional(),
+  // Task #90: optional tort hint — when provided and no assistant is
+  // chosen explicitly, the campaign auto-links to that tort's agent.
+  tort: z.string().max(100).optional(),
 });
 
 router.get(
@@ -144,10 +155,26 @@ router.post(
       res.status(403).json({ code: "NO_FIRM", message: "User not linked to a firm." });
       return;
     }
+    // `tort` is a request-only hint, not a column. Strip it out and use it
+    // to auto-link the tort's dedicated voice agent when the caller did not
+    // pick an assistant explicitly (Task #90).
+    const { tort, ...campaignData } = parsed.data;
+    let assistantId = campaignData.vapi_assistant_id;
+    if (!assistantId && tort) {
+      const [agent] = await db
+        .select()
+        .from(tortVoiceAgentsTable)
+        .where(eq(tortVoiceAgentsTable.tort_id, tort))
+        .limit(1);
+      if (agent?.vapi_assistant_id && agent.status === "active") {
+        assistantId = agent.vapi_assistant_id;
+      }
+    }
     const [row] = await db
       .insert(dialerCampaignsTable)
       .values({
-        ...parsed.data,
+        ...campaignData,
+        vapi_assistant_id: assistantId,
         firm_id: firmId ?? 0,
         created_by: req.user!.id,
       })
@@ -929,6 +956,53 @@ router.post(
       voice: parsed.data.voice_id,
       assistant: json,
     });
+  },
+);
+
+// ─── PER-TORT VOICE AGENTS (Task #90) ────────────────────────────────────────
+
+// List per-tort agent status (provisioned / out-of-date / errors) across the
+// full TORT_REGISTRY, joined against the live generated prompt fingerprint.
+router.get(
+  "/tort-agents",
+  requirePermission(Permission.CALLS_VIEW),
+  async (_req, res) => {
+    const agents = await listTortAgentStatus();
+    res.json({ agents });
+  },
+);
+
+// Provision (create or sync) the agent for a single tort. Idempotent.
+router.post(
+  "/tort-agents/:tortId/provision",
+  requirePermission(Permission.CALLS_MANAGE),
+  async (req, res) => {
+    const tortId = String(req.params.tortId ?? "").trim();
+    if (!tortId) { badRequest(res, "Missing tort id"); return; }
+    const result = await provisionTortAgent(tortId);
+    if (result.outcome === "error" && result.error === "UNKNOWN_TORT") {
+      notFound(res);
+      return;
+    }
+    res.status(result.outcome === "error" ? 502 : 200).json({ result });
+  },
+);
+
+// Provision (create or sync) every tort agent. Each tort succeeds or fails
+// independently; the response carries honest per-tort status.
+router.post(
+  "/tort-agents/provision-all",
+  requirePermission(Permission.CALLS_MANAGE),
+  async (_req, res) => {
+    const results = await provisionAllTortAgents();
+    const summary = {
+      total: results.length,
+      created: results.filter((r) => r.outcome === "created").length,
+      updated: results.filter((r) => r.outcome === "updated").length,
+      in_sync: results.filter((r) => r.outcome === "in_sync").length,
+      errors: results.filter((r) => r.outcome === "error").length,
+    };
+    res.json({ summary, results });
   },
 );
 

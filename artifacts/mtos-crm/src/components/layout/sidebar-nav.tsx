@@ -44,7 +44,8 @@ export const navigation: NavSection[] = [
   {
     section: "Dialer",
     items: [
-      { name: "Dialer",       href: "/dialer",      icon: PhoneCall  },
+      { name: "Dialer",       href: "/dialer",       icon: PhoneCall  },
+      { name: "Voice Agents", href: "/voice-agents", icon: Bot        },
     ],
   },
 

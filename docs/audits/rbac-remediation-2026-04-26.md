@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **302 checked / 44 public / 258 protected / 0 unprotected.**
+Boot-time count: **305 checked / 44 public / 261 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -711,6 +711,9 @@ Boot-time count: **302 checked / 44 public / 258 protected / 0 unprotected.**
 | dialer | GET | `/api/dialer/scripts` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | POST | `/api/dialer/scripts` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | GET | `/api/dialer/stats` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | POST | `/api/dialer/tort-agents/:tortId/provision` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | POST | `/api/dialer/tort-agents/provision-all` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/tort-agents` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | POST | `/api/dialer/vapi-assistant` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | GET | `/api/dialer/vapi-config` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | GET | `/api/dialer/vapi-phones` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
