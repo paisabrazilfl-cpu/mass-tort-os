@@ -1407,6 +1407,196 @@ function ReportsTab() {
   );
 }
 
+// ─── VAPI AI TAB ──────────────────────────────────────────────────────────────
+
+interface VapiChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  action?: { tool: string; args: Record<string, unknown> };
+  loading?: boolean;
+}
+
+const VAPI_AI_QUICK = [
+  { label: "List Assistants", msg: "List all my Vapi assistants" },
+  { label: "Phone Numbers", msg: "Show all Vapi phone numbers" },
+  { label: "Recent Calls", msg: "Show my 10 most recent Vapi calls" },
+  { label: "Active Campaigns", msg: "Show me active call campaigns" },
+];
+
+async function vapiMcpChat(message: string, token: string): Promise<{ reply: string; action?: { tool: string; args: Record<string, unknown> } }> {
+  const res = await fetch("/api/vapi-mcp/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Request failed" }));
+    return { reply: err.error ?? "Request failed" };
+  }
+  return res.json();
+}
+
+function VapiAiTab() {
+  const { user } = useAuth();
+  const token = getAccessToken() ?? "";
+  const [messages, setMessages] = useState<VapiChatMessage[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      content:
+        "Hi! I'm the Vapi AI Manager. I can manage your Vapi assistants, phone numbers, and calls directly from chat.\n\nTry asking me to **list your assistants**, **show phone numbers**, or **create a new intake assistant** — I'll do it automatically using your configured API key.",
+    },
+  ]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function send(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+    setInput("");
+    setSending(true);
+
+    const userMsg: VapiChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
+    const loadingMsg: VapiChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "", loading: true };
+    setMessages((prev) => [...prev, userMsg, loadingMsg]);
+
+    const resp = await vapiMcpChat(trimmed, token);
+
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === loadingMsg.id
+          ? { ...m, content: resp.reply, action: resp.action, loading: false }
+          : m,
+      ),
+    );
+    setSending(false);
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[calc(100vh-220px)] min-h-[500px]">
+      {/* Sidebar */}
+      <Card className="lg:col-span-1 flex flex-col">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Bot className="h-4 w-4 text-primary" />
+            Quick Actions
+          </CardTitle>
+          <CardDescription className="text-xs">One-click Vapi commands</CardDescription>
+        </CardHeader>
+        <CardContent className="flex-1 space-y-2">
+          {VAPI_AI_QUICK.map((q) => (
+            <Button
+              key={q.label}
+              variant="outline"
+              size="sm"
+              className="w-full justify-start text-left text-xs"
+              onClick={() => send(q.msg)}
+              disabled={sending}
+            >
+              <Zap className="h-3 w-3 mr-2 text-yellow-500 shrink-0" />
+              {q.label}
+            </Button>
+          ))}
+        </CardContent>
+        <div className="p-3 border-t">
+          <div className="rounded-md bg-muted/50 p-2 space-y-1">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">How it works</p>
+            <p className="text-[10px] text-muted-foreground">
+              Add your Vapi API key in <span className="font-medium">Integrations → Voice AI → Vapi</span>.
+              Once saved, this chat connects automatically — no other setup needed.
+            </p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Chat */}
+      <Card className="lg:col-span-3 flex flex-col overflow-hidden">
+        <CardHeader className="pb-2 border-b shrink-0">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
+                <Bot className="h-3.5 w-3.5 text-primary" />
+              </div>
+              Vapi AI Manager
+            </CardTitle>
+            <Badge variant="outline" className="text-[10px] gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
+              MCP Connected
+            </Badge>
+          </div>
+        </CardHeader>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {messages.map((msg) => (
+            <div key={msg.id} className={`flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+              {msg.role === "assistant" && (
+                <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+                  <Bot className="h-3.5 w-3.5 text-primary" />
+                </div>
+              )}
+              <div
+                className={`max-w-[80%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
+                  msg.role === "user"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-foreground"
+                }`}
+              >
+                {msg.loading ? (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <span className="text-xs">Calling Vapi MCP…</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                    {msg.action && (
+                      <div className="mt-2 pt-2 border-t border-border/40">
+                        <p className="text-[10px] text-muted-foreground font-mono">
+                          ⚡ {msg.action.tool}({Object.keys(msg.action.args).length > 0 ? JSON.stringify(msg.action.args) : ""})
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              {msg.role === "user" && (
+                <div className="h-7 w-7 rounded-full bg-secondary flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-semibold">
+                  {(user as any)?.name?.charAt(0)?.toUpperCase() ?? "U"}
+                </div>
+              )}
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Input */}
+        <div className="border-t p-3 shrink-0">
+          <div className="flex gap-2">
+            <Input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }}
+              placeholder="Ask Vapi AI Manager anything… e.g. 'Create an intake assistant for talc ovarian cancer'"
+              className="text-sm"
+              disabled={sending}
+            />
+            <Button size="sm" onClick={() => send(input)} disabled={sending || !input.trim()}>
+              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 // ─── PAGE ─────────────────────────────────────────────────────────────────────
 
 export default function DialerPage() {
@@ -1431,6 +1621,7 @@ export default function DialerPage() {
           <TabsTrigger value="dnc" className="gap-1.5"><ShieldOff className="h-3.5 w-3.5" />DNC Manager</TabsTrigger>
           <TabsTrigger value="recordings" className="gap-1.5"><Headphones className="h-3.5 w-3.5" />Recordings</TabsTrigger>
           <TabsTrigger value="reports" className="gap-1.5"><TrendingUp className="h-3.5 w-3.5" />Reports</TabsTrigger>
+          <TabsTrigger value="vapi-ai" className="gap-1.5"><Bot className="h-3.5 w-3.5" />Vapi AI</TabsTrigger>
         </TabsList>
 
         <TabsContent value="dashboard"><StatsTab /></TabsContent>
@@ -1440,6 +1631,7 @@ export default function DialerPage() {
         <TabsContent value="dnc"><DncTab /></TabsContent>
         <TabsContent value="recordings"><RecordingsTab /></TabsContent>
         <TabsContent value="reports"><ReportsTab /></TabsContent>
+        <TabsContent value="vapi-ai"><VapiAiTab /></TabsContent>
       </Tabs>
     </div>
   );

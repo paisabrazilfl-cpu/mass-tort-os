@@ -45,6 +45,7 @@ import formsApiDirectoryRouter from "./forms-api-directory";
 import automationWebhookRouter from "./automation-webhook";
 import aiObserverRouter from "./ai-observer";
 import aiChatRouter from "./ai-chat";
+import vapiMcpRouter from "./vapi-mcp";
 import dialerRouter from "./dialer";
 import vendorPortalRouter from "./vendor-portal";
 import mrrRouter from "./mrr";
@@ -198,6 +199,7 @@ router.use("/admin/forms-api-directory", formsApiDirectoryRouter);
 router.use("/automations", automationsRouter);
 router.use("/ai-observer", aiObserverRouter);
 router.use("/ai-chat", aiChatRouter);
+router.use("/vapi-mcp", vapiMcpRouter);
 router.use("/mrr", mrrRouter);
 
 export default router;
