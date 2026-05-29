@@ -90,3 +90,9 @@ id = "1RKFCEU0DFvP4Wp5hJ86-"
 uri = "file://mtos-source.tar.gz"
 type = "unspecified"
 title = "MTOS Source Code (1.1 MB)"
+
+[[outputs]]
+id = "PCxBhnoonBcphX38X5QBG"
+uri = "file://mtos-latest-2026-05-29.tar.gz"
+type = "unspecified"
+title = "MTOS Source Code — latest (2026-05-29)"
