@@ -8,6 +8,7 @@ import {
   adaptNSOPW,
   adaptPacer,
   adaptPhone,
+  adaptPhoneProvenance,
   adaptResidency,
 } from "./adapters";
 import { BACKGROUND_SOURCES } from "./sources";
@@ -29,6 +30,7 @@ const ADAPTERS: readonly AdapterEntry[] = [
   { lane: "address", run: adaptAddress },
   { lane: "email", run: adaptEmail },
   { lane: "phone", run: adaptPhone },
+  { lane: "phone_provenance", run: adaptPhoneProvenance },
   { lane: "residency", run: adaptResidency },
   { lane: "criminal_court", run: adaptCriminalCourt },
   { lane: "incarceration", run: adaptIncarceration },

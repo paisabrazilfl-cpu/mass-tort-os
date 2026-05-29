@@ -9,6 +9,7 @@ import { searchPcl } from "../pacer/pcl-client";
 import { searchEdgar } from "./sec-edgar";
 import { searchClAttorney } from "./courtlistener-attorney";
 import { checkFccRnd } from "./fcc-rnd";
+import { lookupPhoneProvenance } from "./phone-provenance";
 
 import { BACKGROUND_SOURCES } from "./sources";
 import { statusFromFlags } from "./escalation";
@@ -947,6 +948,102 @@ export async function adaptBusiness(lead: LeadLike): Promise<BackgroundLaneResul
       ["sec_edgar_unavailable"],
       { business_name: bizName },
       ["SEC EDGAR check failed unexpectedly — see error field."],
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phone provenance — Telnyx Number Lookup live adapter.
+//
+// Telnyx's Lookup API returns carrier + line type for any North American
+// number. We derive a burner-risk signal from those fields:
+//
+//   line_type=mobile, carrier known         → low risk
+//   line_type=fixed_voip                    → moderate risk (Google Voice,
+//                                              TextNow, etc — common burner
+//                                              path in mass-tort fraud)
+//   line_type=non_fixed_voip                → high risk (anonymous SIP
+//                                              numbers; cheap to spin up)
+//   line_type=toll_free                     → moderate risk (claimant
+//                                              should not be reachable
+//                                              via a toll-free number)
+//   carrier unknown + recently-ported       → high risk
+//
+// Reuses the existing `telnyx` integration row's api_key — no separate
+// signup. The Lookup endpoint is billed at fractions of a cent per call.
+//
+// Skipped (NOT_RUN) when the lead has no phone number.
+// ---------------------------------------------------------------------------
+export async function adaptPhoneProvenance(lead: LeadLike): Promise<BackgroundLaneResult> {
+  const rawPhone = lead.phone?.trim() ?? "";
+
+  if (!rawPhone) {
+    return {
+      lane: "phone_provenance",
+      status: "NOT_RUN",
+      score: 0,
+      flags: [],
+      notes: ["No phone number on lead — phone-provenance check skipped."],
+      sources: [...BACKGROUND_SOURCES.phone_provenance],
+      checked_at: new Date().toISOString(),
+      raw: { phone: null },
+    };
+  }
+
+  try {
+    const result = await lookupPhoneProvenance(rawPhone);
+
+    if (result.status === "unconfigured") {
+      return makeResult(
+        "phone_provenance",
+        ["phone_provenance_unconfigured"],
+        { phone: result.phone, note: result.note },
+        ["Telnyx integration not configured — add TELNYX_API_KEY to vault or env for line-type/carrier lookup."],
+      );
+    }
+
+    if (result.status === "error") {
+      return makeResult(
+        "phone_provenance",
+        ["phone_lookup_unreachable"],
+        { phone: result.phone, note: result.note },
+        [`Telnyx Lookup unavailable: ${result.note ?? "unknown error"}. Operator: verify phone manually.`],
+      );
+    }
+
+    // status === "ok" — map the risk verdict to flags
+    const flags: string[] = [...result.flags];
+    const notes: string[] = [];
+
+    if (result.risk === "high") {
+      notes.push(`High-risk phone: line_type=${result.line_type ?? "unknown"}, carrier=${result.carrier ?? "unknown"}. ${result.recently_ported ? "Recently ported. " : ""}Operator: verify claimant identity.`);
+    } else if (result.risk === "moderate") {
+      notes.push(`Moderate-risk phone: line_type=${result.line_type ?? "unknown"}, carrier=${result.carrier ?? "unknown"}. ${result.recently_ported ? "Recently ported. " : ""}Operator review recommended.`);
+    } else {
+      notes.push(`Low-risk phone: line_type=${result.line_type ?? "unknown"}, carrier=${result.carrier ?? "unknown"}. No adverse signals.`);
+    }
+
+    return makeResult(
+      "phone_provenance",
+      flags,
+      {
+        phone: result.phone,
+        line_type: result.line_type,
+        carrier: result.carrier,
+        country_code: result.country_code,
+        recently_ported: result.recently_ported,
+        risk: result.risk,
+      },
+      notes,
+    );
+  } catch (err) {
+    logger.warn({ err }, "bg-hub: adaptPhoneProvenance threw unexpectedly");
+    return makeResult(
+      "phone_provenance",
+      ["phone_lookup_unreachable"],
+      { phone: rawPhone },
+      ["Phone provenance check failed unexpectedly — see error field."],
       err instanceof Error ? err.message : String(err),
     );
   }

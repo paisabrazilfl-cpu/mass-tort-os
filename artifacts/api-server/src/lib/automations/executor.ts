@@ -102,8 +102,9 @@ async function assertSafeOutboundUrl(raw: string): Promise<URL> {
     for (const r of records) {
       if (isBlockedIp(r.address)) throw new Error(`Host ${host} resolves to private/internal IP ${r.address}.`);
     }
-  } catch (e: any) {
-    throw new Error(`DNS lookup failed for ${host}: ${e?.message ?? String(e)}`);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`DNS lookup failed for ${host}: ${message}`);
   }
   return u;
 }
@@ -582,8 +583,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     vm.createContext(sandbox);
     try {
       vm.runInContext(`result = (function(input, vars){ ${code} })(input, vars);`, sandbox, { timeout: timeoutMs });
-    } catch (err: any) {
-      throw new Error(`script.javascript: ${err.message}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`script.javascript: ${message}`);
     }
     return sandbox.result;
   },
@@ -1167,8 +1169,8 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
           to: result.to,
         },
       };
-    } catch (err: any) {
-      const message = err?.message ?? String(err);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       // Try to parse the fax_results.id we appended to the error message
       // so downstream nodes can still link to the timeline row.
       const m = /fax_results\.id=(\d+)/.exec(message);

@@ -86,8 +86,9 @@ async function checkHttpHealth(): Promise<CheckResult> {
       detail: `HTTP ${r.status}`,
       ms: Date.now() - t,
     };
-  } catch (e: any) {
-    return { name: "api-healthz", passed: false, detail: e.message, ms: Date.now() - t };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { name: "api-healthz", passed: false, detail: message, ms: Date.now() - t };
   }
 }
 
@@ -108,9 +109,10 @@ async function checkLoginPage(page: Page): Promise<CheckResult> {
       detail: visible ? "Login page rendered" : '"Sign in to MTOS" not found',
       ms: Date.now() - t,
     };
-  } catch (e: any) {
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
     await snap(page, "login-page-error");
-    return { name: "login-page", passed: false, detail: e.message, ms: Date.now() - t };
+    return { name: "login-page", passed: false, detail: message, ms: Date.now() - t };
   }
 }
 
@@ -133,9 +135,10 @@ async function checkAuthentication(page: Page): Promise<CheckResult> {
     await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 20_000 });
     const pathname = new URL(page.url()).pathname;
     return { name: "auth-login", passed: true, detail: `Redirected to ${pathname}`, ms: Date.now() - t };
-  } catch (e: any) {
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
     await snap(page, "auth-fail");
-    return { name: "auth-login", passed: false, detail: e.message, ms: Date.now() - t };
+    return { name: "auth-login", passed: false, detail: message, ms: Date.now() - t };
   }
 }
 
@@ -153,8 +156,9 @@ async function checkDashboard(page: Page): Promise<CheckResult> {
       detail: passed ? `Dashboard at ${new URL(url).pathname}` : `notLogin=${notLogin} hasHeading=${hasHeading}`,
       ms: Date.now() - t,
     };
-  } catch (e: any) {
-    return { name: "dashboard-load", passed: false, detail: e.message, ms: Date.now() - t };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { name: "dashboard-load", passed: false, detail: message, ms: Date.now() - t };
   }
 }
 
@@ -187,8 +191,9 @@ async function checkSidebarNav(page: Page): Promise<CheckResult> {
         : `Missing: ${missing.join(", ")}`,
       ms: Date.now() - t,
     };
-  } catch (e: any) {
-    return { name: "sidebar-nav", passed: false, detail: e.message, ms: Date.now() - t };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { name: "sidebar-nav", passed: false, detail: message, ms: Date.now() - t };
   }
 }
 
@@ -207,8 +212,9 @@ async function checkBosOmega(page: Page): Promise<CheckResult> {
         : `BOS-OMEGA=${bosOmega} DarkRoom=${darkRoom}`,
       ms: Date.now() - t,
     };
-  } catch (e: any) {
-    return { name: "bos-omega-visible", passed: false, detail: e.message, ms: Date.now() - t };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { name: "bos-omega-visible", passed: false, detail: message, ms: Date.now() - t };
   }
 }
 
@@ -230,9 +236,10 @@ async function checkLeadsPage(page: Page): Promise<CheckResult> {
       detail: hasContent ? "/leads loaded" : "No recognisable content on /leads",
       ms: Date.now() - t,
     };
-  } catch (e: any) {
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
     await snap(page, "leads-error");
-    return { name: "leads-page", passed: false, detail: e.message, ms: Date.now() - t };
+    return { name: "leads-page", passed: false, detail: message, ms: Date.now() - t };
   }
 }
 
@@ -339,8 +346,9 @@ async function main(): Promise<void> {
       let results: CheckResult[];
       try {
         results = await runCycle(browser, cycle);
-      } catch (e: any) {
-        log("ERROR", `Cycle ${cycle} threw an unhandled error: ${e.message}`);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        log("ERROR", `Cycle ${cycle} threw an unhandled error: ${message}`);
         consecutiveFailures++;
         if (consecutiveFailures >= MAX_FAIL) {
           log(
