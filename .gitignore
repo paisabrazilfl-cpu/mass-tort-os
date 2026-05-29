@@ -1,4 +1,3 @@
-```
 # Dependencies
 node_modules/
 
@@ -12,26 +11,29 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-env/
+*.py.class
+*.py.backup
+*.swp
+*.swo
+
+# Virtual environments
 venv/
 .venv/
-.ENV
+env/
+.env/
+
+# Environment variables
 .env
-.env.*
 .env.local
+*.env.*
 
 # Logs
 *.log
 
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Coverage
+coverage/
+htmlcov/
+.coverage
 
 # IDE
 .vscode/
@@ -39,17 +41,26 @@ Thumbs.db
 *.swp
 *.swo
 
-# Coverage
-coverage/
-htmlcov/
-.coverage
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+.cache/
+.mypy_cache/
+.pytest_cache/
+.gradle/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Temporary files
 *.tmp
 *.temp
 *.bak
+*.backup
 
-# Compressed files
+# Compressed
 *.zip
 *.gz
 *.tar
@@ -72,4 +83,3 @@ htmlcov/
 *.tar.bz2
 *.tar.xz
 *.tar.zst
-```
