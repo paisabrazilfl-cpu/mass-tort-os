@@ -15,9 +15,10 @@ import { format } from "date-fns";
 import {
   ArrowLeft, Trash2, FileText, CheckCircle, XCircle, FileSignature,
   AlertTriangle, Download, Brain, Save, RefreshCw, Shield, User,
-  MapPin, Phone, Mail, Building2, Stethoscope, Scale, Activity, Zap
+  MapPin, Phone, Mail, Building2, Stethoscope, Scale, Activity, Zap,
+  Clock, Inbox, ExternalLink
 } from "lucide-react";
-import { apiFetchRaw } from "@/lib/api-fetch";
+import { apiFetch, apiFetchRaw } from "@/lib/api-fetch";
 import { EnvelopeTimeline } from "@/components/envelope-timeline";
 import { BackgroundCheckHubCard } from "@/components/background-check-hub-card";
 import { FastenConnectCard } from "@/components/fasten-connect-card";
@@ -561,6 +562,8 @@ export default function LeadDetail() {
 
             <CustomFieldsCard tortType={lead.tort_type} customFields={(lead as any).custom_fields} />
           </div>
+
+          <LeadRecordsRequestsCard leadId={leadId} />
         </TabsContent>
 
         <TabsContent value="compliance" className="space-y-6 mt-6">
@@ -1043,6 +1046,90 @@ function CustomFieldsCard({ tortType, customFields }: { tortType?: string | null
             </span>
           </div>
         ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+interface LeadMrrRow {
+  id: number;
+  hospital_name: string | null;
+  fax_number: string;
+  status: string;
+  sent_at: string | null;
+  expected_by: string | null;
+  response_fax_result_id: number | null;
+}
+
+function LeadRecordsRequestsCard({ leadId }: { leadId: number }) {
+  const [rows, setRows] = useState<LeadMrrRow[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    apiFetch<{ results: LeadMrrRow[] }>(`/api/mrr?lead_id=${leadId}&page_size=50`)
+      .then((d) => { if (active) setRows(d.results); })
+      .catch(() => { if (active) setRows([]); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [leadId]);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <div>
+          <CardTitle className="flex items-center gap-2"><Stethoscope className="h-4 w-4" />Medical Records Requests</CardTitle>
+          <CardDescription>Outbound records requests faxed to this claimant's treatment facilities.</CardDescription>
+        </div>
+        <Link href="/medical-records" className="text-xs text-primary hover:underline inline-flex items-center gap-1">
+          Records hub <ExternalLink className="h-3 w-3" />
+        </Link>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : !rows || rows.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            <Stethoscope className="h-8 w-8 mx-auto mb-2 opacity-50" />
+            <p className="text-sm">No records requests have been sent for this claimant.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {rows.map((r) => {
+              const overdue = r.status === "sent" && r.expected_by && new Date(r.expected_by) < new Date();
+              return (
+                <div key={r.id} className="flex items-center justify-between py-3 border-b last:border-0">
+                  <div className="min-w-0">
+                    <div className="font-medium text-sm truncate">{r.hospital_name || "Unknown facility"}</div>
+                    <div className="text-xs text-muted-foreground font-mono">{r.fax_number}</div>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    {r.response_fax_result_id != null && (
+                      <span className="text-xs text-emerald-600 inline-flex items-center gap-1">
+                        <Inbox className="h-3 w-3" /> Received
+                      </span>
+                    )}
+                    {r.status === "fulfilled" ? (
+                      <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 gap-1"><CheckCircle className="h-3 w-3" />Fulfilled</Badge>
+                    ) : overdue ? (
+                      <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20 gap-1"><AlertTriangle className="h-3 w-3" />Overdue</Badge>
+                    ) : r.status === "failed" ? (
+                      <Badge variant="destructive" className="gap-1"><XCircle className="h-3 w-3" />Failed</Badge>
+                    ) : r.status === "cancelled" ? (
+                      <Badge variant="outline" className="text-slate-500">Cancelled</Badge>
+                    ) : (
+                      <Badge className="bg-blue-500/10 text-blue-600 border-blue-500/20 gap-1"><Clock className="h-3 w-3" />Awaiting</Badge>
+                    )}
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                      {r.sent_at ? format(new Date(r.sent_at), "MMM d, yyyy") : "—"}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

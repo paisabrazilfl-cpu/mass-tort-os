@@ -1,15 +1,19 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "wouter";
 import { format } from "date-fns";
 import {
   Stethoscope, Clock, CheckCircle2, AlertCircle, XCircle,
   RefreshCw, RotateCcw, ChevronLeft, ChevronRight, ExternalLink, Signal,
+  Inbox, Eye,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+} from "@/components/ui/sheet";
 import { apiFetch } from "@/lib/api-fetch";
 import { useToast } from "@/hooks/use-toast";
 
@@ -27,9 +31,37 @@ interface MrrRow {
   last_attempt_at: string | null;
   notes: string | null;
   envelope_id: number | null;
+  hospital_npi: string | null;
+  fax_result_id: number | null;
+  response_fax_result_id: number | null;
+  created_at: string | null;
   fax_delivery_status: string | null;
   fax_delivery_checked_at: string | null;
 }
+
+// Shape returned by GET /api/mrr/:id — a plain row from medical_records_requests
+// with NO joins, so it intentionally omits lead_name / fax_delivery_status
+// (those only exist on the joined list payload, MrrRow).
+type MrrDetailRaw = {
+  id: number;
+  lead_id: number;
+  hospital_name: string | null;
+  hospital_npi: string | null;
+  fax_number: string;
+  envelope_id: number | null;
+  fax_result_id: number | null;
+  response_fax_result_id: number | null;
+  status: string;
+  sent_at: string | null;
+  expected_by: string | null;
+  fulfilled_at: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  notes: string | null;
+  created_at: string | null;
+  firm_id?: number | null;
+  updated_at?: string | null;
+};
 
 interface MrrPage {
   results: MrrRow[];
@@ -104,7 +136,37 @@ export default function MedicalRecordsPage() {
   const [resending, setResending] = useState<number | null>(null);
   const [cancelling, setCancelling] = useState<number | null>(null);
   const [pollStats, setPollStats] = useState<PollStats | null>(null);
+  const [detail, setDetail] = useState<MrrRow | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  // Monotonic token guarding against stale detail responses: if the operator
+  // opens row A then quickly opens row B, A's late fetch must not apply (it
+  // would merge A's raw columns onto B's seeded joined fields).
+  const detailReqRef = useRef(0);
   const { toast } = useToast();
+
+  const openDetail = useCallback(async (row: MrrRow) => {
+    // Seed from the clicked list row so the drawer shows accurate data
+    // immediately — the row carries joined fields (lead_name, fax delivery
+    // status) that GET /api/mrr/:id does NOT return. We then merge the
+    // authoritative request columns from the detail endpoint on top without
+    // clobbering the joined-only fields.
+    const token = ++detailReqRef.current;
+    setDetail(row);
+    setDetailOpen(true);
+    setDetailLoading(true);
+    try {
+      const raw = await apiFetch<MrrDetailRaw>(`/api/mrr/${row.id}`);
+      if (detailReqRef.current !== token) return; // a newer row was opened — ignore
+      setDetail((prev) => ({ ...(prev ?? row), ...raw }));
+    } catch {
+      if (detailReqRef.current === token) {
+        toast({ title: "Failed to refresh request detail", variant: "destructive" });
+      }
+    } finally {
+      if (detailReqRef.current === token) setDetailLoading(false);
+    }
+  }, [toast]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -245,7 +307,14 @@ export default function MedicalRecordsPage() {
                         </td>
                         <td className="py-3 pr-4 text-slate-700">{row.hospital_name || "—"}</td>
                         <td className="py-3 pr-4 font-mono text-xs text-slate-600">{row.fax_number}</td>
-                        <td className="py-3 pr-4"><StatusBadge row={row} /></td>
+                        <td className="py-3 pr-4">
+                          <StatusBadge row={row} />
+                          {row.response_fax_result_id != null && (
+                            <span className="mt-1 flex items-center gap-1 text-xs text-emerald-600">
+                              <Inbox className="h-3 w-3" /> Records received
+                            </span>
+                          )}
+                        </td>
                         <td className="py-3 pr-4">
                           {row.status !== "fulfilled" && row.status !== "cancelled"
                             ? <FaxDeliveryBadge status={row.fax_delivery_status} />
@@ -264,6 +333,14 @@ export default function MedicalRecordsPage() {
                         </td>
                         <td className="py-3 text-right">
                           <div className="flex items-center justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 text-xs text-slate-500"
+                              onClick={() => openDetail(row)}
+                            >
+                              <Eye className="h-3 w-3 mr-1" /> Details
+                            </Button>
                             {(row.status === "sent" || row.status === "failed") && row.envelope_id && (
                               <Button
                                 size="sm"
@@ -317,6 +394,101 @@ export default function MedicalRecordsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Sheet open={detailOpen} onOpenChange={setDetailOpen}>
+        <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              <Stethoscope className="h-5 w-5" />
+              Records Request {detail ? `#${detail.id}` : ""}
+              {detailLoading && <RefreshCw className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+            </SheetTitle>
+            <SheetDescription>
+              Full lifecycle detail for this outbound medical-records request.
+            </SheetDescription>
+          </SheetHeader>
+
+          {!detail ? (
+            <div className="space-y-3 mt-6">
+              {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+            </div>
+          ) : (
+            <div className="mt-6 space-y-5 text-sm">
+              <div className="flex items-center gap-2">
+                <StatusBadge row={detail} />
+                {detail.response_fax_result_id != null && (
+                  <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 gap-1">
+                    <Inbox className="h-3 w-3" /> Records received
+                  </Badge>
+                )}
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 border-t pt-4">
+                <DetailField label="Claimant" className="col-span-3">
+                  <Link href={`/leads/${detail.lead_id}`} className="text-primary hover:underline inline-flex items-center gap-1">
+                    {detail.lead_name || `Lead #${detail.lead_id}`}
+                    <ExternalLink className="h-3 w-3 opacity-60" />
+                  </Link>
+                </DetailField>
+                <DetailField label="Facility">{detail.hospital_name || "—"}</DetailField>
+                <DetailField label="Facility NPI">{detail.hospital_npi || "—"}</DetailField>
+                <DetailField label="Fax number"><span className="font-mono text-xs">{detail.fax_number}</span></DetailField>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 border-t pt-4">
+                <DetailField label="Sent">{detail.sent_at ? format(new Date(detail.sent_at), "MMM d, yyyy h:mm a") : "—"}</DetailField>
+                <DetailField label="Expected by">{detail.expected_by ? format(new Date(detail.expected_by), "MMM d, yyyy") : "—"}</DetailField>
+                <DetailField label="Fulfilled">{detail.fulfilled_at ? format(new Date(detail.fulfilled_at), "MMM d, yyyy h:mm a") : "—"}</DetailField>
+                <DetailField label="Attempts">{detail.attempt_count ?? 1}</DetailField>
+                <DetailField label="Last attempt">{detail.last_attempt_at ? format(new Date(detail.last_attempt_at), "MMM d, yyyy h:mm a") : "—"}</DetailField>
+                <DetailField label="Created">{detail.created_at ? format(new Date(detail.created_at), "MMM d, yyyy") : "—"}</DetailField>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 border-t pt-4">
+                <DetailField label="Fax delivery">
+                  <FaxDeliveryBadge status={detail.fax_delivery_status} />
+                </DetailField>
+                <DetailField label="HIPAA envelope">{detail.envelope_id != null ? `#${detail.envelope_id}` : "Not attached"}</DetailField>
+                <DetailField label="Outbound fax">{detail.fax_result_id != null ? `#${detail.fax_result_id}` : "—"}</DetailField>
+              </div>
+
+              <div className="border-t pt-4">
+                <DetailField label="Received records">
+                  {detail.response_fax_result_id != null ? (
+                    <span className="inline-flex items-center gap-1 text-emerald-600">
+                      <Inbox className="h-3.5 w-3.5" /> Inbound fax #{detail.response_fax_result_id} correlated
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">No inbound records correlated yet</span>
+                  )}
+                </DetailField>
+                {detail.response_fax_result_id != null && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    View the received document from the lead's records inbox.
+                  </p>
+                )}
+              </div>
+
+              {detail.notes && (
+                <div className="border-t pt-4">
+                  <DetailField label="Notes">
+                    <span className="whitespace-pre-wrap">{detail.notes}</span>
+                  </DetailField>
+                </div>
+              )}
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
+}
+
+function DetailField({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+  return (
+    <div className={className}>
+      <p className="text-xs text-muted-foreground uppercase tracking-wide">{label}</p>
+      <div className="mt-0.5 text-slate-800">{children}</div>
     </div>
   );
 }
