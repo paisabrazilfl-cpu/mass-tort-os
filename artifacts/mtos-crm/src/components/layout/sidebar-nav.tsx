@@ -12,10 +12,15 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
 
+type ColorKey =
+  | "indigo" | "blue" | "amber" | "emerald" | "rose" | "sky"
+  | "violet" | "orange" | "teal" | "fuchsia" | "slate" | "red";
+
 type NavItem = { name: string; href: string; icon: typeof LayoutDashboard; superAdminOnly?: boolean };
 type NavSection = {
   section: string;
   icon: typeof LayoutDashboard;
+  color: ColorKey;
   items: NavItem[];
   superAdminOnly?: boolean;
 };
@@ -26,6 +31,7 @@ export const navigation: NavSection[] = [
   {
     section: "Dashboard",
     icon: LayoutDashboard,
+    color: "indigo",
     items: [
       { name: "Overview",    href: "/",            icon: LayoutDashboard },
       { name: "Pipeline",    href: "/pipeline",    icon: GitBranch       },
@@ -39,6 +45,7 @@ export const navigation: NavSection[] = [
   {
     section: "Leads & Intake",
     icon: Users,
+    color: "blue",
     items: [
       { name: "All Leads",    href: "/leads",       icon: Users      },
       { name: "New Lead",     href: "/leads/new",   icon: PlusCircle },
@@ -54,6 +61,7 @@ export const navigation: NavSection[] = [
   {
     section: "Cases",
     icon: Briefcase,
+    color: "amber",
     items: [
       { name: "Cases",        href: "/cases",        icon: Briefcase   },
       { name: "Timeline",     href: "/timeline",     icon: Clock       },
@@ -66,6 +74,7 @@ export const navigation: NavSection[] = [
   {
     section: "Calls & Dialer",
     icon: PhoneCall,
+    color: "emerald",
     items: [
       { name: "Calls",        href: "/calls",        icon: Phone     },
       { name: "Dialer",       href: "/dialer",       icon: PhoneCall },
@@ -78,6 +87,7 @@ export const navigation: NavSection[] = [
   {
     section: "Medical Records",
     icon: HeartPulse,
+    color: "rose",
     items: [
       { name: "Medical Records", href: "/medical-records", icon: Stethoscope },
       { name: "Document Inbox",  href: "/ocr-inbox",       icon: Inbox       },
@@ -91,6 +101,7 @@ export const navigation: NavSection[] = [
   {
     section: "Documents",
     icon: FileText,
+    color: "sky",
     items: [
       { name: "All Documents", href: "/documents",          icon: FileText      },
       { name: "AI Drafting",   href: "/drafting",           icon: Wand2         },
@@ -103,6 +114,7 @@ export const navigation: NavSection[] = [
   {
     section: "AI & Tools",
     icon: Sparkles,
+    color: "violet",
     items: [
       { name: "Abby",            href: "/abby",            icon: Sparkles },
       { name: "AI Agents",       href: "/ai-agents",       icon: Bot      },
@@ -116,6 +128,7 @@ export const navigation: NavSection[] = [
   {
     section: "Operations",
     icon: Activity,
+    color: "orange",
     items: [
       { name: "Job Queue",  href: "/job-queue",  icon: Activity  },
       { name: "Paralegals", href: "/paralegals", icon: UserCheck },
@@ -127,6 +140,7 @@ export const navigation: NavSection[] = [
   {
     section: "Automation",
     icon: Workflow,
+    color: "teal",
     items: [
       { name: "Automations",   href: "/automations",           icon: Workflow },
       { name: "Automation Docs", href: "/automation-docs",     icon: BookOpen },
@@ -141,6 +155,7 @@ export const navigation: NavSection[] = [
   {
     section: "Research",
     icon: Eye,
+    color: "fuchsia",
     items: [
       { name: "Competitive Intel", href: "/competitive-intel", icon: Eye        },
       { name: "Ads Libraries",     href: "/ads-libraries",     icon: Search     },
@@ -154,6 +169,7 @@ export const navigation: NavSection[] = [
   {
     section: "Admin",
     icon: Settings,
+    color: "slate",
     items: [
       { name: "Firm Settings",     href: "/firm-settings",        icon: Building    },
       { name: "Team Members",      href: "/users",                icon: UserCog     },
@@ -173,12 +189,124 @@ export const navigation: NavSection[] = [
   {
     section: "BOS-OMEGA",
     icon: Skull,
+    color: "red",
     superAdminOnly: true,
     items: [
       { name: "Dark Room", href: "/dark-room", icon: Skull, superAdminOnly: true },
     ],
   },
 ];
+
+// Per-section accent palettes. Full literal class strings so Tailwind's content
+// scanner keeps them. `dark:` variants tuned so accents read on both the white
+// (light) and dark-navy (dark) sidebar backgrounds.
+type Palette = {
+  chip: string;       // icon "chip" behind the group icon
+  label: string;      // section label color when its group owns the route
+  rail: string;       // colored rail down the left of an open group
+  itemActive: string; // active link background + text
+  itemHover: string;  // idle link hover background + text
+  iconHover: string;  // idle link icon color on hover
+};
+
+const colorThemes: Record<ColorKey, Palette> = {
+  indigo: {
+    chip: "bg-indigo-500/10 text-indigo-600 dark:bg-indigo-400/15 dark:text-indigo-300",
+    label: "text-indigo-700 dark:text-indigo-200",
+    rail: "border-indigo-400/40 dark:border-indigo-400/25",
+    itemActive: "bg-gradient-to-r from-indigo-700 to-indigo-800 text-white shadow-sm shadow-indigo-500/30",
+    itemHover: "hover:bg-indigo-500/10 hover:text-indigo-700 dark:hover:bg-indigo-400/10 dark:hover:text-indigo-200",
+    iconHover: "group-hover:text-indigo-600 dark:group-hover:text-indigo-300",
+  },
+  blue: {
+    chip: "bg-blue-500/10 text-blue-600 dark:bg-blue-400/15 dark:text-blue-300",
+    label: "text-blue-700 dark:text-blue-200",
+    rail: "border-blue-400/40 dark:border-blue-400/25",
+    itemActive: "bg-gradient-to-r from-blue-700 to-blue-800 text-white shadow-sm shadow-blue-500/30",
+    itemHover: "hover:bg-blue-500/10 hover:text-blue-700 dark:hover:bg-blue-400/10 dark:hover:text-blue-200",
+    iconHover: "group-hover:text-blue-600 dark:group-hover:text-blue-300",
+  },
+  amber: {
+    chip: "bg-amber-500/10 text-amber-600 dark:bg-amber-400/15 dark:text-amber-300",
+    label: "text-amber-700 dark:text-amber-200",
+    rail: "border-amber-400/40 dark:border-amber-400/25",
+    itemActive: "bg-gradient-to-r from-amber-700 to-amber-800 text-white shadow-sm shadow-amber-500/30",
+    itemHover: "hover:bg-amber-500/10 hover:text-amber-700 dark:hover:bg-amber-400/10 dark:hover:text-amber-200",
+    iconHover: "group-hover:text-amber-600 dark:group-hover:text-amber-300",
+  },
+  emerald: {
+    chip: "bg-emerald-500/10 text-emerald-600 dark:bg-emerald-400/15 dark:text-emerald-300",
+    label: "text-emerald-700 dark:text-emerald-200",
+    rail: "border-emerald-400/40 dark:border-emerald-400/25",
+    itemActive: "bg-gradient-to-r from-emerald-700 to-emerald-800 text-white shadow-sm shadow-emerald-500/30",
+    itemHover: "hover:bg-emerald-500/10 hover:text-emerald-700 dark:hover:bg-emerald-400/10 dark:hover:text-emerald-200",
+    iconHover: "group-hover:text-emerald-600 dark:group-hover:text-emerald-300",
+  },
+  rose: {
+    chip: "bg-rose-500/10 text-rose-600 dark:bg-rose-400/15 dark:text-rose-300",
+    label: "text-rose-700 dark:text-rose-200",
+    rail: "border-rose-400/40 dark:border-rose-400/25",
+    itemActive: "bg-gradient-to-r from-rose-700 to-rose-800 text-white shadow-sm shadow-rose-500/30",
+    itemHover: "hover:bg-rose-500/10 hover:text-rose-700 dark:hover:bg-rose-400/10 dark:hover:text-rose-200",
+    iconHover: "group-hover:text-rose-600 dark:group-hover:text-rose-300",
+  },
+  sky: {
+    chip: "bg-sky-500/10 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300",
+    label: "text-sky-700 dark:text-sky-200",
+    rail: "border-sky-400/40 dark:border-sky-400/25",
+    itemActive: "bg-gradient-to-r from-sky-700 to-sky-800 text-white shadow-sm shadow-sky-500/30",
+    itemHover: "hover:bg-sky-500/10 hover:text-sky-700 dark:hover:bg-sky-400/10 dark:hover:text-sky-200",
+    iconHover: "group-hover:text-sky-600 dark:group-hover:text-sky-300",
+  },
+  violet: {
+    chip: "bg-violet-500/10 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300",
+    label: "text-violet-700 dark:text-violet-200",
+    rail: "border-violet-400/40 dark:border-violet-400/25",
+    itemActive: "bg-gradient-to-r from-violet-700 to-violet-800 text-white shadow-sm shadow-violet-500/30",
+    itemHover: "hover:bg-violet-500/10 hover:text-violet-700 dark:hover:bg-violet-400/10 dark:hover:text-violet-200",
+    iconHover: "group-hover:text-violet-600 dark:group-hover:text-violet-300",
+  },
+  orange: {
+    chip: "bg-orange-500/10 text-orange-600 dark:bg-orange-400/15 dark:text-orange-300",
+    label: "text-orange-700 dark:text-orange-200",
+    rail: "border-orange-400/40 dark:border-orange-400/25",
+    itemActive: "bg-gradient-to-r from-orange-700 to-orange-800 text-white shadow-sm shadow-orange-500/30",
+    itemHover: "hover:bg-orange-500/10 hover:text-orange-700 dark:hover:bg-orange-400/10 dark:hover:text-orange-200",
+    iconHover: "group-hover:text-orange-600 dark:group-hover:text-orange-300",
+  },
+  teal: {
+    chip: "bg-teal-500/10 text-teal-600 dark:bg-teal-400/15 dark:text-teal-300",
+    label: "text-teal-700 dark:text-teal-200",
+    rail: "border-teal-400/40 dark:border-teal-400/25",
+    itemActive: "bg-gradient-to-r from-teal-700 to-teal-800 text-white shadow-sm shadow-teal-500/30",
+    itemHover: "hover:bg-teal-500/10 hover:text-teal-700 dark:hover:bg-teal-400/10 dark:hover:text-teal-200",
+    iconHover: "group-hover:text-teal-600 dark:group-hover:text-teal-300",
+  },
+  fuchsia: {
+    chip: "bg-fuchsia-500/10 text-fuchsia-600 dark:bg-fuchsia-400/15 dark:text-fuchsia-300",
+    label: "text-fuchsia-700 dark:text-fuchsia-200",
+    rail: "border-fuchsia-400/40 dark:border-fuchsia-400/25",
+    itemActive: "bg-gradient-to-r from-fuchsia-700 to-fuchsia-800 text-white shadow-sm shadow-fuchsia-500/30",
+    itemHover: "hover:bg-fuchsia-500/10 hover:text-fuchsia-700 dark:hover:bg-fuchsia-400/10 dark:hover:text-fuchsia-200",
+    iconHover: "group-hover:text-fuchsia-600 dark:group-hover:text-fuchsia-300",
+  },
+  slate: {
+    chip: "bg-slate-500/10 text-slate-600 dark:bg-slate-400/15 dark:text-slate-300",
+    label: "text-slate-700 dark:text-slate-200",
+    rail: "border-slate-400/40 dark:border-slate-400/25",
+    itemActive: "bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-sm shadow-slate-500/30",
+    itemHover: "hover:bg-slate-500/10 hover:text-slate-700 dark:hover:bg-slate-400/10 dark:hover:text-slate-200",
+    iconHover: "group-hover:text-slate-600 dark:group-hover:text-slate-300",
+  },
+  red: {
+    chip: "bg-red-500/10 text-red-600 dark:bg-red-400/15 dark:text-red-300",
+    label: "text-red-700 dark:text-red-200",
+    rail: "border-red-400/40 dark:border-red-400/25",
+    itemActive: "bg-gradient-to-r from-red-700 to-red-800 text-white shadow-sm shadow-red-500/30",
+    itemHover: "hover:bg-red-500/10 hover:text-red-700 dark:hover:bg-red-400/10 dark:hover:text-red-200",
+    iconHover: "group-hover:text-red-600 dark:group-hover:text-red-300",
+  },
+};
 
 const STORAGE_KEY = "mtos:sidebarOpenGroups";
 
@@ -332,6 +460,7 @@ export function SidebarNav({ onNavigate }: SidebarNavProps) {
             const open = isGroupOpen(group.section);
             const groupSlug = slugify(group.section);
             const groupHasActive = group.section === activeSection;
+            const theme = colorThemes[group.color];
             return (
               <div key={group.section} className="mb-0.5">
                 <button
@@ -349,8 +478,17 @@ export function SidebarNav({ onNavigate }: SidebarNavProps) {
                       : "text-sidebar-foreground/55",
                   )}
                 >
-                  <group.icon className="h-3.5 w-3.5 flex-shrink-0 text-sidebar-foreground/45" aria-hidden="true" />
-                  <span className="flex-1 text-left">{group.section}</span>
+                  <span
+                    className={cn(
+                      "flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md transition-colors",
+                      theme.chip,
+                    )}
+                  >
+                    <group.icon className="h-3.5 w-3.5" aria-hidden="true" />
+                  </span>
+                  <span className={cn("flex-1 text-left", groupHasActive && theme.label)}>
+                    {group.section}
+                  </span>
                   {!isSearching && (
                     <ChevronDown
                       className={cn(
@@ -363,7 +501,11 @@ export function SidebarNav({ onNavigate }: SidebarNavProps) {
                 </button>
 
                 {open && (
-                  <div className="mt-0.5 space-y-0.5 pl-1.5" role="group" aria-label={group.section}>
+                  <div
+                    className={cn("mt-1 ml-3 space-y-0.5 border-l-2 pl-2.5", theme.rail)}
+                    role="group"
+                    aria-label={group.section}
+                  >
                     {group.items.map((item) => {
                       const isActive = isItemActive(location, item.href);
                       return (
@@ -377,12 +519,8 @@ export function SidebarNav({ onNavigate }: SidebarNavProps) {
                             "transition-[background-color,color,box-shadow,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
                             "focus-visible:ring-2 focus-visible:ring-sidebar-ring/70 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
                             isActive
-                              ? [
-                                  "text-sidebar-primary-foreground",
-                                  "bg-[linear-gradient(180deg,hsl(var(--sidebar-primary)/0.96),hsl(var(--sidebar-primary))_60%,hsl(var(--sidebar-primary)/0.9))]",
-                                  "shadow-[0_1px_0_hsl(0_0%_100%/0.18)_inset,0_1px_2px_hsl(0_0%_0%/0.18),0_4px_10px_-4px_hsl(var(--sidebar-primary)/0.5)]",
-                                ].join(" ")
-                              : "text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground hover:translate-x-px",
+                              ? theme.itemActive
+                              : cn("text-sidebar-foreground/75 hover:translate-x-px", theme.itemHover),
                           )}
                           aria-current={isActive ? "page" : undefined}
                         >
@@ -390,8 +528,8 @@ export function SidebarNav({ onNavigate }: SidebarNavProps) {
                             className={cn(
                               "mr-2.5 h-3.5 w-3.5 flex-shrink-0 transition-colors",
                               isActive
-                                ? "text-sidebar-primary-foreground"
-                                : "text-sidebar-foreground/45 group-hover:text-sidebar-accent-foreground",
+                                ? "text-white"
+                                : cn("text-sidebar-foreground/45", theme.iconHover),
                             )}
                             aria-hidden="true"
                           />
