@@ -95,7 +95,12 @@ async function checkLoginPage(page: Page): Promise<CheckResult> {
   const t = Date.now();
   try {
     await page.goto(`${BASE_URL}/login`, { waitUntil: "domcontentloaded", timeout: 20_000 });
-    const visible = await page.locator("text=Sign in to MTOS").isVisible().catch(() => false);
+    // React SPA: wait for the heading to be rendered, not just HTML shell
+    const visible = await page
+      .locator("text=Sign in to MTOS")
+      .waitFor({ state: "visible", timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
     if (!visible) await snap(page, "login-page-fail");
     return {
       name: "login-page",
@@ -211,10 +216,12 @@ async function checkLeadsPage(page: Page): Promise<CheckResult> {
   const t = Date.now();
   try {
     await page.goto(`${BASE_URL}/leads`, { waitUntil: "domcontentloaded", timeout: 20_000 });
+    // React SPA: wait for rendered content — table, heading, or grid (not just HTML shell)
     const hasContent = await page
       .locator("table, [role='grid'], h1, h2, [data-testid]")
       .first()
-      .isVisible()
+      .waitFor({ state: "visible", timeout: 20_000 })
+      .then(() => true)
       .catch(() => false);
     if (!hasContent) await snap(page, "leads-fail");
     return {
@@ -253,6 +260,11 @@ async function runCycle(browser: Browser, cycle: number): Promise<CheckResult[]>
   try {
     results.push(await checkLoginPage(page));
     results.push(await checkAuthentication(page));
+
+    // Clear pre-auth console errors: a 401 on /api/auth/me during the login page
+    // is expected React SPA behaviour (app probes the session on boot, gets 401,
+    // shows the login form). Only errors that occur AFTER login are actionable.
+    consoleErrors.length = 0;
 
     const authed = results.find((r) => r.name === "auth-login")?.passed ?? false;
     if (authed) {
