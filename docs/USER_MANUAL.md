@@ -2,7 +2,7 @@
 
 > **This manual is exhaustive and granular.** Every page, button, field, status enum, role, permission, API endpoint, automation node, error code, and audit event in the system is documented below. Cross-references use exact code paths so engineers and operators see the same source of truth.
 
-**Version 2026.05.09** • Built directly from source: `artifacts/api-server/src`, `artifacts/mtos-crm/src`, `lib/db/src/schema`.
+**Version 2026.05.29** • Built directly from source: `artifacts/api-server/src`, `artifacts/mtos-crm/src`, `lib/db/src/schema`.
 
 ---
 
@@ -20,22 +20,29 @@
 
 All `/api/*` calls go through `authMiddleware` then a `requirePermission(...)` or `requireRole(...)` gate.
 
+**Deployment.** Production runs on **Railway**, served at **mtosvelocity.com** (the CRM) with the API server at its Railway service domain. When debugging a production incident, read **Railway** logs — not Replit or Render. The legacy `RENDER_API_KEY` secret is no longer an active deploy target.
+
 ---
 
 ## 2. Identity, authentication, and sessions
 
-### 2.1 The four roles
+### 2.1 The seven roles
 
-Defined in `artifacts/api-server/src/lib/rbac.ts` (`UserRole`), in declared order:
+Defined in `artifacts/api-server/src/lib/rbac.ts` (`UserRole`), in declared order. The hierarchy from top to bottom is **super_admin → admin → user_manager → attorney → paralegal → agent → viewer**:
 
 | # | Role | Hierarchy weight | Typical user |
 |---|------|---|---|
-| 1 | `admin` | 100 | Firm owner / IT lead. Has every permission. |
-| 2 | `attorney` | 75 | Licensed attorney handling cases. |
-| 3 | `paralegal` | 50 | Daily lead/case worker. |
-| 4 | `viewer` | 25 | Read-only observer (compliance, auditor). |
+| 1 | `super_admin` | 200 | Platform owner only (`paisabrazilfl@gmail.com`). Sees **all firms, all data** — every lead, case, audit log, admin panel, and system screen across the whole platform. Holds `Object.values(Permission)` plus owner-only screens (see §13.2). |
+| 2 | `admin` | 100 | Firm owner / IT lead. Has every permission **within their own firm**. |
+| 3 | `user_manager` | 80 | Office / team manager. Manages users, invites, and roles; read-only on cases and leads. |
+| 4 | `attorney` | 75 | Licensed attorney handling cases. |
+| 5 | `paralegal` | 50 | Daily lead/case worker. |
+| 6 | `agent` | 35 | Intake agent / call-center rep. Creates and works their own leads only. |
+| 7 | `viewer` | 25 | Read-only observer (compliance, auditor). |
 
-The `requireRole(...)` middleware grants access if your role's weight ≥ the required role's weight, so `admin` automatically passes any check.
+The `requireRole(...)` middleware grants access if your role's weight ≥ the required role's weight, so `super_admin` passes every check and `admin` passes any check at `admin` or below.
+
+> **super_admin vs admin.** A regular `admin` only ever sees their own firm. `super_admin` is the single owner-level account that sees the entire platform across every firm simultaneously — it is the only role above `admin`. If the `super_admin` account is ever locked out by failed-login attempts, the lockout must be cleared directly in the database (a known recovery step, not a bug).
 
 ### 2.2 Email verification gate
 
@@ -144,10 +151,15 @@ Every permission name in the system, in declared order from `rbac.ts:94-235`. Th
 - `automations:view`, `automations:manage`, `automations:execute`
 - `self_heal:manage`
 - `competitive_intel:manage`
+- `snapshot:manage` — take / restore firm-scoped operational config snapshots
+- `ai:rerank` — access to the AI-powered lead reranking endpoint
 
 ### 3.7 Default role → permission map (`ROLE_PERMISSIONS`, `rbac.ts:242-381`)
 
-- **admin** receives `Object.values(Permission)` — every permission, including any added later.
+- **super_admin** receives `Object.values(Permission)` — every permission — and is additionally the *only* role that can open owner-only surfaces gated by `requireRole("super_admin")` (e.g. the Boss Omega Dark Room, §13.2). Unlike `admin`, it is not scoped to a single firm.
+- **admin** receives `Object.values(Permission)` — every permission, including any added later — but scoped to its own `firm_id`.
+- **user_manager** is the office/team manager: it receives the user-administration permissions (`users:view/manage`, firm invites, role changes) plus read-only visibility into leads, cases, and the dashboard. It does **not** get write access to cases or leads.
+- **agent** is the intake / call-center role: it receives `lead:view:own/create/update/qualify`, intake-form submit and verification perms, `dashboard:view`, and `calls:view` — scoped to its own leads only. It cannot see other agents' leads or reach cases beyond its own.
 - **attorney** receives the union of: every `lead:*` (except `delete` is also granted), `case:view:any/create/upload/analyze`, `paralegal:view`, `forms:config:view*`, `forms:submit/background_check/npi_verify/fraud_check/escalate_fbi`, `decision_engine:view`, `buyers:view`, `vendors:view/manage`, `lead_sources:view`, `templates:view`, `workflow_settings:view`, all `documents:*` (incl. `delete`/`redact`), `ocr:upload/view/ai_fields`, `drafting:*`, `image_objects:view/manage`, `npi:lookup`, `news:view`, `timeline:view`, `review_queue:view/resolve`, `dashboard:view`, `analytics:view`, `analytics:predictive:lead`, `calls:view/manage`, `sms:send`, `medical_records:view/manage`.
 - **paralegal** receives: `lead:view:own/create/update/qualify`, `lead_import:preview`, `case:view:own/create/upload/analyze`, `forms:config:view:public`, `forms:submit/background_check/npi_verify/fraud_check`, `vendors:view`, `buyers:view`, `lead_sources:view`, `templates:view`, `workflow_settings:view`, `documents:view/create/update/redact`, `ocr:upload/view/ai_fields`, `drafting:*`, `image_objects:view/manage`, `npi:lookup`, `news:view`, `timeline:view`, `review_queue:view`, `dashboard:view`, `analytics:predictive:lead`, `calls:view`, `sms:send`, `medical_records:view/manage`.
 - **viewer** receives: `lead:view:own`, `case:view:own`, `forms:config:view:public`, `buyers:view`, `lead_sources:view`, `templates:view`, `workflow_settings:view`, `documents:view`, `news:view`, `dashboard:view`, `calls:view`. Read-only.
@@ -316,6 +328,26 @@ Each page is documented in the order it appears in the left sidebar. Every entry
 - Every item the system couldn't auto-decide: held qualifications, conflicting documents, low-confidence AI extractions, failed automation runs.
 - **Per item:** entity, reason, priority, system reasoning trace, accept / override / reject buttons. Every override is audited.
 
+### 7.10 Enterprise Dialer — `/dialer`
+- **Permissions:** `calls:view` (read), `calls:manage` (mutate). Sidebar section **Dialer**.
+- An outbound calling console built on Vapi. **Seven tabs** (`dialer.tsx`): **Stats**, **Campaigns**, **Calls**, **Leads**, **DNC List**, **Scripts**, **Dial Pad**.
+- **Setup wizard (`VapiSetupCard`):** (1) add the Vapi **API key** in Integrations, (2) add the Vapi **public key** (Web SDK) in Integrations, (3) create an assistant — the "Auto-create assistant" button calls `POST /api/dialer/vapi-assistant`.
+- **Campaigns** drive bulk outbound. Selecting a `tort` on `POST /api/dialer/campaigns` auto-links that tort's dedicated voice agent (`vapi_assistant_id`). A campaign is run by the worker job `dialer_campaign_run` (`worker.ts`): it enforces the timezone-aware call window, checks Vapi credentials, claims a batch up to `max_concurrent_calls`, applies **DNC** filtering, then places calls via `https://api.vapi.ai/call`.
+- **Endpoints (`/api/dialer`, perms `calls:view`/`calls:manage`):** `GET /stats`; campaign CRUD `GET|POST /campaigns`, `GET|PATCH|DELETE /campaigns/:id`, `POST /campaigns/:id/{start,pause}`, `GET /campaigns/:id/{progress,leads}`, `POST /campaigns/:id/leads`; DNC `GET /dnc`, `POST /dnc`, `POST /dnc/bulk`, `POST /dnc/check`, `DELETE /dnc/:id`; scripts `GET|POST /scripts`, `GET|PATCH|DELETE /scripts/:id`; `POST /manual-call` (Dial Pad); `GET /vapi-config`, `POST /vapi-assistant`, `GET /vapi-phones`; `PUT /call/:id/end`.
+- **Vapi tool callbacks (`/api/vapi-tools`):** public but **Bearer-gated** — `checkBearer` uses `crypto.timingSafeEqual` against the integration's `client_secret`. The live assistant calls back into the CRM via `POST /lookup-lead`, `POST /create-lead`, `POST /check-eligibility`, `POST /escalate-to-human`; tool URLs are tort-scoped (`?tort=<id>`).
+- **Vapi MCP (`/api/vapi-mcp`, perm `dashboard:view`):** `GET /tools`, `POST /call`, `POST /chat` expose machine-readable actions (used by Abby, §11.8).
+
+### 7.11 Per-Tort Voice Agents — `/voice-agents`
+- **Permissions:** `calls:view` (read), `calls:manage` (provision). Sidebar section **Dialer**.
+- Each tort campaign gets its **own dedicated Vapi assistant**, provisioned and kept in sync from `lib/voice/tort-agent-provisioning.ts`. `computeAgentFingerprint` detects configuration drift; `provisionTortAgent` creates/updates an assistant idempotently.
+- **Bulk sync:** `provisionOutOfDateTortAgents` re-syncs only the agents whose fingerprint has changed, so a prompt/tooling change can be rolled out across every tort at once.
+- **Endpoints (`/api/dialer`):** `GET /tort-agents` (list + status), `GET /tort-agents/activity`, `POST /tort-agents/:tortId/provision`, `POST /tort-agents/provision-all`, `POST /tort-agents/sync-out-of-date`.
+- Staff place outbound calls using a tort's dedicated agent through Dialer campaigns (auto-linked, §7.10) or the manual Dial Pad.
+
+### 7.12 AI Agents Monitor — `/ai-agents`
+- **Permission:** `calls:view`. Sidebar section **AI & Clinical**.
+- A live panel of the configured Vapi voice agents and their recent activity — the operator-facing health view of the per-tort agents from §7.11.
+
 ---
 
 ## 8. Document Workflow
@@ -383,7 +415,7 @@ Each page is documented in the order it appears in the left sidebar. Every entry
 
 ### 9.1 Automations editor — `/automations`
 - **Permissions:** `automations:view`, `automations:manage`, `automations:execute`.
-- React Flow drag-and-drop. The full **node catalog** is enumerated in §13.1.
+- React Flow drag-and-drop. The full **node catalog** is enumerated in §13.3.
 - **Endpoints:**
 
 | Method | Path | Permission | Notes |
@@ -445,7 +477,7 @@ All four are converted into structured `AttemptOutcome`s and fed to `recursiveRe
 
 ### 9.8 Competitive Intel — `/competitive-intel`
 - **Permission:** `competitive_intel:manage`.
-- **Backed by:** SerpAPI's `google_ads_transparency_center` engine. Requires `SERPAPI_API_KEY`.
+- **Backed by:** SerpAPI's `google_ads_transparency_center` engine (plus Meta Ads). Requires `SERPAPI_API_KEY`.
 - **Endpoints (`/api/admin/competitive-intel`):**
   - `GET /config` — returns `{ configured: boolean }`.
   - `POST /lookup` — body `{ query | advertiser_id, region? }` → live SerpAPI fetch. Audited.
@@ -453,6 +485,8 @@ All four are converted into structured `AttemptOutcome`s and fed to `recursiveRe
   - `POST /watchlist` — add advertiser. Audited.
   - `DELETE /watchlist/:id` — remove. Audited.
   - `POST /watchlist/:id/refresh` — re-snapshot. **Audit only when `last_ad_count` changes** (no spam).
+  - `POST /sync-all` — manually trigger a background sync of the whole watchlist.
+- **Automated syncing:** the `competitive_intel_watchlist_sync` background job (`lib/ci-poller.ts`) periodically re-snapshots every watched advertiser into `competitive_intel_snapshots`, so the watchlist refreshes itself without an operator clicking refresh.
 - **Tabs:** **Lookup** (search + ad-card grid) · **Watchlist** (pinned firms with refresh button).
 - **Failure modes:** SerpAPI 403/401 → `serpapi_auth`, 200 with `error` payload → 422 `serpapi_logical_error`, network timeout → `serpapi_timeout` (15 s AbortController).
 - **API key never logged** — `?api_key=...` is stripped from URLs in `serpapi-client.ts` before logging.
@@ -495,6 +529,12 @@ All four are converted into structured `AttemptOutcome`s and fed to `recursiveRe
 - **Permissions:** `drafting:templates_view`, `drafting:generate`.
 - Pick a case → pick a template type → generate → human-edit → save as draft → export to Word.
 - The model uses `TEMPLATE_PROMPTS` in `drafting-ai.ts` and refuses to assert facts not present in the case file.
+
+### 10.5 Medical Records Retrieval (MRR) — `/medical-records`
+- **Permissions:** `medical_records:view` (read), `medical_records:manage` (mutate). Sidebar section **AI & Clinical**.
+- Operator-facing tracking for **patient-initiated FHIR record imports** via **Fasten Health** (`lib/fasten/client.ts`), plus medical-records fax requests. Read-heavy; all writes flow through the job queue (`fax_med_records_request`) and delivery-poll jobs.
+- **Endpoints (`/api/mrr`):** `GET /` (list), `GET /:id` (detail), `GET /poll-stats` (delivery-poll health) — all `medical_records:view`; `PATCH /:id/cancel` (soft-cancel) and `POST /:id/resend` (re-enqueue the fax job) — `medical_records:manage`.
+- **Schema:** `lib/db/src/schema/medical_records_requests.ts`.
 
 ---
 
@@ -549,21 +589,28 @@ A human always confirms these. This is enforced via the AI Constitution (§5.6).
 - **UI:** searchable lead picker + chronological card list with Date · Title · Category badge · Source badge.
 
 ### 11.7 Background Check Hub
-Not its own page — appears as a button on every lead. Fans out across nine verification lanes (`lib/bg-hub/hub.ts`), each reporting honestly **pass / fail / unknown**:
+Not its own page — appears as a button on every lead. `POST /api/leads/:id/background-check` (perm `forms:background_check`) fans out across **ten verification lanes** in parallel (`lib/bg-hub/hub.ts` + `adapters.ts`), each reporting a per-lane status `PASS | REVIEW_REQUIRED | FAIL | NOT_RUN`:
 
-| # | Lane (`lib/bg-hub/hub.ts`) | What it checks |
+| # | Lane | Source / status |
 |---|---|---|
-| 1 | `address` | Residency history + address consistency. |
-| 2 | `email` | Deliverability + breach exposure. |
-| 3 | `phone` | Phone ownership + carrier risk. |
-| 4 | `residency` | State / duration requirements for the specific tort (e.g. Camp Lejeune). |
-| 5 | `criminal_court` | CourtListener + OFAC sanctions. |
-| 6 | `incarceration` | Incarceration during exposure window. |
-| 7 | `sex_offender_nsopw` | National Sex Offender Public Website. |
-| 8 | `attorney` | Claimant is a licensed attorney (conflict). |
-| 9 | `business_entity` | Corporate filings / business interests. |
+| 1 | `address` | Live — wraps `lib/address-validator` (residency history + address consistency). |
+| 2 | `email` | Live — wraps `lib/email-validator` (deliverability + breach exposure). |
+| 3 | `phone` | Live — phone ownership + carrier risk, **including an FCC RND (Reassigned Numbers Database) check** for TCPA reassignment exposure. |
+| 4 | `residency` | Live — US Census Geocoder; state / duration requirements for the tort (e.g. Camp Lejeune). |
+| 5 | `criminal_court` | Live — wraps `lib/background-check.ts` (CourtListener + OFAC sanctions). |
+| 6 | `incarceration` | Live — Federal BOP inmate locator (incarceration during the exposure window). |
+| 7 | `sex_offender_nsopw` | **Stub** — returns `nsopw_manual_check_required`; NSOPW prohibits automated scraping, so this lane flags for manual review. |
+| 8 | `attorney` | Live — CourtListener RECAP index (claimant is a licensed attorney / conflict). |
+| 9 | `business_entity` | Live — SEC EDGAR search (corporate filings / business interests). |
+| 10 | `pacer_federal` | Live — PACER PCL Search API via vault credentials. |
 
-Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surface depending on tort.
+**Final status precedence** (`hub.ts`): `FAIL` > `REVIEW_REQUIRED` > (any `NOT_RUN` is treated cautiously as `REVIEW_REQUIRED`) > `PASS` (only when every lane is `PASS`). Several lanes graduated from stub to live over the last cycle; only `sex_offender_nsopw` remains a deliberate manual-review stub.
+
+### 11.8 Abby — `/abby` (internal AI assistant)
+- **Permission:** `dashboard:view`. Sidebar section **AI & Clinical**.
+- A chat assistant that reasons over a **live CRM-state snapshot** (leads, cases, documents, jobs, review queue) injected into its system prompt, alongside the full **AI Constitution** (§5.6).
+- **Endpoint:** `POST /api/ai-chat` (`ai-chat.ts`). Calls `callLLM` with `module: "lead-intelligence"`. When Vapi MCP (§7.10) is configured, Abby can take machine-readable actions via `<vapi_action>` tags routed through `/api/vapi-mcp`.
+- Bound by the Constitution: deterministic-first, never invents a clean result, audits every action, and escalates bright-line decisions to the review queue.
 
 ---
 
@@ -582,7 +629,7 @@ Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surfa
 - **Permissions:** `users:list`, `users:manage`, `invites:manage`.
 - **Endpoints:**
   - `GET /api/users` — firm member list.
-  - `PATCH /api/users/:id/role` — admin only; body `{ role: 'attorney'|'paralegal'|'viewer' }`. Promotion-rule failures: §3.7. Successful change writes audit `entity_type=user, action=role_changed, payload={previous_role, new_role}` and bumps `token_version` (kicks all sessions).
+  - `PATCH /api/users/:id/role` — admin only; body `{ role: 'user_manager'|'attorney'|'paralegal'|'agent'|'viewer' }` (`admin` and `super_admin` cannot be assigned through this route). Promotion-rule failures: §3.7. Successful change writes audit `entity_type=user, action=role_changed, payload={previous_role, new_role}` and bumps `token_version` (kicks all sessions).
   - `POST /api/auth/firm-invites` — mint a one-time registration link.
 - **Columns:** ID, Name, Role badge, MFA status, Last login.
 
@@ -610,6 +657,12 @@ Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surfa
 - **Features:** Token revocation (per-user `token_version` bump), MFA enforcement toggle, rate-limit settings, AI threat-analysis log, login history.
 - **Defaults:** General API 100/15min · Auth 5/15min.
 
+### 12.8 Vendor Portal & lead attribution
+- A token-gated portal that lets an external lead vendor see only the leads they sourced — no CRM login required.
+- **Attribution pipeline:** a public form submission `POST /api/forms-public/submit/:tortId?v=<TOKEN>` resolves the vendor by `vendors.portal_token` and stamps `vendor_id` onto the lead body before it enters `runSubmissionPipeline` (`forms-public.ts`). Drop the `?v=TOKEN` parameter on a vendor's landing-page form and every resulting lead is attributed to them.
+- **Portal endpoints (`/api/vendor-portal`):** `GET /:token` (portal access — the token is the sole credential, no auth header), `GET /:token/submissions` (paginated list of that vendor's attributed leads).
+- **Access control:** the portal only resolves when the vendor row has a `portal_token` and `status === 'active'`. Manage vendors and their tokens under **Vendors** (§12.1).
+
 ---
 
 ## 13. News, BOS-OMEGA, and reference appendices
@@ -622,13 +675,16 @@ Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surfa
   - `finance.yahoo.com/news/rssindex`, MarketWatch RSS, CNBC RSS.
   - **Cache TTL:** 10 minutes (server-side).
 
-### 13.2 Dark Room — `/dark-room` (admin only, BOS-OMEGA)
-- Admin diagnostic / red-team console. Bypasses some normal guards but is fully audited (`entity_type=dark_room`).
+### 13.2 Boss Omega Dark Room — `/dark-room` (super_admin only, BOS-OMEGA)
+- The owner's private control panel — a hidden diagnostic / red-team console. It **only resolves for the `super_admin` owner account** (`paisabrazilfl@gmail.com`). The backing API (`/api/admin/dark-room`, `admin-dark-room.ts`) is hard-gated with `requireRole("super_admin")` — note the in-code comment that a plain `admin` gate would be wrong here — so no firm admin, attorney, or other role can read or write Dark Room data. It is not surfaced in the navigation for any other role.
+- **Gating:** every endpoint is behind `requireRole("super_admin")`. Bypasses some normal guards but is fully audited (`entity_type=dark_room`).
 - **Endpoints:** `GET/POST /api/admin/dark-room`, `PATCH/DELETE /api/admin/dark-room/:id`.
 
 ---
 
 ## 13.3 Full automation node catalog
+
+Defined in `artifacts/api-server/src/lib/automations/node-catalog.ts`. **74 nodes** across 12 categories (trigger 12 · logic 4 · data 5 · crm 14 · communication 5 · documents 6 · forms 4 · ai 8 · integration 7 · script 4 · io 3 · utility 2). Always confirm the live set via `GET /api/automations/node-catalog`; the catalog grows.
 
 **Triggers** — workflow entry points; one output each unless noted.
 
@@ -679,7 +735,7 @@ Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surfa
 | `crm.assign_paralegal` | 1 | Round-robin if `paralegalId` blank. |
 | `crm.set_lead_status` | 1 | Sets `leads.status`. |
 | `crm.send_to_review_queue` | 1 | Routes item to operator. |
-| `crm.background_check` | `clear`, `flagged`, `error` | Fans out 9-lane check. |
+| `crm.background_check` | `clear`, `flagged`, `error` | Fans out 10-lane check. |
 | `crm.npi_lookup` | 1 | NPPES API call. |
 | `crm.decision_engine` | `qualified`, `rejected`, `review` | Full deterministic scoring. |
 | `crm.competitive_intel_lookup` | `found`, `empty`, `error` | SerpAPI Google Ads search. |
@@ -695,15 +751,38 @@ Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surfa
 | `comm.send_voicemail` | 1 | Voicemail drop. |
 | `comm.send_calendar_invite` | 1 | iCal invite over email. |
 
+**Documents**
+
+| ID | Outputs | What it does |
+|---|---|---|
+| `documents.render_template` | 1 | Renders a `document_templates` row (PDF or AI-drafted). |
+| `documents.send_dropbox_sign` | 1 | E-sign packet via Dropbox Sign. |
+| `documents.send_docusign` | 1 | E-sign packet via DocuSign. |
+| `documents.fax_medical_records` | `sent`, `failed` | Faxes a HIPAA-authorized records request to a provider. |
+| `documents.ocr_extract` | 1 | OCR a document to raw text. |
+| `documents.medical_extract` | 1 | Structured medical-field extraction (OCR + AI). |
+
+**Forms**
+
+| ID | Outputs | What it does |
+|---|---|---|
+| `forms.publish` | 1 | Publishes a form configuration. |
+| `forms.embed_script` | 1 | Emits the embeddable `<script>` snippet. |
+| `forms.validate_submission` | `valid`, `invalid` | Server-side validation of a submission payload. |
+| `forms.create_lead_from_submission` | 1 | Creates a lead from a submission with intake-dedup. |
+
 **AI**
 
-| ID | Description |
-|---|---|
-| `ai.agent` | Autonomous loop with `tools[]`. |
-| `ai.classify` | `text` → one of `categories[]`. |
-| `ai.chat_response` | `prompt` + `history`. |
-| `ai.voice_agent` | Vapi outbound voice agent. |
-| `ai.transcribe` | Audio → text. |
+| ID | Outputs | Description |
+|---|---|---|
+| `ai.agent` | `success`, `max_steps`, `error` | Autonomous loop with `tools[]`. |
+| `ai.classify` | 1 | `text` → one of `categories[]`. |
+| `ai.chat_response` | 1 | `prompt` + `history`. |
+| `ai.voice_agent` | `completed`, `failed` | Vapi outbound voice agent. |
+| `ai.transcribe` | 1 | Audio → text. |
+| `ai.extract_fields` | 1 | Structured field extraction from free text. |
+| `ai.summarize` | 1 | Summarize a document or thread. |
+| `ai.draft` | 1 | Draft correspondence / boilerplate. |
 
 **Integration**
 
@@ -712,7 +791,10 @@ Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surfa
 | `integration.send_email` | SendGrid (or chosen provider). |
 | `integration.send_fax` | SrFax / Telnyx. |
 | `integration.send_esign` | E-sign packet via Workflow Settings provider. |
+| `integration.webhook_out` | Outbound HMAC-signed webhook to a subscriber. |
 | `integration.http_request` | Generic HTTP w/ outbound URL guard. |
+| `integration.web_search` | Web search query (SerpAPI-backed). |
+| `integration.graphql` | Generic GraphQL request w/ outbound URL guard. |
 
 **Script** — every script node requires `approved: true` to execute.
 
@@ -721,12 +803,15 @@ Additional non-headline lanes (e.g. `pacer_federal`) exist in code and may surfa
 | `script.javascript` | `node:vm`, no Node globals | `timeoutMs` default 5 000 ms |
 | `script.python` | `child_process.spawn` | 15 000 ms |
 | `script.bash` | `child_process.spawn` | 15 000 ms |
+| `script.powershell` | `child_process.spawn` | 15 000 ms |
 
 **IO**
 
 | ID | Description |
 |---|---|
 | `io.sql_query` | Read-only (SELECT only) parameterized SQL. |
+| `io.read_file` | Read a vault file (SSRF-safe path check). |
+| `io.write_file` | Write a vault file (append-only, no overwrite). |
 
 **Utility**
 
@@ -821,6 +906,35 @@ Emitted via `auditLog(entity_type, entity_id, action, details)`:
 - **`document`:** `created`, `signed`, `redacted`, `deleted`.
 - **General:** `export_leads`, `login_success`, `login_failed`.
 
+### 13.11 LLM routing — Bitdeer primary, Anthropic hard fallback
+All LLM calls go through `callLLM()` in `lib/ai-provider.ts`; never call a provider SDK directly (you'd lose the fallback, the audit row, and usage accounting).
+
+- **Bitdeer AI Cloud is the primary provider** (`lib/ai/bitdeer.ts`) when `BITDEER_API_KEY` is present. `resolveLlmForModule` defaults `run-script`, `ai-agent`, and `lead-intelligence` (Abby) to Bitdeer.
+- **Role-addressed (per-function) model assignment** via `BITDEER_MODULE_MODELS`:
+
+| Module | Model | Role |
+|---|---|---|
+| `run-script` | `Qwen3-Coder-Plus` | hard_code |
+| `ai-agent` / `lead-intelligence` | `Qwen3-235B` | chat |
+| `ai-ocr` | `Qwen3-235B` | vision |
+| `drafting-ai` | `Nemotron-3-Super` | planner |
+| `threat-analyzer` | `Gemma-4-E4B` | router |
+
+- **Tiered fallback:** primary (Bitdeer) → a cheaper Tier-2 backup → **Anthropic env-key adapter (Tier 3, the hard fallback)** using `AI_INTEGRATIONS_ANTHROPIC_API_KEY`, triggered whenever a chosen provider returns a non-retryable error. This is the same vault-only adapter model described in §8.5.
+
+### 13.12 Comprehensive tort intake forms
+- `lib/comprehensive-tort-forms.ts` defines **31 torts** (Roundup, Talcum Powder, Camp Lejeune, etc.). Each tort form is assembled from shared blocks plus tort-specific questions:
+  - **`CONTACT_FIELDS`** — first/last name, email, phone, DOB, state.
+  - **`BASE_ELIGIBILITY`** — 18+, US resident, not already represented by another attorney.
+  - **`ANTI_FRAUD_FIELDS`** — relationship to the injury, prior lawsuits/settlements, HIPAA consent, truthful attestation.
+  - **`TORT_SPECIFIC_QUESTIONS`** — the qualifying questions for that campaign (e.g. Roundup: `roundup_use_type`, `roundup_years_used`).
+- These power the public web forms (§8.1) and the form engine (§11.2), and feed the same intake-dedup pipeline.
+
+### 13.13 Outbound events & lead webhooks
+- The system emits four signed events to subscribed integrations: `lead.created`, `lead.updated` (carries `changed_fields`), `ocr.completed`, `case.stage_changed`. Live catalog: `GET /api/admin/event-catalog` → `events[]`.
+- Every delivery is **HMAC-SHA256 signed** — header `X-MTOS-Signature: sha256=<hex>` over the raw body — plus `X-MTOS-Event` and `X-MTOS-Delivery` (uuid) headers. Subscribers verify the signature with the secret stored at subscription time.
+- Subscriber filter: an integration's `config.userConfig.subscribed_events` array (default `["lead.created"]`). The `integration.webhook_out` automation node (§13.3) emits these on demand inside a workflow.
+
 ---
 
 # Part III — Operating playbooks
@@ -877,7 +991,7 @@ These cheat sheets cover the most common end-to-end jobs.
 # Part IV — Glossary
 
 - **Audit log** — Immutable per-firm action history. Source of truth for "who did what, when."
-- **Background Check Hub** — One-button fan-out across nine verification lanes (§11.7).
+- **Background Check Hub** — One-button fan-out across ten verification lanes (§11.7).
 - **Bright lines** — Things AI never does unattended (§11.5).
 - **Convexity** — Decision-engine framing of expected case value: `convex` (long right tail) > `neutral` > `concave` (capped upside).
 - **DID** — A specific phone number (Direct Inward Dial) used for inbound call/SMS/fax routing.
