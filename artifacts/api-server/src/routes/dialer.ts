@@ -23,7 +23,7 @@ import {
 } from "@workspace/db";
 import {
   eq, and, desc, asc, sql, ilike, or, inArray, count,
-  gte, lte, ne,
+  gte, lte, ne, isNotNull,
 } from "drizzle-orm";
 import { requirePermission, Permission } from "../lib/rbac";
 import { badRequest, notFound } from "../lib/http-errors";
@@ -1085,6 +1085,133 @@ router.get(
   async (_req, res) => {
     const agents = await listTortAgentStatus();
     res.json({ agents });
+  },
+);
+
+// Live activity view: what each provisioned tort agent is currently doing.
+// Joins the per-tort provisioning status against aggregated call_logs (scoped
+// to the operator's firm) so the AI Agents panel can show, per agent, how many
+// calls are active right now, totals, today's outcomes, and the most recent
+// call — plus a flat list of every call currently in flight across all agents.
+router.get(
+  "/tort-agents/activity",
+  requirePermission(Permission.CALLS_VIEW),
+  async (req, res) => {
+    const firmId = await getFirmId(req.user!.id);
+    // Fail closed: a real user (id > 0) with no firm linkage must not see
+    // cross-firm call_logs. Only the dev-bypass user (id <= 0) runs unscoped.
+    if (req.user!.id > 0 && firmId == null) {
+      res.status(403).json({
+        status: "error",
+        code: "NO_FIRM",
+        message: "User account is not linked to a firm.",
+      });
+      return;
+    }
+    const firmScope = firmId != null ? eq(callLogsTable.firm_id, firmId) : sql`true`;
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const ACTIVE_STATUSES = ["queued", "ringing", "in_progress"] as const;
+
+    const [agents, activityRows, liveCalls] = await Promise.all([
+      listTortAgentStatus(),
+      db
+        .select({
+          assistant_id: callLogsTable.vapi_assistant_id,
+          total: count(),
+          active: sql<number>`count(*) filter (where ${callLogsTable.status} in ('queued','ringing','in_progress'))`.mapWith(Number),
+          completed_today: sql<number>`count(*) filter (where ${callLogsTable.status} = 'completed' and ${callLogsTable.created_at} >= ${todayStart})`.mapWith(Number),
+          failed_today: sql<number>`count(*) filter (where ${callLogsTable.status} = 'failed' and ${callLogsTable.created_at} >= ${todayStart})`.mapWith(Number),
+          last_call_at: sql<string | null>`(array_agg(${callLogsTable.started_at} order by ${callLogsTable.created_at} desc))[1]`,
+          last_status: sql<string | null>`(array_agg(${callLogsTable.status} order by ${callLogsTable.created_at} desc))[1]`,
+          last_direction: sql<string | null>`(array_agg(${callLogsTable.direction} order by ${callLogsTable.created_at} desc))[1]`,
+        })
+        .from(callLogsTable)
+        .where(and(firmScope, isNotNull(callLogsTable.vapi_assistant_id)))
+        .groupBy(callLogsTable.vapi_assistant_id),
+      db
+        .select({
+          id: callLogsTable.id,
+          tort_type: callLogsTable.tort_type,
+          vapi_assistant_id: callLogsTable.vapi_assistant_id,
+          status: callLogsTable.status,
+          direction: callLogsTable.direction,
+          from_number: callLogsTable.from_number,
+          to_number: callLogsTable.to_number,
+          started_at: callLogsTable.started_at,
+          duration_seconds: callLogsTable.duration_seconds,
+          lead_first: leadsTable.first_name,
+          lead_last: leadsTable.last_name,
+        })
+        .from(callLogsTable)
+        .leftJoin(leadsTable, eq(callLogsTable.lead_id, leadsTable.id))
+        .where(
+          and(
+            firmScope,
+            isNotNull(callLogsTable.vapi_assistant_id),
+            inArray(callLogsTable.status, [...ACTIVE_STATUSES]),
+          ),
+        )
+        .orderBy(desc(callLogsTable.started_at))
+        .limit(50),
+    ]);
+
+    const byAssistant = new Map(
+      activityRows
+        .filter((r) => r.assistant_id)
+        .map((r) => [r.assistant_id as string, r]),
+    );
+
+    const enriched = agents.map((a) => {
+      const act = a.vapi_assistant_id ? byAssistant.get(a.vapi_assistant_id) : undefined;
+      return {
+        tort_id: a.tort_id,
+        tort_label: a.tort_label,
+        vapi_assistant_id: a.vapi_assistant_id,
+        status: a.status,
+        out_of_date: a.out_of_date,
+        last_synced_at: a.last_synced_at,
+        last_error: a.last_error,
+        activity: {
+          total_calls: act ? Number(act.total) : 0,
+          active_calls: act ? Number(act.active) : 0,
+          completed_today: act ? Number(act.completed_today) : 0,
+          failed_today: act ? Number(act.failed_today) : 0,
+          last_call_at: act?.last_call_at ?? null,
+          last_call_status: act?.last_status ?? null,
+          last_call_direction: act?.last_direction ?? null,
+        },
+      };
+    });
+
+    const live = liveCalls.map((c) => ({
+      id: c.id,
+      tort_type: c.tort_type,
+      vapi_assistant_id: c.vapi_assistant_id,
+      status: c.status,
+      direction: c.direction,
+      number: c.direction === "inbound" ? c.from_number : c.to_number,
+      lead_name:
+        [c.lead_first, c.lead_last].filter(Boolean).join(" ").trim() || null,
+      started_at: c.started_at ? c.started_at.toISOString() : null,
+      duration_seconds: c.duration_seconds,
+    }));
+
+    const summary = {
+      total_agents: enriched.length,
+      working_agents: enriched.filter((a) => a.activity.active_calls > 0).length,
+      active_agents: enriched.filter((a) => a.status === "active").length,
+      error_agents: enriched.filter((a) => a.status === "error").length,
+      live_calls: live.length,
+      calls_today: enriched.reduce(
+        (n, a) => n + a.activity.completed_today + a.activity.failed_today,
+        0,
+      ),
+    };
+
+    res.json({ summary, agents: enriched, live_calls: live });
   },
 );
 

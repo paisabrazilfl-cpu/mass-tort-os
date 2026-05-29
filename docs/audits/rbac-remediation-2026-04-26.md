@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **306 checked / 44 public / 262 protected / 0 unprotected.**
+Boot-time count: **307 checked / 44 public / 263 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -712,6 +712,7 @@ Boot-time count: **306 checked / 44 public / 262 protected / 0 unprotected.**
 | dialer | POST | `/api/dialer/scripts` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | GET | `/api/dialer/stats` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | POST | `/api/dialer/tort-agents/:tortId/provision` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/tort-agents/activity` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | POST | `/api/dialer/tort-agents/provision-all` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | POST | `/api/dialer/tort-agents/sync-out-of-date` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | GET | `/api/dialer/tort-agents` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
