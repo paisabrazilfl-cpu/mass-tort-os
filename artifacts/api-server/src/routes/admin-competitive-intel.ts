@@ -29,6 +29,7 @@ import {
 import { Permission, requirePermission } from "../lib/rbac";
 import { auditLog } from "../lib/audit";
 import { badRequest, notFound } from "../lib/http-errors";
+import { enqueueJob } from "../lib/queue";
 import {
   serpapiAdvertiserAds,
   serpapiSearchAdvertisers,
@@ -393,6 +394,28 @@ router.post("/watchlist/:id/refresh", requirePermission(Permission.COMPETITIVE_I
     }
     throw err;
   }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /sync-all
+// Enqueues a background job that re-fetches every watchlist entry
+// for this firm. Returns immediately — the worker picks it up.
+// ──────────────────────────────────────────────────────────────
+router.post("/sync-all", requirePermission(Permission.COMPETITIVE_INTEL_MANAGE), async (req, res) => {
+  const job = await enqueueJob("competitive_intel_watchlist_sync", {
+    firm_id: req.user!.firm_id,
+    triggered_by: "manual",
+  });
+  await auditLog("competitive_intel", String(req.user!.firm_id), "watchlist_sync_enqueued", {
+    firm_id: req.user!.firm_id,
+    enqueued_by_user_id: req.user!.id,
+    job_id: (job as { id?: number }).id ?? null,
+  });
+  res.status(202).json({
+    status: "queued",
+    message: "Watchlist sync job enqueued — all advertisers for this firm will be refreshed by the worker.",
+    job,
+  });
 });
 
 export default router;

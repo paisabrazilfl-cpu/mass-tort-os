@@ -12,6 +12,7 @@ export type JobType =
   | "send_workflow_email"
   | "send_workflow_sms"
   | "fasten_records_sync"
+  | "competitive_intel_watchlist_sync"
   | "dialer_campaign_run"
   | "poll_fax_delivery";
 
@@ -71,6 +72,12 @@ export interface JobPayload {
   /** Processes one batch of an active outbound dialing campaign. Self-re-enqueues until complete or paused. */
   dialer_campaign_run: {
     campaign_id: number;
+  };
+  /** Re-fetches all watchlist entries for a firm (or all firms when firm_id is omitted). */
+  competitive_intel_watchlist_sync: {
+    firm_id?: number;
+    advertiser_id?: number;
+    triggered_by?: "schedule" | "manual";
   };
   /** Polls the fax provider for delivery confirmation on an outbound MRR fax. */
   poll_fax_delivery: {

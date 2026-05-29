@@ -22,6 +22,7 @@ import { extractPdfText } from "./lib/pdf-extract";
 import { withErrorFallback, createLoopGuard, DEFAULT_LIMITS } from "./lib/error-fallback";
 import { handleSendEsignPacket, handleFaxMedRecordsRequest, handleSendWorkflowEmail, handleSendWorkflowSms } from "./lib/workflow-handlers";
 import { handleFastenRecordsSync, auditStaleFastenPartials } from "./lib/fasten-job";
+import { handleCompetitiveIntelSync, type CompetitiveIntelSyncPayload } from "./lib/competitive-intel-sync";
 import { ensureSystemUser } from "./lib/case-ownership-backfill";
 import { dispatchEvent } from "./lib/event-dispatcher";
 import { updateCaseStatus } from "./lib/case-status";
@@ -356,6 +357,8 @@ async function processJob(job: {
     await handleSendWorkflowSms(payload as unknown as Parameters<typeof handleSendWorkflowSms>[0]);
   } else if (job.job_type === "fasten_records_sync") {
     await handleFastenRecordsSync(payload as unknown as Parameters<typeof handleFastenRecordsSync>[0]);
+  } else if (job.job_type === "competitive_intel_watchlist_sync") {
+    await handleCompetitiveIntelSync(payload as CompetitiveIntelSyncPayload);
   } else if (job.job_type === "dialer_campaign_run") {
     // ── Campaign outbound dialer ──────────────────────────────────────────────
     const { campaign_id } = payload as { campaign_id: unknown };
@@ -675,6 +678,12 @@ export async function workerLoop(): Promise<void> {
   let lastFastenStaleAuditAt = 0;
   const FASTEN_STALE_AUDIT_EVERY_MS = 60 * 60_000;
 
+  // Auto-refresh all competitive-intel watchlist entries every 6 hours.
+  // The job is enqueued (not run inline) so it benefits from the normal
+  // job-queue retry / dead-letter policy if the API keys are unavailable.
+  let lastCiSyncEnqueuedAt = 0;
+  const CI_SYNC_EVERY_MS = 6 * 60 * 60_000;
+
   while (true) {
     try {
       const now = Date.now();
@@ -692,6 +701,15 @@ export async function workerLoop(): Promise<void> {
           await auditStaleFastenPartials();
         } catch (e) {
           logger.error({ err: e }, "Stale Fasten partial audit failed");
+        }
+      }
+      if (now - lastCiSyncEnqueuedAt > CI_SYNC_EVERY_MS) {
+        lastCiSyncEnqueuedAt = now;
+        try {
+          await enqueueJob("competitive_intel_watchlist_sync", { triggered_by: "schedule" });
+          logger.info("CI sync job enqueued (scheduled 6h tick)");
+        } catch (e) {
+          logger.error({ err: e }, "Failed to enqueue competitive_intel_watchlist_sync");
         }
       }
     } catch {
