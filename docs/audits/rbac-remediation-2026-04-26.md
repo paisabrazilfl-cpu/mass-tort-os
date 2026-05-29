@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **301 checked / 44 public / 257 protected / 0 unprotected.**
+Boot-time count: **302 checked / 44 public / 258 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -599,6 +599,7 @@ Boot-time count: **301 checked / 44 public / 257 protected / 0 unprotected.**
 | admin-api-keys | POST | `/api/admin-api-keys/` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-competitive-intel | GET | `/api/admin-competitive-intel/config` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
 | admin-competitive-intel | POST | `/api/admin-competitive-intel/lookup` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
+| admin-competitive-intel | POST | `/api/admin-competitive-intel/sync-all` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
 | admin-competitive-intel | POST | `/api/admin-competitive-intel/watchlist/:id/refresh` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
 | admin-competitive-intel | DELETE | `/api/admin-competitive-intel/watchlist/:id` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
 | admin-competitive-intel | GET | `/api/admin-competitive-intel/watchlist` | ✓ | ✓ |  |  |  | — | `competitive_intel:manage` | ✓ |
