@@ -36,6 +36,8 @@ type AgentActivity = {
   active_calls: number;
   completed_today: number;
   failed_today: number;
+  inbound_today: number;
+  outbound_today: number;
   last_call_at: string | null;
   last_call_status: string | null;
   last_call_direction: string | null;
@@ -124,11 +126,14 @@ export default function AiAgentsPage() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
 
-  const { data, isLoading, isFetching, refetch } = useQuery({
+  const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
     queryKey: ["tort-agents-activity"],
     queryFn: () => apiFetch<ActivityResponse>("/tort-agents/activity"),
     refetchInterval: 10_000,
   });
+
+  const errorMessage =
+    error instanceof Error ? error.message : "Couldn't load agent activity.";
 
   const summary = data?.summary;
   const agents = data?.agents ?? [];
@@ -178,6 +183,18 @@ export default function AiAgentsPage() {
         </div>
       </div>
 
+      {isError && (
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCw className="h-3.5 w-3.5 mr-1" /> Retry
+          </Button>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <Card><CardContent className="py-4"><p className="text-2xl font-semibold text-sky-600">{summary?.working_agents ?? 0}</p><p className="text-xs text-muted-foreground">Working now</p></CardContent></Card>
         <Card><CardContent className="py-4"><p className="text-2xl font-semibold text-sky-600">{summary?.live_calls ?? 0}</p><p className="text-xs text-muted-foreground">Live calls</p></CardContent></Card>
@@ -199,6 +216,10 @@ export default function AiAgentsPage() {
           {isLoading ? (
             <div className="flex justify-center py-12">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : isError ? (
+            <div className="text-center text-destructive py-8 text-sm">
+              {errorMessage}
             </div>
           ) : liveCalls.length === 0 ? (
             <div className="text-center text-muted-foreground py-8 text-sm">
@@ -266,16 +287,22 @@ export default function AiAgentsPage() {
             <div className="flex justify-center py-12">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
+          ) : isError ? (
+            <div className="text-center text-destructive py-8 text-sm">
+              {errorMessage}
+            </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Agent</TableHead>
                   <TableHead>State</TableHead>
+                  <TableHead>Assistant ID</TableHead>
                   <TableHead className="text-right">Active</TableHead>
-                  <TableHead className="text-right">Today</TableHead>
+                  <TableHead className="text-right">Today (in / out)</TableHead>
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead>Last call</TableHead>
+                  <TableHead>Last synced</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -291,6 +318,13 @@ export default function AiAgentsPage() {
                       )}
                     </TableCell>
                     <TableCell><AgentStateBadge agent={a} /></TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {a.vapi_assistant_id ? (
+                        <span title={a.vapi_assistant_id}>{a.vapi_assistant_id}</span>
+                      ) : (
+                        <span className="text-muted-foreground/60">—</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {a.activity.active_calls > 0 ? (
                         <span className="font-semibold text-sky-600">{a.activity.active_calls}</span>
@@ -303,6 +337,9 @@ export default function AiAgentsPage() {
                       {a.activity.failed_today > 0 && (
                         <span className="text-destructive"> / {a.activity.failed_today}</span>
                       )}
+                      <div className="text-xs text-muted-foreground">
+                        {a.activity.inbound_today} in / {a.activity.outbound_today} out
+                      </div>
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
                       {a.activity.total_calls}
@@ -318,11 +355,14 @@ export default function AiAgentsPage() {
                         "No calls yet"
                       )}
                     </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {a.last_synced_at ? fmtTime(a.last_synced_at) : "Never"}
+                    </TableCell>
                   </TableRow>
                 ))}
                 {filtered.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                       No agents match your search.
                     </TableCell>
                   </TableRow>
