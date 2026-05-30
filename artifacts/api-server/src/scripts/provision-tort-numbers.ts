@@ -83,13 +83,23 @@ async function main(): Promise<void> {
       continue;
     }
 
-    await db.insert(tortPhoneNumbersTable).values({
-      tort_id: t.tort_id,
-      phone_number: json.number ?? json.id,
-      vapi_phone_number_id: json.id,
-      label: `${t.tort_id} dedicated inbound`,
-      active: true,
-    }).onConflictDoNothing();
+    // The Vapi number now exists (real spend). If we fail to record it, a
+    // rerun would buy ANOTHER number — so surface the orphan loudly for manual
+    // recovery instead of silently dropping it.
+    try {
+      const inserted = await db.insert(tortPhoneNumbersTable).values({
+        tort_id: t.tort_id,
+        phone_number: json.number ?? json.id,
+        vapi_phone_number_id: json.id,
+        label: `${t.tort_id} dedicated inbound`,
+        active: true,
+      }).onConflictDoNothing().returning({ id: tortPhoneNumbersTable.id });
+      if (inserted.length === 0) {
+        console.log(`  !! ORPHAN: Vapi number ${json.number ?? json.id} (${json.id}) created but mapping conflict on insert for '${t.tort_id}'. Record/release manually to avoid repurchase.`);
+      }
+    } catch (err) {
+      console.log(`  !! ORPHAN: Vapi number ${json.number ?? json.id} (${json.id}) created but DB insert FAILED for '${t.tort_id}': ${String((err as Error).message)}. Record/release manually to avoid repurchase.`);
+    }
     created++;
     console.log(`  [${created}] ${t.tort_id} -> ${json.number ?? "(no E.164)"} (${json.id})`);
     if (created < LIMIT && i < todo.length - 1) await sleep(SPACING_MS);

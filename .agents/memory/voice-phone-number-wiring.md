@@ -22,6 +22,15 @@ that tort's active assistant. One number can dedicate to only one tort.
 Only buy additional numbers when a tort needs its own inbound line for caller
 attribution.
 
+**Vapi free-number cap = 10 per account.** Creating an 11th free number
+(`provider:"vapi"`) returns HTTP 400 "You have reached the maximum number of
+free phone numbers." Beyond 10, numbers must be imported from a paid carrier
+(Telnyx/Twilio BYO + a SIP connection), which is a separate recurring spend.
+Vapi free-number creation also REQUIRES `numberDesiredAreaCode` (or `sipUri`) —
+omitting it returns a 400. When >10 dedicated numbers are wanted, reallocate the
+10 free ones to the highest-priority torts (PATCH `/phone-number/:id`
+{assistantId} + move the tort_phone_numbers row) rather than buying more.
+
 **How to apply:**
 - To "attach a phone number so agents can call out", set
   `phone_number_id` on the active voice integration's `userConfig` (merge with
