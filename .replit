@@ -91,12 +91,12 @@ args = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1
 name = "rbac-test"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts src/lib/__tests__/rbac-route-matrix.test.ts src/lib/__tests__/rbac-route-matrix-headline.test.ts src/lib/__tests__/firm-context.test.ts src/lib/__tests__/firm-invites.test.ts src/lib/__tests__/fasten-webhook.test.ts src/lib/__tests__/fasten-job.test.ts src/lib/__tests__/tort-agent-provisioning.test.ts src/routes/__tests__/vapi-tools-eligibility-mapping.test.ts src/routes/__tests__/vapi-tools-tort-scope.test.ts src/routes/__tests__/leads-fax-results-route.test.ts src/routes/__tests__/auth-register-route.test.ts src/routes/__tests__/users-route.test.ts src/routes/__tests__/fasten-route.test.ts src/routes/__tests__/admin-api-keys-route.test.ts"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/api-server exec node --import tsx --test src/lib/__tests__/rbac.test.ts src/lib/__tests__/rbac-route-matrix.test.ts src/lib/__tests__/rbac-route-matrix-headline.test.ts src/lib/__tests__/firm-context.test.ts src/lib/__tests__/firm-invites.test.ts src/lib/__tests__/fasten-webhook.test.ts src/lib/__tests__/fasten-job.test.ts src/lib/__tests__/tort-agent-provisioning.test.ts src/lib/__tests__/tort-agent-prompt.test.ts src/routes/__tests__/vapi-tools-eligibility-mapping.test.ts src/routes/__tests__/vapi-tools-tort-scope.test.ts src/routes/__tests__/leads-fax-results-route.test.ts src/routes/__tests__/auth-register-route.test.ts src/routes/__tests__/users-route.test.ts src/routes/__tests__/fasten-route.test.ts src/routes/__tests__/admin-api-keys-route.test.ts"
 
 [nix]
 channel = "stable-25_05"
