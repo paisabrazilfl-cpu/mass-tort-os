@@ -1,1 +1,2 @@
 - [Vapi per-tort agent provisioning](vapi-tort-agent-provisioning.md) — restart api-server after provisioning edits (live server runs stale bundle); space Vapi calls (429); MTOS branding never "law firm".
+- [MTOS CRM preview serving](mtos-crm-preview-serving.md) — api-server serves the CRM SPA from mtos-crm/dist/public; rebuild that bundle so screenshots/preview reflect web edits (Vite HMR alone isn't what the screenshot hits).

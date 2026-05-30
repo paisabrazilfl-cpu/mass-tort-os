@@ -27,6 +27,7 @@ import type { AddressInfo } from "node:net";
 import type { Express } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { getLegalBundleMeta } from "../../lib/legal/terms.js";
 
 // Audit writes off — they are not what this test pins, and the route
 // would otherwise insert one audit row per 201 here. The rbac.test.ts
@@ -106,6 +107,13 @@ before(async () => {
 });
 
 after(async () => {
+  // Acceptances carry a non-cascading FK to mtos_users, so they must be
+  // removed BEFORE the user rows or the user delete fails the constraint.
+  await db
+    .execute(
+      sql`DELETE FROM mtos_terms_acceptances WHERE email IN (${HAPPY_EMAIL}, ${DUPE_EMAIL}, ${WEAK_EMAIL}, ${GATE_EMAIL})`,
+    )
+    .catch(() => {});
   await db
     .execute(
       sql`DELETE FROM mtos_users WHERE email IN (${HAPPY_EMAIL}, ${DUPE_EMAIL}, ${WEAK_EMAIL}, ${GATE_EMAIL})`,
@@ -270,4 +278,67 @@ test("(e) clickwrap gate: registration without terms_accepted is rejected and cr
   const rows = await db.execute(sql`SELECT id FROM mtos_users WHERE email = ${GATE_EMAIL}`);
   const r = (rows as unknown as { rows?: Array<{ id: number }> }).rows ?? [];
   assert.equal(r.length, 0, "a terms-gate failure must not create a user row");
+});
+
+test("(f) GET /api/auth/terms returns the multi-document legal bundle (T&C + Master Protective Agreement)", async () => {
+  // The clickwrap now spans two documents. The endpoint must expose the
+  // bundle envelope (version + sha over the whole set) AND each document
+  // with its own content, so the UI can render both in the modal and echo
+  // the bundle version back on acceptance.
+  const res = await fetch(`${baseUrl}/api/auth/terms`);
+  assert.equal(res.status, 200, "terms endpoint must be publicly readable for the clickwrap");
+  const body = (await res.json()) as {
+    version?: unknown;
+    sha256?: unknown;
+    documents?: Array<{ key?: unknown; title?: unknown; version?: unknown; content?: unknown }>;
+  };
+
+  const meta = getLegalBundleMeta();
+  assert.equal(body.version, meta.version, "bundle version must match the canonical bundle meta");
+  assert.equal(
+    body.sha256,
+    meta.sha256,
+    "bundle sha must match the canonical bundle meta so the UI shows the exact accepted hash",
+  );
+
+  assert.ok(Array.isArray(body.documents), "bundle must expose a documents array");
+  const keys = (body.documents ?? []).map((d) => d.key);
+  assert.ok(keys.includes("terms"), "bundle must include the Terms and Conditions document");
+  assert.ok(
+    keys.includes("master-protective-agreement"),
+    "bundle must include the Master Protective Agreement document",
+  );
+  for (const doc of body.documents ?? []) {
+    assert.equal(typeof doc.title, "string", "each document must carry a renderable title");
+    assert.equal(typeof doc.version, "string", "each document must carry its own version");
+    assert.ok(
+      typeof doc.content === "string" && (doc.content as string).length > 0,
+      "each document must include its full text so the clickwrap shows what was agreed to",
+    );
+  }
+});
+
+test("(g) acceptance row records the BUNDLE version + hash (server-authoritative), never a client value", async () => {
+  // The happy-path registration in (a) wrote one acceptance row. It must
+  // capture the canonical bundle version + sha (so an audit can prove the
+  // exact multi-document text the user assented to), not the single-doc
+  // T&C values or anything the client supplied.
+  const meta = getLegalBundleMeta();
+  const rows = await db.execute(
+    sql`SELECT terms_version, content_sha256 FROM mtos_terms_acceptances WHERE email = ${HAPPY_EMAIL} ORDER BY id DESC LIMIT 1`,
+  );
+  const r =
+    (rows as unknown as { rows?: Array<{ terms_version: string; content_sha256: string }> }).rows ??
+    [];
+  assert.equal(r.length, 1, "a successful registration must persist exactly one acceptance row");
+  assert.equal(
+    r[0]?.terms_version,
+    meta.version,
+    "acceptance must record the bundle version so re-acceptance gates can detect bundle changes",
+  );
+  assert.equal(
+    r[0]?.content_sha256,
+    meta.sha256,
+    "acceptance must record the bundle sha so a later edit to either document cannot rewrite history",
+  );
 });

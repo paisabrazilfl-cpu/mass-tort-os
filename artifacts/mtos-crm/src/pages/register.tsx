@@ -7,11 +7,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/auth-context";
 
-type TermsDoc = {
+type LegalDoc = {
+  key: string;
+  title: string;
   version: string;
   effective_date: string;
   last_updated: string;
   content: string;
+};
+
+type TermsBundle = {
+  version: string;
+  effective_date: string;
+  last_updated: string;
+  documents: LegalDoc[];
 };
 
 const PASSWORD_RULES = [
@@ -48,8 +57,8 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  // Clickwrap Terms & Conditions state.
-  const [terms, setTerms] = useState<TermsDoc | null>(null);
+  // Clickwrap legal-bundle state (Terms & Conditions + Master Protective Agreement).
+  const [terms, setTerms] = useState<TermsBundle | null>(null);
   const [termsError, setTermsError] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -132,7 +141,7 @@ export default function RegisterPage() {
           setTermsError(true);
           return;
         }
-        const body = (await res.json()) as TermsDoc;
+        const body = (await res.json()) as TermsBundle;
         if (cancelled) return;
         setTerms(body);
       } catch {
@@ -360,7 +369,7 @@ export default function RegisterPage() {
               type="checkbox"
               checked={termsAccepted}
               onChange={(e) => setTermsAccepted(e.target.checked)}
-              disabled={submitting || (!terms && !termsError)}
+              disabled={submitting || !terms}
               className="mt-0.5 h-4 w-4 shrink-0 rounded border-input accent-primary"
               data-testid="register-terms-checkbox"
               aria-describedby="register-terms-help"
@@ -377,7 +386,7 @@ export default function RegisterPage() {
                 className="font-medium text-primary underline underline-offset-2 hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-60"
                 data-testid="register-terms-open"
               >
-                Terms and Conditions
+                Terms and Conditions and Master Protective Agreement
               </button>
               {terms ? (
                 <span id="register-terms-help">
@@ -441,26 +450,43 @@ export default function RegisterPage() {
             <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
               <div className="space-y-0.5">
                 <h2 id="terms-modal-title" className="text-base font-semibold tracking-tight">
-                  Terms and Conditions
+                  Legal Agreements
                 </h2>
                 <p className="text-xs text-muted-foreground">
-                  Version {terms.version} · Effective {terms.effective_date}
+                  Bundle v{terms.version} · Effective {terms.effective_date} · A single
+                  agreement covers all documents below
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowTerms(false)}
                 className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                aria-label="Close terms"
+                aria-label="Close legal agreements"
                 data-testid="register-terms-close"
               >
                 <X className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
             <div className="overflow-y-auto px-5 py-4">
-              <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground">
-                {terms.content}
-              </pre>
+              {terms.documents.map((doc, index) => (
+                <section
+                  key={doc.key}
+                  className={index > 0 ? "mt-8 border-t border-border pt-6" : undefined}
+                  data-testid={`register-terms-doc-${doc.key}`}
+                >
+                  <div className="mb-2 space-y-0.5">
+                    <h3 className="text-sm font-semibold tracking-tight text-foreground">
+                      {doc.title}
+                    </h3>
+                    <p className="text-[11px] text-muted-foreground">
+                      Version {doc.version} · Effective {doc.effective_date}
+                    </p>
+                  </div>
+                  <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground">
+                    {doc.content}
+                  </pre>
+                </section>
+              ))}
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
               <Button

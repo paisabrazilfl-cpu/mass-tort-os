@@ -43,7 +43,7 @@ import { db, termsAcceptancesTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { dispatchCriticalAlert } from "../lib/security-alerts";
-import { getTermsDocument, getTermsMeta } from "../lib/legal/terms";
+import { getLegalBundle, getTermsMeta } from "../lib/legal/terms";
 
 const router = Router();
 
@@ -324,18 +324,28 @@ const REGISTER_PENDING_BODY = {
 };
 
 /**
- * Public: serve the canonical Terms & Conditions so the /register clickwrap
- * can display the exact text the user is agreeing to and echo back the
- * version. No auth — this is shown to anonymous visitors before signup.
+ * Public: serve the canonical legal bundle (Terms & Conditions + Master
+ * Protective Agreement) so the /register clickwrap can display the exact
+ * text of every document the user is agreeing to and echo back the bundle
+ * version. A single "I agree" accepts the whole bundle. No auth — this is
+ * shown to anonymous visitors before signup.
  */
 router.get("/terms", (_req, res) => {
-  const doc = getTermsDocument();
+  const bundle = getLegalBundle();
   res.json({
-    version: doc.version,
-    effective_date: doc.effective_date,
-    last_updated: doc.last_updated,
-    sha256: doc.sha256,
-    content: doc.content,
+    version: bundle.version,
+    effective_date: bundle.effective_date,
+    last_updated: bundle.last_updated,
+    sha256: bundle.sha256,
+    documents: bundle.documents.map((d) => ({
+      key: d.key,
+      title: d.title,
+      version: d.version,
+      effective_date: d.effective_date,
+      last_updated: d.last_updated,
+      sha256: d.sha256,
+      content: d.content,
+    })),
   });
 });
 

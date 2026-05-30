@@ -24,6 +24,19 @@ export const TERMS_VERSION = "1.0";
 export const TERMS_EFFECTIVE_DATE = "2026-05-30";
 export const TERMS_LAST_UPDATED = "2026-05-30";
 
+export const MASTER_AGREEMENT_VERSION = "1.0";
+export const MASTER_AGREEMENT_EFFECTIVE_DATE = "2026-05-30";
+export const MASTER_AGREEMENT_LAST_UPDATED = "2026-05-30";
+
+// Version of the COMBINED legal bundle the clickwrap presents (Terms &
+// Conditions + Master Protective Agreement). Bump this whenever the SET of
+// documents changes or any document's version changes, so a new acceptance
+// row is required. Earlier rows recorded "1.0" when only the T&C existed;
+// the bundle that now also includes the Master Protective Agreement is "1.1".
+export const LEGAL_BUNDLE_VERSION = "1.1";
+export const LEGAL_BUNDLE_EFFECTIVE_DATE = "2026-05-30";
+export const LEGAL_BUNDLE_LAST_UPDATED = "2026-05-30";
+
 const TERMS_CONTENT = `TERMS AND CONDITIONS
 MTOS — Mass Tort Operating System
 Master Subscription, Platform & Acceptable-Use Agreement
@@ -322,16 +335,172 @@ Questions about these Terms may be directed to:
 Email: [CONTACT EMAIL]    Phone: [PHONE]
 Statutory and case citations refer to authorities in effect as of drafting and are provided to indicate the legal foundation of each provision. Verify current text, jurisdiction, and applicability with counsel licensed in your jurisdiction before publication. This template does not create an attorney-client relationship.`;
 
-let cachedSha: string | null = null;
+const MASTER_AGREEMENT_CONTENT = `MASTER PROTECTIVE AGREEMENT
+Release • Waiver • Covenant Not to Sue • Broad-Form Indemnification • Limitation of Liability • Arbitration
+(Maximum Risk-Shifting Instrument — Enforced to the Fullest Extent Permitted by Law)
+Effective Date: [DATE]      Version: [v1.0]
+Protected Party: [LEGAL ENTITY NAME, LLC]  (“Company” / “Indemnitee”)
+Counterparty: [CUSTOMER / USER NAME]  (“You” / “Indemnitor”)
+THIS AGREEMENT WAIVES SUBSTANTIAL LEGAL RIGHTS. IT RELEASES CLAIMS, BARS LAWSUITS, REQUIRES YOU TO DEFEND AND INDEMNIFY THE COMPANY (INCLUDING FOR THE COMPANY’S OWN ORDINARY NEGLIGENCE WHERE PERMITTED), CAPS THE COMPANY’S LIABILITY, SHORTENS DEADLINES TO SUE, AND REQUIRES BINDING INDIVIDUAL ARBITRATION WITH A CLASS-ACTION AND JURY-TRIAL WAIVER. DO NOT SIGN UNLESS YOU UNDERSTAND AND ACCEPT IT.
+Red bracketed fields must be completed before use. This is a template, not legal advice; have counsel licensed in your governing state review it before signature.
 
-function termsSha(): string {
-  if (cachedSha === null) {
-    cachedSha = crypto.createHash("sha256").update(TERMS_CONTENT, "utf8").digest("hex");
-  }
-  return cachedSha;
+Recitals and Purpose
+This Master Protective Agreement (“Agreement”) is entered into between [LEGAL ENTITY NAME] and its members, managers, officers, directors, employees, agents, affiliates, successors, and assigns (collectively, the “Indemnitees”), and the undersigned counterparty (“You” or “Indemnitor”), in connection with Your access to and use of the MTOS platform and related services (the “Services”).
+The purpose of this Agreement is to allocate, to the maximum extent permitted by law, all risk, loss, and liability arising from or relating to the Services and Your activities to You, and away from the Indemnitees. Each provision is intended to be read independently and enforced to the fullest extent the law allows; any portion held invalid is to be limited or severed without affecting the remainder (Section 21).
+Consideration. The Indemnitees’ provision of access to the Services, and the mutual promises in this Agreement, are good and valuable consideration, the receipt and sufficiency of which You acknowledge.
+
+1. Definitions
+“Claim” means any claim, demand, action, suit, proceeding, investigation, audit, arbitration, regulatory inquiry, charge, citation, fine, penalty, or assessment of any kind, whether civil, criminal, administrative, contractual, statutory, or in tort, whether known or unknown, threatened or actual.
+“Losses” means any and all liabilities, damages, judgments, settlements, awards, fines, penalties, interest, costs, and expenses, including reasonable attorneys’ fees, expert fees, investigation costs, and the costs of enforcing this Agreement.
+“Your Activities” means anything You, Your personnel, vendors, or end users do or fail to do in connection with the Services, including Your data, communications, marketing, telemarketing, solicitation, intake, lead generation, and Your compliance or non-compliance with law.
+
+2. Acknowledgment and Assumption of Risk
+You knowingly and voluntarily acknowledge that use of the Services involves risks, including risks of data inaccuracy, service interruption, regulatory exposure, and third-party claims. YOU EXPRESSLY ASSUME ALL SUCH RISKS, WHETHER KNOWN OR UNKNOWN, AND ACCEPT THE SERVICES “AS IS” AND “AS AVAILABLE.”
+Legal basis:  Express assumption-of-risk and exculpatory clauses are generally enforceable when clearly and conspicuously stated and not contrary to public policy. See Tunkl v. Regents of Univ. of Cal., 60 Cal. 2d 92 (1963) (factors governing enforceability of exculpatory agreements).
+
+3. General Release of Claims
+To the maximum extent permitted by law, You hereby irrevocably and unconditionally release, acquit, and forever discharge the Indemnitees from any and all Claims and Losses arising out of or relating to the Services or Your Activities, whether based in contract, tort, statute, strict liability, or otherwise, and whether now existing or arising in the future.
+Waiver of unknown claims. You expressly waive any rights or benefits under any law that would otherwise preserve unknown claims, and You assume the risk that facts may later prove different from what You now believe.
+Legal basis:  General releases are enforceable as contracts. Many states preserve “unknown” claims absent an express waiver — e.g., California Civil Code § 1542 — so this Section includes an express § 1542-style waiver to reach unknown claims to the extent the law permits.
+
+4. Covenant Not to Sue
+You covenant and agree that You will not file, commence, join, fund, or voluntarily assist any Claim against any Indemnitee that is released or barred by this Agreement, in any court or forum, individually or on behalf of any class or other person. This covenant may be pleaded as a complete bar and defense to any such Claim.
+Liquidated remedy for breach. If You bring a Claim in breach of this Section or Section 3, You will reimburse the Indemnitees for all Losses, including attorneys’ fees, incurred in defending and dismissing it, and the Indemnitees may recover those amounts by setoff or otherwise.
+Legal basis:  A covenant not to sue is a recognized, enforceable contractual undertaking distinct from a release and may bar later litigation; fee-recovery and liquidated remedies are enforceable where reasonable and not a penalty (cf. UCC § 2-718 on reasonable liquidated damages).
+
+5. Broad-Form Indemnification, Defense, and Hold Harmless
+TO THE FULLEST EXTENT PERMITTED BY LAW, YOU WILL DEFEND, INDEMNIFY, AND HOLD HARMLESS THE INDEMNITEES FROM AND AGAINST ANY AND ALL CLAIMS AND LOSSES ARISING OUT OF, RESULTING FROM, OR RELATING IN ANY WAY TO:
+Your Activities and Your use of or inability to use the Services;
+Your data and content, including any lead, claimant, or personal information You process;
+any communication You originate, including any claim under the TCPA, Telemarketing Sales Rule, CAN-SPAM, do-not-call rules, or state mini-TCPA statutes;
+Your violation of any law, regulation, rule of professional conduct, or third-party right;
+any breach of this Agreement or of the Terms and Conditions governing the Services; and
+any act or omission of Your personnel, vendors, contractors, or end users.
+5.1 Coverage of the Indemnitees’ own negligence
+THIS INDEMNITY EXPRESSLY EXTENDS TO CLAIMS AND LOSSES CAUSED OR ALLEGED TO BE CAUSED, IN WHOLE OR IN PART, BY THE ORDINARY NEGLIGENCE OF ANY INDEMNITEE, TO THE FULLEST EXTENT PERMITTED BY LAW. This provision is conspicuous and specifically negotiated. It does not extend to an Indemnitee’s sole gross negligence, willful misconduct, or fraud where the law prohibits indemnification for such conduct.
+5.2 Duty to defend
+Your duty to defend is independent of and broader than Your duty to indemnify, arises upon tender of any Claim regardless of its merit, and requires You to pay defense costs as incurred. The Indemnitees may select their own counsel at Your expense, and You may not settle any Claim in a manner that imposes any obligation or admission on an Indemnitee without its prior written consent.
+5.3 No limitation
+Your obligations under this Section are not limited by any limitation on the amount or type of damages, compensation, or benefits payable by or for You under workers’ compensation, disability, or similar laws, and are not capped by Section 8.
+Legal basis:  Broad-form indemnity that reaches the indemnitee’s own negligence is enforceable only when the intent is expressed clearly and conspicuously — the “express negligence” doctrine and conspicuousness requirement. See Ethyl Corp. v. Daniel Constr. Co., 725 S.W.2d 705 (Tex. 1987); Dresser Indus., Inc. v. Page Petroleum, Inc., 853 S.W.2d 505 (Tex. 1993). Several states’ anti-indemnity statutes restrict indemnity for the indemnitee’s sole negligence in certain contracts (e.g., construction); the carve-out and savings clause address those limits. TCPA exposure that drives this indemnity arises under 47 U.S.C. § 227(b)(3) ($500–$1,500 per violation).
+
+6. Regulatory and Statutory Indemnification
+Without limiting Section 5, You specifically indemnify the Indemnitees against any government or regulatory action, civil-investigative demand, or private statutory claim arising from Your Activities, including under telemarketing, anti-spam, privacy, healthcare-privacy, consumer-protection, and professional-responsibility laws.
+Legal basis:  E.g., TCPA, 47 U.S.C. § 227 and 47 C.F.R. § 64.1200; Telemarketing Sales Rule, 16 C.F.R. Part 310; CAN-SPAM, 15 U.S.C. §§ 7701–7713; HIPAA, 45 C.F.R. Parts 160 and 164; FTC Act § 5, 15 U.S.C. § 45; CCPA/CPRA, Cal. Civ. Code § 1798.100 et seq.
+
+7. Disclaimer of All Warranties
+THE INDEMNITEES DISCLAIM ALL WARRANTIES OF ANY KIND, EXPRESS, IMPLIED, OR STATUTORY, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, ACCURACY, AND NON-INFRINGEMENT. NO INDEMNITEE WARRANTS THAT THE SERVICES WILL BE UNINTERRUPTED, ERROR-FREE, OR SECURE.
+Legal basis:  Conspicuous disclaimers of implied warranties are permitted by UCC § 2-316; some states bar exclusion of certain implied warranties, so portions may not apply.
+
+8. Limitation of Liability
+TO THE MAXIMUM EXTENT PERMITTED BY LAW: (a) THE INDEMNITEES WILL HAVE NO LIABILITY FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR LOST PROFITS, REVENUE, GOODWILL, OR DATA; AND (b) THE INDEMNITEES’ TOTAL AGGREGATE LIABILITY FOR ALL CLAIMS WILL NOT EXCEED THE GREATER OF (i) THE AMOUNTS YOU PAID FOR THE SERVICES IN THE THREE (3) MONTHS BEFORE THE EVENT GIVING RISE TO THE CLAIM, OR (ii) ONE HUNDRED U.S. DOLLARS ($100).
+This limitation applies regardless of the theory of liability, is an essential basis of the bargain, and survives the failure of any limited remedy. It does not apply to liability that cannot be limited by law.
+Legal basis:  Limitation and exclusion of consequential damages is permitted unless unconscionable, per UCC § 2-719; a damages cap is a recognized form of agreed remedy limitation.
+
+9. Shortened Limitations Period
+To the fullest extent permitted by law, any Claim You bring against any Indemnitee must be filed within [ONE (1) YEAR] after the event giving rise to it, or it is permanently barred. This period may not be extended by any later-discovered fact.
+Legal basis:  Parties may contractually shorten an otherwise-applicable statute of limitations to a reasonable period. See Order of United Commercial Travelers v. Wolfe, 331 U.S. 586 (1947); many states enforce reasonable contractual limitations periods.
+
+10. Insurance, Additional Insured, and Waiver of Subrogation
+You will maintain, at Your expense, commercially reasonable insurance appropriate to Your Activities, which may include commercial general liability, professional liability (errors and omissions), and cyber-liability coverage. You will name the Indemnitees as additional insureds on a primary and non-contributory basis, and Your insurers will waive subrogation against the Indemnitees, in each case to the extent of Your obligations under this Agreement. You will provide certificates of insurance on request.
+Legal basis:  Additional-insured, primary-and-noncontributory, and waiver-of-subrogation provisions are standard, enforceable risk-transfer mechanisms that complement the indemnity.
+
+11. Advancement of Defense Costs and Setoff
+Upon tender of a Claim, You will advance defense costs as incurred. The Indemnitees may withhold, setoff, or recoup any amounts owed to You against amounts You owe under this Agreement, and may require reasonable security for Your obligations.
+
+12. Indemnification Procedure
+The Indemnitees will give You notice of a Claim within a reasonable time; failure to give prompt notice relieves You only to the extent You are actually and materially prejudiced. You will cooperate fully, and the Indemnitees may participate in the defense with their own counsel.
+
+13. Primary Obligation; No Contribution Limit
+Your indemnity and defense obligations are primary and are not reduced or offset by any insurance the Indemnitees maintain or by any right of contribution. The existence of the Indemnitees’ own coverage does not diminish Your obligations.
+
+14. Binding Arbitration; Class and Jury Waiver; Fee-Shifting
+ANY DISPUTE NOT BARRED BY THIS AGREEMENT WILL BE RESOLVED BY FINAL AND BINDING INDIVIDUAL ARBITRATION. YOU WAIVE ANY RIGHT TO A JURY TRIAL AND TO PARTICIPATE IN ANY CLASS, COLLECTIVE, OR REPRESENTATIVE PROCEEDING.
+Arbitration will be administered by [AAA / JAMS] under its then-current commercial rules, before a single arbitrator, seated in [CITY, STATE]. The Indemnitees may seek injunctive relief in court to protect intellectual property or confidential information, or bring an individual claim in small-claims court.
+Prevailing party. In any arbitration or permitted court proceeding, the prevailing party is entitled to recover its reasonable attorneys’ fees and costs to the fullest extent permitted by law.
+Legal basis:  The Federal Arbitration Act, 9 U.S.C. §§ 1–16, makes arbitration agreements enforceable; class-action waivers are enforceable per AT&T Mobility LLC v. Concepcion, 563 U.S. 333 (2011); American Express Co. v. Italian Colors Restaurant, 570 U.S. 228 (2013); and Epic Systems Corp. v. Lewis, 584 U.S. 497 (2018). Contractual prevailing-party fee-shifting is broadly enforced.
+
+15. No Assignment of Claims
+You may not assign, transfer, or otherwise convey any Claim against an Indemnitee, and any attempted assignment is void. The Indemnitees’ rights and protections inure to the benefit of their successors and assigns.
+
+16. Governing Law and Venue
+This Agreement is governed by the laws of the State of [GOVERNING STATE], excluding conflict-of-laws rules. Subject to Section 14, the parties consent to the exclusive jurisdiction of the state and federal courts located in [COUNTY, STATE].
+
+17. Notices
+Notices to the Company must be sent to [LEGAL NOTICE EMAIL / ADDRESS]. Notices to You may be sent to the address or email on file.
+
+18. Indemnitees as Third-Party Beneficiaries
+Each Indemnitee who is not a signatory is an intended third-party beneficiary of this Agreement and may enforce it directly. There are no other third-party beneficiaries.
+
+19. Entire Agreement; Amendment
+This Agreement, together with the Terms and Conditions governing the Services, is the entire agreement on its subject and supersedes all prior understandings. It may be amended only in a writing signed by the Company. Any conflicting purchase-order or vendor terms are rejected.
+
+20. Survival
+The release, covenant not to sue, indemnification, defense, hold-harmless, limitation-of-liability, warranty-disclaimer, limitations-period, arbitration, and fee-shifting provisions survive termination of Your access to the Services and the expiration of this Agreement indefinitely, and continue to bind You, Your heirs, successors, and assigns.
+
+21. Severability, Savings, and Maximum-Enforcement Clause
+Each provision of this Agreement is severable. If any provision or any part of it is held invalid, illegal, or unenforceable in any respect, that provision will be reformed and limited to the minimum extent necessary so that it is enforceable, and if it cannot be so reformed, it will be severed, with the remaining provisions remaining in full force. It is the parties’ express intent that every release, waiver, indemnity, and limitation be enforced to the maximum extent permitted by law, and that no holding of partial unenforceability defeat the protections that remain.
+Legal basis:  Severability and “save-as-much-as-possible” reformation clauses are routinely enforced; where a release or indemnity overreaches (e.g., purporting to cover gross negligence or fraud), courts commonly enforce the lawful remainder rather than voiding the entire provision when the contract so directs.
+
+22. Acknowledgment of Understanding and Voluntariness
+YOU ACKNOWLEDGE THAT YOU HAVE READ THIS AGREEMENT, UNDERSTAND IT, HAVE HAD THE OPPORTUNITY TO CONSULT COUNSEL OF YOUR CHOICE, AND ENTER INTO IT KNOWINGLY AND VOLUNTARILY. YOU AGREE THAT ITS TERMS ARE CONSPICUOUS, REASONABLE, AND SPECIFICALLY BARGAINED FOR, AND THAT IT IS NOT A CONTRACT OF ADHESION OR UNCONSCIONABLE.
+Legal basis:  Acknowledgment of conspicuousness, opportunity to consult counsel, and voluntariness supports enforceability of releases, exculpatory clauses, express-negligence indemnities, and arbitration agreements against later defenses of surprise or unconscionability.
+
+23. Electronic Acceptance
+By clicking to accept at signup, You agree to be bound by this Agreement as of the date of acceptance. Electronic acceptance constitutes Your signature for all purposes under the E-SIGN Act and UETA.
+No agreement can waive liability for a party’s own fraud, gross negligence, or willful misconduct, and some statutory and regulatory liability cannot be contracted away. This instrument is drafted to capture the maximum protection the law allows and to survive partial invalidity through severance and reformation. Citations indicate the legal foundation of each provision as of drafting; confirm current law and enforceability in Your governing state with licensed counsel before use.`;
+
+// Per-document content-hash cache. Keyed by document `key` so each
+// document's SHA-256 is computed once and reused.
+const docShaCache = new Map<string, string>();
+
+function sha256(text: string): string {
+  return crypto.createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-export interface TermsDocument {
+interface LegalDocSource {
+  key: string;
+  title: string;
+  version: string;
+  effective_date: string;
+  last_updated: string;
+  content: string;
+}
+
+// The ordered set of legal documents the clickwrap presents at signup.
+// Order is significant: it drives display order AND the deterministic
+// bundle hash below.
+const LEGAL_DOC_SOURCES: readonly LegalDocSource[] = [
+  {
+    key: "terms",
+    title: "Terms and Conditions",
+    version: TERMS_VERSION,
+    effective_date: TERMS_EFFECTIVE_DATE,
+    last_updated: TERMS_LAST_UPDATED,
+    content: TERMS_CONTENT,
+  },
+  {
+    key: "master-protective-agreement",
+    title: "Master Protective Agreement",
+    version: MASTER_AGREEMENT_VERSION,
+    effective_date: MASTER_AGREEMENT_EFFECTIVE_DATE,
+    last_updated: MASTER_AGREEMENT_LAST_UPDATED,
+    content: MASTER_AGREEMENT_CONTENT,
+  },
+];
+
+function docSha(key: string, content: string): string {
+  let cached = docShaCache.get(key);
+  if (cached === undefined) {
+    cached = sha256(content);
+    docShaCache.set(key, cached);
+  }
+  return cached;
+}
+
+export interface LegalDocument {
+  key: string;
+  title: string;
   version: string;
   effective_date: string;
   last_updated: string;
@@ -339,18 +508,96 @@ export interface TermsDocument {
   sha256: string;
 }
 
-/** Returns the current canonical Terms & Conditions with its content hash. */
+/** Backward-compatible alias kept for existing imports. */
+export type TermsDocument = Omit<LegalDocument, "key" | "title">;
+
+/** Every legal document presented in the clickwrap, in display order. */
+export function getLegalDocuments(): LegalDocument[] {
+  return LEGAL_DOC_SOURCES.map((d) => ({
+    key: d.key,
+    title: d.title,
+    version: d.version,
+    effective_date: d.effective_date,
+    last_updated: d.last_updated,
+    content: d.content,
+    sha256: docSha(d.key, d.content),
+  }));
+}
+
+let cachedBundleSha: string | null = null;
+
+// Deterministic hash over the WHOLE bundle: each document's key + version +
+// content hash, joined in order. Binds both which documents were accepted
+// and their exact text, so a later edit to either document cannot silently
+// rewrite what someone agreed to.
+function bundleSha(): string {
+  if (cachedBundleSha === null) {
+    const canonical = LEGAL_DOC_SOURCES.map(
+      (d) => `${d.key}:${d.version}:${docSha(d.key, d.content)}`,
+    ).join("\n");
+    cachedBundleSha = sha256(canonical);
+  }
+  return cachedBundleSha;
+}
+
+export interface LegalBundle {
+  version: string;
+  effective_date: string;
+  last_updated: string;
+  sha256: string;
+  documents: LegalDocument[];
+}
+
+/**
+ * The combined legal bundle (Terms & Conditions + Master Protective
+ * Agreement) the /register clickwrap displays. A single "I agree" click
+ * accepts every document; the acceptance row records the bundle version +
+ * bundle hash returned by getLegalBundleMeta.
+ */
+export function getLegalBundle(): LegalBundle {
+  return {
+    version: LEGAL_BUNDLE_VERSION,
+    effective_date: LEGAL_BUNDLE_EFFECTIVE_DATE,
+    last_updated: LEGAL_BUNDLE_LAST_UPDATED,
+    sha256: bundleSha(),
+    documents: getLegalDocuments(),
+  };
+}
+
+/**
+ * Lightweight bundle metadata (no document bodies) — used when recording an
+ * acceptance. version + sha256 are stored verbatim on the acceptance row.
+ */
+export function getLegalBundleMeta(): { version: string; sha256: string; effective_date: string } {
+  return {
+    version: LEGAL_BUNDLE_VERSION,
+    sha256: bundleSha(),
+    effective_date: LEGAL_BUNDLE_EFFECTIVE_DATE,
+  };
+}
+
+/**
+ * Backward-compatible single-document accessor returning the Terms &
+ * Conditions. Retained so any caller that only needs the T&C body keeps
+ * working; new code should prefer getLegalBundle / getLegalDocuments.
+ */
 export function getTermsDocument(): TermsDocument {
   return {
     version: TERMS_VERSION,
     effective_date: TERMS_EFFECTIVE_DATE,
     last_updated: TERMS_LAST_UPDATED,
     content: TERMS_CONTENT,
-    sha256: termsSha(),
+    sha256: docSha("terms", TERMS_CONTENT),
   };
 }
 
-/** Lightweight metadata (no body) — used when recording an acceptance. */
+/**
+ * Metadata recorded when a user accepts the clickwrap. This now returns the
+ * BUNDLE version + hash (Terms & Conditions + Master Protective Agreement),
+ * not the T&C alone, so a single acceptance row legally captures assent to
+ * every document shown. The acceptance schema is unchanged — terms_version
+ * stores the bundle version and content_sha256 stores the bundle hash.
+ */
 export function getTermsMeta(): Pick<TermsDocument, "version" | "sha256" | "effective_date"> {
-  return { version: TERMS_VERSION, sha256: termsSha(), effective_date: TERMS_EFFECTIVE_DATE };
+  return getLegalBundleMeta();
 }
