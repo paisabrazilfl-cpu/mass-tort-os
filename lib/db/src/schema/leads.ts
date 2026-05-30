@@ -34,6 +34,12 @@ export const leadsTable = pgTable("leads", {
   assigned_to: integer("assigned_to"),
   routing: varchar("routing", { length: 20 }).default("cold"),
 
+  // Public web-form intake: which follow-up path the submitter chose. Either
+  // "agent" (a human reaches out) or "text_email" (self-serve via SMS/email).
+  // Mutually exclusive — captured from a required radio on the embedded form.
+  // NULL for non-web-form leads. Drives the per-choice automation triggers.
+  contact_preference: varchar("contact_preference", { length: 20 }),
+
   first_name: varchar("first_name", { length: 255 }),
   last_name: varchar("last_name", { length: 255 }),
   date_of_birth: text("date_of_birth"),

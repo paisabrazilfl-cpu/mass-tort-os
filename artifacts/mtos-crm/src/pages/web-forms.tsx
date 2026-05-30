@@ -46,6 +46,7 @@ import {
   Code,
   ExternalLink,
   AlertTriangle,
+  Download,
 } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -261,6 +262,95 @@ export default function WebFormsPage() {
     }
   }
 
+  // Build a single, self-contained HTML page listing every tort's embed code
+  // so it can be handed to another builder (e.g. Replit) to spin up landing
+  // sites. Includes ALL forms, each labelled enabled/disabled, with its public
+  // URL and the exact <div>+<script> snippet to paste. Generated client-side
+  // from data already loaded on this page — no extra API round trip.
+  function handleDownloadAll() {
+    if (!summaries || summaries.length === 0) {
+      toast({
+        title: "Nothing to download",
+        description: "No forms are available yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const esc = (s: string) =>
+      s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    const generatedAt = new Date().toISOString();
+    const enabledCount = summaries.filter((s) => s.web_form_enabled).length;
+    const cards = summaries
+      .map((s) => {
+        const snippet = buildEmbedSnippet(s.tort_id, origin);
+        const publicUrl = buildPublicConfigUrl(s.tort_id, origin);
+        const previewUrl = `${origin.replace(/\/$/, "")}/api/web-forms/${encodeURIComponent(s.tort_id)}/preview`;
+        const statusBadge = s.web_form_enabled
+          ? `<span class="badge badge-on">ENABLED</span>`
+          : `<span class="badge badge-off">DISABLED</span>`;
+        return `<section class="card">
+  <h2>${esc(s.tort_label)} ${statusBadge}</h2>
+  <div class="meta"><strong>Tort ID:</strong> <code>${esc(s.tort_id)}</code> &middot; <strong>Category:</strong> ${esc(s.category)} &middot; <strong>Fields:</strong> ${s.field_count}</div>
+  <div class="meta"><strong>Public config URL:</strong> <a href="${esc(publicUrl)}">${esc(publicUrl)}</a></div>
+  <div class="meta"><strong>Standalone preview:</strong> <a href="${esc(previewUrl)}">${esc(previewUrl)}</a></div>
+  <p class="lbl">Embed code — paste into any site:</p>
+  <pre><code>${esc(snippet)}</code></pre>
+</section>`;
+      })
+      .join("\n");
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>MTOS Intake Forms — Embed Codes</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;background:#f8fafc;margin:0;padding:24px;line-height:1.5}
+  .wrap{max-width:880px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:#475569;margin:0 0 24px;font-size:14px}
+  .card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .card h2{font-size:17px;margin:0 0 10px;display:flex;align-items:center;gap:10px}
+  .meta{font-size:13px;color:#475569;margin:2px 0}
+  .lbl{font-size:13px;font-weight:600;margin:12px 0 6px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+  pre{background:#0f172a;color:#e2e8f0;padding:12px 14px;border-radius:8px;overflow:auto;font-size:13px;margin:0}
+  pre code{color:inherit}
+  .badge{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px}
+  .badge-on{background:#dcfce7;color:#166534}
+  .badge-off{background:#fee2e2;color:#991b1b}
+  a{color:#2563eb;word-break:break-all}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>MTOS Intake Forms — Embed Codes</h1>
+<p class="sub">${summaries.length} forms (${enabledCount} enabled) &middot; generated ${esc(generatedAt)} &middot; host <code>${esc(origin)}</code>. Disabled forms return a "not enabled" response until switched on in the CRM.</p>
+${cards}
+</div>
+</body>
+</html>`;
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "mtos-intake-forms.html";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast({
+      title: "Download started",
+      description: `${summaries.length} forms exported to mtos-intake-forms.html.`,
+    });
+  }
+
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
@@ -278,6 +368,17 @@ export default function WebFormsPage() {
             . Disabling a form immediately blocks public submissions with a 403.
           </p>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={!summaries || summaries.length === 0}
+          onClick={handleDownloadAll}
+          title="Download every form's embed code as a single HTML file"
+        >
+          <Download className="mr-2 h-4 w-4" />
+          Download all forms
+        </Button>
       </div>
 
       {loadError ? (

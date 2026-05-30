@@ -179,6 +179,29 @@ async function runWebFormPipeline(
   }
   pipeline.push(step1);
 
+  // STEP 1b: Contact preference — a required, mutually-exclusive choice the
+  // visitor makes right before submitting. Exactly one of "agent" (a human
+  // reaches out) or "text_email" (self-serve via SMS + email). The embed
+  // enforces this client-side, but the server is the source of truth, so we
+  // re-validate and reject anything that isn't one of the two known values.
+  const prefStep: PipelineStep = { name: "CONTACT_PREFERENCE", status: "passed", errors: [] };
+  const contactPreferenceRaw = String(body.contact_preference ?? "").trim();
+  const contactPreference =
+    contactPreferenceRaw === "agent" || contactPreferenceRaw === "text_email"
+      ? contactPreferenceRaw
+      : null;
+  if (!contactPreference) {
+    prefStep.errors = ["MISSING_OR_INVALID_CONTACT_PREFERENCE"];
+    prefStep.status = "failed";
+    pipeline.push(prefStep);
+    return failed(
+      pipeline,
+      "CONTACT_PREFERENCE",
+      "Please choose how you'd like us to proceed before submitting.",
+    );
+  }
+  pipeline.push(prefStep);
+
   // STEP 2: Eligibility rules (server-enforced if-then logic).
   const step2: PipelineStep = { name: "ELIGIBILITY_RULES", status: "passed", errors: [] };
   const blockedMessages: string[] = [];
@@ -350,6 +373,10 @@ async function runWebFormPipeline(
       // tcpa_consent is the one field that should ratchet UP — once
       // consented, stay consented. Never demote to false.
       if (tcpaConsented) setExpr.tcpa_consent = sql`${leadsTable.tcpa_consent} OR true`;
+      // Fill-empty, consistent with the other identifying fields above: only
+      // record the choice if the existing lead hasn't already captured one.
+      if (contactPreference)
+        setExpr.contact_preference = sql`COALESCE(${leadsTable.contact_preference}, ${contactPreference})`;
       await db
         .update(leadsTable)
         .set(setExpr as Partial<typeof leadsTable.$inferInsert>)
@@ -384,6 +411,7 @@ async function runWebFormPipeline(
           notes: briefStory,
           hospital_fax: hospitalFaxE164,
           tcpa_consent: tcpaConsented,
+          contact_preference: contactPreference,
           // Task #15: canonical dedup hash over plaintext (tort|email|phone10).
           // Returns null if any component is missing — column stays NULL and
           // the dedup helper falls back to the email/phone scan paths.
@@ -500,6 +528,7 @@ async function runWebFormPipeline(
           state: stateCode,
           tort_type: config.label,
           hospital_fax: hospitalFaxE164,
+          contact_preference: contactPreference,
         },
       },
       // Web-form submissions are tenant-less at intake (the lead has no
@@ -512,6 +541,39 @@ async function runWebFormPipeline(
       firmId: null,
       source: `web_form_${tortId}`,
     });
+
+    // Fire the choice-specific automation trigger. "agent" and "text_email"
+    // each get their own event so an operator can later attach a different
+    // workflow to each path. These are REAL trigger events that currently
+    // fan out to zero workflows (dispatchTrigger no-ops when nothing matches)
+    // — the actual automations are wired up later. No placeholder side effects.
+    const preferenceTrigger =
+      contactPreference === "agent"
+        ? "trigger.contact_pref_agent"
+        : "trigger.contact_pref_text_email";
+    void dispatchTrigger(preferenceTrigger, {
+      input: {
+        tort_id: tortId,
+        tort_label: config.label,
+        contact_preference: contactPreference,
+        lead: {
+          id: leadId,
+          first_name: firstName,
+          last_name: lastName,
+          email: emailValue || null,
+          state: stateCode,
+          tort_type: config.label,
+        },
+      },
+      firmId: null,
+      source: `web_form_${tortId}`,
+    });
+
+    // Durable, queryable proof of the contact-method choice for compliance.
+    void auditLog("lead", String(leadId), "web_form_contact_preference", {
+      tort_id: tortId,
+      contact_preference: contactPreference,
+    }).catch((err) => logger.warn({ err, leadId }, "contact-preference audit failed"));
   }
 
   // STEP 6: Optional confirmation email.
@@ -1013,6 +1075,21 @@ function init(){
     var sec=buildSection(s[0],s[1],fs);
     if(sec)form.appendChild(sec);
   });
+  var prefFs=el("fieldset",{"class":"wf-section wf-section-preference"});
+  prefFs.appendChild(el("legend",{text:"How would you like us to proceed?"}));
+  prefFs.appendChild(el("p",{"class":"wf-sub",text:"Choose one option below — you can select only one."}));
+  var prefOpts=[["agent","I wish to be contacted by an Agent"],["text_email","I wish to do all via Text message and Email"]];
+  var prefGroup=el("div",{"class":"wf-radio-group"});
+  prefOpts.forEach(function(o,i){
+    var pid="wf_contact_preference_"+i;
+    var plab=el("label",{"for":pid,"class":"wf-radio-opt"});
+    plab.appendChild(el("input",{type:"radio",name:"contact_preference",id:pid,value:o[0]}));
+    plab.appendChild(el("span",{text:o[1]}));
+    prefGroup.appendChild(plab);
+  });
+  prefFs.appendChild(prefGroup);
+  prefFs.appendChild(el("div",{"class":"wf-error","id":"wfe_contact_preference"}));
+  form.appendChild(prefFs);
   var msg=el("div",{"class":"wf-msg"});
   var btn=el("button",{type:"submit",text:"Submit"});
   form.appendChild(msg);
@@ -1023,6 +1100,18 @@ function init(){
     btn.disabled=true;btn.textContent="Submitting…";
     var payload={};
     DATA.fields.forEach(function(f){payload[f.key]=readVal(f);});
+    // Required, mutually-exclusive contact preference (server re-validates).
+    var prefVal="";var prefRadios=document.getElementsByName("contact_preference");
+    for(var pj=0;pj<prefRadios.length;pj++){if(prefRadios[pj].checked)prefVal=prefRadios[pj].value;}
+    var prefErrEl=document.getElementById("wfe_contact_preference");
+    if(prefErrEl)prefErrEl.textContent="";
+    if(prefVal!=="agent"&&prefVal!=="text_email"){
+      if(prefErrEl)prefErrEl.textContent="Please choose how you'd like us to proceed.";
+      msg.appendChild(el("div",{"class":"wf-block",text:"Please choose how you'd like us to proceed before submitting."}));
+      btn.disabled=false;btn.textContent="Submit";
+      return;
+    }
+    payload.contact_preference=prefVal;
     // Client-side eligibility hint (server is the source of truth).
     for(var i=0;i<DATA.rules.length;i++){
       var r=DATA.rules[i];
