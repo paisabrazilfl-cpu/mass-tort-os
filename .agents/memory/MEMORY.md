@@ -1,1 +1,2 @@
 - [Git pushes need a task agent](git-push-blocked-on-main-agent.md) — main agent is hard-blocked from ALL git network ops (even read-only fetch); GitHub push must be delegated to a task agent.
+- [Inbound voice call tenancy](inbound-voice-tenancy.md) — resolve firm from the dialed number mapping, not just metadata, or inbound lead dedup leaks across firms.

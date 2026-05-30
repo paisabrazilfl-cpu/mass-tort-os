@@ -37,7 +37,7 @@ import { eq, sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import { loadVapiCredentials } from "../lib/voice/vapi-webhook";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
-import { encryptLeadFields, rebindLeadEncryptionAad } from "../lib/encryption";
+import { encryptLeadFields, decryptLeadFields, rebindLeadEncryptionAad } from "../lib/encryption";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { findExistingLeadForIntake } from "../lib/lead-dedup";
 
@@ -482,6 +482,160 @@ router.post("/escalate-to-human", async (req, res) => {
     res.status(200).json({ ok: true });
   } catch (err) {
     logger.error({ err }, "vapi-tools escalate-to-human failed");
+    res.status(200).json({ ok: false, code: "INTERNAL" });
+  }
+});
+
+// ─── update-lead (progressive save) ──────────────────────────────────────────
+// Called repeatedly DURING a live call so each confirmed answer is persisted
+// as it is captured — if the caller hangs up mid-intake, everything gathered
+// so far is already on the lead instead of being lost at end-of-call.
+//
+// Partial by design: only fields the agent actually sends are written
+// (overwriting the existing value with the freshly-confirmed one). PII is
+// encrypted with AAD bound to (fieldName, lead.id) — the correct shape for an
+// UPDATE on a known id, matching the leads route. Tort scope is enforced the
+// same way as check-eligibility/escalate so an agent can never edit a lead
+// outside its own tort.
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+const updateLeadSchema = z.object({
+  lead_id: z.coerce.number().int().positive(),
+  tort_type: z.string().min(1).max(100).optional().nullable(),
+  first_name: z.string().min(1).max(120).optional().nullable(),
+  last_name: z.string().min(1).max(120).optional().nullable(),
+  date_of_birth: z.string().max(40).optional().nullable(),
+  email: z.string().email().optional().nullable(),
+  phone: z.string().min(7).max(32).optional().nullable(),
+  street_address: z.string().max(300).optional().nullable(),
+  city: z.string().max(100).optional().nullable(),
+  state: z.string().max(2).optional().nullable(),
+  zip: z.string().max(10).optional().nullable(),
+  diagnosis: z.string().max(500).optional().nullable(),
+  diagnosis_type: z.string().max(255).optional().nullable(),
+  diagnosis_date: z.string().max(40).optional().nullable(),
+  exposure_start: z.string().max(40).optional().nullable(),
+  exposure_end: z.string().max(40).optional().nullable(),
+  location_name: z.string().max(255).optional().nullable(),
+  medications: z.string().max(1000).optional().nullable(),
+  physician_first_name: z.string().max(255).optional().nullable(),
+  physician_last_name: z.string().max(255).optional().nullable(),
+  physician_full_address: z.string().max(500).optional().nullable(),
+  physician_contact_info: z.string().max(500).optional().nullable(),
+  hospital_name: z.string().max(500).optional().nullable(),
+  hospital_contact_info: z.string().max(500).optional().nullable(),
+  notes: z.string().max(4000).optional().nullable(),
+});
+
+router.post("/update-lead", async (req, res) => {
+  if (!(await checkBearer(req))) {
+    res.status(401).json({ ok: false, code: "UNAUTHORIZED" });
+    return;
+  }
+  const parsed = updateLeadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(200).json({ ok: false, code: "BAD_REQUEST", issues: parsed.error.issues });
+    return;
+  }
+  const scope = resolveTortType(req, parsed.data.tort_type);
+  if (!scope.ok) {
+    res.status(200).json({ ok: false, code: scope.code });
+    return;
+  }
+  const leadId = parsed.data.lead_id;
+  try {
+    const inScope = await assertLeadInScope(leadId, scope.tort);
+    if (!inScope.ok) {
+      res.status(200).json({ ok: false, code: inScope.code });
+      return;
+    }
+
+    const existingRows = await db
+      .select()
+      .from(leadsTable)
+      .where(eq(leadsTable.id, leadId))
+      .limit(1);
+    const existingRow = existingRows[0];
+    if (!existingRow) {
+      res.status(200).json({ ok: false, code: "LEAD_NOT_FOUND" });
+      return;
+    }
+    const existing = decryptLeadFields(existingRow as Record<string, unknown>, String(leadId));
+
+    // Collect provided plaintext fields. `undefined` (key absent) means
+    // "leave alone"; an explicit value (incl. provided string) overwrites.
+    const d = parsed.data;
+    const plain: Record<string, unknown> = {};
+    const setIf = (key: string, val: string | null | undefined) => {
+      if (val === undefined || val === null) return;
+      const t = val.trim();
+      if (t.length > 0) plain[key] = t;
+    };
+
+    setIf("first_name", d.first_name);
+    setIf("last_name", d.last_name);
+    setIf("date_of_birth", d.date_of_birth);
+    setIf("email", d.email);
+    setIf("street_address", d.street_address);
+    setIf("city", d.city);
+    setIf("state", d.state ? d.state.toUpperCase() : d.state);
+    setIf("zip", d.zip);
+    setIf("diagnosis", d.diagnosis);
+    setIf("diagnosis_type", d.diagnosis_type);
+    setIf("diagnosis_date", d.diagnosis_date);
+    setIf("location_name", d.location_name);
+    setIf("medications", d.medications);
+    setIf("physician_first_name", d.physician_first_name);
+    setIf("physician_last_name", d.physician_last_name);
+    setIf("physician_full_address", d.physician_full_address);
+    setIf("physician_contact_info", d.physician_contact_info);
+    setIf("hospital_name", d.hospital_name);
+    setIf("hospital_contact_info", d.hospital_contact_info);
+    setIf("notes", d.notes);
+
+    // Phone normalized to E.164 like every other intake surface.
+    if (d.phone != null) {
+      const phoneE164 = normalizePhone(d.phone);
+      if (phoneE164) plain.phone = phoneE164;
+    }
+
+    // Exposure columns are real DATE columns — only accept YYYY-MM-DD so a
+    // loose spoken date never throws and aborts the whole save.
+    if (d.exposure_start != null && DATE_ONLY.test(d.exposure_start.trim())) {
+      plain.exposure_start = d.exposure_start.trim();
+    }
+    if (d.exposure_end != null && DATE_ONLY.test(d.exposure_end.trim())) {
+      plain.exposure_end = d.exposure_end.trim();
+    }
+
+    // Keep the display `name` coherent when either name part changes.
+    if (plain.first_name !== undefined || plain.last_name !== undefined) {
+      const first = (plain.first_name ?? existing.first_name ?? "") as string;
+      const last = (plain.last_name ?? existing.last_name ?? "") as string;
+      const composed = [first, last].filter((s) => String(s).trim().length > 0).join(" ").trim();
+      if (composed) plain.name = composed;
+    }
+
+    if (Object.keys(plain).length === 0) {
+      res.status(200).json({ ok: true, updated: [] });
+      return;
+    }
+
+    // Recompute the canonical lookup_hash from the merged plaintext triple so
+    // dedup stays consistent once both email and phone are known.
+    const mergedEmail = (plain.email ?? existing.email ?? null) as string | null;
+    const mergedPhone = (plain.phone ?? existing.phone ?? null) as string | null;
+    const hash = leadLookupHash(scope.tort === "unknown" ? existingRow.tort_type : scope.tort, mergedEmail, mergedPhone);
+
+    const encrypted = encryptLeadFields(plain, String(leadId));
+    const updateRow: Record<string, unknown> = { ...encrypted, updated_at: new Date() };
+    if (hash) updateRow.lookup_hash = hash;
+
+    await db.update(leadsTable).set(updateRow).where(eq(leadsTable.id, leadId));
+
+    res.status(200).json({ ok: true, updated: Object.keys(plain) });
+  } catch (err) {
+    logger.error({ err, lead_id: leadId }, "vapi-tools update-lead failed");
     res.status(200).json({ ok: false, code: "INTERNAL" });
   }
 });

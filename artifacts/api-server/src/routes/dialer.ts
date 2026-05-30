@@ -20,6 +20,7 @@ import {
   callLogsTable,
   leadsTable,
   tortVoiceAgentsTable,
+  tortPhoneNumbersTable,
   importBatchesTable,
 } from "@workspace/db";
 import { auditLog } from "../lib/audit";
@@ -44,6 +45,8 @@ import {
   provisionAllTortAgents,
   provisionOutOfDateTortAgents,
 } from "../lib/voice/tort-agent-provisioning";
+import { TORT_REGISTRY } from "../lib/tort-engine";
+import { loadVapiCredentials } from "../lib/voice/vapi-webhook";
 
 const router = Router();
 
@@ -1445,6 +1448,196 @@ router.post(
       errors: results.filter((r) => r.outcome === "error").length,
     };
     res.json({ summary, results });
+  },
+);
+
+// ─── INBOUND NUMBER → TORT MAPPING ───────────────────────────────────────────
+// The operator runs one dedicated phone number per tort/campaign. These routes
+// let them map a number to a tort so an inbound call is attributed to the right
+// tort/form (see lib/voice/inbound-routing.ts). Best-effort: when a Vapi phone
+// number id is supplied, we ask Vapi to route that number to the tort's active
+// assistant so inbound dialing is wired end to end.
+
+function normalizeE164(raw: string): string {
+  const digits = raw.replace(/\D+/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length > 0) return `+${digits}`;
+  return "";
+}
+
+// Best-effort: point a Vapi phone number at an assistant so inbound calls to it
+// reach the tort's agent. Never throws — a failure here must not block the DB
+// mapping (the dialed-number lane still resolves the tort on its own).
+async function assignVapiNumberToAssistant(
+  vapiPhoneNumberId: string,
+  assistantId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const creds = await loadVapiCredentials();
+    if (!creds) return { ok: false, error: "no_credentials" };
+    const resp = await fetch(`https://api.vapi.ai/phone-number/${encodeURIComponent(vapiPhoneNumberId)}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${creds.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ assistantId }),
+    });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      return { ok: false, error: `http_${resp.status} ${body.slice(0, 160)}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String((err as Error).message) };
+  }
+}
+
+router.get(
+  "/tort-agents/numbers",
+  requirePermission(Permission.CALLS_VIEW),
+  async (req, res) => {
+    const firmId = await getFirmId(req.user!.id);
+    // Fail closed: a real user (id > 0) with no firm linkage must not see
+    // cross-firm number mappings. Only the dev-bypass user runs unscoped.
+    if (req.user!.id > 0 && firmId == null) {
+      res.status(403).json({ status: "error", code: "NO_FIRM", message: "User account is not linked to a firm." });
+      return;
+    }
+    const rows = await db
+      .select()
+      .from(tortPhoneNumbersTable)
+      .where(firmId != null ? eq(tortPhoneNumbersTable.firm_id, firmId) : sql`true`)
+      .orderBy(desc(tortPhoneNumbersTable.created_at));
+    const numbers = rows.map((r) => ({
+      ...r,
+      tort_label: TORT_REGISTRY[r.tort_id]?.label ?? r.tort_id,
+    }));
+    res.json({ numbers });
+  },
+);
+
+const createNumberSchema = z.object({
+  tort_id: z.string().min(1).max(80),
+  phone_number: z.string().min(7).max(32),
+  vapi_phone_number_id: z.string().max(100).optional().nullable(),
+  label: z.string().max(200).optional().nullable(),
+  active: z.boolean().optional(),
+});
+
+router.post(
+  "/tort-agents/numbers",
+  requirePermission(Permission.CALLS_MANAGE),
+  async (req, res) => {
+    const parsed = createNumberSchema.safeParse(req.body);
+    if (!parsed.success) {
+      badRequest(res, "Invalid number mapping", parsed.error.issues);
+      return;
+    }
+    const { tort_id } = parsed.data;
+    if (!TORT_REGISTRY[tort_id]) {
+      badRequest(res, `Unknown tort: ${tort_id}`);
+      return;
+    }
+    const phoneE164 = normalizeE164(parsed.data.phone_number);
+    if (!phoneE164) {
+      badRequest(res, "Invalid phone number");
+      return;
+    }
+    const firmId = await getFirmId(req.user!.id);
+    if (req.user!.id > 0 && firmId == null) {
+      res.status(403).json({ status: "error", code: "NO_FIRM", message: "User account is not linked to a firm." });
+      return;
+    }
+
+    // Reject a number already mapped (the column is globally unique anyway —
+    // catch it here with a clean message instead of a raw constraint error).
+    const existing = await db
+      .select({ id: tortPhoneNumbersTable.id })
+      .from(tortPhoneNumbersTable)
+      .where(eq(tortPhoneNumbersTable.phone_number, phoneE164))
+      .limit(1);
+    if (existing.length > 0) {
+      badRequest(res, "That phone number is already mapped to a tort");
+      return;
+    }
+
+    const [inserted] = await db
+      .insert(tortPhoneNumbersTable)
+      .values({
+        tort_id,
+        phone_number: phoneE164,
+        vapi_phone_number_id: parsed.data.vapi_phone_number_id ?? null,
+        label: parsed.data.label ?? null,
+        active: parsed.data.active ?? true,
+        firm_id: firmId,
+      })
+      .returning();
+
+    // Best-effort: route the Vapi number to this tort's active assistant.
+    let vapiAssignment: { ok: boolean; error?: string } | null = null;
+    if (inserted!.vapi_phone_number_id) {
+      const agent = await db
+        .select({ assistant_id: tortVoiceAgentsTable.vapi_assistant_id })
+        .from(tortVoiceAgentsTable)
+        .where(and(eq(tortVoiceAgentsTable.tort_id, tort_id), eq(tortVoiceAgentsTable.status, "active")))
+        .limit(1);
+      const assistantId = agent[0]?.assistant_id;
+      if (assistantId) {
+        vapiAssignment = await assignVapiNumberToAssistant(inserted!.vapi_phone_number_id, assistantId);
+        if (!vapiAssignment.ok) {
+          logger.warn({ tort_id, error: vapiAssignment.error }, "vapi number→assistant assignment failed");
+        }
+      } else {
+        vapiAssignment = { ok: false, error: "no_active_assistant" };
+      }
+    }
+
+    await auditLog("tort_phone_number", String(inserted!.id), "tort_phone_number.create", {
+      actor_id: req.user!.id,
+      tort_id,
+      phone_number: phoneE164,
+      vapi_assignment: vapiAssignment,
+    });
+
+    res.status(201).json({
+      number: { ...inserted!, tort_label: TORT_REGISTRY[tort_id]?.label ?? tort_id },
+      vapi_assignment: vapiAssignment,
+    });
+  },
+);
+
+router.delete(
+  "/tort-agents/numbers/:id",
+  requirePermission(Permission.CALLS_MANAGE),
+  async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      badRequest(res, "Invalid id");
+      return;
+    }
+    const firmId = await getFirmId(req.user!.id);
+    if (req.user!.id > 0 && firmId == null) {
+      res.status(403).json({ status: "error", code: "NO_FIRM", message: "User account is not linked to a firm." });
+      return;
+    }
+    const [deleted] = await db
+      .delete(tortPhoneNumbersTable)
+      .where(
+        and(
+          eq(tortPhoneNumbersTable.id, id),
+          firmId != null ? eq(tortPhoneNumbersTable.firm_id, firmId) : sql`true`,
+        ),
+      )
+      .returning();
+    if (!deleted) {
+      notFound(res);
+      return;
+    }
+    await auditLog("tort_phone_number", String(id), "tort_phone_number.delete", {
+      actor_id: req.user!.id,
+      tort_id: deleted.tort_id,
+      phone_number: deleted.phone_number,
+    });
+    res.json({ ok: true });
   },
 );
 

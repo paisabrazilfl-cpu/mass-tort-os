@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **309 checked / 45 public / 264 protected / 0 unprotected.**
+Boot-time count: **313 checked / 46 public / 267 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -715,6 +715,9 @@ Boot-time count: **309 checked / 45 public / 264 protected / 0 unprotected.**
 | dialer | GET | `/api/dialer/stats` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
 | dialer | POST | `/api/dialer/tort-agents/:tortId/provision` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | GET | `/api/dialer/tort-agents/activity` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | DELETE | `/api/dialer/tort-agents/numbers/:id` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
+| dialer | GET | `/api/dialer/tort-agents/numbers` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
+| dialer | POST | `/api/dialer/tort-agents/numbers` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | POST | `/api/dialer/tort-agents/provision-all` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | POST | `/api/dialer/tort-agents/sync-out-of-date` | ✓ | ✓ |  |  |  | — | `calls:manage` | ✓ |
 | dialer | GET | `/api/dialer/tort-agents` | ✓ | ✓ |  |  |  | — | `calls:view` | ✓ |
@@ -860,6 +863,7 @@ Boot-time count: **309 checked / 45 public / 264 protected / 0 unprotected.**
 | vapi-tools | POST | `/api/vapi-tools/create-lead` |  |  | ✓ |  |  | — | — | — |
 | vapi-tools | POST | `/api/vapi-tools/escalate-to-human` |  |  | ✓ |  |  | — | — | — |
 | vapi-tools | POST | `/api/vapi-tools/lookup-lead` |  |  | ✓ |  |  | — | — | — |
+| vapi-tools | POST | `/api/vapi-tools/update-lead` |  |  | ✓ |  |  | — | — | — |
 | vendor-portal | GET | `/api/vendor-portal/:token/submissions` |  |  | ✓ |  |  | — | — | — |
 | vendor-portal | GET | `/api/vendor-portal/:token` |  |  | ✓ |  |  | — | — | — |
 | vendors | DELETE | `/api/vendors/:id` | ✓ | ✓ |  |  |  | — | `vendors:delete` | ✓ |

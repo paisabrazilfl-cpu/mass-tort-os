@@ -19,6 +19,7 @@ import {
   integrationsTable,
   firmsTable,
   callLogsTable,
+  leadsTable,
   smsMessagesTable,
   leadDispositionsTable,
   emailEventsTable,
@@ -33,6 +34,10 @@ import { getIntegrationCredentialsById } from "./integrations";
 import { badRequest, notFound } from "../lib/http-errors";
 import { verifyWebhook as verifyStripeWebhook } from "../lib/payments/stripe";
 import { verifyVapiSignature } from "../lib/voice/vapi-webhook";
+import { resolveInboundTort } from "../lib/voice/inbound-routing";
+import { encryptLeadFields, rebindLeadEncryptionAad } from "../lib/encryption";
+import { leadLookupHash } from "../lib/lead-lookup-hash";
+import { findExistingLeadForIntake } from "../lib/lead-dedup";
 import { verifyTelnyxSignature } from "../lib/sms/telnyx";
 import { verifyFastenSignature } from "../lib/fasten/webhook";
 import { getFastenWebhookSecret } from "../lib/fasten/client";
@@ -489,6 +494,11 @@ interface VapiEventPayload {
     status?: string;
     customer?: { number?: string };
     assistant?: { id?: string };
+    // The dialed (destination) number — our dedicated per-tort number the
+    // caller rang. Vapi nests it under `phoneNumber.number` and also exposes
+    // a `phoneNumberId`. Either lets us resolve which tort/form to run.
+    phoneNumber?: { id?: string; number?: string };
+    phoneNumberId?: string;
     startedAt?: string;
     endedAt?: string;
     recordingUrl?: string;
@@ -506,6 +516,60 @@ interface VapiEventPayload {
     recordingUrl?: string;
   };
   result?: Record<string, unknown>;
+}
+
+/**
+ * Normalize a phone to E.164 (US-centric) so inbound leads share the same
+ * shape as every other intake surface.
+ */
+function normalizeInboundPhone(raw: string): string {
+  const digits = raw.replace(/\D+/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length > 0) return `+${digits}`;
+  return "";
+}
+
+/**
+ * Find (via the shared dedup pipeline) or create a minimal lead for an
+ * inbound call so the agent has a real row to progressively fill. The lead
+ * starts with just the tort + caller phone; the rest is captured live via
+ * the update-lead tool. Returns the lead id, or null when the phone is
+ * unusable.
+ */
+async function findOrCreateInboundLead(input: {
+  tortType: string;
+  phone: string;
+  firmId: number | null;
+}): Promise<number | null> {
+  const phoneE164 = normalizeInboundPhone(input.phone);
+  if (!phoneE164) return null;
+
+  const existing = await findExistingLeadForIntake({
+    tortType: input.tortType,
+    phone: phoneE164,
+    firmId: input.firmId,
+  });
+  if (existing) return existing.leadId;
+
+  // lookup_hash needs the full (tort|email|phone) triple; with no email yet
+  // it stays null and is backfilled later by update-lead once email lands.
+  const encrypted = encryptLeadFields({
+    name: `Vapi caller ${phoneE164}`,
+    phone: phoneE164,
+  });
+  const [inserted] = await db
+    .insert(leadsTable)
+    .values({
+      tort_type: input.tortType,
+      firm_id: input.firmId,
+      source: "vapi_inbound",
+      status: "new",
+      ...(encrypted as Pick<typeof leadsTable.$inferInsert, "name" | "phone">),
+    })
+    .returning();
+  await rebindLeadEncryptionAad(db, leadsTable, inserted!, eq);
+  return inserted!.id;
 }
 
 async function applyVapiEvent(body: unknown): Promise<void> {
@@ -530,14 +594,60 @@ async function applyVapiEvent(body: unknown): Promise<void> {
   const leadId = Number(call?.metadata?.lead_id);
 
   if (!row) {
+    const metadataFirmId = Number.isFinite(firmId) && firmId > 0 ? firmId : null;
+    const callerNumber = call?.customer?.number ?? null;
+    const dialedNumber = call?.phoneNumber?.number ?? null;
+
+    // Inbound calls land on a dedicated per-tort number. Resolve which
+    // tort/form to run (metadata → assistant → dialed number) so the call
+    // is attributed correctly and a lead can be started for progressive
+    // capture even when the Vapi assistant metadata is absent.
+    let tortType: string | null =
+      typeof call?.metadata?.tort_id === "string" ? (call.metadata.tort_id as string) : null;
+    let resolvedFirmId = metadataFirmId;
+    let resolvedLeadId = Number.isFinite(leadId) && leadId > 0 ? leadId : null;
+    try {
+      const routing = await resolveInboundTort({
+        metadataTortId: tortType,
+        assistantId: call?.assistant?.id ?? null,
+        dialedNumber,
+      });
+      tortType = routing.tortId;
+      // The dialed number is the authoritative tenancy signal for inbound:
+      // prefer the firm explicitly set on the call metadata, otherwise adopt
+      // the firm that owns the number. This scopes dedup so a caller is never
+      // attached to a different firm's lead.
+      if (resolvedFirmId == null) resolvedFirmId = routing.firmId;
+    } catch (err) {
+      logger.warn({ err, vapiCallId }, "vapi inbound: tort resolution failed");
+    }
+
+    // Start the lead now so each answer the agent saves mid-call lands on a
+    // real row (form fills as the call goes). Dedup first so we attach to an
+    // existing lead instead of creating a duplicate.
+    if (resolvedLeadId === null && tortType && callerNumber) {
+      try {
+        resolvedLeadId = await findOrCreateInboundLead({
+          tortType,
+          phone: callerNumber,
+          firmId: resolvedFirmId,
+        });
+      } catch (err) {
+        logger.warn({ err, vapiCallId, tortType }, "vapi inbound: find-or-create lead failed");
+      }
+    }
+
     const [inserted] = await db
       .insert(callLogsTable)
       .values({
-        firm_id: Number.isFinite(firmId) && firmId > 0 ? firmId : null,
-        lead_id: Number.isFinite(leadId) && leadId > 0 ? leadId : null,
+        firm_id: resolvedFirmId,
+        lead_id: resolvedLeadId,
         vapi_call_id: vapiCallId,
+        vapi_assistant_id: call?.assistant?.id ?? null,
+        tort_type: tortType,
         direction: "inbound",
-        from_number: call?.customer?.number ?? null,
+        from_number: callerNumber,
+        to_number: dialedNumber,
         status: "in_progress",
         started_at: call?.startedAt ? new Date(call.startedAt) : new Date(),
         events: [{ type: evtType, ts: new Date().toISOString(), payload }] as unknown[],

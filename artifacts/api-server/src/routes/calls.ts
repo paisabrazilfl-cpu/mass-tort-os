@@ -19,6 +19,7 @@ import { badRequest } from "../lib/http-errors";
 import { getFirmIdForUser } from "../lib/subscription-gate";
 import { resolveProvider, isResolved } from "../lib/provider-router";
 import { getVoiceAdapter } from "../lib/voice";
+import { buildLeadCallContext } from "../lib/voice/lead-call-context";
 import { logger } from "../lib/logger";
 
 /**
@@ -266,6 +267,30 @@ router.post(
       return;
     }
 
+    // Outbound enrichment: when a lead is attached, load + decrypt the full
+    // record and hand the agent everything we know (name, contact, tort,
+    // captured intake) so it greets by name and confirms rather than
+    // re-asking. Caller-supplied context wins on key collisions. Failures
+    // here must never block the call — the agent simply falls back to a
+    // cold intake.
+    let callContext: Record<string, string> = { ...(context ?? {}) };
+    let leadTortType: string | null = null;
+    if (lead_id != null) {
+      try {
+        const leadCtx = await buildLeadCallContext(lead_id, scope.firmId);
+        if (leadCtx) {
+          callContext = {
+            caller_context: leadCtx.summary,
+            ...leadCtx.variableValues,
+            ...callContext,
+          };
+          leadTortType = leadCtx.tortType;
+        }
+      } catch (err) {
+        logger.warn({ err, lead_id }, "outbound: failed to build lead call context; proceeding cold");
+      }
+    }
+
     // Persist the queued row before dispatch so an upstream timeout
     // still leaves an audit trail visible to the operator.
     const [inserted] = await db
@@ -277,6 +302,8 @@ router.post(
         from_number: from ?? null,
         to_number: to,
         status: "queued",
+        vapi_assistant_id: resolved.provider === "vapi" ? assistant_id : null,
+        tort_type: leadTortType,
       })
       .returning({ id: callLogsTable.id });
     const callLogId = inserted!.id;
@@ -286,8 +313,12 @@ router.post(
         assistantId: assistant_id,
         to,
         from,
-        context,
-        metadata: { call_log_id: String(callLogId), lead_id: lead_id != null ? String(lead_id) : "" },
+        context: callContext,
+        metadata: {
+          call_log_id: String(callLogId),
+          lead_id: lead_id != null ? String(lead_id) : "",
+          ...(leadTortType ? { tort_id: leadTortType } : {}),
+        },
       });
 
       if (!out.ok) {

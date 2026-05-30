@@ -28,7 +28,7 @@ const VAPI_BASE = "https://api.vapi.ai";
 // is unchanged. The stored fingerprint folds this version + the public API
 // base + the prompt fingerprint, so drift is detected for ALL of: prompt
 // edits, tool-wiring changes, and a newly-configured PUBLIC_API_BASE.
-const TORT_AGENT_PAYLOAD_VERSION = "2.0.0";
+const TORT_AGENT_PAYLOAD_VERSION = "2.1.0";
 
 /**
  * Composite fingerprint for drift detection. Covers the full provisioning
@@ -198,6 +198,33 @@ function buildTortTools(
         notes: { type: "string" },
       },
       ["phone"],
+    ),
+    fn(
+      "update-lead",
+      "Save the caller's answers to their lead AS SOON AS each one is confirmed, throughout the call. Call this repeatedly — send only the fields you just collected. Persisting progressively means nothing is lost if the call drops.",
+      {
+        lead_id: { type: "number", description: "The lead id returned by lookup-lead or create-lead." },
+        first_name: { type: "string" },
+        last_name: { type: "string" },
+        email: { type: "string" },
+        phone: { type: "string" },
+        date_of_birth: { type: "string", description: "YYYY-MM-DD if known." },
+        street_address: { type: "string" },
+        city: { type: "string" },
+        state: { type: "string", description: "2-letter state code." },
+        zip: { type: "string" },
+        diagnosis: { type: "string" },
+        diagnosis_date: { type: "string" },
+        exposure_start: { type: "string", description: "YYYY-MM-DD." },
+        exposure_end: { type: "string", description: "YYYY-MM-DD." },
+        location_name: { type: "string", description: "Place of exposure/use." },
+        medications: { type: "string" },
+        physician_first_name: { type: "string" },
+        physician_last_name: { type: "string" },
+        hospital_name: { type: "string" },
+        notes: { type: "string", description: "Any other relevant detail." },
+      },
+      ["lead_id"],
     ),
     fn(
       "check-eligibility",
