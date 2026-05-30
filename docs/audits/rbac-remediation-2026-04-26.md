@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **308 checked / 44 public / 264 protected / 0 unprotected.**
+Boot-time count: **309 checked / 45 public / 264 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -640,6 +640,7 @@ Boot-time count: **308 checked / 44 public / 264 protected / 0 unprotected.**
 | auth | POST | `/api/auth/mfa/verify` | ✓ |  |  | ✓ |  | — | — | ✓ |
 | auth | POST | `/api/auth/refresh` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | POST | `/api/auth/register` |  |  |  |  | ✓ | — | — | ✓ |
+| auth | GET | `/api/auth/terms` |  |  |  |  | ✓ | — | — | ✓ |
 | auth | GET | `/api/auth/users` | ✓ | ✓ |  |  |  | — | `users:list` | ✓ |
 | auth | GET | `/api/auth/verify-email` |  |  |  |  | ✓ | — | — | ✓ |
 | automation-webhook | _ALL | `/api/automation-webhook/:slug` |  |  | ✓ |  |  | — | — | — |
