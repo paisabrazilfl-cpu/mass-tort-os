@@ -312,7 +312,17 @@ export function buildVapiAssistantPayload(
 }
 
 const VAPI_TIMEOUT_MS = 15000;
-const VAPI_MAX_ATTEMPTS = 3;
+const VAPI_MAX_ATTEMPTS = 4;
+// Cap a single backoff wait so a hostile/huge Retry-After can't stall a
+// request past the operator's patience; we'd rather fail and let them retry.
+const VAPI_MAX_RETRY_DELAY_MS = 10_000;
+// Pace between agents in a batch re-provision so we don't burst the Vapi
+// management API and trip its per-minute rate limit. The 5/29 batch fired
+// ~31 PATCHes back-to-back and the tail agents got HTTP 429; a small gap
+// (~30 torts × 400ms ≈ 12s) keeps a full sync comfortably under the limit.
+// Only applied after a call that actually hit Vapi (created/updated/error),
+// never after an in-sync no-op, so steady-state syncs stay fast.
+const VAPI_BATCH_PACE_MS = 400;
 
 function isTransientStatus(status: number): boolean {
   // Retry rate limits and upstream/server faults; never retry 4xx auth/
@@ -322,6 +332,21 @@ function isTransientStatus(status: number): boolean {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Parse an HTTP `Retry-After` header into milliseconds. Supports both forms
+ * the spec allows: delta-seconds (e.g. `Retry-After: 5`) and an HTTP-date.
+ * Returns null when absent or unparseable so the caller falls back to its
+ * own exponential backoff.
+ */
+function parseRetryAfterMs(value: string | null): number | null {
+  if (!value) return null;
+  const secs = Number(value);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const when = Date.parse(value);
+  if (!Number.isNaN(when)) return Math.max(0, when - Date.now());
+  return null;
+}
 
 /**
  * Call the Vapi management API with a hard timeout and bounded retry/backoff
@@ -348,11 +373,18 @@ async function vapiFetch(
       });
       const json = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
       if (!resp.ok && isTransientStatus(resp.status) && attempt < VAPI_MAX_ATTEMPTS) {
+        // Prefer the server's Retry-After (Vapi sends it on 429) over our blind
+        // exponential backoff — retrying before the window resets just burns an
+        // attempt and re-trips the limit, which is how the 5/29 batch exhausted
+        // its retries. Cap the wait so a pathological value can't hang us.
+        const retryAfter = parseRetryAfterMs(resp.headers.get("retry-after"));
+        const backoff = 250 * 2 ** (attempt - 1);
+        const delay = Math.min(retryAfter ?? backoff, VAPI_MAX_RETRY_DELAY_MS);
         logger.warn(
-          { path, method, status: resp.status, attempt },
+          { path, method, status: resp.status, attempt, delayMs: delay, retryAfter: retryAfter != null },
           "vapi transient HTTP error — retrying",
         );
-        await sleep(250 * 2 ** (attempt - 1));
+        await sleep(delay);
         continue;
       }
       return { ok: resp.ok, status: resp.status, json };
@@ -496,8 +528,14 @@ async function upsertAgentRow(
  */
 export async function provisionAllTortAgents(): Promise<TortAgentSyncResult[]> {
   const results: TortAgentSyncResult[] = [];
-  for (const tortId of Object.keys(TORT_REGISTRY)) {
-    results.push(await provisionTortAgent(tortId));
+  const tortIds = Object.keys(TORT_REGISTRY);
+  for (let i = 0; i < tortIds.length; i++) {
+    const result = await provisionTortAgent(tortIds[i]!);
+    results.push(result);
+    // Pace only after a call that actually hit Vapi; in-sync no-ops cost nothing.
+    if (i < tortIds.length - 1 && result.outcome !== "in_sync") {
+      await sleep(VAPI_BATCH_PACE_MS);
+    }
   }
   return results;
 }
@@ -515,8 +553,12 @@ export async function provisionOutOfDateTortAgents(): Promise<TortAgentSyncResul
   const statuses = await listTortAgentStatus();
   const staleTortIds = statuses.filter((s) => s.out_of_date).map((s) => s.tort_id);
   const results: TortAgentSyncResult[] = [];
-  for (const tortId of staleTortIds) {
-    results.push(await provisionTortAgent(tortId));
+  for (let i = 0; i < staleTortIds.length; i++) {
+    const result = await provisionTortAgent(staleTortIds[i]!);
+    results.push(result);
+    if (i < staleTortIds.length - 1 && result.outcome !== "in_sync") {
+      await sleep(VAPI_BATCH_PACE_MS);
+    }
   }
   return results;
 }
