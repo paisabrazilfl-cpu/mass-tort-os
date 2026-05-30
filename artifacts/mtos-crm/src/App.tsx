@@ -81,8 +81,12 @@ const queryClient = new QueryClient({
     mutations: { retry: 0 },
   },
   queryCache: new QueryCache({
-    onError: (err) => {
+    onError: (err, query) => {
       if (err instanceof ApiError && err.status === 401) return;
+      // Opt-out hook: a query can set meta.suppressErrorToast when its failure
+      // is expected/non-fatal (e.g. a permission-gated lookup that the page
+      // already falls back from gracefully) so we don't nag the user.
+      if (query.meta?.suppressErrorToast) return;
       toast({
         title: "Couldn't load data",
         description: describeError(err),

@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { Link } from "wouter";
-import { useListLeads, getListLeadsQueryKey, ListLeadsStatus } from "@workspace/api-client-react";
+import {
+  useListLeads,
+  getListLeadsQueryKey,
+  ListLeadsStatus,
+  useListVendors,
+  getListVendorsQueryKey,
+} from "@workspace/api-client-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,6 +17,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Search, Plus, Download } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
+import { useAuth } from "@/contexts/auth-context";
 
 function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [exportStatus, setExportStatus] = useState("all");
@@ -109,6 +116,99 @@ function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
   );
 }
 
+// Humanize a raw `source` string (e.g. "operator_intake") into a readable label.
+function humanizeSource(source: string | null | undefined): string | null {
+  if (!source) return null;
+  const known: Record<string, string> = {
+    operator_intake: "Operator Intake",
+    web_form: "Web Form",
+    form: "Web Form",
+    n8n: "n8n Automation",
+    api: "API",
+    import: "CSV Import",
+    csv_import: "CSV Import",
+    manual: "Manual Entry",
+  };
+  const key = source.toLowerCase();
+  if (known[key]) return known[key];
+  return source
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Pull a site/landing/referrer hint out of the lead's custom_fields JSON so the
+// operator can see *where* a web lead came from beyond just the vendor.
+function extractSiteHint(custom: unknown): string | null {
+  if (!custom || typeof custom !== "object") return null;
+  const cf = custom as Record<string, unknown>;
+  const keys = ["site", "utm_source", "source_url", "landing_page", "referrer", "utm_campaign"];
+  for (const k of keys) {
+    const v = cf[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+// The forward pipeline stages every lead moves through, in order.
+const PIPELINE_STAGES = ["new", "qualified", "signed"] as const;
+
+// Renders a compact 3-step pipeline progress so the operator can see where a
+// lead sits at a glance. Rejected/review_required are off-pipeline states and
+// get their own treatment.
+function StageCell({ status }: { status: string }) {
+  if (status === "rejected") {
+    return (
+      <div className="flex flex-col gap-1" data-testid="stage-rejected">
+        <div className="flex items-center gap-1">
+          {PIPELINE_STAGES.map((_, i) => (
+            <span key={i} className="h-1.5 w-6 rounded-full bg-rose-400/70" />
+          ))}
+        </div>
+        <span className="text-xs font-medium text-rose-600">Rejected</span>
+      </div>
+    );
+  }
+
+  if (status === "review_required") {
+    return (
+      <div className="flex flex-col gap-1" data-testid="stage-review">
+        <div className="flex items-center gap-1">
+          <span className="h-1.5 w-6 rounded-full bg-amber-500" />
+          <span className="h-1.5 w-6 rounded-full bg-amber-500" />
+          <span className="h-1.5 w-6 rounded-full bg-muted" />
+        </div>
+        <span className="text-xs font-medium text-amber-600">Needs Review</span>
+      </div>
+    );
+  }
+
+  const currentIdx = PIPELINE_STAGES.indexOf(status as (typeof PIPELINE_STAGES)[number]);
+  const label =
+    currentIdx === 0 ? "New" : currentIdx === 1 ? "Qualified" : currentIdx === 2 ? "Signed" : "—";
+
+  return (
+    <div className="flex flex-col gap-1" data-testid={`stage-${status}`}>
+      <div className="flex items-center gap-1">
+        {PIPELINE_STAGES.map((_, i) => (
+          <span
+            key={i}
+            className={
+              "h-1.5 w-6 rounded-full " +
+              (currentIdx >= 0 && i <= currentIdx ? "bg-emerald-500" : "bg-muted")
+            }
+          />
+        ))}
+      </div>
+      <span className="text-xs font-medium text-foreground">
+        {label}
+        <span className="text-muted-foreground">
+          {currentIdx >= 0 ? ` · ${currentIdx + 1}/${PIPELINE_STAGES.length}` : ""}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 export default function Leads() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<ListLeadsStatus | "all">("all");
@@ -122,6 +222,27 @@ export default function Leads() {
   const { data: leads, isLoading } = useListLeads(params, {
     query: { queryKey: getListLeadsQueryKey(params) }
   });
+
+  // Vendor names are resolved client-side to label the Source column. The
+  // /vendors route is gated by `vendors:view`, which agent/viewer roles lack,
+  // so we only run the lookup for roles that can read it. The Source column
+  // falls back to the raw source channel when no vendor name is available, and
+  // the query is marked non-fatal so a stray 403 never raises an error toast.
+  const { user } = useAuth();
+  const canViewVendors =
+    !!user &&
+    ["super_admin", "admin", "user_manager", "attorney", "paralegal"].includes(user.role);
+  const { data: vendors } = useListVendors({
+    query: {
+      queryKey: getListVendorsQueryKey(),
+      enabled: canViewVendors,
+      retry: false,
+      meta: { suppressErrorToast: true },
+    },
+  });
+  const vendorNameById = new Map<number, string>(
+    (vendors ?? []).map((v) => [v.id, v.name]),
+  );
 
   return (
     <div className="space-y-6">
@@ -174,8 +295,9 @@ export default function Leads() {
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
+              <TableHead>Source</TableHead>
               <TableHead>Tort</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead>Stage</TableHead>
               <TableHead>Convexity</TableHead>
               <TableHead>Created</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -186,15 +308,17 @@ export default function Leads() {
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i}>
                   <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-28" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                   <TableCell><Skeleton className="h-6 w-20" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                   <TableCell><Skeleton className="h-8 w-16 ml-auto" /></TableCell>
                 </TableRow>
               ))
             ) : leads?.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center">
+                <TableCell colSpan={7} className="h-24 text-center">
                   No leads found.
                 </TableCell>
               </TableRow>
@@ -205,16 +329,35 @@ export default function Leads() {
                     <div>{lead.name}</div>
                     <div className="text-xs text-muted-foreground">{lead.email || lead.phone}</div>
                   </TableCell>
+                  <TableCell>
+                    {(() => {
+                      const vendorName =
+                        lead.vendor_id != null ? vendorNameById.get(lead.vendor_id) : undefined;
+                      const sourceLabel = humanizeSource(lead.source);
+                      const siteHint = extractSiteHint((lead as any).custom_fields);
+                      const primary = vendorName ?? sourceLabel;
+                      // Secondary line: prefer a site/landing hint; otherwise, if a
+                      // vendor name is the primary, show the raw source channel.
+                      const secondary =
+                        siteHint ?? (vendorName ? sourceLabel : null);
+                      if (!primary && !secondary) {
+                        return <span className="text-muted-foreground">—</span>;
+                      }
+                      return (
+                        <div data-testid={`lead-source-${lead.id}`}>
+                          <div className="text-sm">{primary ?? "—"}</div>
+                          {secondary && primary !== secondary ? (
+                            <div className="text-xs text-muted-foreground truncate max-w-[180px]">
+                              {secondary}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
+                  </TableCell>
                   <TableCell>{lead.tort_type}</TableCell>
                   <TableCell>
-                    <Badge variant={
-                      lead.status === "signed" ? "default" :
-                      lead.status === "qualified" ? "secondary" :
-                      lead.status === "rejected" ? "destructive" :
-                      lead.status === "review_required" ? "secondary" : "outline"
-                    } className={lead.status === "review_required" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : ""}>
-                      {lead.status === "review_required" ? "REVIEW" : lead.status.toUpperCase()}
-                    </Badge>
+                    <StageCell status={lead.status} />
                   </TableCell>
                   <TableCell>
                     {(() => {
