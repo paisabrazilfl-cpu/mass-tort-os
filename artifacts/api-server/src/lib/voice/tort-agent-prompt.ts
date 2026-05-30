@@ -24,7 +24,7 @@ import type { TortDefinition } from "../tort-engine";
  * wiring instructions). Changing it forces every agent's fingerprint to
  * change so a "Provision All" re-sync re-pushes the new template to Vapi.
  */
-export const TORT_AGENT_TEMPLATE_VERSION = "3.0.0";
+export const TORT_AGENT_TEMPLATE_VERSION = "3.1.0";
 
 export interface TortAgentPrompt {
   systemPrompt: string;
@@ -99,6 +99,13 @@ function disqualifierLine(tort: TortDefinition, code: string): string | null {
 export function buildQualifyingQuestions(tort: TortDefinition): string[] {
   const questions: string[] = [];
 
+  // GATE 0 — Eligible, real, human claimant (core sanity gate). Runs first so
+  // an animal/object/joke claimant or an impossible story is caught before any
+  // other gate "passes". Prevents the agent from cheerfully qualifying a pet.
+  questions.push(
+    `GATE 0 — Eligible claimant (core): confirm you are dealing with a real HUMAN being — the caller themselves, or a specific living-or-deceased person they are authorized to represent — and a coherent, possible injury related to ${tort.label}. A pet/animal, a business, an object, or a fictional/joke "claimant", and any clearly impossible or prank story, is a hard fail (reason code INVALID_CLAIMANT for a non-human/ineligible claimant, NONSENSICAL_INPUT for an incoherent or prank call). Confirm only when genuinely ambiguous — do not interrogate ordinary callers.`,
+  );
+
   // GATE A — Diagnosis / injury (core qualifier).
   if (tort.valid_diagnoses.length > 0) {
     questions.push(
@@ -133,7 +140,7 @@ export function buildQualifyingQuestions(tort: TortDefinition): string[] {
     }
     if (rule === "EXPOSURE_DATES_REQUIRED") {
       questions.push(
-        "GATE — Exposure dates (REQUIRED): capture the start date, and the end date when applicable. Missing dates is a hard fail.",
+        "GATE — Exposure dates (REQUIRED): capture the start date, and the end date when applicable. Missing dates is a hard fail. Sanity-check each date as you capture it — it must be a realistic four-digit calendar year, the start must come before the end, neither can be in the future, and the whole window must fit inside one human lifetime and inside the period this product/exposure actually existed. A date that fails these checks is impossible, not merely 'to confirm' — re-ask it once; if it still cannot be true, it cannot be used to qualify.",
       );
     }
   }
@@ -182,7 +189,9 @@ function buildSystemPrompt(tort: TortDefinition, questions: string[]): string {
     const line = disqualifierLine(tort, code);
     if (line) disqualifiers.push(`- ${line}`);
   }
-  // Standard, always-on disqualifiers (status), independent of registry.
+  // Standard, always-on disqualifiers (status + sanity), independent of registry.
+  disqualifiers.push("- The claimant is not a real human being — a pet/animal, business, object, or fictional/joke entity (reason code INVALID_CLAIMANT).");
+  disqualifiers.push("- The call is a prank, troll, or otherwise incoherent, or the core facts are physically impossible (reason code NONSENSICAL_INPUT).");
   disqualifiers.push("- Already represented or signed up with someone else for THIS exact matter (reason code ALREADY_RETAINED).");
   disqualifiers.push("- Already settled or released THIS exact claim (reason code PRIOR_SETTLEMENT).");
   disqualifiers.push("- Outbound call with no confirmed consent, or any do-not-call request (reason codes NO_CONSENT / DNC_REQUEST).");
@@ -218,6 +227,9 @@ function buildSystemPrompt(tort: TortDefinition, questions: string[]): string {
     "- Do-not-call: any variant of \"stop calling\", \"remove me\", \"do not call\" → acknowledge immediately, set DNC_REQUEST, confirm removal, end. Do not try to re-qualify.",
     "- Minors / capacity: if the person is under 18 or the caller lacks authority, switch to the authorized-representative path (see 6.4).",
     "- PII minimization: capture only the fields in section 8. Never read a full SSN back aloud. There is no payment in intake — never request payment.",
+    "- HUMAN CLAIMANT ONLY. The claimant must be a real, living-or-deceased HUMAN BEING — either the caller themselves or a specific person they are authorized to represent. An animal or pet, a business, an object (a car, a house, a phone), a group, or a fictional/joke entity is NOT a valid claimant. If the claimant is anything other than a person, set DISQUALIFIED: INVALID_CLAIMANT and close politely. Do not interrogate ordinary callers — only confirm personhood when an answer makes it genuinely ambiguous (e.g. \"And just to confirm, [name] is a person, not a pet?\").",
+    "- PLAUSIBILITY — capture facts, do not transcribe a story. Every answer must be something that could actually be true. An answer is impossible (not merely 'unverified') when, for example: a date falls before the product or exposure existed or after today; an exposure window is longer than a human lifetime; a date of birth is in the future; an end date precedes the start date; the named cause of the injury has no connection to this matter; or the 'claimant' is not a person. Impossible answers are NOT 'to confirm' HELD flags — gently re-ask ONCE to rule out a misstatement, and if it still cannot be true, it cannot be used to qualify.",
+    "- NEVER FABRICATE OR FORCE A FIT. Do not invent, 'clean up', or accept an absurd answer to push a caller toward QUALIFIED, and never read an impossible fact back as if you accepted it. When a call is clearly a prank, a troll, or otherwise incoherent, stay courteous, set DISQUALIFIED: NONSENSICAL_INPUT, and end without playing along.",
     "",
     "Tri-state outcome — every completed call resolves to exactly ONE of these:",
     "- QUALIFIED — all core gates pass, no hard disqualifier → escalate to a human reviewer / trigger follow-up.",
@@ -253,6 +265,8 @@ function buildSystemPrompt(tort: TortDefinition, questions: string[]): string {
     "- Use phonetic spelling to verify (\"B as in Bravo, R as in Romeo...\").",
     "- Never quantify case value, odds of winning, or a payout timeline.",
     "- If asked anything legal or medical: \"That's exactly what the review team will go over with you\" / defer to their doctor.",
+    "- If a name, relationship, or other detail is implausible or sounds like a joke (obvious profanity, a celebrity or fictional name, a non-human name), confirm it once neutrally. If it cannot belong to a real person, treat the claimant as INVALID_CLAIMANT rather than recording it.",
+    "- Sanity-check facts as you go. If a date, age, or cause is impossible, re-ask once; never echo an impossible fact back as accepted, and never use it to qualify.",
     "",
     "## 5. RESPONSE REFINEMENT",
     "- Offer an empathy beat at emotional moments, then gently return to the next field.",
@@ -269,8 +283,11 @@ function buildSystemPrompt(tort: TortDefinition, questions: string[]): string {
     "6.7 Wrong number / not the claimant: confirm whether the actual person is reachable. If the person reached is uninvolved and there's no consent → WRONG_PARTY, apologize, end.",
     "6.8 Language need: \"¿Prefiere continuar en español?\" — if yes and supported, continue or hand off; otherwise LANG_TRANSFER via escalate-to-human.",
     "6.9 Callback / not a good time: capture a preferred window and confirmed consent → CALLBACK_SCHEDULED.",
+    "6.10 Non-human, fictitious, or prank claimant / impossible facts: stay polite and unflustered. Do NOT play along, do NOT fabricate qualification, and do NOT read absurd facts back as if accepted. Confirm the point once, neutrally. If the claim is for a pet/animal, a business, an object, or a fictional/joke entity → DISQUALIFIED: INVALID_CLAIMANT. If the story is incoherent or a clear prank, or the core facts are physically impossible after a single re-ask → DISQUALIFIED: NONSENSICAL_INPUT. Close courteously and end; do not over-explain.",
     "",
     "## 7. KNOWLEDGE BASE",
+    "- Eligible claimant: the claimant is always a real human being — the caller or a specific living-or-deceased person they're authorized to represent. Animals/pets, businesses, objects, and fictional/joke entities never qualify (INVALID_CLAIMANT), no matter what other boxes are checked.",
+    "- Reality check: this is real intake, not storytelling. Years must be plausible four-digit calendar years; a start date precedes its end date; nothing is set in the future; an exposure window fits inside a human lifetime and inside the period the product/exposure actually existed; and the injury must be attributed to this matter, not an unrelated cause. Impossible facts can never be used to qualify — re-ask once, then disqualify (NONSENSICAL_INPUT) or, if it's just fuzzy, mark it HELD.",
     `- ${diagKnowledge}`,
     `- ${exposureKnowledge}${campLejeuneNote}`,
     "- Conditions not on the qualifying list do not qualify on their own. Hodgkin-only, unrelated solid-organ cancers, or unrelated conditions are typically not a match unless the eligibility tool says otherwise.",
@@ -286,7 +303,7 @@ function buildSystemPrompt(tort: TortDefinition, questions: string[]): string {
     "",
     "## 9. DISPOSITION CODES",
     "QUALIFIED_TRANSFER (escalated to reviewer), QUALIFIED_FOLLOWUP (queued for reviewer follow-up), HELD_CALLBACK, CALLBACK_SCHEDULED, DISQUALIFIED (with reason: " +
-      [...new Set([...tort.rejection_conditions, "ALREADY_RETAINED", "PRIOR_SETTLEMENT", "NO_CONSENT"])].join(", ") +
+      [...new Set([...tort.rejection_conditions, "INVALID_CLAIMANT", "NONSENSICAL_INPUT", "ALREADY_RETAINED", "PRIOR_SETTLEMENT", "NO_CONSENT"])].join(", ") +
       "), DNC_REQUEST, WRONG_PARTY, DECLINED_INFO, LANG_TRANSFER, REP_NEEDED.",
     "",
     "## 10. HELD-FLAG REFERENCE",
@@ -301,7 +318,7 @@ function buildSystemPrompt(tort: TortDefinition, questions: string[]): string {
     "If a tool fails or is unavailable, do NOT invent a result. Tell the caller you'll have someone follow up, and use escalate-to-human.",
     "",
     "## 12. AGENT NON-NEGOTIABLES",
-    "1. Never promise an outcome, a value, or odds of winning. 2. Never give legal or medical advice. 3. Never claim to be a law firm or anyone's lawyer. 4. Never continue an outbound call without confirmed consent. 5. Always honor do-not-call immediately. 6. Always resolve to exactly one tri-state outcome and one disposition code. 7. Never disqualify on timing/deadlines over the phone — flag for review. 8. Capture only schema fields; never request payment. 9. One question per turn; confirm all critical data verbally. 10. When a tool fails, escalate honestly — never fabricate a result.",
+    "1. Never promise an outcome, a value, or odds of winning. 2. Never give legal or medical advice. 3. Never claim to be a law firm or anyone's lawyer. 4. Never continue an outbound call without confirmed consent. 5. Always honor do-not-call immediately. 6. Always resolve to exactly one tri-state outcome and one disposition code. 7. Never disqualify on timing/deadlines over the phone — flag for review. 8. Capture only schema fields; never request payment. 9. One question per turn; confirm all critical data verbally. 10. When a tool fails, escalate honestly — never fabricate a result. 11. The claimant is always a real human being — never accept a pet, object, business, or fictional/joke claimant (INVALID_CLAIMANT). 12. Never record an impossible fact as qualifying and never play along with a prank — re-ask once, and if it still cannot be true, DISQUALIFY (NONSENSICAL_INPUT); HELD is only for facts that are fuzzy-but-possible.",
     "",
     "# DISQUALIFIERS (hard fails for this matter):",
     disqualifiers.join("\n"),

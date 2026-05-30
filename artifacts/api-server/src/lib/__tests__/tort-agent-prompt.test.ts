@@ -99,6 +99,58 @@ test("exposure-required torts state exposure is required; non-exposure torts do 
   }
 });
 
+test("every prompt enforces a human, plausible claimant (anti-dog / anti-nonsense guardrails)", () => {
+  for (const tort of ALL) {
+    const { systemPrompt, qualifyingQuestions } = buildTortAgentPrompt(tort);
+    // Personhood: claimant must be a real human, not a pet/object/joke entity.
+    assert.match(
+      systemPrompt,
+      /HUMAN CLAIMANT ONLY/,
+      `${tort.id} should require a human claimant`,
+    );
+    assert.match(
+      systemPrompt,
+      /INVALID_CLAIMANT/,
+      `${tort.id} should surface the INVALID_CLAIMANT reason code`,
+    );
+    // Plausibility / anti-prank: impossible facts cannot qualify.
+    assert.match(
+      systemPrompt,
+      /PLAUSIBILITY/,
+      `${tort.id} should include a plausibility rule`,
+    );
+    assert.match(
+      systemPrompt,
+      /NONSENSICAL_INPUT/,
+      `${tort.id} should surface the NONSENSICAL_INPUT reason code`,
+    );
+    // GATE 0 must run first so a non-human / impossible claim is caught up front.
+    assert.match(
+      qualifyingQuestions[0] ?? "",
+      /^GATE 0 — Eligible claimant/,
+      `${tort.id} GATE 0 should be the first qualifying gate`,
+    );
+    // Dedicated scenario for prank / non-human callers.
+    assert.match(
+      systemPrompt,
+      /6\.10 Non-human, fictitious, or prank claimant/,
+      `${tort.id} should handle the prank / non-human caller scenario`,
+    );
+  }
+});
+
+test("exposure-date-required torts demand date sanity, not just presence", () => {
+  for (const tort of ALL) {
+    if (!tort.rules.includes("EXPOSURE_DATES_REQUIRED")) continue;
+    const { systemPrompt } = buildTortAgentPrompt(tort);
+    assert.match(
+      systemPrompt,
+      /Sanity-check each date/i,
+      `${tort.id} requires exposure dates but does not sanity-check them`,
+    );
+  }
+});
+
 test("camp lejeune prompt encodes the 1953-1987 coverage window", () => {
   const cl = TORT_REGISTRY["camp-lejeune"];
   assert.ok(cl, "camp-lejeune tort should exist");
