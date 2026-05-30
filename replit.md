@@ -33,7 +33,7 @@ The application is deployed on **Render** (not Railway or Replit autoscale).
 - `VAPI_PUBLIC_KEY` (and optionally `VAPI_API_KEY`) must also be set in the Render web service env for the dialer's browser calling to work in production. These are the system-level Vapi fallback secrets (see Vault-Only Provider Adapters below); a value stored in the integration vault still takes precedence, env only fills a blank.
 - When debugging production issues, check Render logs — not Replit or Railway logs.
 - The `RENDER_API_KEY` secret is the Render account key (used for API-triggered deploys / service management). Auto-deploy on push does not require it.
-- Railway config files (`railway.json`, `mtos-crm.railway.json`, `scripts/railway-deploy.sh`) are legacy and no longer the active deployment target.
+- Railway is no longer the deployment target. The legacy Railway config files (`railway.json`, `mtos-crm.railway.json`, `scripts/railway-deploy.sh`) have been removed from the repo.
 
 # System Architecture
 
