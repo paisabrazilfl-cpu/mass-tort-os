@@ -53,6 +53,7 @@ type Ctx = {
     password: string,
     name: string,
     inviteToken?: string,
+    termsVersion?: string,
   ) => Promise<RegisterOutcome>;
   verifyMfa: (totpCode: string) => Promise<LoginOutcome>;
   verifyEmail: (token: string) => Promise<LoginOutcome>;
@@ -262,6 +263,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       password: string,
       name: string,
       inviteToken?: string,
+      termsVersion?: string,
     ): Promise<RegisterOutcome> => {
       try {
         // Task #57: when the user arrived via /register?invite=<token>,
@@ -270,7 +272,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Empty/whitespace tokens are dropped so the server's optional
         // schema doesn't reject "" with a hex-shape error.
         const trimmedInvite = inviteToken?.trim();
-        const payload: Record<string, unknown> = { email, password, name };
+        // Clickwrap: the server requires terms_accepted === true to create
+        // the account. The RegisterPage only calls this once the user has
+        // ticked the agreement box, so we always send true here; the
+        // version is echoed back so the server can detect a stale tab.
+        const payload: Record<string, unknown> = {
+          email,
+          password,
+          name,
+          terms_accepted: true,
+        };
+        if (termsVersion) {
+          payload.terms_version = termsVersion;
+        }
         if (trimmedInvite) {
           payload.invite_token = trimmedInvite;
         }

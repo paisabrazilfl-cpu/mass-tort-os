@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useForceLightSkin } from "@/hooks/use-force-light-skin";
 import { Link, useLocation } from "wouter";
-import { Loader2, MailCheck, ShieldCheck, Users } from "lucide-react";
+import { Loader2, MailCheck, ShieldCheck, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/auth-context";
+
+type TermsDoc = {
+  version: string;
+  effective_date: string;
+  last_updated: string;
+  content: string;
+};
 
 const PASSWORD_RULES = [
   "At least 12 characters",
@@ -41,6 +48,11 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Clickwrap Terms & Conditions state.
+  const [terms, setTerms] = useState<TermsDoc | null>(null);
+  const [termsError, setTermsError] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
 
   // Parse ?invite=<token> from window.location once. Wouter's useLocation
   // returns only the pathname, so we go to URLSearchParams directly. The
@@ -105,6 +117,43 @@ export default function RegisterPage() {
     document.title = "Create account · MTOS";
   }, []);
 
+  // Fetch the canonical Terms & Conditions so the clickwrap shows the exact
+  // text the user is agreeing to and we can echo the accepted version back to
+  // the server. On failure we surface a soft notice and keep the checkbox
+  // disabled — the server enforces acceptance regardless, so we never let the
+  // form submit without it.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/terms");
+        if (cancelled) return;
+        if (!res.ok) {
+          setTermsError(true);
+          return;
+        }
+        const body = (await res.json()) as TermsDoc;
+        if (cancelled) return;
+        setTerms(body);
+      } catch {
+        if (!cancelled) setTermsError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Lock background scroll while the full-terms modal is open.
+  useEffect(() => {
+    if (!showTerms) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [showTerms]);
+
   // If a session is already live (e.g. dev-bypass or returning user),
   // skip the form and land on the dashboard. The check-your-email panel
   // is only shown to anonymous visitors who just submitted.
@@ -119,6 +168,10 @@ export default function RegisterPage() {
     setError(null);
     if (!email.trim() || !name.trim() || !password) {
       setError("Email, name, and password are required.");
+      return;
+    }
+    if (!termsAccepted) {
+      setError("Please read and accept the Terms and Conditions to continue.");
       return;
     }
     setSubmitting(true);
@@ -137,6 +190,7 @@ export default function RegisterPage() {
         password,
         name.trim(),
         inviteToForward,
+        terms?.version,
       );
       if (result.kind === "pending_verification") {
         setSubmittedEmail(result.email);
@@ -300,6 +354,50 @@ export default function RegisterPage() {
             Your account starts in viewer mode — ask an admin to elevate it.
           </p>
 
+          <div className="flex items-start gap-2">
+            <input
+              id="register-terms"
+              type="checkbox"
+              checked={termsAccepted}
+              onChange={(e) => setTermsAccepted(e.target.checked)}
+              disabled={submitting || (!terms && !termsError)}
+              className="mt-0.5 h-4 w-4 shrink-0 rounded border-input accent-primary"
+              data-testid="register-terms-checkbox"
+              aria-describedby="register-terms-help"
+            />
+            <Label
+              htmlFor="register-terms"
+              className="text-xs font-normal leading-relaxed text-muted-foreground"
+            >
+              I have read and agree to the{" "}
+              <button
+                type="button"
+                onClick={() => setShowTerms(true)}
+                disabled={!terms}
+                className="font-medium text-primary underline underline-offset-2 hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-60"
+                data-testid="register-terms-open"
+              >
+                Terms and Conditions
+              </button>
+              {terms ? (
+                <span id="register-terms-help">
+                  {" "}
+                  (v{terms.version})
+                </span>
+              ) : null}
+              .
+            </Label>
+          </div>
+          {termsError && (
+            <p
+              className="text-xs text-amber-700 dark:text-amber-300"
+              data-testid="register-terms-load-error"
+            >
+              We couldn't load the Terms and Conditions right now. Please refresh
+              the page before creating your account.
+            </p>
+          )}
+
           {error && (
             <div
               role="alert"
@@ -309,7 +407,11 @@ export default function RegisterPage() {
             </div>
           )}
 
-          <Button type="submit" className="w-full" disabled={submitting}>
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={submitting || !termsAccepted}
+          >
             {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
             {submitting ? "Creating account…" : "Create account"}
           </Button>
@@ -322,6 +424,68 @@ export default function RegisterPage() {
           </Link>
         </p>
       </div>
+
+      {showTerms && terms && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="terms-modal-title"
+          onClick={() => setShowTerms(false)}
+          data-testid="register-terms-modal"
+        >
+          <div
+            className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-background shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+              <div className="space-y-0.5">
+                <h2 id="terms-modal-title" className="text-base font-semibold tracking-tight">
+                  Terms and Conditions
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Version {terms.version} · Effective {terms.effective_date}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTerms(false)}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="Close terms"
+                data-testid="register-terms-close"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="overflow-y-auto px-5 py-4">
+              <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground">
+                {terms.content}
+              </pre>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowTerms(false)}
+              >
+                Close
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  setTermsAccepted(true);
+                  setShowTerms(false);
+                }}
+                data-testid="register-terms-accept"
+              >
+                I agree
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

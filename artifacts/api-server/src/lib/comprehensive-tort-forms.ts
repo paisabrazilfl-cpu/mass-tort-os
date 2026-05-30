@@ -1198,6 +1198,9 @@ const TORT_SPECIFIC_CUSTOM_FIELDS: Record<string, CustomField[]> = {
     { key: "dental_damage", label: "Dental damage type", type: "select", required: true, options: ["Severe decay multiple teeth", "Crumbling/fracturing", "Complete tooth loss", "Abscesses/infections", "Gum disease", "Need dentures/implants", "Multiple"] },
     { key: "teeth_lost_count", label: "Teeth lost or extracted", type: "select", required: false, options: ["1-2", "3-5", "6-10", "10+", "All/nearly all", "None (decay only)"] },
     { key: "prior_dental_health", label: "Good dental health prior to Suboxone", type: "select", required: true, options: ["Yes", "Some prior issues — worse on drug", "No"] },
+    // Operator-authored field preserved from the live CRM (do not rename the
+    // key — sync merges by key, and renaming would orphan historical answers).
+    { key: "first_dental_visit", label: "Date of First Dental Issue", type: "date", required: false, helper_text: "First date the claimant noticed or was treated for dental damage — anchors the SOL clock." },
   ],
   "tepezza": [
     { key: "tepezza_infusion_count", label: "Tepezza infusions received", type: "select", required: true, options: ["1-2", "3-4", "5-6 (full course)", "7+", "Unsure"] },
@@ -1206,6 +1209,9 @@ const TORT_SPECIFIC_CUSTOM_FIELDS: Record<string, CustomField[]> = {
     { key: "hearing_loss_severity", label: "Hearing loss severity", type: "select", required: false, options: ["Mild (25-40 dB)", "Moderate (41-55)", "Mod-severe (56-70)", "Severe (71-90)", "Profound", "Tinnitus only"] },
     { key: "hearing_aids_needed", label: "Hearing aids / implants needed", type: "select", required: false, options: ["Yes", "Evaluating", "No"] },
     { key: "permanent_loss", label: "Doctor confirmed permanent", type: "select", required: false, options: ["Yes", "Still evaluating", "No"] },
+    // Operator-authored field preserved from the live CRM (do not rename the
+    // key — sync merges by key, and renaming would orphan historical answers).
+    { key: "audiogram_db", label: "Audiogram dB Loss", type: "text", required: false, placeholder: "e.g. 45 dB R / 50 dB L", helper_text: "Decibel loss from the audiogram report — objective severity evidence." },
   ],
   "tylenol": [
     { key: "tylenol_trimester", label: "Trimester(s) of use", type: "select", required: true, options: ["1st only", "2nd only", "3rd only", "1st+2nd", "2nd+3rd", "All three", "Most of pregnancy"] },

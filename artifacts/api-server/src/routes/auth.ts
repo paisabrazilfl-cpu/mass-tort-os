@@ -39,10 +39,11 @@ import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { generateSecret, verifyTOTP, generateOTPAuthURL } from "../lib/totp";
 import { encrypt, decrypt } from "../lib/encryption";
-import { db } from "@workspace/db";
+import { db, termsAcceptancesTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { dispatchCriticalAlert } from "../lib/security-alerts";
+import { getTermsDocument, getTermsMeta } from "../lib/legal/terms";
 
 const router = Router();
 
@@ -80,6 +81,16 @@ const RegisterBody = z.object({
     .trim()
     .regex(/^[0-9a-f]{64}$/i, "invite_token must be 64 hex characters")
     .optional(),
+  // Clickwrap gate: the user must affirmatively accept the Terms &
+  // Conditions before an account can be created. z.literal(true) rejects
+  // false/undefined/missing so registration is impossible without assent.
+  // The accepted version/hash recorded server-side is the canonical one
+  // (getTermsMeta), not whatever the client claims — the client value is
+  // only used to detect a stale-tab mismatch for logging.
+  terms_accepted: z.literal(true, {
+    errorMap: () => ({ message: "You must accept the Terms and Conditions to create an account." }),
+  }),
+  terms_version: z.string().trim().max(32).optional(),
 });
 const InviteInfoQuery = z.object({
   token: z
@@ -312,10 +323,26 @@ const REGISTER_PENDING_BODY = {
     "Account created. Check your email for a verification link to finish signing up.",
 };
 
+/**
+ * Public: serve the canonical Terms & Conditions so the /register clickwrap
+ * can display the exact text the user is agreeing to and echo back the
+ * version. No auth — this is shown to anonymous visitors before signup.
+ */
+router.get("/terms", (_req, res) => {
+  const doc = getTermsDocument();
+  res.json({
+    version: doc.version,
+    effective_date: doc.effective_date,
+    last_updated: doc.last_updated,
+    sha256: doc.sha256,
+    content: doc.content,
+  });
+});
+
 router.post("/register", authRateLimit, async (req, res) => {
   const parsed = RegisterBody.safeParse(req.body);
   if (!parsed.success) { badRequest(res, parsed.error, "Email, password, and name required"); return; }
-  const { email, password, name, invite_token } = parsed.data;
+  const { email, password, name, invite_token, terms_version } = parsed.data;
 
   // Block public registration of reserved/system addresses. Compared
   // case-insensitively because email addresses are case-insensitive in
@@ -417,6 +444,57 @@ router.post("/register", authRateLimit, async (req, res) => {
         "register: attachInviteUser failed; invite remains consumed but claimed_by_user_id was not stitched",
       );
     }
+  }
+
+  // Record the clickwrap Terms acceptance now that the user row exists.
+  // The version + content hash come from the SERVER's canonical document
+  // (getTermsMeta), never the client — the Zod gate above already proved
+  // the user clicked "I agree", and the server is the source of truth for
+  // exactly what they agreed to. A stale client tab claiming an older
+  // version is logged for visibility.
+  //
+  // FAIL-CLOSED: this acceptance row IS the legal clickwrap evidence the
+  // feature exists to capture, so it must NOT be best-effort. If the insert
+  // fails we undo the just-created user and reject the request — an account
+  // that exists with no persisted terms acceptance is a compliance defect,
+  // strictly worse than asking the user to retry. The account is brand-new,
+  // email-unverified, and no JWT/refresh tokens have been issued yet, so
+  // deleting it here leaves no orphaned session state.
+  const termsMeta = getTermsMeta();
+  if (terms_version && terms_version !== termsMeta.version) {
+    logger.warn(
+      { user_id: user.id, client_terms_version: terms_version, server_terms_version: termsMeta.version },
+      "register: client accepted a different terms version than the current server version",
+    );
+  }
+  try {
+    await db.insert(termsAcceptancesTable).values({
+      user_id: user.id,
+      email,
+      terms_version: termsMeta.version,
+      content_sha256: termsMeta.sha256,
+      ip_address: req.ip ?? null,
+      user_agent: req.get("user-agent") ?? null,
+    });
+  } catch (err) {
+    logger.error(
+      { user_id: user.id, err },
+      "register: failed to persist terms acceptance row; rolling back the just-created user",
+    );
+    try {
+      await db.execute(sql`DELETE FROM mtos_users WHERE id = ${user.id}`);
+    } catch (cleanupErr) {
+      logger.error(
+        { user_id: user.id, err: cleanupErr },
+        "register: rollback delete of user failed after terms-acceptance persistence error",
+      );
+    }
+    res.status(500).json({
+      status: "error",
+      code: "terms_persist_failed",
+      message: "Account creation failed. Please try again.",
+    });
+    return;
   }
 
   // Fire-and-await email send. Failures here log and continue —

@@ -45,5 +45,6 @@ export * from "./system_snapshots";
 export * from "./dialer";
 export * from "./medical_records_requests";
 export * from "./tort_voice_agents";
+export * from "./terms_acceptances";
 export { refreshTokensTable } from "./users";
 export { securityNotificationsTable } from "./security_alerts";

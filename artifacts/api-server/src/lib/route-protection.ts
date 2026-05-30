@@ -88,6 +88,11 @@ const AUTH_ROUTE_EXCEPTIONS = new Set([
   // to render the firm name + email prefill. The token in the query
   // string is the credential; the response carries no token / hash.
   "GET /invite-info",
+  // Clickwrap Terms & Conditions document fetch. The /register page must
+  // render the current Terms (version + full text) to an anonymous visitor
+  // before they have a session, so the signup checkbox can record which
+  // version they accepted. Read-only; carries no token / hash / PII.
+  "GET /terms",
 ]);
 
 // Authenticated routes that legitimately do not need a role gate (caller's

@@ -48,6 +48,7 @@ const TS = Date.now();
 const HAPPY_EMAIL = `register-happy-${TS}@mtos.test`;
 const DUPE_EMAIL = `register-dupe-${TS}@mtos.test`;
 const WEAK_EMAIL = `register-weak-${TS}@mtos.test`;
+const GATE_EMAIL = `register-gate-${TS}@mtos.test`;
 const STRONG_PASSWORD = "Sup3r$ecret!Pa$$w0rd";
 
 interface RegisterResponse {
@@ -107,7 +108,7 @@ before(async () => {
 after(async () => {
   await db
     .execute(
-      sql`DELETE FROM mtos_users WHERE email IN (${HAPPY_EMAIL}, ${DUPE_EMAIL}, ${WEAK_EMAIL})`,
+      sql`DELETE FROM mtos_users WHERE email IN (${HAPPY_EMAIL}, ${DUPE_EMAIL}, ${WEAK_EMAIL}, ${GATE_EMAIL})`,
     )
     .catch(() => {});
   await close();
@@ -118,6 +119,7 @@ test("(a) happy path: returns 202 pending_verification envelope and creates an u
     email: HAPPY_EMAIL,
     password: STRONG_PASSWORD,
     name: "Happy Path",
+    terms_accepted: true,
   });
   assert.equal(
     resp.status,
@@ -187,6 +189,7 @@ test("(b) duplicate email returns 409 { error: 'Email already registered' }", as
     email: DUPE_EMAIL,
     password: STRONG_PASSWORD,
     name: "Dupe Seed",
+    terms_accepted: true,
   });
   assert.equal(seed.status, 202, `seed must succeed, got ${seed.status}`);
 
@@ -194,6 +197,7 @@ test("(b) duplicate email returns 409 { error: 'Email already registered' }", as
     email: DUPE_EMAIL,
     password: STRONG_PASSWORD,
     name: "Dupe Retry",
+    terms_accepted: true,
   });
   assert.equal(dupe.status, 409, `expected 409 on duplicate email, got ${dupe.status}`);
   assert.equal(dupe.body.error, "Email already registered");
@@ -204,6 +208,7 @@ test("(c) weak password returns 400 with the complexity-rule message", async () 
     email: WEAK_EMAIL,
     password: "short",
     name: "Weak Password",
+    terms_accepted: true,
   });
   assert.equal(resp.status, 400, `expected 400 on weak password, got ${resp.status}`);
   assert.equal(typeof resp.body.error, "string", "error must be a string the UI can render verbatim");
@@ -223,6 +228,7 @@ test("(d) reserved email (system@mtos.local) returns the SAME 409 shape as a dup
     email: "system@mtos.local",
     password: STRONG_PASSWORD,
     name: "Reserved Attempt",
+    terms_accepted: true,
   });
   assert.equal(resp.status, 409, `expected 409 on reserved email, got ${resp.status}`);
   assert.equal(
@@ -230,4 +236,38 @@ test("(d) reserved email (system@mtos.local) returns the SAME 409 shape as a dup
     "Email already registered",
     "reserved-email response must match duplicate-email response verbatim so the endpoint cannot be used to enumerate reserved addresses",
   );
+});
+
+test("(e) clickwrap gate: registration without terms_accepted is rejected and creates no user row", async () => {
+  // Omitting terms_accepted entirely must fail the z.literal(true) gate
+  // BEFORE any user state is created — there must be no way to register
+  // without affirmatively accepting the Terms.
+  const missing = await registerProbe({
+    email: GATE_EMAIL,
+    password: STRONG_PASSWORD,
+    name: "No Terms",
+  });
+  assert.equal(
+    missing.status,
+    400,
+    `registration without terms_accepted must be rejected, got ${missing.status}`,
+  );
+
+  // terms_accepted:false must be rejected identically (z.literal(true)).
+  const declined = await registerProbe({
+    email: GATE_EMAIL,
+    password: STRONG_PASSWORD,
+    name: "Declined Terms",
+    terms_accepted: false,
+  });
+  assert.equal(
+    declined.status,
+    400,
+    `registration with terms_accepted:false must be rejected, got ${declined.status}`,
+  );
+
+  // No user row may exist for the gate-blocked email.
+  const rows = await db.execute(sql`SELECT id FROM mtos_users WHERE email = ${GATE_EMAIL}`);
+  const r = (rows as unknown as { rows?: Array<{ id: number }> }).rows ?? [];
+  assert.equal(r.length, 0, "a terms-gate failure must not create a user row");
 });

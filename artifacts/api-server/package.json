@@ -14,7 +14,8 @@
     "pretypecheck": "tsc -b ../../",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test --test-timeout=30000 src/lib/__tests__/*.test.ts",
-    "verify:search": "tsx src/scripts/verify-serpapi.ts"
+    "verify:search": "tsx src/scripts/verify-serpapi.ts",
+    "sync:forms": "tsx src/scripts/sync-form-intake.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
