@@ -60,6 +60,25 @@ const DEFAULT_PROVIDER_BY_CATEGORY: Record<ProviderCategory, string | null> = {
   llm_drafting: null,
 };
 
+/**
+ * Hard-wire Vapi from system secrets. The browser Web SDK needs a public key
+ * and outbound dispatch needs the server api key — both are system-level config
+ * rather than per-firm data. When the integration vault row omits either field
+ * we fall back to process.env (`VAPI_PUBLIC_KEY` / `VAPI_API_KEY`), mirroring the
+ * llm category's env fallback. A value stored in the vault always wins; env only
+ * fills a blank, so existing per-firm overrides are never clobbered.
+ */
+function applyVapiEnvFallback(creds: DecryptedCredentials): void {
+  if (!creds.public_key || !creds.public_key.trim()) {
+    const envPub = process.env["VAPI_PUBLIC_KEY"]?.trim();
+    if (envPub) creds.public_key = envPub;
+  }
+  if (!creds.api_key || !creds.api_key.trim()) {
+    const envKey = process.env["VAPI_API_KEY"]?.trim();
+    if (envKey) creds.api_key = envKey;
+  }
+}
+
 async function findActiveIntegrationByProvider(provider: string): Promise<number | null> {
   // Provider uniqueness is NOT enforced at the schema level (multiple
   // historical rows for the same provider can coexist after re-onboarding).
@@ -187,6 +206,8 @@ export async function resolveProvider(
       details: `Credential decryption failed for fields: ${credentials._decryption_errors.join(", ")}. Re-enter the API key.`,
     };
   }
+
+  if (row.provider === "vapi") applyVapiEnvFallback(credentials);
 
   return {
     integration_id: integrationId,
