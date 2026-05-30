@@ -28,7 +28,7 @@ const VAPI_BASE = "https://api.vapi.ai";
 // is unchanged. The stored fingerprint folds this version + the public API
 // base + the prompt fingerprint, so drift is detected for ALL of: prompt
 // edits, tool-wiring changes, and a newly-configured PUBLIC_API_BASE.
-const TORT_AGENT_PAYLOAD_VERSION = "1.1.0";
+const TORT_AGENT_PAYLOAD_VERSION = "2.0.0";
 
 /**
  * Composite fingerprint for drift detection. Covers the full provisioning
@@ -233,10 +233,14 @@ export function buildVapiAssistantPayload(
   // exist"); wiring a custom LLM now requires a Vapi-stored credential
   // (POST /credential + credentialId), which is out of scope for basic per-tort
   // provisioning. Use Vapi's native OpenAI model so every tort agent provisions
-  // and runs reliably.
+  // and runs reliably. gpt-4o (over -mini) gives noticeably warmer, more
+  // natural phrasing on these sensitive intake calls; a little temperature
+  // keeps replies from sounding canned without loosening the deterministic
+  // qualification gates (those live in the prompt, not the sampler).
   const model: Record<string, unknown> = {
     provider: "openai",
-    model: "gpt-4o-mini",
+    model: "gpt-4o",
+    temperature: 0.7,
     messages: [{ role: "system", content: prompt.systemPrompt }],
     ...(tools.length ? { tools } : {}),
   };
@@ -246,12 +250,34 @@ export function buildVapiAssistantPayload(
   // tort_voice_agents row, not the display name.
   const name = `MTOS ${tort.label}`.slice(0, 40);
 
+  // Realism-tuned payload — the goal is an agent that sounds human and flows
+  // naturally on the phone rather than reading a script:
+  //   - voice: Cartesia (premium neural TTS) as primary instead of the robotic
+  //     OpenAI "alloy", with an OpenAI fallback so a Cartesia hiccup never drops
+  //     the call. This voiceId is one Vapi already validates for this account.
+  //   - backchanneling: small spoken "mm-hmm"/"right" cues while the caller
+  //     talks, so it feels like someone is actually listening.
+  //   - startSpeakingPlan: smart endpointing + a short wait so the agent lets
+  //     the caller finish a thought before replying (no clipping mid-sentence).
+  //   - stopSpeakingPlan: natural barge-in — the caller can interrupt and the
+  //     agent yields gracefully instead of talking over them.
+  //   - backgroundDenoising: cleaner audio on noisy caller lines.
+  // The transcriber is intentionally omitted so Vapi keeps its current
+  // best-in-class default (multilingual streaming) rather than pinning an older
+  // model and regressing existing assistants on re-sync.
   return {
     name,
     model,
-    voice: { provider: "openai", voiceId: "alloy" },
-    transcriber: { provider: "deepgram", model: "nova-2", language: "en-US" },
+    voice: {
+      provider: "cartesia",
+      voiceId: "57dcab65-68ac-45a6-8480-6c4c52ec1cd1",
+      fallbackPlan: { voices: [{ provider: "openai", voiceId: "alloy" }] },
+    },
     firstMessage: prompt.firstMessage,
+    backchannelingEnabled: true,
+    backgroundDenoisingEnabled: true,
+    startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: "vapi" } },
+    stopSpeakingPlan: { numWords: 2, voiceSeconds: 0.2, backoffSeconds: 1.0 },
     endCallFunctionEnabled: true,
     recordingEnabled: true,
     metadata: { tort_id: tort.id, tort_label: tort.label },

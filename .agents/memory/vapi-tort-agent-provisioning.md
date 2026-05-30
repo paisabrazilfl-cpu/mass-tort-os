@@ -19,3 +19,11 @@ The product is NOT a law firm. Agent prompts/first messages must present MTOS as
 
 ## Vapi schema constraint
 Vapi rejects inline custom-llm auth headers and caps assistant names; use native providers. A true custom LLM needs Vapi's credential flow, not inline auth.
+
+## Payload-only fields (voice/model/turn-taking) are NOT in the fingerprint
+The drift fingerprint = PAYLOAD_VERSION | apiBase | prompt.fingerprint, and prompt.fingerprint only hashes the rendered systemPrompt+firstMessage. Voice, model, temperature, backchanneling, start/stopSpeakingPlan etc. live in `buildVapiAssistantPayload` and are invisible to drift detection.
+**How to apply:** any payload-only change (e.g. new voice/model/turn-taking) MUST bump `TORT_AGENT_PAYLOAD_VERSION` or provision will report `in_sync` and never re-push. Bumping flags ALL torts out_of_date; they keep running until individually re-synced.
+
+## Live assistants carry Vapi defaults beyond our template
+A live GET can show fields the code never sends (e.g. assembly-ai multilingual transcriber, voice fallbackPlan, smartEndpointingPlan) — Vapi applies/normalizes its current defaults. A naive resync that explicitly sets weaker values (e.g. deepgram nova-2) REGRESSES the assistant.
+**How to apply:** GET the live assistant before changing the template; to preserve a good Vapi default, OMIT that field from the payload rather than pinning an older value. Reuse voiceIds Vapi already validated for the account (they appear in the existing fallbackPlan) to avoid 400s.
