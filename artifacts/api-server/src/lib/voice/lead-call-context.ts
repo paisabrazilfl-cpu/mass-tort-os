@@ -73,6 +73,32 @@ export interface LeadCallContext {
 }
 
 /**
+ * Assemble the final `variableValues` map handed to the voice provider for an
+ * OUTBOUND call. This is the single source of truth for outbound call wiring,
+ * extracted as a pure function so the direction contract is unit-testable.
+ *
+ * Contract:
+ *   - `call_direction` is always pinned to `"outbound"` (inbound calls never
+ *     run through this helper — they omit the variable so the prompt's
+ *     {{call_direction}} renders empty and is treated as inbound).
+ *   - Lead enrichment (`caller_context` summary + `lead_*` values) is layered
+ *     in first, then the operator-supplied context, then `call_direction` —
+ *     so `call_direction` can never be clobbered, while a same-key operator
+ *     override still wins over lead-derived values.
+ */
+export function buildOutboundCallVariables(
+  operatorContext: Record<string, string> | undefined,
+  leadCtx: LeadCallContext | null,
+): Record<string, string> {
+  const base: Record<string, string> = {
+    ...(leadCtx ? { caller_context: leadCtx.summary, ...leadCtx.variableValues } : {}),
+    ...(operatorContext ?? {}),
+    call_direction: "outbound",
+  };
+  return base;
+}
+
+/**
  * Build the outbound caller context for a lead. Returns null when the lead
  * does not exist (or is out of the given firm scope). The optional
  * `firmId` enforces tenancy — pass the operator's firm so a cross-firm

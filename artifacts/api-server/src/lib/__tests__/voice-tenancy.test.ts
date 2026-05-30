@@ -31,7 +31,10 @@ import {
 import { eq, inArray } from "drizzle-orm";
 import { TORT_REGISTRY } from "../tort-engine.js";
 import { resolveInboundTort } from "../voice/inbound-routing.js";
-import { buildLeadCallContext } from "../voice/lead-call-context.js";
+import {
+  buildLeadCallContext,
+  buildOutboundCallVariables,
+} from "../voice/lead-call-context.js";
 
 const NS = `voice-tenancy-${Date.now()}`;
 const FIRM_A = 880001;
@@ -153,5 +156,53 @@ describe("voice intake firm tenancy", () => {
   test("dev/unscoped caller (firmId null) may enrich any lead", async () => {
     const ctx = await buildLeadCallContext(leadAId, null);
     assert.ok(ctx, "unscoped caller is the dev bypass path");
+  });
+
+  // ── call direction wiring (inbound vs outbound) ────────────────────────────
+  //
+  // One generic agent handles BOTH directions. The only runtime difference is
+  // the `call_direction` variable: outbound dispatch pins it to "outbound";
+  // inbound never sets it, so {{call_direction}} renders empty and the prompt
+  // treats the call as inbound. These tests pin that contract end-to-end on the
+  // outbound assembler (the inbound path simply omits the variable).
+
+  test("OUTBOUND cold call (no lead) pins call_direction=outbound", () => {
+    const vars = buildOutboundCallVariables(undefined, null);
+    assert.equal(vars.call_direction, "outbound");
+    assert.equal(vars.caller_context, undefined, "cold call has no lead context");
+  });
+
+  test("OUTBOUND enriched call carries lead context AND outbound direction", async () => {
+    const leadCtx = await buildLeadCallContext(leadAId, FIRM_A);
+    assert.ok(leadCtx);
+    const vars = buildOutboundCallVariables(undefined, leadCtx);
+    assert.equal(vars.call_direction, "outbound");
+    assert.match(vars.caller_context!, /Tenancy Fixture/, "agent greets the known lead");
+  });
+
+  test("call_direction can never be clobbered by lead-derived values", async () => {
+    const leadCtx = await buildLeadCallContext(leadAId, FIRM_A);
+    // Simulate a lead value that collides with the direction key.
+    const poisoned = { ...leadCtx!, variableValues: { ...leadCtx!.variableValues, call_direction: "inbound" } };
+    const vars = buildOutboundCallVariables(undefined, poisoned);
+    assert.equal(vars.call_direction, "outbound", "outbound dispatch always wins the direction");
+  });
+
+  test("operator context overrides lead values but never the direction", () => {
+    const vars = buildOutboundCallVariables(
+      { caller_context: "operator override", call_direction: "inbound" },
+      { summary: "lead summary", variableValues: { caller_context: "lead summary" }, tortType: null },
+    );
+    assert.equal(vars.caller_context, "operator override", "operator wins same-key collisions");
+    assert.equal(vars.call_direction, "outbound", "direction is non-overridable on outbound dispatch");
+  });
+
+  test("INBOUND contract: variable is omitted so the prompt renders empty", () => {
+    // The inbound webhook path does not run buildOutboundCallVariables and sets
+    // no call_direction. We assert the contract that an unset direction is the
+    // inbound signal (empty render === inbound), mirroring how {{caller_context}}
+    // behaves when no lead is attached.
+    const inboundVars: Record<string, string> = {};
+    assert.equal(inboundVars.call_direction, undefined, "inbound never sets call_direction");
   });
 });

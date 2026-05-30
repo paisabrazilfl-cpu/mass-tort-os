@@ -19,7 +19,11 @@ import { badRequest } from "../lib/http-errors";
 import { getFirmIdForUser } from "../lib/subscription-gate";
 import { resolveProvider, isResolved } from "../lib/provider-router";
 import { getVoiceAdapter } from "../lib/voice";
-import { buildLeadCallContext } from "../lib/voice/lead-call-context";
+import {
+  buildLeadCallContext,
+  buildOutboundCallVariables,
+  type LeadCallContext,
+} from "../lib/voice/lead-call-context";
 import { logger } from "../lib/logger";
 
 /**
@@ -273,23 +277,17 @@ router.post(
     // re-asking. Caller-supplied context wins on key collisions. Failures
     // here must never block the call — the agent simply falls back to a
     // cold intake.
-    let callContext: Record<string, string> = { call_direction: "outbound", ...(context ?? {}) };
+    let leadCtx: LeadCallContext | null = null;
     let leadTortType: string | null = null;
     if (lead_id != null) {
       try {
-        const leadCtx = await buildLeadCallContext(lead_id, scope.firmId);
-        if (leadCtx) {
-          callContext = {
-            caller_context: leadCtx.summary,
-            ...leadCtx.variableValues,
-            ...callContext,
-          };
-          leadTortType = leadCtx.tortType;
-        }
+        leadCtx = await buildLeadCallContext(lead_id, scope.firmId);
+        if (leadCtx) leadTortType = leadCtx.tortType;
       } catch (err) {
         logger.warn({ err, lead_id }, "outbound: failed to build lead call context; proceeding cold");
       }
     }
+    const callContext = buildOutboundCallVariables(context, leadCtx);
 
     // Persist the queued row before dispatch so an upstream timeout
     // still leaves an audit trail visible to the operator.
