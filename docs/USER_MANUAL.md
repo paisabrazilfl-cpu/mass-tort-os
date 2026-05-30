@@ -2,7 +2,7 @@
 
 > **This manual is exhaustive and granular.** Every page, button, field, status enum, role, permission, API endpoint, automation node, error code, and audit event in the system is documented below. Cross-references use exact code paths so engineers and operators see the same source of truth.
 
-**Version 2026.05.29** • Built directly from source: `artifacts/api-server/src`, `artifacts/mtos-crm/src`, `lib/db/src/schema`.
+**Version 2026.05.30** • Built directly from source: `artifacts/api-server/src`, `artifacts/mtos-crm/src`, `lib/db/src/schema`.
 
 ---
 
@@ -340,7 +340,9 @@ Each page is documented in the order it appears in the left sidebar. Every entry
 
 ### 7.11 Per-Tort Voice Agents — `/voice-agents`
 - **Permissions:** `calls:view` (read), `calls:manage` (provision). Sidebar section **Dialer**.
-- Each tort campaign gets its **own dedicated Vapi assistant**, provisioned and kept in sync from `lib/voice/tort-agent-provisioning.ts`. `computeAgentFingerprint` detects configuration drift; `provisionTortAgent` creates/updates an assistant idempotently.
+- Each tort campaign gets its **own dedicated Vapi assistant**, provisioned and kept in sync from `lib/voice/tort-agent-provisioning.ts`. `computeAgentFingerprint` detects configuration drift; `provisionTortAgent` creates/updates an assistant idempotently. All **31** torts in `TORT_REGISTRY` have a live assistant.
+- **Generated intake script (`lib/voice/tort-agent-prompt.ts`, template `TORT_AGENT_TEMPLATE_VERSION = 3.0.0`):** each assistant's system prompt is composed **deterministically** from that tort's `TORT_REGISTRY` entry — no LLM writes the prompt. Every tort follows the same full Tier-1 intake structure: **§0 compliance gate** (TCPA consent, recording disclosure, DNC, minors/capacity, PII minimization, **no legal or medical advice**) with a tri-state outcome **QUALIFIED / HELD / DISQUALIFIED**; §1 identity; §2 voice & persona; §3 the gated conversation flow (inbound + outbound intros, empathy, qualification gates A–E built from the tort's `valid_diagnoses` / `required_exposure` / `exposure_fields` / `rules` / `rejection_conditions`, lead capture, confirmation, disposition + handoff, close); §4–§5 response guidelines & refinement; §6 scenario handling; §7 a per-tort knowledge base (qualifying conditions, exposure requirement, and special windows such as Camp Lejeune's **1953–1987** coverage period); §8 data schema; §9 disposition codes; §10 held-flag reference; §11 the mandatory tool order (`lookup-lead` → `create-lead` → `check-eligibility` → `escalate-to-human`, fail-honest); §12 non-negotiables; plus a **DISQUALIFIERS** block derived from the tort's rejection conditions.
+- **Branding rule:** the prompt never claims to be a law firm, a lawyer, or the caller's legal representative, and never gives legal or medical advice — it speaks as a neutral **MTOS intake reviewer**. Bumping `TORT_AGENT_TEMPLATE_VERSION` changes every agent's fingerprint, so the bulk sync below rolls the new script out to all 31 live assistants at once.
 - **Bulk sync:** `provisionOutOfDateTortAgents` re-syncs only the agents whose fingerprint has changed, so a prompt/tooling change can be rolled out across every tort at once.
 - **Endpoints (`/api/dialer`):** `GET /tort-agents` (list + status), `GET /tort-agents/activity`, `POST /tort-agents/:tortId/provision`, `POST /tort-agents/provision-all`, `POST /tort-agents/sync-out-of-date`.
 - Staff place outbound calls using a tort's dedicated agent through Dialer campaigns (auto-linked, §7.10) or the manual Dial Pad.
