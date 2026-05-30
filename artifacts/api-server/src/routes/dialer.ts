@@ -1399,6 +1399,112 @@ router.get(
   },
 );
 
+// Per-agent call log (the Vapi dashboard "Logs" tab equivalent). Returns the
+// full call history for one tort's dedicated agent — every inbound/outbound
+// call it handled, newest first — so the owner can drill into any agent from
+// the live monitor and watch its calls. Firm-scoped + fail-closed like the
+// activity view. Matches calls by the tort AND the agent's assistant id so
+// rows recorded under either key are included.
+const agentCallsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+router.get(
+  "/tort-agents/:tortId/calls",
+  requirePermission(Permission.CALLS_VIEW),
+  async (req, res) => {
+    const tortId = String(req.params.tortId ?? "").trim();
+    if (!tortId || !TORT_REGISTRY[tortId]) {
+      notFound(res);
+      return;
+    }
+    const parsed = agentCallsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      badRequest(res, "Invalid query", parsed.error.issues);
+      return;
+    }
+    const limit = parsed.data.limit ?? 50;
+
+    const firmId = await getFirmId(req.user!.id);
+    // Fail closed: a real user (id > 0) with no firm linkage must not see
+    // cross-firm call_logs. Only the dev-bypass user (id <= 0) runs unscoped.
+    if (req.user!.id > 0 && firmId == null) {
+      res.status(403).json({
+        status: "error",
+        code: "NO_FIRM",
+        message: "User account is not linked to a firm.",
+      });
+      return;
+    }
+    const firmScope = firmId != null ? eq(callLogsTable.firm_id, firmId) : sql`true`;
+
+    // Resolve this tort's dedicated assistant so calls stamped only with the
+    // assistant id (and not tort_type) are still attributed to the agent.
+    const agentRow = await db
+      .select({ assistant_id: tortVoiceAgentsTable.vapi_assistant_id })
+      .from(tortVoiceAgentsTable)
+      .where(eq(tortVoiceAgentsTable.tort_id, tortId))
+      .limit(1);
+    const assistantId = agentRow[0]?.assistant_id ?? null;
+
+    const agentMatch = assistantId
+      ? or(
+          eq(callLogsTable.tort_type, tortId),
+          eq(callLogsTable.vapi_assistant_id, assistantId),
+        )!
+      : eq(callLogsTable.tort_type, tortId);
+
+    const rows = await db
+      .select({
+        id: callLogsTable.id,
+        vapi_call_id: callLogsTable.vapi_call_id,
+        direction: callLogsTable.direction,
+        status: callLogsTable.status,
+        from_number: callLogsTable.from_number,
+        to_number: callLogsTable.to_number,
+        started_at: callLogsTable.started_at,
+        ended_at: callLogsTable.ended_at,
+        duration_seconds: callLogsTable.duration_seconds,
+        recording_url: callLogsTable.recording_url,
+        error: callLogsTable.error,
+        created_at: callLogsTable.created_at,
+        lead_id: callLogsTable.lead_id,
+        lead_first: leadsTable.first_name,
+        lead_last: leadsTable.last_name,
+      })
+      .from(callLogsTable)
+      .leftJoin(leadsTable, eq(callLogsTable.lead_id, leadsTable.id))
+      .where(and(firmScope, agentMatch))
+      .orderBy(desc(callLogsTable.created_at), desc(callLogsTable.id))
+      .limit(limit);
+
+    const calls = rows.map((c) => ({
+      id: c.id,
+      vapi_call_id: c.vapi_call_id,
+      direction: c.direction,
+      status: c.status,
+      number: c.direction === "inbound" ? c.from_number : c.to_number,
+      from_number: c.from_number,
+      to_number: c.to_number,
+      started_at: c.started_at ? c.started_at.toISOString() : null,
+      ended_at: c.ended_at ? c.ended_at.toISOString() : null,
+      duration_seconds: c.duration_seconds,
+      recording_url: c.recording_url,
+      error: c.error,
+      created_at: c.created_at ? c.created_at.toISOString() : null,
+      lead_id: c.lead_id,
+      lead_name: [c.lead_first, c.lead_last].filter(Boolean).join(" ").trim() || null,
+    }));
+
+    res.json({
+      tort_id: tortId,
+      tort_label: TORT_REGISTRY[tortId]?.label ?? tortId,
+      vapi_assistant_id: assistantId,
+      calls,
+    });
+  },
+);
+
 // Provision (create or sync) the agent for a single tort. Idempotent.
 router.post(
   "/tort-agents/:tortId/provision",

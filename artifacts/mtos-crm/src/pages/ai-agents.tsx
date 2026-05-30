@@ -10,8 +10,12 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
+  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+} from "@/components/ui/sheet";
+import {
   Bot, Loader2, PhoneCall, Search, Sparkles, Radio, AlertTriangle,
-  CheckCircle, XCircle, RefreshCw,
+  CheckCircle, XCircle, RefreshCw, ScrollText, PhoneIncoming, PhoneOutgoing,
+  PlayCircle,
 } from "lucide-react";
 
 const API = (path: string) => `/api/dialer${path}`;
@@ -79,6 +83,47 @@ type ActivityResponse = {
   live_calls: LiveCall[];
 };
 
+type AgentCall = {
+  id: number;
+  vapi_call_id: string | null;
+  direction: string;
+  status: string;
+  number: string | null;
+  from_number: string | null;
+  to_number: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  recording_url: string | null;
+  error: string | null;
+  created_at: string | null;
+  lead_id: number | null;
+  lead_name: string | null;
+};
+
+type AgentCallsResponse = {
+  tort_id: string;
+  tort_label: string;
+  vapi_assistant_id: string | null;
+  calls: AgentCall[];
+};
+
+const ACTIVE_CALL_STATUSES = new Set(["queued", "ringing", "in_progress"]);
+
+function callStatusBadge(s: string) {
+  if (ACTIVE_CALL_STATUSES.has(s)) {
+    return (
+      <Badge variant="outline" className="gap-1 border-sky-500 text-sky-600">
+        <Radio className="h-3 w-3 animate-pulse" /> {s}
+      </Badge>
+    );
+  }
+  if (s === "completed") return <Badge className="bg-emerald-600 hover:bg-emerald-700">completed</Badge>;
+  if (s === "failed") return <Badge variant="destructive">failed</Badge>;
+  if (s === "no_answer") return <Badge variant="secondary">no answer</Badge>;
+  return <Badge variant="outline">{s}</Badge>;
+}
+
 function AgentStateBadge({ agent }: { agent: AgentRow }) {
   if (agent.activity.active_calls > 0) {
     return (
@@ -125,12 +170,28 @@ function fmtDuration(secs: number | null): string {
 export default function AiAgentsPage() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
+  const [logsAgent, setLogsAgent] = useState<AgentRow | null>(null);
 
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
     queryKey: ["tort-agents-activity"],
     queryFn: () => apiFetch<ActivityResponse>("/tort-agents/activity"),
     refetchInterval: 10_000,
   });
+
+  // Per-agent call log (the Vapi "Logs" tab equivalent). Only fetches while a
+  // drawer is open, and live-refreshes every 8s so the owner watches calls land.
+  const logsQ = useQuery({
+    queryKey: ["tort-agent-calls", logsAgent?.tort_id],
+    queryFn: () =>
+      apiFetch<AgentCallsResponse>(
+        `/tort-agents/${encodeURIComponent(logsAgent!.tort_id)}/calls?limit=100`,
+      ),
+    enabled: logsAgent !== null,
+    refetchInterval: logsAgent !== null ? 8_000 : false,
+  });
+  const agentCalls = logsQ.data?.calls ?? [];
+  const logsError =
+    logsQ.error instanceof Error ? logsQ.error.message : "Couldn't load call log.";
 
   const errorMessage =
     error instanceof Error ? error.message : "Couldn't load agent activity.";
@@ -307,9 +368,16 @@ export default function AiAgentsPage() {
               </TableHeader>
               <TableBody>
                 {filtered.map((a) => (
-                  <TableRow key={a.tort_id}>
+                  <TableRow
+                    key={a.tort_id}
+                    className="cursor-pointer"
+                    onClick={() => setLogsAgent(a)}
+                  >
                     <TableCell>
-                      <div className="font-medium">{a.tort_label}</div>
+                      <div className="font-medium flex items-center gap-1.5">
+                        {a.tort_label}
+                        <ScrollText className="h-3.5 w-3.5 text-muted-foreground" />
+                      </div>
                       <div className="text-xs text-muted-foreground">{a.tort_id}</div>
                       {a.last_error && (
                         <div className="text-xs text-destructive mt-0.5 max-w-md truncate" title={a.last_error}>
@@ -372,6 +440,111 @@ export default function AiAgentsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Sheet open={logsAgent !== null} onOpenChange={(open) => !open && setLogsAgent(null)}>
+        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              <ScrollText className="h-5 w-5" />
+              {logsAgent?.tort_label} — Call Log
+            </SheetTitle>
+            <SheetDescription>
+              Every call this agent handled, newest first. Refreshes live while open.
+              {logsAgent?.vapi_assistant_id && (
+                <span className="block font-mono text-xs mt-1">
+                  Assistant {logsAgent.vapi_assistant_id}
+                </span>
+              )}
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="mt-4">
+            {logsQ.isLoading ? (
+              <div className="flex justify-center py-12">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : logsQ.isError ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                <span>{logsError}</span>
+                <Button size="sm" variant="outline" onClick={() => logsQ.refetch()}>
+                  <RefreshCw className="h-3.5 w-3.5 mr-1" /> Retry
+                </Button>
+              </div>
+            ) : agentCalls.length === 0 ? (
+              <div className="text-center text-muted-foreground py-12 text-sm">
+                This agent has no calls yet.
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Call</TableHead>
+                    <TableHead>Contact</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Duration</TableHead>
+                    <TableHead>Started</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {agentCalls.map((c) => (
+                    <TableRow key={c.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-1.5 text-sm capitalize">
+                          {c.direction === "inbound" ? (
+                            <PhoneIncoming className="h-3.5 w-3.5 text-emerald-600" />
+                          ) : (
+                            <PhoneOutgoing className="h-3.5 w-3.5 text-sky-600" />
+                          )}
+                          {c.direction}
+                        </div>
+                        {c.recording_url && (
+                          <a
+                            href={c.recording_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-sky-600 hover:underline mt-0.5"
+                          >
+                            <PlayCircle className="h-3 w-3" /> Recording
+                          </a>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {c.lead_id ? (
+                          <button
+                            className="text-left hover:underline"
+                            onClick={() => setLocation(`/leads/${c.lead_id}`)}
+                          >
+                            {c.lead_name ?? c.number ?? "—"}
+                          </button>
+                        ) : (
+                          c.lead_name ?? c.number ?? "—"
+                        )}
+                        {c.lead_name && c.number && (
+                          <div className="text-xs text-muted-foreground">{c.number}</div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {callStatusBadge(c.status)}
+                        {c.error && (
+                          <div className="text-xs text-destructive mt-0.5 max-w-[14rem] truncate" title={c.error}>
+                            {c.error}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
+                        {fmtDuration(c.duration_seconds)}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {fmtTime(c.started_at ?? c.created_at)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
