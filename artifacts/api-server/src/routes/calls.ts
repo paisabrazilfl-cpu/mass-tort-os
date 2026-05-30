@@ -273,7 +273,7 @@ router.post(
     // re-asking. Caller-supplied context wins on key collisions. Failures
     // here must never block the call — the agent simply falls back to a
     // cold intake.
-    let callContext: Record<string, string> = { ...(context ?? {}) };
+    let callContext: Record<string, string> = { call_direction: "outbound", ...(context ?? {}) };
     let leadTortType: string | null = null;
     if (lead_id != null) {
       try {

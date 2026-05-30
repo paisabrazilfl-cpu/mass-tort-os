@@ -81,6 +81,38 @@ test("every prompt resolves the tri-state outcome and lists disposition reason c
   }
 });
 
+test("system prompt declares call direction and one shared timeline for inbound + outbound", () => {
+  for (const tort of ALL) {
+    const { systemPrompt } = buildTortAgentPrompt(tort);
+    assert.match(systemPrompt, /## 1\.4 CALL DIRECTION/, `${tort.id} should declare a CALL DIRECTION section`);
+    assert.ok(systemPrompt.includes("{{call_direction}}"), `${tort.id} should expose the call_direction variable`);
+    assert.match(systemPrompt, /INBOUND \(they called us\)/, `${tort.id} should have an inbound opener`);
+    assert.match(systemPrompt, /OUTBOUND \(we called them/, `${tort.id} should have an outbound opener`);
+    assert.match(
+      systemPrompt,
+      /identical regardless of direction/,
+      `${tort.id} should converge to one shared timeline after the opener`,
+    );
+  }
+});
+
+test("first message is direction-neutral so a single agent opens correctly inbound OR outbound", () => {
+  for (const tort of ALL) {
+    const { firstMessage } = buildTortAgentPrompt(tort);
+    assert.doesNotMatch(
+      firstMessage,
+      /thank you for calling/i,
+      `${tort.id} first message has inbound-only framing`,
+    );
+    assert.doesNotMatch(
+      firstMessage,
+      /thank you for taking my call|reaching out/i,
+      `${tort.id} first message has outbound-only framing`,
+    );
+    assert.match(firstMessage, /MTOS/, `${tort.id} first message should mention MTOS`);
+  }
+});
+
 test("exposure-required torts state exposure is required; non-exposure torts do not invent a hard requirement", () => {
   for (const tort of ALL) {
     const { systemPrompt } = buildTortAgentPrompt(tort);

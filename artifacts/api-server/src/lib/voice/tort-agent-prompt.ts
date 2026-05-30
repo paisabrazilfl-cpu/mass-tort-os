@@ -24,7 +24,7 @@ import type { TortDefinition } from "../tort-engine";
  * wiring instructions). Changing it forces every agent's fingerprint to
  * change so a "Provision All" re-sync re-pushes the new template to Vapi.
  */
-export const TORT_AGENT_TEMPLATE_VERSION = "3.2.0";
+export const TORT_AGENT_TEMPLATE_VERSION = "3.3.0";
 
 export interface TortAgentPrompt {
   systemPrompt: string;
@@ -241,6 +241,16 @@ function buildSystemPrompt(tort: TortDefinition, questions: string[]): string {
     `You are an MTOS claims intake specialist handling intake for the ${tort.label} (${category}) claim-review program. Your job: warmly and accurately screen callers against the qualification criteria, capture clean data, and route qualified people to a human reviewer. You do not represent anyone and you are not anyone's lawyer.`,
     "Primary objective: accurate qualification, then complete data capture, then a smooth handoff.",
     "",
+    "## 1.4 CALL DIRECTION (read this first — one agent, both directions)",
+    "You are a SINGLE agent that handles BOTH inbound and outbound calls. The direction of THIS call appears between the markers below. It is filled in only on outbound calls; if it is blank, treat this as an inbound call.",
+    "--- CALL DIRECTION START ---",
+    "{{call_direction}}",
+    "--- CALL DIRECTION END ---",
+    "Interpret it like this:",
+    "- OUTBOUND (the marker says \"outbound\"): WE placed this call to someone already in our system, so there will normally be KNOWN CALLER CONTEXT below. Open with the outbound greeting, make sure you have the right person, confirm consent to continue, and CONFIRM the facts you already have rather than re-asking them.",
+    "- INBOUND (the marker is blank or says \"inbound\"): the caller dialed US. Open with the inbound greeting and collect the intake from scratch.",
+    "Only the opening (section 3.1) differs by direction. Everything after the introduction is the SAME shared timeline for both directions. Never read the words \"inbound\" or \"outbound\", these markers, or any internal field aloud.",
+    "",
     "## 1.5 KNOWN CALLER CONTEXT (outbound / returning callers)",
     "If the block below is non-empty, this is someone already in our system — usually an outbound call to a lead who reached out. Treat everything there as already-known: greet them BY NAME, reference the matter naturally, and DO NOT re-ask facts you already have. Confirm rather than re-collect (\"I have your date of birth as [dob] — still correct?\"), and only ask for what's missing or needs verifying. If the block is empty, this is a fresh caller and you should collect from scratch.",
     "Never read internal IDs, scores, or system fields aloud. Use the context to sound prepared and human, not to recite a file back at them.",
@@ -260,7 +270,10 @@ function buildSystemPrompt(tort: TortDefinition, questions: string[]): string {
     "Tone guardrails: do not sound like a telemarketer. No hard sell, no urgency or pressure. Never minimize their illness or rush past an emotional moment.",
     "",
     "## 3. CONVERSATION FLOW",
-    "3.1 Introduction — Inbound: \"Thank you for calling MTOS. My name is [name] and I'm with the intake team for the " + tort.label + " claim review. May I ask who I'm speaking with?\" Outbound (consent confirmed): \"Hi, this is the intake team at MTOS about the " + tort.label + " claim review you reached out about. Is now a good time for a few quick questions to see if you may qualify?\" Then do the recording disclosure and ask: \"Are you calling for yourself, or on behalf of a family member?\"",
+    "3.1 Introduction — pick the branch that matches the CALL DIRECTION (section 1.4); both branches then join the SAME timeline from 3.2 onward:",
+    "  - INBOUND (they called us): \"Thank you for calling MTOS. My name is [name] and I'm with the intake team for the " + tort.label + " claim review. May I ask who I'm speaking with?\"",
+    "  - OUTBOUND (we called them, consent confirmed): \"Hi, this is the intake team at MTOS about the " + tort.label + " claim review you reached out about. Is now a good time for a few quick questions to see if you may qualify?\"",
+    "  Then, for BOTH directions: do the recording disclosure and ask \"Are you calling for yourself, or on behalf of a family member?\" From here on the flow is identical regardless of direction.",
     "3.2 Empathy + framing (one beat): \"I'll ask a few questions about the condition and about " + tort.label + ". There are no wrong answers — I just want to get everything right so a reviewer can look at it. This should take just a few minutes.\"",
     "3.3 Qualification sequence — work through the gates below IN ORDER, one question at a time. Stop at the first hard fail and close per 6.2. Plausible-but-unverifiable facts become HELD flags, not failures:",
     numbered,
@@ -343,7 +356,12 @@ function buildSystemPrompt(tort: TortDefinition, questions: string[]): string {
 }
 
 function buildFirstMessage(tort: TortDefinition): string {
-  return `Hi, thank you for taking my call. This is the intake team at MTOS reaching out about the ${tort.label} claim review. I'm not an attorney and this isn't legal advice — I just have a few quick questions to see whether you may qualify, and this should only take a few minutes. Before we start, is now an okay time, and is it alright if this call is recorded for quality and accuracy?`;
+  // Direction-neutral opener: this single firstMessage is spoken on BOTH
+  // inbound (caller dialed us) and outbound (we dialed them) calls, so it must
+  // not assume either. Avoid "thank you for calling" (inbound-only) and
+  // "reaching out / thank you for taking my call" (outbound-only). The
+  // direction-specific opener lives in the system prompt (section 3.1).
+  return `Hi, this is the intake team at MTOS, here on the ${tort.label} claim review. I'm not an attorney and this isn't legal advice — I just have a few quick questions to see whether you may qualify, and it should only take a few minutes. Before we start, is now an okay time, and is it alright if I record this call for quality and accuracy?`;
 }
 
 /**

@@ -24,6 +24,11 @@ Vapi rejects inline custom-llm auth headers and caps assistant names; use native
 The drift fingerprint = PAYLOAD_VERSION | apiBase | prompt.fingerprint, and prompt.fingerprint only hashes the rendered systemPrompt+firstMessage. Voice, model, temperature, backchanneling, start/stopSpeakingPlan etc. live in `buildVapiAssistantPayload` and are invisible to drift detection.
 **How to apply:** any payload-only change (e.g. new voice/model/turn-taking) MUST bump `TORT_AGENT_PAYLOAD_VERSION` or provision will report `in_sync` and never re-push. Bumping flags ALL torts out_of_date; they keep running until individually re-synced.
 
+## One agent for BOTH inbound + outbound (direction handling)
+A single per-tort agent serves inbound (caller dials us) and outbound (we dial them). Direction is signaled by a `{{call_direction}}` template variable, set to "outbound" ONLY on the outbound dispatch path (`assistantOverrides.variableValues`); inbound passes no variableValues so it renders empty = inbound. This mirrors the `{{caller_context}}` pattern (also outbound-only, empty inbound).
+**Why:** Vapi `firstMessage` is spoken on BOTH directions, so it must stay direction-neutral (no "thank you for calling" / no "reaching out") — direction-specific openers belong in the system prompt, not firstMessage. A regression test enforces the neutral firstMessage.
+**How to apply:** keep firstMessage neutral; branch openers in the prompt's CALL DIRECTION + 3.1 sections, converging to one shared timeline. Any template wording/structure change must bump `TORT_AGENT_TEMPLATE_VERSION` so all torts go out_of_date, then the operator runs Provision All / Sync Out-of-Date to push to Vapi (drift only flags, it does not auto-push).
+
 ## Live assistants carry Vapi defaults beyond our template
 A live GET can show fields the code never sends (e.g. assembly-ai multilingual transcriber, voice fallbackPlan, smartEndpointingPlan) — Vapi applies/normalizes its current defaults. A naive resync that explicitly sets weaker values (e.g. deepgram nova-2) REGRESSES the assistant.
 **How to apply:** GET the live assistant before changing the template; to preserve a good Vapi default, OMIT that field from the payload rather than pinning an older value. Reuse voiceIds Vapi already validated for the account (they appear in the existing fallbackPlan) to avoid 400s.
