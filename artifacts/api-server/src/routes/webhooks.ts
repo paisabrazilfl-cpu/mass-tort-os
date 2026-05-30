@@ -611,6 +611,7 @@ async function applyVapiEvent(body: unknown): Promise<void> {
         metadataTortId: tortType,
         assistantId: call?.assistant?.id ?? null,
         dialedNumber,
+        dialedNumberId: call?.phoneNumber?.id ?? call?.phoneNumberId ?? null,
       });
       tortType = routing.tortId;
       // The dialed number is the authoritative tenancy signal for inbound:

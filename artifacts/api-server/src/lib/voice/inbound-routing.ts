@@ -50,6 +50,28 @@ export async function findMappingForDialedNumber(
   return null;
 }
 
+/**
+ * Look up the dedicated-number mapping by the Vapi phone-number RESOURCE id.
+ * Vapi inbound events sometimes carry only `phoneNumberId` (no dialed E.164),
+ * so this is the second way to recover the tort + owning firm for tenancy.
+ */
+export async function findMappingForVapiNumberId(
+  vapiNumberId: string | null | undefined,
+): Promise<{ tortId: string; firmId: number | null } | null> {
+  const id = (vapiNumberId ?? "").trim();
+  if (!id) return null;
+  const rows = await db
+    .select({
+      tort_id: tortPhoneNumbersTable.tort_id,
+      firm_id: tortPhoneNumbersTable.firm_id,
+    })
+    .from(tortPhoneNumbersTable)
+    .where(and(eq(tortPhoneNumbersTable.vapi_phone_number_id, id), eq(tortPhoneNumbersTable.active, true)))
+    .limit(1);
+  const r = rows[0];
+  return r ? { tortId: r.tort_id, firmId: r.firm_id } : null;
+}
+
 /** Look up the tort that owns a Vapi assistant id, if any. */
 export async function findTortForAssistant(
   assistantId: string | null | undefined,
@@ -67,6 +89,8 @@ export interface InboundTortSignals {
   metadataTortId?: string | null;
   assistantId?: string | null;
   dialedNumber?: string | null;
+  /** Vapi phone-number resource id — used when the dialed E.164 is absent. */
+  dialedNumberId?: string | null;
 }
 
 export interface InboundRouting {
@@ -89,13 +113,23 @@ export interface InboundRouting {
  *   3. the dialed (destination) number — also yields the firm
  */
 export async function resolveInboundTort(signals: InboundTortSignals): Promise<InboundRouting> {
+  // The dialed (destination) number is the authoritative tenancy signal for
+  // inbound, so always resolve it up front — even when a stronger tort signal
+  // (metadata/assistant) wins the tort itself. Otherwise a call whose tort
+  // resolves via metadata/assistant would carry firmId=null and fall through
+  // to GLOBAL lead dedup, which could attach the caller to another firm's
+  // lead. Sourcing firm from the number keeps inbound dedup firm-scoped.
+  const byNumber =
+    (await findMappingForDialedNumber(signals.dialedNumber)) ??
+    (await findMappingForVapiNumberId(signals.dialedNumberId));
+  const numberFirmId = byNumber?.firmId ?? null;
+
   const meta = (signals.metadataTortId ?? "").trim();
-  if (meta && TORT_REGISTRY[meta]) return { tortId: meta, firmId: null };
+  if (meta && TORT_REGISTRY[meta]) return { tortId: meta, firmId: numberFirmId };
 
   const byAssistant = await findTortForAssistant(signals.assistantId);
-  if (byAssistant) return { tortId: byAssistant, firmId: null };
+  if (byAssistant) return { tortId: byAssistant, firmId: numberFirmId };
 
-  const byNumber = await findMappingForDialedNumber(signals.dialedNumber);
   if (byNumber) return { tortId: byNumber.tortId, firmId: byNumber.firmId };
 
   return { tortId: null, firmId: null };

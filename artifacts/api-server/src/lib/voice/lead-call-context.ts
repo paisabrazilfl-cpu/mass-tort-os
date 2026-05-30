@@ -85,7 +85,11 @@ export async function buildLeadCallContext(
   const rows = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId)).limit(1);
   const row = rows[0];
   if (!row) return null;
-  if (firmId !== null && row.firm_id !== null && row.firm_id !== firmId) return null;
+  // Tenancy: a firm-scoped caller (firmId non-null) may only enrich a lead in
+  // its OWN firm. Reject both cross-firm rows AND unscoped (firm_id IS NULL)
+  // rows — failing closed prevents a scoped operator from decrypting another
+  // tenant's PII into a live call. A null firmId is the dev/unscoped path.
+  if (firmId !== null && row.firm_id !== firmId) return null;
 
   const lead = decryptLeadFields(row as Record<string, unknown>, String(row.id));
 
