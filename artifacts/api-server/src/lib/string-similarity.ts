@@ -45,7 +45,16 @@ const CREDENTIAL_TOKENS = new Set([
 // name similarity reflects the actual person name. Returns "" when the
 // input collapses to only stripped tokens.
 export function normalizeName(s: string | null | undefined): string {
-  const tokens = normalize(s).split(" ").filter(Boolean);
+  return normalizeNameFromNormalized(normalize(s));
+}
+
+/**
+ * Internal helper to strip credentials from an ALREADY-normalized string.
+ * Reduces regex-heavy re-normalization in similarityName wrappers.
+ */
+export function normalizeNameFromNormalized(normalized: string): string {
+  if (!normalized) return "";
+  const tokens = normalized.split(" ").filter(Boolean);
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
     .join(" ");
@@ -58,8 +67,21 @@ export function similarityName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
-  const raw = similarity(a, b);
-  const stripped = similarity(normalizeName(a), normalizeName(b));
+  const na = normalize(a);
+  const nb = normalize(b);
+
+  // Path 1: Raw similarity
+  const raw = similarityPreNormalized(na, nb);
+  if (raw >= 0.99) return raw; // Early return for near-exact matches
+
+  // Path 2: Stripped similarity
+  const sa = normalizeNameFromNormalized(na);
+  const sb = normalizeNameFromNormalized(nb);
+
+  // Only run stripped comparison if it's actually different from raw
+  if (sa === na && sb === nb) return raw;
+
+  const stripped = similarityPreNormalized(sa, sb);
   return Math.max(raw, stripped);
 }
 
@@ -67,30 +89,52 @@ export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
-  let prev = new Array<number>(b.length + 1);
-  let curr = new Array<number>(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
-    }
-    [prev, curr] = [curr, prev];
+
+  // Swap to ensure 'b' is the shorter string, minimizing space to O(min(N, M))
+  if (a.length < b.length) {
+    [a, b] = [b, a];
   }
-  return prev[b.length];
+
+  const n = a.length;
+  const m = b.length;
+  const v = new Int32Array(m + 1);
+
+  for (let j = 0; j <= m; j++) {
+    v[j] = j;
+  }
+
+  for (let i = 1; i <= n; i++) {
+    let prevDiag = v[0];
+    v[0] = i;
+    for (let j = 1; j <= m; j++) {
+      const prevDiagTemp = v[j];
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      v[j] = Math.min(v[j] + 1, v[j - 1] + 1, prevDiag + cost);
+      prevDiag = prevDiagTemp;
+    }
+  }
+
+  return v[m];
 }
 
 // 0..1 similarity ratio after normalization. 1.0 = identical, 0.0 = totally different.
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
-  const na = normalize(a);
-  const nb = normalize(b);
-  if (na === "" && nb === "") return 1;
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  return similarityPreNormalized(normalize(a), normalize(b));
+}
+
+/**
+ * Internal similarity logic that skips the normalize() step.
+ * Used to avoid redundant normalization in similarityName().
+ */
+export function similarityPreNormalized(na: string, nb: string): number {
+  if (na === nb) return 1;
   if (na === "" || nb === "") return 0;
   const maxLen = Math.max(na.length, nb.length);
-  if (maxLen === 0) return 1;
   return 1 - levenshtein(na, nb) / maxLen;
 }
