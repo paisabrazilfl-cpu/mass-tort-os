@@ -1,9 +1,16 @@
 import { chromium, type Browser, type Page } from "playwright";
 import fs from "fs";
 
-const EMAIL      = "paisabrazilfl@gmail.com";
-const PASSWORD   = "1Giselle!";
-const DOMAIN     = "mtosvelocity.com";
+const EMAIL      = process.env.NAMECOM_EMAIL ?? "";
+const PASSWORD   = process.env.NAMECOM_PASSWORD ?? "";
+const DOMAIN     = process.env.NAMECOM_DOMAIN ?? "mtosvelocity.com";
+
+if (!EMAIL || !PASSWORD) {
+  console.error(
+    "Missing credentials. Set NAMECOM_EMAIL and NAMECOM_PASSWORD env vars before running this script.",
+  );
+  process.exit(2);
+}
 // Render serves both the apex and www custom domains from the same web
 // service host. The CNAME target is the api service's onrender hostname.
 const CNAME_ROOT = "mtos-api.onrender.com";
