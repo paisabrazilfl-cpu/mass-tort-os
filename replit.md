@@ -30,6 +30,7 @@ The application is deployed on **Render** (not Railway or Replit autoscale).
 - Production domain: **mtosvelocity.com**
 - Deploy flow: push to GitHub `main` → Render auto-deploys. The blueprint lives at `.render/render.yaml` (`branch: main`, `autoDeploy: true`) and defines three resources: a Postgres database (`mtos-db`), the web service (`mtos-api`, health check `/api/healthz`), and the background worker (`mtos-worker`).
 - Secrets marked `sync: false` in the blueprint (`SESSION_SECRET`, `ENCRYPTION_KEY_V1`, `ENCRYPTION_KEY_V2`) are NOT pushed from the repo — they must be set manually in the Render dashboard for both the web and worker services, or the app will fail to start / cannot decrypt ePHI.
+- `VAPI_PUBLIC_KEY` (and optionally `VAPI_API_KEY`) must also be set in the Render web service env for the dialer's browser calling to work in production. These are the system-level Vapi fallback secrets (see Vault-Only Provider Adapters below); a value stored in the integration vault still takes precedence, env only fills a blank.
 - When debugging production issues, check Render logs — not Replit or Railway logs.
 - The `RENDER_API_KEY` secret is the Render account key (used for API-triggered deploys / service management). Auto-deploy on push does not require it.
 - Railway config files (`railway.json`, `mtos-crm.railway.json`, `scripts/railway-deploy.sh`) are legacy and no longer the active deployment target.
