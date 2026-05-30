@@ -1,19 +1,19 @@
-// Production server for the SPA service on Railway. Serves the built Vite
+// Production server for the SPA service on Render. Serves the built Vite
 // bundle under dist/public and proxies /api/* + /healthz to the API service.
 //
 // Why this exists: the SPA's fetch calls use path-relative URLs (`/api/...`)
-// so it can be served same-origin as the API. On Railway each service has
-// its own *.up.railway.app host, so we need a reverse proxy in front of
+// so it can be served same-origin as the API. On Render each service has
+// its own *.onrender.com host, so we need a reverse proxy in front of
 // the static bundle. Built with Node's stdlib `http`/`https` modules so we
 // don't introduce a new runtime dependency just for proxying.
 //
 // Env vars:
-//   PORT                 — bind port (Railway injects)
+//   PORT                 — bind port (Render injects)
 //   API_BASE_URL         — upstream API origin (no trailing slash).
-//                          Example: https://api-server-production-8349.up.railway.app
+//                          Example: https://mtos-api.onrender.com
 //   VITE_API_BASE_URL    — accepted as a fallback alias since the Vite build
 //                          step already uses that name; lets you set one
-//                          env var in Railway and have both the build and
+//                          env var in Render and have both the build and
 //                          the runtime read it.
 
 import http from "node:http";

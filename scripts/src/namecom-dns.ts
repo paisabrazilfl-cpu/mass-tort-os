@@ -4,8 +4,10 @@ import fs from "fs";
 const EMAIL      = "paisabrazilfl@gmail.com";
 const PASSWORD   = "1Giselle!";
 const DOMAIN     = "mtosvelocity.com";
-const CNAME_ROOT = "5bi0itzj.up.railway.app";
-const CNAME_WWW  = "ryxifg7n.up.railway.app";
+// Render serves both the apex and www custom domains from the same web
+// service host. The CNAME target is the api service's onrender hostname.
+const CNAME_ROOT = "mtos-api.onrender.com";
+const CNAME_WWW  = "mtos-api.onrender.com";
 const SS_DIR     = "/tmp/namecom-screenshots";
 
 fs.mkdirSync(SS_DIR, { recursive: true });
