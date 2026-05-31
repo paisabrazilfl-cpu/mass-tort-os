@@ -32,7 +32,7 @@ export interface ComprehensiveTortForm {
 // SHARED BUILDING BLOCKS
 // ─────────────────────────────────────────────────────────────────────────
 
-const CONTACT_FIELDS: WebFormField[] = [
+export const CONTACT_FIELDS: WebFormField[] = [
   { key: "first_name", label: "First name", type: "text", section: "contact", required: true, max_length: 100 },
   { key: "last_name", label: "Last name", type: "text", section: "contact", required: true, max_length: 100 },
   { key: "email", label: "Email address", type: "email", section: "contact", required: true, max_length: 254 },
@@ -41,13 +41,13 @@ const CONTACT_FIELDS: WebFormField[] = [
   { key: "state", label: "State of residence", type: "state", section: "contact", required: true },
 ];
 
-const BASE_ELIGIBILITY: WebFormField[] = [
+export const BASE_ELIGIBILITY: WebFormField[] = [
   { key: "age_18_plus", label: "Are you 18 years of age or older?", type: "radio", section: "eligibility", required: true, options: ["Yes", "No"] },
   { key: "us_resident", label: "Do you currently reside in the United States?", type: "radio", section: "eligibility", required: true, options: ["Yes", "No"] },
   { key: "represented_by_attorney", label: "Are you currently represented by another attorney for this specific matter?", type: "radio", section: "eligibility", required: true, options: ["Yes", "No"] },
 ];
 
-const BASE_RULES: EligibilityRule[] = [
+export const BASE_RULES: EligibilityRule[] = [
   { id: "must_be_adult", field: "age_18_plus", op: "eq", value: "No", message: "You must be 18 or older to submit this form." },
   { id: "must_be_us_resident", field: "us_resident", op: "eq", value: "No", message: "We currently only accept claims from U.S. residents." },
   { id: "no_existing_representation", field: "represented_by_attorney", op: "eq", value: "Yes", message: "You are already represented by an attorney for this matter. Please continue with your current counsel." },
@@ -59,7 +59,7 @@ const BASE_RULES: EligibilityRule[] = [
 // laundering, fabricated injury claims, and statute-of-limitations issues.
 // They double-record critical facts in different framings so downstream
 // cross-checks (e.g. fraud-engine.ts) can detect inconsistencies.
-const ANTI_FRAUD_FIELDS: WebFormField[] = [
+export const ANTI_FRAUD_FIELDS: WebFormField[] = [
   {
     key: "claimant_relationship_to_injury",
     label: "Who is the injured person on this claim?",
@@ -137,7 +137,7 @@ const ANTI_FRAUD_FIELDS: WebFormField[] = [
   },
 ];
 
-const TCPA_FIELD: WebFormField = {
+export const TCPA_FIELD: WebFormField = {
   key: "tcpa_consent",
   label: "I consent to be contacted by phone, text, or email about my potential claim, including via automated systems. Message & data rates may apply. Consent is not a condition of representation.",
   type: "checkbox",
@@ -145,26 +145,26 @@ const TCPA_FIELD: WebFormField = {
   required: true,
 };
 
-const ANTI_FRAUD_RULES: EligibilityRule[] = [
+export const ANTI_FRAUD_RULES: EligibilityRule[] = [
   { id: "attestation_required", field: "truthful_attestation", op: "ne", value: "true", message: "You must attest to the accuracy of your information." },
   { id: "claimant_not_self_warning", field: "claimant_relationship_to_injury", op: "eq", value: "Other", message: "Please contact us by phone — third-party submissions require additional documentation." },
   { id: "prior_full_release_knockout", field: "prior_settlement_disclosure", op: "eq", value: "Yes — full release signed", message: "A previously signed full release typically forecloses a new claim for the same injury. We cannot proceed without first reviewing the release agreement." },
   { id: "hipaa_consent_required", field: "hipaa_release_consent", op: "ne", value: "Yes — I will sign the HIPAA release", message: "Initial intake requires HIPAA authorization to verify medical records — please call us to discuss." },
 ];
 
-const TREATMENT_FIELDS: WebFormField[] = [
+export const TREATMENT_FIELDS: WebFormField[] = [
   { key: "had_surgery", label: "Did you require surgery related to this condition?", type: "radio", section: "story", required: false, options: ["Yes", "No", "Scheduled"] },
   { key: "hospitalized", label: "Were you hospitalized due to this condition?", type: "radio", section: "story", required: false, options: ["Yes", "No"] },
   { key: "currently_treating", label: "Are you currently receiving treatment?", type: "radio", section: "story", required: false, options: ["Yes", "No", "Treatment ended"] },
   { key: "medical_records_available", label: "Do you have medical records documenting your diagnosis?", type: "radio", section: "story", required: false, options: ["Yes", "No", "In process of obtaining"] },
 ];
 
-const DAMAGE_FIELDS: WebFormField[] = [
+export const DAMAGE_FIELDS: WebFormField[] = [
   { key: "lost_wages", label: "Did you miss work or lose income as a result of this condition?", type: "radio", section: "story", required: false, options: ["Yes", "No"] },
   { key: "approx_medical_costs", label: "Estimated out-of-pocket medical expenses so far", type: "select", section: "story", required: false, options: ["Under $1,000", "$1,000 – $5,000", "$5,000 – $25,000", "$25,000 – $100,000", "Over $100,000", "Still accumulating"] },
 ];
 
-const DESCRIPTION_FIELD: WebFormField = {
+export const DESCRIPTION_FIELD: WebFormField = {
   key: "brief_description",
   label: "In your own words, briefly describe what happened (optional)",
   type: "textarea",
@@ -205,7 +205,7 @@ function conf(
   return [tortId, config];
 }
 
-function confirmationHtml(label: string): string {
+export function confirmationHtml(label: string): string {
   return `<!doctype html>
 <html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;line-height:1.6;max-width:560px;margin:0 auto;padding:24px">
 <h2 style="margin:0 0 16px;font-size:20px">Thanks, {{first_name}} — we received your inquiry.</h2>
@@ -1356,5 +1356,132 @@ export function summarizeWebForm(cfg: WebFormConfig | null | undefined): WebForm
     anti_fraud_count: fields.filter(f => antiFraudKeys.has(f.key)).length,
     eligibility_rules_count: (cfg.eligibility_rules ?? []).length,
     enabled: cfg.enabled !== false,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CANONICAL LOCKED GUARDRAILS (Site Maker Engine)
+//
+// Every site generated by the Site Maker auto-attaches and LOCKS the same
+// base contact fields, base eligibility questions, anti-fraud probes, the
+// TCPA consent, and the corresponding eligibility rules. These are the
+// non-negotiable compliance spine of every public tort site. The Site Maker
+// may APPEND tort-specific custom fields/rules on top, but it can never
+// remove or mutate the locked base — operators and the AI scaffold both
+// treat these keys/ids as read-only.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * The six canonical tort categories every site must belong to. Mirrors the
+ * `category` union in tort-engine.ts — kept here so the Site Maker and the AI
+ * scaffold can validate/constrain category without importing the heavy engine.
+ */
+export const CANONICAL_CATEGORIES = [
+  "pharmaceutical",
+  "product_liability",
+  "medical_device",
+  "environmental",
+  "transportation",
+  "digital_platform",
+] as const;
+
+export type CanonicalCategory = (typeof CANONICAL_CATEGORIES)[number];
+
+/** Field keys that are locked on every generated site and cannot be removed. */
+export const CANONICAL_BASE_FIELD_KEYS: readonly string[] = Object.freeze([
+  ...BASE_ELIGIBILITY.map(f => f.key),
+  ...CONTACT_FIELDS.map(f => f.key),
+  ...TREATMENT_FIELDS.map(f => f.key),
+  ...DAMAGE_FIELDS.map(f => f.key),
+  ...ANTI_FRAUD_FIELDS.map(f => f.key),
+  DESCRIPTION_FIELD.key,
+  TCPA_FIELD.key,
+]);
+
+/** Eligibility-rule ids that are locked on every generated site. */
+export const CANONICAL_BASE_RULE_IDS: readonly string[] = Object.freeze([
+  ...BASE_RULES.map(r => r.id),
+  ...ANTI_FRAUD_RULES.map(r => r.id),
+]);
+
+export interface BuildCanonicalWebFormInput {
+  /** Hero headline shown above the form (usually the tort display name). */
+  headline: string;
+  /** Supporting sub-headline. */
+  subhead: string;
+  /**
+   * Tort-specific eligibility questions appended after the base eligibility
+   * block (e.g. "Were you diagnosed with X?"). Keys must NOT collide with the
+   * locked base keys — collisions are dropped to protect the canonical spine.
+   */
+  eligibilityExtra?: WebFormField[];
+  /** Tort-specific eligibility rules appended after the base rules. */
+  rulesExtra?: EligibilityRule[];
+  /**
+   * Tort-specific story/diagnosis fields appended into the story section
+   * (before the locked treatment/damage/anti-fraud blocks).
+   */
+  storyExtra?: WebFormField[];
+}
+
+/**
+ * Build a complete, compliance-locked WebFormConfig for a brand-new site.
+ * Mirrors the internal `conf()` builder used by the canonical seed forms so
+ * generated sites are structurally identical to hand-authored ones: the
+ * locked base fields/rules always appear, in the same order, regardless of
+ * what tort-specific extras are supplied. Any extra field/rule that collides
+ * with a locked canonical key/id is silently dropped.
+ */
+export function buildCanonicalWebFormConfig(input: BuildCanonicalWebFormInput): WebFormConfig {
+  const lockedKeys = new Set(CANONICAL_BASE_FIELD_KEYS);
+  const lockedRuleIds = new Set(CANONICAL_BASE_RULE_IDS);
+  const seenExtraKeys = new Set<string>();
+  const seenExtraRuleIds = new Set<string>();
+
+  const dedupeFields = (fields: WebFormField[] | undefined): WebFormField[] =>
+    (fields ?? []).filter(f => {
+      if (lockedKeys.has(f.key) || seenExtraKeys.has(f.key)) return false;
+      seenExtraKeys.add(f.key);
+      return true;
+    });
+
+  const eligibilityExtra = dedupeFields(input.eligibilityExtra);
+  const storyExtra = dedupeFields(input.storyExtra);
+
+  // A rule may only reference a field that actually survives into this config —
+  // a locked canonical field or one of the accepted extra fields. This closes
+  // an integrity gap where a direct API caller could persist "orphan" knockout
+  // rules pointing at fields that were never added (dead logic on the live site).
+  const validRuleFieldKeys = new Set<string>([
+    ...lockedKeys,
+    ...eligibilityExtra.map(f => f.key),
+    ...storyExtra.map(f => f.key),
+  ]);
+  const rulesExtra = (input.rulesExtra ?? []).filter(r => {
+    if (lockedRuleIds.has(r.id) || seenExtraRuleIds.has(r.id)) return false;
+    if (!validRuleFieldKeys.has(r.field)) return false;
+    seenExtraRuleIds.add(r.id);
+    return true;
+  });
+
+  return {
+    enabled: true,
+    intro_headline: input.headline,
+    intro_subhead: input.subhead,
+    fields: [
+      ...BASE_ELIGIBILITY,
+      ...eligibilityExtra,
+      ...CONTACT_FIELDS,
+      ...storyExtra,
+      ...TREATMENT_FIELDS,
+      ...DAMAGE_FIELDS,
+      ...ANTI_FRAUD_FIELDS,
+      DESCRIPTION_FIELD,
+      TCPA_FIELD,
+    ],
+    eligibility_rules: [...BASE_RULES, ...rulesExtra, ...ANTI_FRAUD_RULES],
+    send_confirmation_email: true,
+    confirmation_subject: `We received your ${input.headline} inquiry`,
+    confirmation_body_html: confirmationHtml(input.headline),
   };
 }

@@ -7,6 +7,7 @@ import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import pinoHttp from "pino-http";
 import router from "./routes";
+import publicSitesRouter from "./routes/public-sites";
 import { logger } from "./lib/logger";
 import { idsMiddleware } from "./lib/ids";
 import { markPublic, validateRouteTable } from "./lib/route-protection";
@@ -159,6 +160,13 @@ app.use("/api", (req: express.Request, res: express.Response) => {
     message: `No API route matches ${req.method} ${req.path}`,
   });
 });
+
+// Public Site Maker pages — server-rendered intake (/intake/:slug) and landing
+// (/c/:category/:slug) pages. Mounted BEFORE the SPA fallback so these paths
+// are served by the API server (not the React shell). The router is markPublic.
+// The /intake and /c path prefixes are registered to this artifact's proxy
+// services so the shared proxy routes them here.
+app.use(publicSitesRouter);
 
 // Production SPA serving — when deployed to Replit Autoscale (or any
 // single-process target), this same Express server also serves the built

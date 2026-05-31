@@ -1,12 +1,24 @@
 import { db } from "@workspace/db";
 import { formConfigurationsTable } from "@workspace/db";
-import type { CustomField, FormConfiguration, WebFormConfig } from "@workspace/db";
+import type {
+  CustomField,
+  FormConfiguration,
+  WebFormConfig,
+  WebFormField,
+  EligibilityRule,
+} from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { TORT_REGISTRY, TortDefinition } from "./tort-engine";
-import { getComprehensiveTortForm } from "./comprehensive-tort-forms";
+import {
+  getComprehensiveTortForm,
+  buildCanonicalWebFormConfig,
+  CANONICAL_CATEGORIES,
+  type CanonicalCategory,
+} from "./comprehensive-tort-forms";
 import { logger } from "./logger";
 
 export type { CustomField } from "@workspace/db";
+export { CANONICAL_CATEGORIES, type CanonicalCategory } from "./comprehensive-tort-forms";
 
 export interface FormConfigPublic {
   id: string;
@@ -276,4 +288,216 @@ export async function removeCustomField(
     { custom_fields: cfg.custom_fields.filter(f => f.key !== key) },
     userId
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Site Maker — create brand-new public tort sites from canonical params.
+// A "site" is a form_configurations row whose id IS its public URL slug.
+// ─────────────────────────────────────────────────────────────────────────
+
+const RESERVED_SLUGS = new Set([
+  "api", "admin", "intake", "c", "sitemap", "robots", "assets", "static",
+  "preview", "embed", "submit", "new", "edit", "list", "all", "health",
+  "healthz", "login", "logout", "auth", "www",
+]);
+
+/** Normalize an arbitrary display name into a safe kebab-case URL slug. */
+export function toKebabSlug(input: string): string {
+  return input
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/['"]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-")
+    .slice(0, 80);
+}
+
+export function isCanonicalCategory(value: string): value is CanonicalCategory {
+  return (CANONICAL_CATEGORIES as readonly string[]).includes(value);
+}
+
+/** True if a form_configurations row already uses this slug/id. */
+export async function slugExists(slug: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: formConfigurationsTable.id })
+    .from(formConfigurationsTable)
+    .where(eq(formConfigurationsTable.id, slug))
+    .limit(1);
+  if (rows.length > 0) return true;
+  // Also collides with a built-in registry tort id.
+  return Boolean(TORT_REGISTRY[slug]);
+}
+
+/**
+ * Pick a unique, non-reserved slug derived from a base string. Appends a
+ * numeric suffix on collision (slug-2, slug-3, …).
+ */
+export async function resolveUniqueSlug(base: string): Promise<string> {
+  let root = toKebabSlug(base);
+  if (!root) root = "site";
+  if (RESERVED_SLUGS.has(root)) root = `${root}-tort`;
+  let candidate = root;
+  let n = 2;
+  // Bounded loop — never spin forever on a pathological dataset.
+  while (await slugExists(candidate)) {
+    candidate = `${root}-${n}`;
+    n += 1;
+    if (n > 999) {
+      candidate = `${root}-${Date.now()}`;
+      break;
+    }
+  }
+  return candidate;
+}
+
+export interface CreateSiteInput {
+  /** Public-facing tort display name, e.g. "Roundup Weed Killer". */
+  label: string;
+  /** Canonical category. */
+  category: CanonicalCategory;
+  /** Optional explicit slug; otherwise derived from label. */
+  slug?: string;
+  /** Hero headline; defaults to label. */
+  headline?: string;
+  /** Hero sub-headline. */
+  subhead?: string;
+  /** Intro text shown above the form. */
+  introText?: string | null;
+  /**
+   * Accepted tort-specific custom fields from the AI scaffold (the tri-state
+   * proposal). The canonical locked spine is added automatically by
+   * buildCanonicalWebFormConfig and cannot be overridden here.
+   */
+  customFields?: WebFormField[];
+  /** Accepted tort-specific eligibility rules from the AI scaffold. */
+  eligibilityRules?: EligibilityRule[];
+  /** Decision-engine hints (optional). */
+  avg_settlement_low?: number | null;
+  avg_settlement_high?: number | null;
+  mdl_status?: string | null;
+  sol_months?: number | null;
+}
+
+/**
+ * Create a brand-new public tort site. Builds a compliance-LOCKED
+ * web_form_config (canonical spine + accepted tort-specific extras), inserts
+ * a form_configurations row keyed by slug, and stamps updated_by so the
+ * seeder treats it as hand-authored and never clobbers it.
+ *
+ * Throws on slug collision or non-canonical category — callers (routes)
+ * translate these into 4xx responses.
+ */
+export async function createSite(
+  input: CreateSiteInput,
+  userId: number,
+): Promise<FormConfigPublic> {
+  await seedFormConfigurations();
+
+  const label = input.label.trim();
+  if (!label) throw new Error("label is required");
+  if (!isCanonicalCategory(input.category)) {
+    throw new Error(`category must be one of: ${CANONICAL_CATEGORIES.join(", ")}`);
+  }
+
+  const slug = input.slug ? toKebabSlug(input.slug) : toKebabSlug(label);
+  if (!slug) throw new Error("Could not derive a valid slug from the label");
+  if (RESERVED_SLUGS.has(slug)) throw new Error(`"${slug}" is a reserved slug`);
+  if (await slugExists(slug)) throw new Error(`Slug "${slug}" already exists`);
+
+  const headline = (input.headline ?? label).trim();
+  const subhead = (input.subhead ?? `See if you may qualify for a ${label} claim.`).trim();
+
+  const eligibilityExtra = (input.customFields ?? []).filter(f => f.section === "eligibility");
+  const storyExtra = (input.customFields ?? []).filter(f => f.section !== "eligibility");
+
+  const webFormConfig: WebFormConfig = buildCanonicalWebFormConfig({
+    headline,
+    subhead,
+    eligibilityExtra,
+    storyExtra,
+    rulesExtra: input.eligibilityRules ?? [],
+  });
+
+  // Persist accepted custom fields as legacy operator-intake custom_fields too,
+  // so the operator console sees the same tort-specific questions.
+  const legacyCustomFields: CustomField[] = (input.customFields ?? []).map(f => ({
+    key: f.key,
+    label: f.label,
+    type: (["text", "email", "tel", "date", "number", "select", "textarea", "checkbox"].includes(f.type)
+      ? f.type
+      : "text") as CustomField["type"],
+    required: f.required,
+    placeholder: f.placeholder,
+    helper_text: f.helper_text,
+    options: f.options,
+    max_length: f.max_length,
+  }));
+
+  await db.insert(formConfigurationsTable).values({
+    id: slug,
+    label,
+    category: input.category,
+    valid_diagnoses: [],
+    exposure_fields: [],
+    extra_fields: [],
+    custom_fields: legacyCustomFields,
+    rules: [],
+    rejection_conditions: [],
+    required_exposure: false,
+    intro_text: input.introText ?? null,
+    active: true,
+    avg_settlement_low: input.avg_settlement_low ?? null,
+    avg_settlement_high: input.avg_settlement_high ?? null,
+    mdl_status: input.mdl_status ?? null,
+    sol_months: input.sol_months ?? null,
+    web_form_config: webFormConfig,
+    updated_by: userId,
+  });
+
+  logger.info({ slug, category: input.category, userId }, "Site Maker: created new tort site");
+  const created = await getFormConfig(slug);
+  if (!created) throw new Error("Site created but could not be reloaded");
+  return created;
+}
+
+/**
+ * Soft-delete (deactivate) a site. Sets active:false so public pages 404 and
+ * the form stops accepting submissions, without destroying lead history.
+ */
+export async function softDeleteSite(
+  slug: string,
+  userId: number,
+): Promise<FormConfigPublic | null> {
+  return updateFormConfig(slug, { active: false }, userId);
+}
+
+/** Re-activate a previously soft-deleted site. */
+export async function reactivateSite(
+  slug: string,
+  userId: number,
+): Promise<FormConfigPublic | null> {
+  return updateFormConfig(slug, { active: true }, userId);
+}
+
+/** Toggle a site's enabled flag inside web_form_config (keeps the row active). */
+export async function setSiteEnabled(
+  slug: string,
+  enabled: boolean,
+  userId: number,
+): Promise<FormConfigPublic | null> {
+  const cfg = await getFormConfig(slug);
+  if (!cfg || !cfg.web_form_config) return null;
+  const next: WebFormConfig = { ...cfg.web_form_config, enabled };
+  const patch: Record<string, unknown> = {
+    web_form_config: next,
+    updated_at: new Date(),
+    updated_by: userId,
+  };
+  await db
+    .update(formConfigurationsTable)
+    .set(patch as never)
+    .where(eq(formConfigurationsTable.id, slug));
+  return getFormConfig(slug);
 }

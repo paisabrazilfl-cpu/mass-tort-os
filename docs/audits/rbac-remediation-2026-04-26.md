@@ -581,14 +581,20 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **315 checked / 46 public / 269 protected / 0 unprotected.**
+Boot-time count: **321 checked / 46 public / 275 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
+| (root) | DELETE | `/api/:slug` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
+| (root) | PUT | `/api/:slug` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | POST | `/api/chat` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
+| (root) | GET | `/api/` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
 | (root) | GET | `/api/navigation` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | GET | `/api/pages` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
+| (root) | POST | `/api/` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
 | (root) | POST | `/api/` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
+| (root) | POST | `/api/rebuild-all` | ✓ | ✓ |  |  |  | `super_admin` | — | ✓ |
+| (root) | POST | `/api/scaffold` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
 | (root) | GET | `/api/snapshot` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | GET | `/api/tools` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | admin-ai-constitution | GET | `/api/admin-ai-constitution/` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |

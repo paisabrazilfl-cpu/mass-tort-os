@@ -187,6 +187,7 @@ describe("public allowlist (validateRouteTable policy)", () => {
       "spa",
       "automation-webhook",
       "vendor-portal",
+      "public-sites",
     ]);
     for (const r of publicRouters) {
       assert.ok(expected.has(r), `unexpected public router: ${r}`);
@@ -211,8 +212,12 @@ describe("public allowlist (validateRouteTable policy)", () => {
     // hashed token in the query string is the credential, and the
     // response carries no token / hash material — only firm name and
     // optional email prefill so the /register page can render context.
+    // GET /terms serves the public legal Terms & Conditions bundle (no
+    // session, no PII) so the /register page can render the agreement
+    // before the user has an account.
     assert.deepEqual(exceptions, [
       "GET /invite-info",
+      "GET /terms",
       "GET /verify-email",
       "POST /login",
       "POST /refresh",
@@ -406,6 +411,10 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       "automation-webhook": "/api/automations/webhook",
       // Vendor portal: opaque portal_token in the URL path IS the credential.
       "vendor-portal": "/api/vendor-portal",
+      // Public Site Maker pages: server-rendered intake (/intake/:slug) and
+      // landing (/c/:category/:slug) sites. Non-/api GETs mounted at root,
+      // before the SPA fallback. No session, no PII — the slug IS the lookup.
+      "public-sites": "",
       // SPA fallback: serves the React shell (index.html) for any non-/api GET
       // when the CRM static bundle is present. No PII, no auth required.
       spa: "",
@@ -419,6 +428,8 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       "/api/vapi-tools/",
       "/api/automations/webhook/",
       "/api/vendor-portal/",
+      "/intake/",
+      "/c/",
     ];
     for (const p of booted.policy) {
       if (p.status !== "public") continue;
@@ -785,6 +796,7 @@ describe("cases ownership backfill smoke test (Task #22)", () => {
           email: "system@mtos.local",
           password: "Sup3r$ecret!Pa$$w0rd-attempt-1",
           name: "Attacker",
+          terms_accepted: true,
         },
       });
       assert.equal(
@@ -919,7 +931,7 @@ describe("real login + MFA smoke test (Task #51 T005, blocker #20)", () => {
       // and does NOT issue a JWT pair; the user is persisted with
       // email_verified_at = NULL until the verification link is consumed.
       const reg = await probe("POST", "/api/auth/register", {
-        body: { email, password, name: "MFA Smoke" },
+        body: { email, password, name: "MFA Smoke", terms_accepted: true },
       });
       assert.equal(
         reg.status,
@@ -988,7 +1000,10 @@ describe("real login + MFA smoke test (Task #51 T005, blocker #20)", () => {
       assert.ok(login3Body.token, "login with valid totp must return a token");
     } finally {
       // Clean up the ephemeral user so re-runs don't 409 on register.
+      // Register now records a terms-acceptance row (FK -> mtos_users), so
+      // delete the child rows first or the user DELETE violates the FK.
       for (const id of cleanupIds) {
+        await db.execute(sql`DELETE FROM mtos_terms_acceptances WHERE user_id = ${id}`);
         await db.execute(sql`DELETE FROM mtos_users WHERE id = ${id}`);
       }
     }

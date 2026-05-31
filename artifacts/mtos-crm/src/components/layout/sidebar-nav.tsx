@@ -52,6 +52,7 @@ export const navigation: NavSection[] = [
       { name: "Import Leads", href: "/lead-import", icon: FileUp     },
       { name: "Intake Form",  href: "/form-engine", icon: AppWindow  },
       { name: "Public Forms", href: "/web-forms",   icon: ListChecks },
+      { name: "Sites",        href: "/sites",       icon: Grid3x3    },
       { name: "Form API",     href: "/forms-api",   icon: Library    },
     ],
   },
