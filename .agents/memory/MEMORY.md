@@ -1,6 +1,7 @@
 - [Git pushes need a task agent](git-push-blocked-on-main-agent.md) — main agent is hard-blocked from ALL git network ops (even read-only fetch); GitHub push must be delegated to a task agent.
 - [Inbound voice call tenancy](inbound-voice-tenancy.md) — resolve firm from the dialed number mapping, not just metadata, or inbound lead dedup leaks across firms.
 - [Vapi per-tort agent provisioning](vapi-tort-agent-provisioning.md) — one agent for both call directions ({{call_direction}} outbound-only, neutral firstMessage), drift/version pitfalls, branding, payload-vs-prompt fingerprint.
+- [Agent/chat tool re-authorization](agent-tool-reauthorization.md) — broad-gated AI agent endpoints must re-check each privileged tool action (per-entity perm + ownership scope), or the agent becomes a privilege-escalation bypass.
 - [Automation trigger payload shapes](automation-trigger-payload-shapes.md) — lead_created/form_submitted use input.lead.id, inbound_call uses input.lead_id; resolve THEN fall back; firm-scope gate handler lookups.
 - [Dev vs prod database](dev-vs-prod-database.md) — workspace DATABASE_URL (host `helium`) is the DEV DB, not Render prod; data fixes here are dev-only.
 - [Voice phone-number wiring](voice-phone-number-wiring.md) — one shared `config.phone_number_id` covers ALL agents' outbound; dedicated numbers are inbound-only (tort_phone_numbers). Don't buy per-agent.

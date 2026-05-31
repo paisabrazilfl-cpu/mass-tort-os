@@ -29,23 +29,23 @@ const WELCOME: Message = {
   role: "assistant",
   content: `Hi, I'm **Abby** — your MTOS internal agent. I'm fully wired into your CRM and here to help.
 
-I can answer questions about:
-- **Your pipeline** — lead counts, status breakdowns, intake trends
-- **Cases & documents** — open cases, review queue depth, doc status
-- **Compliance & workflows** — TCPA requirements, audit logs, automation setup
-- **Operations** — background checks, form campaigns, team assignments, dedup logic
+I can:
+- **Look up real records** — pull up a specific lead, case, document, form campaign, review item, or job by id, name, email, or status
+- **Read your pipeline** — lead counts, status breakdowns, queue depth, recent activity
+- **Build automations** — describe a workflow in plain English and I'll draft it (disabled) in the [Automation Center](/automations) for you to review and enable
+- **Explain operations** — TCPA/compliance steps, background-check hub, dedup logic, form campaigns, team assignments
 
 What do you need?`,
   ts: Date.now(),
 };
 
 const SUGGESTIONS = [
+  "Look up the lead with email jane@example.com",
+  "Show me the 5 most recent leads pending review",
   "What's my lead pipeline looking like right now?",
-  "How many leads are pending review and why?",
-  "Walk me through the Round Up intake process",
-  "What TCPA steps are required for a new campaign?",
+  "Build an automation: when a lead qualifies, send the e-sign packet and notify the paralegal",
   "How does the background check hub work?",
-  "Help me set up an automation for lead triage",
+  "What TCPA steps are required for a new campaign?",
 ];
 
 function AbbyAvatar({ size = "md" }: { size?: "sm" | "md" }) {
@@ -62,7 +62,7 @@ function FormattedText({ content }: { content: string }) {
   return (
     <span>
       {lines.map((line, li) => {
-        const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+        const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g);
         return (
           <span key={li}>
             {parts.map((part, pi) => {
@@ -74,6 +74,21 @@ function FormattedText({ content }: { content: string }) {
                     {part.slice(1, -1)}
                   </code>
                 );
+              const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+              if (link) {
+                const [, label, href] = link;
+                const isInternal = href.startsWith("/");
+                return (
+                  <a
+                    key={pi}
+                    href={href}
+                    {...(isInternal ? {} : { target: "_blank", rel: "noopener noreferrer" })}
+                    className="text-violet-600 dark:text-violet-400 underline underline-offset-2 hover:text-violet-700"
+                  >
+                    {label}
+                  </a>
+                );
+              }
               return <span key={pi}>{part}</span>;
             })}
             {li < lines.length - 1 && <br />}
