@@ -290,6 +290,12 @@ export default function SitesPage() {
 
   const liveCount = useMemo(() => sites.filter(s => s.live).length, [sites]);
   const totalLeads = useMemo(() => sites.reduce((n, s) => n + s.lead_count, 0), [sites]);
+  // Category hubs are only published (200) for categories that have at least one
+  // active site — empty categories 404. Mirror that here so every hub link is live.
+  const liveCategories = useMemo(
+    () => Array.from(new Set(sites.filter(s => s.active).map(s => s.category))).sort(),
+    [sites],
+  );
 
   return (
     <div className="space-y-6 p-6">
@@ -327,6 +333,45 @@ export default function SitesPage() {
         <StatCard label="Live" value={liveCount} icon={<CheckCircle2 className="h-4 w-4 text-emerald-600" />} />
         <StatCard label="Leads captured" value={totalLeads} icon={<Users className="h-4 w-4" />} />
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Globe className="h-4 w-4 text-violet-600" /> Public SEO network
+          </CardTitle>
+          <CardDescription>
+            The public-facing pages search engines crawl and claimants land on. Each opens the
+            live page in a new tab.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {liveCategories.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {liveCategories.map((c) => (
+                <Button key={c} asChild variant="outline" size="sm" className="gap-1">
+                  <a href={`/c/${encodeURIComponent(c)}`} target="_blank" rel="noreferrer">
+                    <ExternalLink className="h-3.5 w-3.5" /> {prettyCategory(c)} hub
+                  </a>
+                </Button>
+              ))}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {[
+              { label: "Glossary", href: "/glossary" },
+              { label: "How It Works", href: "/how-it-works" },
+              { label: "Sitemap", href: "/sitemap.xml" },
+              { label: "Robots", href: "/robots.txt" },
+            ].map((p) => (
+              <Button key={p.href} asChild variant="outline" size="sm" className="gap-1">
+                <a href={p.href} target="_blank" rel="noreferrer">
+                  <ExternalLink className="h-3.5 w-3.5" /> {p.label}
+                </a>
+              </Button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -471,6 +516,11 @@ export default function SitesPage() {
       />
     </div>
   );
+}
+
+// Turn a category slug ("toxic-exposure") into a readable label ("Toxic Exposure").
+function prettyCategory(c: string): string {
+  return c.replace(/[-_]+/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
 // Compact "last edited" label for the registry table.

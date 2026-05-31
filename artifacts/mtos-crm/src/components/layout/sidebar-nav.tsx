@@ -7,7 +7,7 @@ import {
   TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings,
   Activity, CreditCard, Phone, Workflow, Eye, BookOpen, Library,
   Webhook, Wrench, Search, ListChecks, Bot, Skull, Sparkles, PhoneCall,
-  HeartPulse, ChevronDown, X,
+  HeartPulse, ChevronDown, X, Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -52,8 +52,19 @@ export const navigation: NavSection[] = [
       { name: "Import Leads", href: "/lead-import", icon: FileUp     },
       { name: "Intake Form",  href: "/form-engine", icon: AppWindow  },
       { name: "Public Forms", href: "/web-forms",   icon: ListChecks },
-      { name: "Sites",        href: "/sites",       icon: Grid3x3    },
       { name: "Form API",     href: "/forms-api",   icon: Library    },
+    ],
+  },
+
+  // ── SITES ─────────────────────────────────────────────────────────────────
+  // Tort campaign sites: live landing pages, compliant intake forms, and the
+  // public SEO page network. Promoted to its own top-level tab for visibility.
+  {
+    section: "Sites",
+    icon: Globe,
+    color: "violet",
+    items: [
+      { name: "Site Manager", href: "/sites", icon: Grid3x3 },
     ],
   },
 
