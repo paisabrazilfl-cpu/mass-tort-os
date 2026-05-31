@@ -13,6 +13,8 @@ import {
   getComprehensiveTortForm,
   buildCanonicalWebFormConfig,
   CANONICAL_CATEGORIES,
+  CANONICAL_BASE_FIELD_KEYS,
+  CANONICAL_BASE_RULE_IDS,
   type CanonicalCategory,
 } from "./comprehensive-tort-forms";
 import { logger } from "./logger";
@@ -460,6 +462,153 @@ export async function createSite(
   const created = await getFormConfig(slug);
   if (!created) throw new Error("Site created but could not be reloaded");
   return created;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Edit lifecycle — split a stored config into its locked canonical spine vs
+// the editable custom extras, and re-publish from edited params.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Split a stored web_form_config into its LOCKED canonical spine (base fields
+ * + base rules) vs the admin/AI custom extras. The Site Maker wizard re-opens
+ * pre-filled with ONLY the non-canonical fields/rules — the locked spine is
+ * always re-attached on republish and can never be edited or dropped here.
+ */
+export function extractCustomParts(cfg: WebFormConfig | null): {
+  headline: string;
+  subhead: string;
+  customFields: WebFormField[];
+  eligibilityRules: EligibilityRule[];
+} {
+  const lockedKeys = new Set(CANONICAL_BASE_FIELD_KEYS);
+  const lockedRuleIds = new Set(CANONICAL_BASE_RULE_IDS);
+  return {
+    headline: cfg?.intro_headline ?? "",
+    subhead: cfg?.intro_subhead ?? "",
+    customFields: (cfg?.fields ?? []).filter(f => !lockedKeys.has(f.key)),
+    eligibilityRules: (cfg?.eligibility_rules ?? []).filter(r => !lockedRuleIds.has(r.id)),
+  };
+}
+
+export interface SiteEditDetail {
+  slug: string;
+  label: string;
+  category: string;
+  intro_text: string | null;
+  headline: string;
+  subhead: string;
+  custom_fields: WebFormField[];
+  eligibility_rules: EligibilityRule[];
+  active: boolean;
+  web_form_enabled: boolean;
+}
+
+/** Full edit-prefill payload for one site (locked spine stripped out). */
+export async function getSiteEditDetail(slug: string): Promise<SiteEditDetail | null> {
+  const cfg = await getFormConfig(slug);
+  if (!cfg) return null;
+  const parts = extractCustomParts(cfg.web_form_config);
+  return {
+    slug: cfg.id,
+    label: cfg.label,
+    category: cfg.category,
+    intro_text: cfg.intro_text,
+    headline: parts.headline,
+    subhead: parts.subhead,
+    custom_fields: parts.customFields,
+    eligibility_rules: parts.eligibilityRules,
+    active: cfg.active,
+    web_form_enabled: Boolean(cfg.web_form_config?.enabled),
+  };
+}
+
+export interface RepublishSiteInput {
+  label?: string;
+  category?: CanonicalCategory;
+  headline?: string;
+  subhead?: string;
+  introText?: string | null;
+  customFields?: WebFormField[];
+  eligibilityRules?: EligibilityRule[];
+}
+
+/**
+ * Re-publish an existing site: rebuild the compliance-LOCKED web_form_config
+ * from the canonical spine + the supplied custom extras, preserving the
+ * current open/closed (enabled) state, and update the row's
+ * label/category/intro_text. The locked base fields/rules are always
+ * re-attached by buildCanonicalWebFormConfig and cannot be dropped here.
+ *
+ * Re-publishing the same slug updates the SAME row in place — it never
+ * duplicates a form_configurations row.
+ */
+export async function republishSite(
+  slug: string,
+  input: RepublishSiteInput,
+  userId: number,
+): Promise<FormConfigPublic | null> {
+  await seedFormConfigurations();
+  const existing = await getFormConfig(slug);
+  if (!existing) return null;
+  if (input.category && !isCanonicalCategory(input.category)) {
+    throw new Error(`category must be one of: ${CANONICAL_CATEGORIES.join(", ")}`);
+  }
+
+  const label = (input.label ?? existing.label).trim();
+  const prevEnabled = Boolean(existing.web_form_config?.enabled);
+  const prevParts = extractCustomParts(existing.web_form_config);
+  const headline = (input.headline ?? (prevParts.headline || label)).trim();
+  const subhead = (
+    input.subhead ?? (prevParts.subhead || `See if you may qualify for a ${label} claim.`)
+  ).trim();
+
+  const customFields = input.customFields ?? prevParts.customFields;
+  const eligibilityRules = input.eligibilityRules ?? prevParts.eligibilityRules;
+
+  const eligibilityExtra = customFields.filter(f => f.section === "eligibility");
+  const storyExtra = customFields.filter(f => f.section !== "eligibility");
+
+  const rebuilt: WebFormConfig = buildCanonicalWebFormConfig({
+    headline,
+    subhead,
+    eligibilityExtra,
+    storyExtra,
+    rulesExtra: eligibilityRules,
+  });
+  // Preserve the current open/closed state across a republish.
+  rebuilt.enabled = prevEnabled;
+
+  const legacyCustomFields: CustomField[] = customFields.map(f => ({
+    key: f.key,
+    label: f.label,
+    type: (["text", "email", "tel", "date", "number", "select", "textarea", "checkbox"].includes(f.type)
+      ? f.type
+      : "text") as CustomField["type"],
+    required: f.required,
+    placeholder: f.placeholder,
+    helper_text: f.helper_text,
+    options: f.options,
+    max_length: f.max_length,
+  }));
+
+  const patch: Record<string, unknown> = {
+    label,
+    intro_text: input.introText !== undefined ? input.introText : existing.intro_text,
+    custom_fields: legacyCustomFields,
+    web_form_config: rebuilt,
+    updated_at: new Date(),
+    updated_by: userId,
+  };
+  if (input.category) patch.category = input.category;
+
+  await db
+    .update(formConfigurationsTable)
+    .set(patch as never)
+    .where(eq(formConfigurationsTable.id, slug));
+
+  logger.info({ slug, userId }, "Site Maker: republished site");
+  return getFormConfig(slug);
 }
 
 /**

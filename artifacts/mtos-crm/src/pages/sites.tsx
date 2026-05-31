@@ -53,7 +53,12 @@ import {
   Globe,
   ShieldCheck,
   RotateCcw,
+  Pencil,
+  Eye,
+  Hammer,
 } from "lucide-react";
+import { useLocation } from "wouter";
+import { useAuth } from "@/contexts/auth-context";
 import { apiFetchRaw, describeError } from "@/lib/api-fetch";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -115,14 +120,75 @@ const CANONICAL_GUARDRAILS = [
   "TCPA consent + TrustedForm",
 ];
 
-const WIZARD_STEPS = ["Basics", "AI Scaffold", "Review Fields", "Guardrails", "Publish"] as const;
+const WIZARD_STEPS = ["Basics", "AI Scaffold", "Review Fields", "Guardrails", "Preview", "Publish"] as const;
+
+// Edit-prefill payload returned by GET /api/sites/:slug (locked spine stripped).
+interface SiteEditDetail {
+  slug: string;
+  label: string;
+  category: string;
+  intro_text: string | null;
+  headline: string;
+  subhead: string;
+  custom_fields: ScaffoldField[];
+  eligibility_rules: ScaffoldRule[];
+  active: boolean;
+  web_form_enabled: boolean;
+}
 
 export default function SitesPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const [, navigate] = useLocation();
   const [loading, setLoading] = useState(true);
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [editSite, setEditSite] = useState<SiteEditDetail | null>(null);
+  const [editLoading, setEditLoading] = useState<string | null>(null);
+  const [rebuilding, setRebuilding] = useState(false);
+
+  const isSuperAdmin = user?.role === "super_admin";
+
+  async function openEdit(site: SiteRow) {
+    setEditLoading(site.slug);
+    try {
+      const res = await apiFetchRaw(`/api/sites/${encodeURIComponent(site.slug)}`);
+      if (!res.ok) throw new Error(`Failed to load site (${res.status})`);
+      const data = (await res.json()) as { site: SiteEditDetail };
+      setEditSite(data.site);
+      setWizardOpen(true);
+    } catch (err) {
+      toast({ title: "Could not open editor", description: describeError(err), variant: "destructive" });
+    } finally {
+      setEditLoading(null);
+    }
+  }
+
+  function viewLeads(site: SiteRow) {
+    navigate(`/leads?tort_type=${encodeURIComponent(site.label)}`);
+  }
+
+  async function rebuildAll() {
+    if (!confirm("Re-verify every registry site and backfill any missing web form? This never overwrites an admin-edited site.")) {
+      return;
+    }
+    setRebuilding(true);
+    try {
+      const res = await apiFetchRaw("/api/sites/rebuild-all", { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || `Rebuild failed (${res.status})`);
+      toast({
+        title: "Rebuild complete",
+        description: `${body.rebuilt ?? 0} backfilled · ${body.verified ?? body.total ?? 0} verified`,
+      });
+      void loadSites();
+    } catch (err) {
+      toast({ title: "Rebuild failed", description: describeError(err), variant: "destructive" });
+    } finally {
+      setRebuilding(false);
+    }
+  }
 
   async function loadSites() {
     setLoading(true);
@@ -208,9 +274,17 @@ export default function SitesPage() {
             from the canonical form engine. Spin up a new one with the Site Maker wizard.
           </p>
         </div>
-        <Button onClick={() => setWizardOpen(true)} className="gap-2">
-          <Plus className="h-4 w-4" /> New Site
-        </Button>
+        <div className="flex items-center gap-2">
+          {isSuperAdmin && (
+            <Button variant="outline" onClick={rebuildAll} disabled={rebuilding} className="gap-2">
+              {rebuilding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Hammer className="h-4 w-4" />}
+              {rebuilding ? "Rebuilding…" : "Rebuild all sites"}
+            </Button>
+          )}
+          <Button onClick={() => { setEditSite(null); setWizardOpen(true); }} className="gap-2">
+            <Plus className="h-4 w-4" /> New Site
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
@@ -241,10 +315,12 @@ export default function SitesPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Tort</TableHead>
+                  <TableHead>Slug</TableHead>
                   <TableHead>Category</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Leads</TableHead>
                   <TableHead>Live links</TableHead>
+                  <TableHead>Last edited</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -256,6 +332,9 @@ export default function SitesPage() {
                       <div className="text-xs text-muted-foreground">
                         {site.field_count} fields · {site.rule_count} rules
                       </div>
+                    </TableCell>
+                    <TableCell>
+                      <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{site.slug}</code>
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline">{site.category}</Badge>
@@ -298,16 +377,47 @@ export default function SitesPage() {
                         )}
                       </div>
                     </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                      {formatEdited(site.updated_at)}
+                    </TableCell>
                     <TableCell className="text-right">
-                      {site.active ? (
-                        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => softDelete(site)}>
-                          <Trash2 className="h-4 w-4" />
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1"
+                          title="Edit site"
+                          disabled={editLoading === site.slug}
+                          onClick={() => openEdit(site)}
+                        >
+                          {editLoading === site.slug ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
                         </Button>
-                      ) : (
-                        <Button variant="ghost" size="sm" className="gap-1 text-emerald-600 hover:text-emerald-600" onClick={() => reactivate(site)}>
-                          <RotateCcw className="h-4 w-4" /> Reactivate
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1"
+                          title="View leads for this tort"
+                          onClick={() => viewLeads(site)}
+                        >
+                          <Eye className="h-4 w-4" />
                         </Button>
-                      )}
+                        {site.landing_url && (
+                          <Button asChild variant="ghost" size="sm" className="gap-1" title="Open live landing page">
+                            <a href={site.landing_url} target="_blank" rel="noreferrer">
+                              <ExternalLink className="h-4 w-4" />
+                            </a>
+                          </Button>
+                        )}
+                        {site.active ? (
+                          <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" title="Soft-delete" onClick={() => softDelete(site)}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        ) : (
+                          <Button variant="ghost" size="sm" className="gap-1 text-emerald-600 hover:text-emerald-600" onClick={() => reactivate(site)}>
+                            <RotateCcw className="h-4 w-4" /> Reactivate
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -319,12 +429,21 @@ export default function SitesPage() {
 
       <SiteMakerWizard
         open={wizardOpen}
-        onClose={() => setWizardOpen(false)}
+        initialSite={editSite}
+        onClose={() => { setWizardOpen(false); setEditSite(null); }}
         categories={categories}
-        onCreated={() => { setWizardOpen(false); void loadSites(); }}
+        onCreated={() => { setWizardOpen(false); setEditSite(null); void loadSites(); }}
       />
     </div>
   );
+}
+
+// Compact "last edited" label for the registry table.
+function formatEdited(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function StatCard({ label, value, icon }: { label: string; value: number; icon: React.ReactNode }) {
@@ -342,25 +461,30 @@ function StatCard({ label, value, icon }: { label: string; value: number; icon: 
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Site Maker — 5-step wizard.
+// Site Maker — 6-step wizard (create + edit).
 // ─────────────────────────────────────────────────────────────────────────
 
 function SiteMakerWizard({
   open,
+  initialSite,
   onClose,
   categories,
   onCreated,
 }: {
   open: boolean;
+  initialSite: SiteEditDetail | null;
   onClose: () => void;
   categories: string[];
   onCreated: () => void;
 }) {
   const { toast } = useToast();
+  const isEdit = Boolean(initialSite);
   const [step, setStep] = useState(0);
 
   // Step 1 — basics
   const [displayName, setDisplayName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [slugStatus, setSlugStatus] = useState<"idle" | "checking" | "available" | "taken">("idle");
   const [category, setCategory] = useState("");
   const [headline, setHeadline] = useState("");
   const [subhead, setSubhead] = useState("");
@@ -371,12 +495,43 @@ function SiteMakerWizard({
   const [proposal, setProposal] = useState<ScaffoldProposal | null>(null);
   const [acceptedKeys, setAcceptedKeys] = useState<Set<string>>(new Set());
 
-  // Step 5 — publish
+  // Step 6 — publish
   const [publishing, setPublishing] = useState(false);
+
+  // Prefill from an existing site when opening in edit mode; otherwise start
+  // clean. Keyed on the dialog opening + which site is being edited.
+  useEffect(() => {
+    if (!open) return;
+    if (initialSite) {
+      setDisplayName(initialSite.label);
+      setSlug(initialSite.slug);
+      setSlugStatus("idle");
+      setCategory(initialSite.category);
+      setHeadline(initialSite.headline);
+      setSubhead(initialSite.subhead);
+      setIntroText(initialSite.intro_text ?? "");
+      // Re-open with the existing custom fields/rules pre-checked, rendered
+      // through the same Review-Fields UI as a synthetic proposal.
+      setProposal({
+        decision: "REVIEW",
+        confidence: 1,
+        reasons: ["Existing site fields — edit, add via AI, or uncheck to drop."],
+        customFields: initialSite.custom_fields,
+        eligibilityRules: initialSite.eligibility_rules,
+      });
+      setAcceptedKeys(new Set(initialSite.custom_fields.map(f => f.key)));
+    } else {
+      reset();
+    }
+    setStep(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialSite]);
 
   function reset() {
     setStep(0);
     setDisplayName("");
+    setSlug("");
+    setSlugStatus("idle");
     setCategory("");
     setHeadline("");
     setSubhead("");
@@ -391,6 +546,43 @@ function SiteMakerWizard({
     reset();
     onClose();
   }
+
+  // Derive a kebab slug from the display name in create mode (the slug is the
+  // permanent public URL key and cannot change after publish).
+  function kebab(s: string): string {
+    return s
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60);
+  }
+
+  // Auto-suggest the slug from the tort name until the operator edits it.
+  const [slugTouched, setSlugTouched] = useState(false);
+  useEffect(() => {
+    if (isEdit || slugTouched) return;
+    setSlug(kebab(displayName));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayName, slugTouched, isEdit]);
+
+  // Debounced collision check against GET /api/sites/:slug (200 = taken,
+  // 404 = available). Skipped in edit mode (slug is locked).
+  useEffect(() => {
+    if (isEdit || !open) return;
+    const s = slug.trim();
+    if (!s) { setSlugStatus("idle"); return; }
+    setSlugStatus("checking");
+    const t = setTimeout(async () => {
+      try {
+        const res = await apiFetchRaw(`/api/sites/${encodeURIComponent(s)}`);
+        setSlugStatus(res.ok ? "taken" : res.status === 404 ? "available" : "idle");
+      } catch {
+        setSlugStatus("idle");
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [slug, isEdit, open]);
 
   async function runScaffold() {
     if (!displayName.trim() || !category) {
@@ -430,6 +622,18 @@ function SiteMakerWizard({
     });
   }
 
+  // The fields/rules that will actually be published — only the accepted ones,
+  // with rules pruned to those referencing an accepted field so no dead logic
+  // ships (and the server doesn't reject the payload).
+  const publishFields = useMemo(
+    () => (proposal?.customFields ?? []).filter(f => acceptedKeys.has(f.key)),
+    [proposal, acceptedKeys],
+  );
+  const publishRules = useMemo(
+    () => (proposal?.eligibilityRules ?? []).filter(r => acceptedKeys.has(r.field)),
+    [proposal, acceptedKeys],
+  );
+
   async function publish() {
     if (!displayName.trim() || !category) {
       toast({ title: "Missing tort name or category", variant: "destructive" });
@@ -437,29 +641,37 @@ function SiteMakerWizard({
     }
     setPublishing(true);
     try {
-      const customFields = (proposal?.customFields ?? []).filter(f => acceptedKeys.has(f.key));
-      // Only carry through knockout rules that reference an accepted field —
-      // a rule pointing at a dropped field would be dead logic (and rejected
-      // server-side), so we filter to keep the generated site coherent.
-      const eligibilityRules = (proposal?.eligibilityRules ?? []).filter(r => acceptedKeys.has(r.field));
-      const res = await apiFetchRaw("/api/sites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          label: displayName.trim(),
-          category,
-          headline: headline.trim() || undefined,
-          subhead: subhead.trim() || undefined,
-          intro_text: introText.trim() || null,
-          custom_fields: customFields,
-          eligibility_rules: eligibilityRules,
-        }),
-      });
+      const payload = {
+        label: displayName.trim(),
+        category,
+        headline: headline.trim() || undefined,
+        subhead: subhead.trim() || undefined,
+        intro_text: introText.trim() || null,
+        custom_fields: publishFields,
+        eligibility_rules: publishRules,
+      };
+      // Edit re-publishes the SAME slug in place (PUT); create POSTs a new row.
+      const res = isEdit
+        ? await apiFetchRaw(`/api/sites/${encodeURIComponent(initialSite!.slug)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          })
+        : await apiFetchRaw("/api/sites", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            // Honor the operator-chosen slug they confirmed as available, instead
+            // of letting the server silently derive one from the label.
+            body: JSON.stringify({ ...payload, slug: slug.trim() || undefined }),
+          });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(body.message || `Publish failed (${res.status})`);
       }
-      toast({ title: "Site published", description: `${displayName.trim()} is now live.` });
+      toast({
+        title: isEdit ? "Site updated" : "Site published",
+        description: `${displayName.trim()} is now live.`,
+      });
       reset();
       onCreated();
     } catch (err) {
@@ -470,20 +682,25 @@ function SiteMakerWizard({
   }
 
   const canNext = useMemo(() => {
-    if (step === 0) return Boolean(displayName.trim() && category);
+    if (step === 0) {
+      if (!displayName.trim() || !category || !slug.trim()) return false;
+      // In create mode the slug must be confirmed free before advancing.
+      if (!isEdit && slugStatus !== "available") return false;
+    }
     return true;
-  }, [step, displayName, category]);
+  }, [step, displayName, category, slug, isEdit, slugStatus]);
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-violet-600" /> Site Maker
+            <Sparkles className="h-5 w-5 text-violet-600" /> {isEdit ? `Edit site — ${initialSite?.label ?? ""}` : "Site Maker"}
           </DialogTitle>
           <DialogDescription>
-            Turn a tort name into a complete, live site. The canonical guardrails are attached and
-            locked automatically — the AI only proposes extra tort-specific questions, which you confirm.
+            {isEdit
+              ? "Edit this site and re-publish. The slug is locked and the canonical guardrails stay attached — your changes go live instantly on save."
+              : "Turn a tort name into a complete, live site. The canonical guardrails are attached and locked automatically — the AI only proposes extra tort-specific questions, which you confirm."}
           </DialogDescription>
         </DialogHeader>
 
@@ -508,6 +725,28 @@ function SiteMakerWizard({
             <div className="space-y-2">
               <Label>Tort name *</Label>
               <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="e.g. Roundup Weed Killer" />
+            </div>
+            <div className="space-y-2">
+              <Label>Slug *</Label>
+              <Input
+                value={slug}
+                disabled={isEdit}
+                onChange={(e) => { setSlugTouched(true); setSlug(kebab(e.target.value)); }}
+                placeholder="auto-generated from the tort name"
+              />
+              {isEdit ? (
+                <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Lock className="h-3 w-3" /> The slug is the permanent public URL key and cannot change after publish.
+                </p>
+              ) : slug.trim() ? (
+                <p className="text-xs">
+                  Public URLs: <code className="rounded bg-muted px-1 py-0.5">/intake/{slug}</code> ·{" "}
+                  <code className="rounded bg-muted px-1 py-0.5">/c/{category || "…"}/{slug}</code>
+                  {slugStatus === "checking" && <span className="ml-2 text-muted-foreground">checking…</span>}
+                  {slugStatus === "available" && <span className="ml-2 font-medium text-emerald-600">available</span>}
+                  {slugStatus === "taken" && <span className="ml-2 font-medium text-destructive">already taken</span>}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label>Category *</Label>
@@ -625,19 +864,67 @@ function SiteMakerWizard({
           </div>
         )}
 
-        {/* STEP 5 — publish */}
+        {/* STEP 5 — in-CRM preview (before anything goes public) */}
         {step === 4 && (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              {isEdit
+                ? "Live preview of the saved site below. Publish to apply your edits."
+                : "A preview of what claimants will see. Nothing is public until you publish."}
+            </p>
+            {isEdit ? (
+              <iframe
+                title="Live site preview"
+                src={`/api/web-forms/${encodeURIComponent(initialSite!.slug)}/preview`}
+                className="h-[420px] w-full rounded-lg border"
+              />
+            ) : (
+              <div className="space-y-4 rounded-lg border p-4">
+                <div className="space-y-1">
+                  <div className="text-lg font-semibold">{headline.trim() || displayName || "Your tort"}</div>
+                  <div className="text-sm text-muted-foreground">
+                    {subhead.trim() || `See if you may qualify for a ${displayName || "this"} claim.`}
+                  </div>
+                </div>
+                {introText.trim() && <p className="text-sm">{introText.trim()}</p>}
+                <Separator />
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Intake questions
+                </div>
+                <ul className="space-y-1 text-sm">
+                  <li className="text-muted-foreground">+ 10 canonical contact &amp; eligibility fields (locked)</li>
+                  {publishFields.map(f => (
+                    <li key={f.key} className="flex items-center gap-2">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                      {f.label}
+                      <Badge variant="outline" className="text-[10px]">{f.section}</Badge>
+                    </li>
+                  ))}
+                </ul>
+                <Separator />
+                <p className="text-[11px] text-muted-foreground">
+                  Not a law firm. The <code>[COMPANY]</code> disclaimer appears in the footer and above every submit button.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* STEP 6 — publish */}
+        {step === 5 && (
           <div className="space-y-4">
             <div className="rounded-lg border p-4 text-sm">
               <div className="font-medium">{displayName || "Untitled tort"}</div>
+              <div className="text-muted-foreground">Slug: <code className="rounded bg-muted px-1 py-0.5">{slug || "—"}</code></div>
               <div className="text-muted-foreground">Category: {category || "—"}</div>
               <div className="mt-2 text-muted-foreground">
-                {acceptedKeys.size} AI field{acceptedKeys.size === 1 ? "" : "s"} accepted + full canonical spine.
+                {acceptedKeys.size} {isEdit ? "custom" : "AI"} field{acceptedKeys.size === 1 ? "" : "s"} accepted + full canonical spine.
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              On publish, the landing page (<code>/c/{category || "…"}/&lt;slug&gt;</code>) and intake page
-              (<code>/intake/&lt;slug&gt;</code>) go live instantly. Status defaults to enabled.
+              On {isEdit ? "save" : "publish"}, the landing page (<code>/c/{category || "…"}/{slug || "<slug>"}</code>) and intake page
+              (<code>/intake/{slug || "<slug>"}</code>) {isEdit ? "update" : "go live"} instantly.
+              {isEdit ? " The open/closed state is preserved." : " Status defaults to enabled."}
             </p>
           </div>
         )}
@@ -653,7 +940,7 @@ function SiteMakerWizard({
           ) : (
             <Button onClick={publish} disabled={publishing} className="gap-2">
               {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
-              {publishing ? "Publishing…" : "Publish site"}
+              {publishing ? "Publishing…" : isEdit ? "Save & re-publish" : "Publish site"}
             </Button>
           )}
         </DialogFooter>

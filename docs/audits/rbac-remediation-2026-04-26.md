@@ -581,10 +581,11 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **321 checked / 46 public / 275 protected / 0 unprotected.**
+Boot-time count: **322 checked / 46 public / 276 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | DELETE | `/api/:slug` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
+| (root) | GET | `/api/:slug` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
 | (root) | PUT | `/api/:slug` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | POST | `/api/chat` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |

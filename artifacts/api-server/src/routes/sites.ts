@@ -26,8 +26,10 @@ import { webFormFieldSchema, eligibilityRuleSchema } from "@workspace/db";
 import {
   getAllFormConfigs,
   getFormConfig,
+  getSiteEditDetail,
   createSite,
   updateFormConfig,
+  republishSite,
   softDeleteSite,
   reactivateSite,
   setSiteEnabled,
@@ -115,6 +117,30 @@ router.get(
     } catch (err) {
       logger.error({ err }, "Failed to list sites");
       serverError(res, "Failed to list sites");
+    }
+  },
+);
+
+// ── GET /api/sites/:slug — single-site edit-prefill detail ───────────────────
+// Returns label/category/intro_text/headline/subhead plus ONLY the editable
+// (non-canonical) custom fields + eligibility rules, so the wizard re-opens
+// pre-filled. The locked canonical spine is intentionally stripped out — it is
+// always re-attached on republish and can never be edited here.
+router.get(
+  "/:slug",
+  requirePermission(Permission.FORMS_CONFIG_VIEW),
+  async (req, res) => {
+    const slug = toKebabSlug(String(req.params.slug));
+    try {
+      const detail = await getSiteEditDetail(slug);
+      if (!detail) {
+        notFound(res, "Site not found");
+        return;
+      }
+      res.json({ status: "ok", site: detail });
+    } catch (err) {
+      logger.error({ err, slug }, "Failed to load site detail");
+      serverError(res, "Failed to load site");
     }
   },
 );
@@ -230,9 +256,13 @@ router.post(
 const updateReqSchema = z.object({
   label: z.string().min(2).max(255).optional(),
   category: z.string().min(2).max(50).optional(),
+  headline: z.string().max(180).optional(),
+  subhead: z.string().max(400).optional(),
   intro_text: z.string().max(1000).nullish(),
   active: z.boolean().optional(),
   web_form_enabled: z.boolean().optional(),
+  custom_fields: z.array(webFormFieldSchema).max(30).optional(),
+  eligibility_rules: z.array(eligibilityRuleSchema).max(30).optional(),
 });
 
 router.put(
@@ -256,14 +286,43 @@ router.put(
         notFound(res, "Site not found");
         return;
       }
-      // Web-form enabled flag lives inside web_form_config.
+      // A republish rebuilds the LOCKED web_form_config from the canonical
+      // spine + edited custom extras. Triggered whenever any content field
+      // (headline/subhead/custom_fields/eligibility_rules) is present.
+      const isRepublish =
+        body.headline !== undefined ||
+        body.subhead !== undefined ||
+        body.custom_fields !== undefined ||
+        body.eligibility_rules !== undefined;
+      if (isRepublish) {
+        await republishSite(
+          slug,
+          {
+            label: body.label,
+            category: body.category as CanonicalCategory | undefined,
+            headline: body.headline,
+            subhead: body.subhead,
+            introText: body.intro_text,
+            customFields: body.custom_fields,
+            eligibilityRules: body.eligibility_rules,
+          },
+          req.user!.id,
+        );
+      }
+      // Web-form enabled flag lives inside web_form_config. Apply AFTER a
+      // republish so an explicit toggle wins over the preserved state.
       if (body.web_form_enabled !== undefined) {
         await setSiteEnabled(slug, body.web_form_enabled, req.user!.id);
       }
       const fieldUpdates: Parameters<typeof updateFormConfig>[1] = {};
-      if (body.label !== undefined) fieldUpdates.label = body.label;
-      if (body.category !== undefined) fieldUpdates.category = body.category;
-      if (body.intro_text !== undefined) fieldUpdates.intro_text = body.intro_text;
+      // label/category/intro_text are written by republishSite; only apply
+      // them here for a plain (non-republish) metadata edit to avoid a
+      // double-write.
+      if (!isRepublish) {
+        if (body.label !== undefined) fieldUpdates.label = body.label;
+        if (body.category !== undefined) fieldUpdates.category = body.category;
+        if (body.intro_text !== undefined) fieldUpdates.intro_text = body.intro_text;
+      }
       if (body.active !== undefined) fieldUpdates.active = body.active;
       if (Object.keys(fieldUpdates).length > 0) {
         await updateFormConfig(slug, fieldUpdates, req.user!.id);

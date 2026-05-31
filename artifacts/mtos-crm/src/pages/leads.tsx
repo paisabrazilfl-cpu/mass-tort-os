@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 import {
   useListLeads,
   getListLeadsQueryKey,
@@ -210,13 +210,17 @@ function StageCell({ status }: { status: string }) {
 }
 
 export default function Leads() {
-  const [search, setSearch] = useState("");
+  const searchString = useSearch();
+  const urlParams = new URLSearchParams(searchString);
+  const tortFilter = urlParams.get("tort_type") ?? "";
+  const [search, setSearch] = useState(urlParams.get("search") ?? "");
   const [status, setStatus] = useState<ListLeadsStatus | "all">("all");
   const [exportOpen, setExportOpen] = useState(false);
-  
+
   const params = {
     ...(search ? { search } : {}),
     ...(status !== "all" ? { status: status as ListLeadsStatus } : {}),
+    ...(tortFilter ? { tort_type: tortFilter } : {}),
   };
 
   const { data: leads, isLoading } = useListLeads(params, {
@@ -289,6 +293,17 @@ export default function Leads() {
           </SelectContent>
         </Select>
       </div>
+
+      {tortFilter && (
+        <div className="flex items-center gap-2 text-sm">
+          <Badge variant="secondary" className="gap-1">
+            Tort: {tortFilter}
+          </Badge>
+          <Link href="/leads" className="text-muted-foreground underline-offset-4 hover:underline">
+            Clear filter
+          </Link>
+        </div>
+      )}
 
       <div className="rounded-md border">
         <Table>
