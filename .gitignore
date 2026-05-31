@@ -58,7 +58,10 @@ exports/
 attached_assets/
 
 # Render / deploy
-.render/
+# Track the Blueprint (no secret values — all secrets are sync:false),
+# but ignore any other files that may be dropped into .render/.
+.render/*
+!.render/render.yaml
 
 # Local environment
 .env
