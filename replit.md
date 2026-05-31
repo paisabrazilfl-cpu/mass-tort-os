@@ -35,6 +35,12 @@ The application is deployed on **Render** (not Railway or Replit autoscale).
 - The `RENDER_API_KEY` secret is the Render account key (used for API-triggered deploys / service management). Auto-deploy on push does not require it.
 - Railway is no longer the deployment target. The legacy Railway config files (`railway.json`, `mtos-crm.railway.json`, `scripts/railway-deploy.sh`) have been removed from the repo.
 
+# Git Push / Branch Convention
+
+Every push to GitHub goes to a **new dedicated branch** — never a force-push, reset, or rebase over `main`. Branch names are **methodical notes, never random**: always `YYYY-MM-DD` followed by a short description of what changed (e.g. `2026-05-31-automations-abby-planner-crm-read`). Each pushed branch must represent the **full latest version of the CRM merged with zero loss of functionality** — it contains every prior feature plus the new work; never drop existing work when creating it.
+
+Operational note: the **main agent is platform-blocked from all git write operations** (even creating a local branch fails). Every push must therefore be executed by a **task agent** in its isolated environment — propose/run a project task to perform it, never expect the main agent to push.
+
 # System Architecture
 
 The project is structured as a pnpm monorepo using TypeScript, targeting Node.js 24. The backend is an Express 5 API, integrated with a PostgreSQL database using Drizzle ORM. API codegen is handled by Orval from an OpenAPI specification. The UI/UX is built with React and Vite.
