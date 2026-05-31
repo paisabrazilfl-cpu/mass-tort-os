@@ -8,11 +8,12 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Workflow, Plus, Play, Trash2, Pencil, Download, Upload } from "lucide-react";
+import { Workflow, Plus, Play, Trash2, Pencil, Upload, Copy } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface Wf {
   id: number;
+  firm_id: number | null;
   name: string;
   description: string | null;
   enabled: boolean;
@@ -63,6 +64,17 @@ export default function AutomationsPage() {
       navigate(`/automations/${wf.id}`);
     } catch (e: any) {
       toast({ title: "Create failed", description: e?.message ?? String(e), variant: "destructive" });
+    }
+  }
+
+  async function clone(id: number) {
+    try {
+      const res = await apiFetchRaw(`/api/automations/${id}/clone`, { method: "POST" });
+      const wf = await res.json();
+      toast({ title: "Cloned to your firm", description: `#${wf.id} ${wf.name}` });
+      navigate(`/automations/${wf.id}`);
+    } catch (e: any) {
+      toast({ title: "Clone failed", description: e?.message ?? String(e), variant: "destructive" });
     }
   }
 
@@ -128,12 +140,17 @@ export default function AutomationsPage() {
         </Card>
       ) : (
         <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-          {items.map((wf) => (
+          {items.map((wf) => {
+            const isSystem = wf.firm_id == null;
+            return (
             <Card key={wf.id} className="hover:border-primary/50 transition">
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between gap-2">
                   <CardTitle className="text-base">{wf.name}</CardTitle>
-                  <Badge variant={wf.enabled ? "default" : "secondary"}>{wf.enabled ? "enabled" : "draft"}</Badge>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <Badge variant={wf.enabled ? "default" : "secondary"}>{wf.enabled ? "enabled" : "draft"}</Badge>
+                    {isSystem && <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700">System template</Badge>}
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -141,14 +158,25 @@ export default function AutomationsPage() {
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <span className="font-mono">trigger:</span> <Badge variant="outline" className="text-[10px]">{wf.trigger_type}</Badge>
                 </div>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="default" asChild><Link href={`/automations/${wf.id}`}><Pencil className="h-3 w-3 mr-1" /> Edit</Link></Button>
-                  <Button size="sm" variant="outline" onClick={() => navigate(`/automations/${wf.id}?run=1`)}><Play className="h-3 w-3 mr-1" /> Run</Button>
-                  <Button size="sm" variant="ghost" className="ml-auto text-destructive" onClick={() => remove(wf.id)}><Trash2 className="h-3 w-3" /></Button>
-                </div>
+                {isSystem ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] text-muted-foreground">Read-only shared template. Clone it into your firm to fill in document templates and enable it.</p>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="default" onClick={() => clone(wf.id)}><Copy className="h-3 w-3 mr-1" /> Clone to my firm</Button>
+                      <Button size="sm" variant="outline" asChild><Link href={`/automations/${wf.id}`}><Pencil className="h-3 w-3 mr-1" /> View</Link></Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="default" asChild><Link href={`/automations/${wf.id}`}><Pencil className="h-3 w-3 mr-1" /> Edit</Link></Button>
+                    <Button size="sm" variant="outline" onClick={() => navigate(`/automations/${wf.id}?run=1`)}><Play className="h-3 w-3 mr-1" /> Run</Button>
+                    <Button size="sm" variant="ghost" className="ml-auto text-destructive" onClick={() => remove(wf.id)}><Trash2 className="h-3 w-3" /></Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 

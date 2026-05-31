@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Sparkles, X, Loader2 } from "lucide-react";
+import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Sparkles, X, Loader2, Copy } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { getLucide } from "@/lib/lucide-icon";
@@ -60,6 +60,10 @@ function EditorInner() {
   const [description, setDescription] = useState("");
   const [enabled, setEnabled] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
+  // A system template (firm_id IS NULL) is read-only to a firm — you clone it
+  // into your firm before editing/enabling.
+  const [isSystem, setIsSystem] = useState(false);
+  const [cloning, setCloning] = useState(false);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [catalog, setCatalog] = useState<NodeDef[]>([]);
@@ -117,6 +121,7 @@ function EditorInner() {
         const cat = await catRes.json();
         setName(wf.name); setDescription(wf.description ?? ""); setEnabled(!!wf.enabled);
         setTags(wf.tags ?? []);
+        setIsSystem(wf.firm_id == null);
         const g = wf.graph ?? { nodes: [], edges: [] };
         // Server stores the catalog node type on `n.type` (e.g. "trigger.manual").
         // ReactFlow's `type` field, however, must point to a registered renderer
@@ -255,7 +260,23 @@ function EditorInner() {
     };
   }
 
+  async function cloneToFirm() {
+    setCloning(true);
+    try {
+      const res = await apiFetchRaw(`/api/automations/${id}/clone`, { method: "POST" });
+      const wf = await res.json();
+      toast({ title: "Cloned to your firm", description: `#${wf.id} ${wf.name}` });
+      navigate(`/automations/${wf.id}`);
+    } catch (e: any) {
+      toast({ title: "Clone failed", description: e?.message, variant: "destructive" });
+    } finally { setCloning(false); }
+  }
+
   async function save() {
+    if (isSystem) {
+      toast({ title: "Read-only template", description: "Clone it to your firm to make changes.", variant: "destructive" });
+      return;
+    }
     setSaving(true);
     try {
       await apiFetchRaw(`/api/automations/${id}`, {
@@ -406,16 +427,26 @@ function EditorInner() {
       {/* Toolbar */}
       <div className="border-b bg-background flex items-center gap-2 px-4 py-2">
         <Button variant="ghost" size="sm" asChild><Link href="/automations"><ArrowLeft className="h-4 w-4 mr-1" /> Back</Link></Button>
-        <Input className="max-w-md" value={name} onChange={(e) => setName(e.target.value)} placeholder="Workflow name" />
-        <div className="flex items-center gap-2 ml-2">
-          <Switch checked={enabled} onCheckedChange={setEnabled} id="enabled" />
-          <Label htmlFor="enabled" className="text-xs">Enabled</Label>
-        </div>
+        <Input className="max-w-md" value={name} onChange={(e) => setName(e.target.value)} placeholder="Workflow name" disabled={isSystem} />
+        {isSystem ? (
+          <Badge variant="outline" className="ml-2 border-amber-400 text-amber-700">System template · read-only</Badge>
+        ) : (
+          <div className="flex items-center gap-2 ml-2">
+            <Switch checked={enabled} onCheckedChange={setEnabled} id="enabled" />
+            <Label htmlFor="enabled" className="text-xs">Enabled</Label>
+          </div>
+        )}
         <div className="ml-auto flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => setAssistOpen(true)} data-testid="button-ai-assist"><Sparkles className="h-4 w-4 mr-1" /> AI Assist</Button>
           <Button size="sm" variant="outline" onClick={exportLocal}><Download className="h-4 w-4 mr-1" /> Export</Button>
-          <Button size="sm" variant="outline" onClick={() => setRunOpen((v) => !v)}><Play className="h-4 w-4 mr-1" /> Run</Button>
-          <Button size="sm" onClick={save} disabled={saving}><Save className="h-4 w-4 mr-1" /> {saving ? "Saving…" : "Save"}</Button>
+          {isSystem ? (
+            <Button size="sm" onClick={cloneToFirm} disabled={cloning}><Copy className="h-4 w-4 mr-1" /> {cloning ? "Cloning…" : "Clone to my firm"}</Button>
+          ) : (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setAssistOpen(true)} data-testid="button-ai-assist"><Sparkles className="h-4 w-4 mr-1" /> AI Assist</Button>
+              <Button size="sm" variant="outline" onClick={() => setRunOpen((v) => !v)}><Play className="h-4 w-4 mr-1" /> Run</Button>
+              <Button size="sm" onClick={save} disabled={saving}><Save className="h-4 w-4 mr-1" /> {saving ? "Saving…" : "Save"}</Button>
+            </>
+          )}
         </div>
       </div>
 

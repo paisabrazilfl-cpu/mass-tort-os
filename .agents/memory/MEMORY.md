@@ -4,3 +4,4 @@
 - [Automation trigger payload shapes](automation-trigger-payload-shapes.md) — lead_created/form_submitted use input.lead.id, inbound_call uses input.lead_id; resolve THEN fall back; firm-scope gate handler lookups.
 - [Dev vs prod database](dev-vs-prod-database.md) — workspace DATABASE_URL (host `helium`) is the DEV DB, not Render prod; data fixes here are dev-only.
 - [Voice phone-number wiring](voice-phone-number-wiring.md) — one shared `config.phone_number_id` covers ALL agents' outbound; dedicated numbers are inbound-only (tort_phone_numbers). Don't buy per-agent.
+- [Automation system templates](automation-system-templates.md) — null-firm workflows are shared templates: tag-gate cross-tenant visibility, keep trigger_config secret (redact on read + blank on clone), keep writes firm-scoped.

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, automationWorkflowsTable, automationRunsTable } from "@workspace/db";
-import { eq, desc, and, or, isNull, sql } from "drizzle-orm";
+import { eq, desc, and, or, isNull, sql, arrayContains } from "drizzle-orm";
 import { z } from "zod/v4";
 import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
 import { badRequest, notFound, forbidden } from "../lib/http-errors";
@@ -28,6 +28,33 @@ router.use(authMiddleware);
 function firmPredicate(firmId: number | null | undefined) {
   if (firmId == null) return isNull(automationWorkflowsTable.firm_id);
   return eq(automationWorkflowsTable.firm_id, firmId);
+}
+/**
+ * Tag that marks a system-wide (firm_id IS NULL) workflow as a SHARED template
+ * every firm may see and clone (e.g. the seeded intake→med-records pipelines).
+ * Read access to null-firm rows is gated on this tag so an unrelated/global row
+ * (which could carry sensitive trigger_config) is NOT silently exposed to every
+ * tenant — only rows explicitly published as templates are shared.
+ */
+const SHARED_TEMPLATE_TAG = "seed:intake-pipeline";
+
+/**
+ * Read predicate: a firm can SEE its own workflows AND shared system templates
+ * (firm_id IS NULL AND tagged with SHARED_TEMPLATE_TAG). System templates are
+ * READ-ONLY to a firm — edit/delete still use the strict firmPredicate so one
+ * tenant can never mutate a row another tenant sees. To customise a system
+ * template, a firm clones it into its own firm (POST /:id/clone) and edits the
+ * copy.
+ */
+function readPredicate(firmId: number | null | undefined) {
+  if (firmId == null) return isNull(automationWorkflowsTable.firm_id);
+  return or(
+    eq(automationWorkflowsTable.firm_id, firmId),
+    and(
+      isNull(automationWorkflowsTable.firm_id),
+      arrayContains(automationWorkflowsTable.tags, [SHARED_TEMPLATE_TAG]),
+    ),
+  );
 }
 function runFirmPredicate(firmId: number | null | undefined) {
   if (firmId == null) return isNull(automationRunsTable.firm_id);
@@ -76,6 +103,7 @@ router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res)
   const rows = await db
     .select({
       id: automationWorkflowsTable.id,
+      firm_id: automationWorkflowsTable.firm_id,
       name: automationWorkflowsTable.name,
       description: automationWorkflowsTable.description,
       enabled: automationWorkflowsTable.enabled,
@@ -85,7 +113,7 @@ router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res)
       created_at: automationWorkflowsTable.created_at,
     })
     .from(automationWorkflowsTable)
-    .where(firmPredicate(firmId))
+    .where(readPredicate(firmId))
     .orderBy(desc(automationWorkflowsTable.updated_at));
   res.json(rows);
 });
@@ -95,9 +123,18 @@ router.get("/:id", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, r
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   const firmId = req.user!.firm_id;
   const [row] = await db.select().from(automationWorkflowsTable)
-    .where(and(eq(automationWorkflowsTable.id, id), firmPredicate(firmId))!)
+    .where(and(eq(automationWorkflowsTable.id, id), readPredicate(firmId))!)
     .limit(1);
   if (!row) { notFound(res, "Workflow not found"); return; }
+  // Shared system templates (firm_id IS NULL) are visible to every tenant for
+  // read/clone. Never expose their trigger_config — it may carry webhook
+  // paths/secrets/privileged config that must not leak across firms. The
+  // template's graph is the shareable part; the trigger is configured per-firm
+  // after cloning.
+  if (row.firm_id == null) {
+    res.json({ ...row, trigger_config: {} });
+    return;
+  }
   res.json(row);
 });
 
@@ -149,6 +186,45 @@ router.delete("/:id", requirePermission(Permission.AUTOMATIONS_MANAGE), async (r
   res.json({ deleted: (result as any).rowCount ?? 1 });
 });
 
+/**
+ * Clone a workflow the caller can SEE (its own or a system template) into the
+ * caller's firm as a fresh, disabled draft. This is how an operator adopts a
+ * system-wide seed (e.g. the intake→med-records pipelines): clone it, fill in
+ * the per-firm template ids, then enable the copy — without ever mutating the
+ * shared global template that every other firm also sees.
+ */
+router.post("/:id/clone", requirePermission(Permission.AUTOMATIONS_MANAGE), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
+  const userId = req.user!.id;
+  const firmId = req.user!.firm_id;
+  const [src] = await db.select().from(automationWorkflowsTable)
+    .where(and(eq(automationWorkflowsTable.id, id), readPredicate(firmId))!).limit(1);
+  if (!src) { notFound(res, "Workflow not found"); return; }
+  // Drop seed bookkeeping tags from the copy so it reads as a firm-owned
+  // workflow, and record where it came from for traceability.
+  const tags = (Array.isArray(src.tags) ? src.tags : [])
+    .filter((t) => t !== "seed:intake-pipeline" && !t.startsWith("cloned-from:"))
+    .concat(`cloned-from:${src.id}`);
+  // Never carry a shared system template's trigger_config into a tenant's copy —
+  // it may hold webhook paths/secrets, and the firm-owned copy is readable
+  // unredacted, which would otherwise let any firm exfiltrate it by cloning. The
+  // operator configures the trigger per-firm on the disabled draft.
+  const triggerConfig = src.firm_id == null ? {} : src.trigger_config;
+  const [row] = await db.insert(automationWorkflowsTable).values({
+    firm_id: firmId ?? null,
+    name: `${src.name} (copy)`.slice(0, 200),
+    description: src.description ?? null,
+    graph: src.graph,
+    enabled: false,
+    trigger_type: src.trigger_type,
+    trigger_config: triggerConfig,
+    tags,
+    created_by_user_id: userId ?? null,
+  } as typeof automationWorkflowsTable.$inferInsert).returning();
+  res.status(201).json(row);
+});
+
 router.post("/:id/run", requirePermission(Permission.AUTOMATIONS_EXECUTE), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
@@ -156,9 +232,10 @@ router.post("/:id/run", requirePermission(Permission.AUTOMATIONS_EXECUTE), async
   if (!parsed.success) { badRequest(res, "Invalid body", parsed.error.flatten()); return; }
   const userId = req.user!.id;
   const firmId = req.user!.firm_id;
-  // Verify ownership before invoking executor.
+  // Verify access before invoking executor — a firm may test-run its own
+  // workflows OR a system template (it executes against the caller's firm).
   const [own] = await db.select({ id: automationWorkflowsTable.id }).from(automationWorkflowsTable)
-    .where(and(eq(automationWorkflowsTable.id, id), firmPredicate(firmId))!).limit(1);
+    .where(and(eq(automationWorkflowsTable.id, id), readPredicate(firmId))!).limit(1);
   if (!own) { notFound(res, "Workflow not found"); return; }
   try {
     const result = await runWorkflow({
@@ -178,9 +255,9 @@ router.get("/:id/runs", requirePermission(Permission.AUTOMATIONS_VIEW), async (r
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { badRequest(res, "id must be integer"); return; }
   const firmId = req.user!.firm_id;
-  // Verify ownership before exposing run history.
+  // Verify access before exposing run history (own workflows + system templates).
   const [own] = await db.select({ id: automationWorkflowsTable.id }).from(automationWorkflowsTable)
-    .where(and(eq(automationWorkflowsTable.id, id), firmPredicate(firmId))!).limit(1);
+    .where(and(eq(automationWorkflowsTable.id, id), readPredicate(firmId))!).limit(1);
   if (!own) { notFound(res, "Workflow not found"); return; }
   const limit = Math.min(Number(req.query.limit ?? 50), 200);
   const rows = await db.select().from(automationRunsTable)
