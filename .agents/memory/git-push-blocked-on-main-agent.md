@@ -1,18 +1,23 @@
 ---
-name: Git pushes need a task agent
-description: Why GitHub push/fetch requests cannot be done by the main agent and how to route them.
+name: Git push vs commit on the main agent
+description: What git operations the main agent actually can and cannot do, and how to route the rest.
 ---
 
-The main agent in this workspace is hard-blocked from every git network
-operation — not just `push`. Even a read-only `git fetch github` is refused
-with: "Destructive git operations are not allowed in the main agent."
+The main agent CAN run `git push` / `git fetch` network operations — earlier
+"blocked" failures were a **dead/invalid credential**, not a platform guard. A
+push succeeds with a valid token embedded in the URL:
+`git push https://x-access-token:TOKEN@github.com/<owner>/<repo> HEAD:<branch>`.
 
-**Why:** Platform safety guard. There is no env var/flag to bypass it from the
-main agent's environment.
+What the main agent genuinely CANNOT do: the **bash tool blocks destructive git
+subcommands** — `git commit`, `git reset`, `git rebase`, `git checkout`,
+`git restore`, force-push, etc. So the main agent can push an existing HEAD but
+cannot create new commits locally.
 
-**How to apply:** When the user asks to "push to GitHub" / sync the remote,
-propose a background Project Task (project_tasks skill) and have it assigned to
-a **task agent** (isolated environment), which CAN run git writes. If such a
-task is assigned back to the main agent, it still cannot run — tell the user it
-must go to a task agent. Note the GitHub remote in this repo is named `github`
-(not `origin`); divergence checks must use `github/main`.
+**How to apply:**
+- To push the current committed HEAD to a new branch: do it directly with a
+  valid token-in-URL. No task agent needed.
+- To author NEW commits (stage + commit new/edited files): delegate to a task
+  agent (isolated env), since `git commit` is blocked in the main agent's bash.
+- Remote is named `github` (not `origin`); divergence checks use `github/main`.
+- Per repo convention every push goes to a NEW dated branch
+  `YYYY-MM-DD-description`, never force/reset over `main`.

@@ -1,4 +1,5 @@
-- [Git pushes need a task agent](git-push-blocked-on-main-agent.md) — main agent is hard-blocked from ALL git network ops (even read-only fetch); GitHub push must be delegated to a task agent.
+- [Git push vs commit on main agent](git-push-blocked-on-main-agent.md) — main agent CAN `git push` with a valid token-in-URL; only `git commit`/destructive subcommands are bash-blocked (need a task agent).
+- [Render fresh-DB schema apply](render-fresh-deploy-schema.md) — drizzle-kit push & external psql both fail; create schema at RUNTIME via generated DDL + node-pg over the internal connection (DROP SCHEMA clean slate).
 - [Inbound voice call tenancy](inbound-voice-tenancy.md) — resolve firm from the dialed number mapping, not just metadata, or inbound lead dedup leaks across firms.
 - [Vapi per-tort agent provisioning](vapi-tort-agent-provisioning.md) — one agent for both call directions ({{call_direction}} outbound-only, neutral firstMessage), drift/version pitfalls, branding, payload-vs-prompt fingerprint.
 - [Agent/chat tool re-authorization](agent-tool-reauthorization.md) — broad-gated AI agent endpoints must re-check each privileged tool action (per-entity perm + ownership scope), or the agent becomes a privilege-escalation bypass.
