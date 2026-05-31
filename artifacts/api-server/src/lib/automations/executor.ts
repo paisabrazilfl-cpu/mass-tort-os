@@ -22,6 +22,8 @@ import {
   documentTemplatesTable,
   integrationsTable,
   workflowSettingsTable,
+  callLogsTable,
+  documentEnvelopesTable,
 } from "@workspace/db";
 import { eq, and, sql, asc } from "drizzle-orm";
 import path from "node:path";
@@ -43,7 +45,12 @@ import { callLLM } from "../ai-provider";
 import { getSearchAdapter } from "../search";
 import { saveFile, readFile } from "../vault";
 import { runBackgroundCheckHub } from "../bg-hub/hub";
-import { lookupNpiAndMatch } from "../taxonomy-engine";
+import { verifyProvider } from "../npi-verify";
+import {
+  evaluateConsent,
+  resolveConsentChannel,
+  evaluateEsignCompletion,
+} from "./gates";
 import { serpapiAdvertiserAds, isSerpapiConfigured, SerpapiError } from "../serpapi-client";
 import { computeAndPersistLeadScore } from "../decision-engine-service";
 import { analyzeDocumentText } from "../ai-fields";
@@ -366,10 +373,15 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     return { ok: true };
   },
   "crm.audit_log": async (s) => {
-    const action = String(s.node.data?.params?.action ?? "");
-    const entityType = String(s.node.data?.params?.entityType ?? "");
-    const entityId = String(s.node.data?.params?.entityId ?? "");
-    const details = s.node.data?.params?.details ?? {};
+    const p = s.node.data?.params ?? {};
+    const action = String(resolveOrLiteral(s, p.action) ?? "");
+    const entityType = String(resolveOrLiteral(s, p.entityType) ?? "");
+    // Resolve the configured entity id template; fall back to the trigger lead
+    // id so the audit row records the real id rather than a literal path string.
+    const entityId = String(
+      resolveOrLiteral(s, p.entityId) ?? s.input?.lead_id ?? s.input?.lead?.id ?? "",
+    );
+    const details = p.details ?? {};
     await db.insert(auditLogTable).values({ action, entity_type: entityType, entity_id: entityId, details } as any);
     return { ok: true };
   },
@@ -727,7 +739,10 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     // Catalog params: entity (lead|case|document), id, reason, priority.
     const p = s.node.data?.params ?? {};
     const entity = String(resolveOrLiteral(s, p.entity ?? "lead"));
-    const idRaw = resolveOrLiteral(s, p.id ?? s.input?.lead_id ?? s.input?.lead?.id);
+    // Resolve the configured id first; if the template path can't resolve (e.g.
+    // a voice flow whose payload uses input.lead_id), fall back to the trigger's
+    // lead id so review routing works across every flow.
+    const idRaw = resolveOrLiteral(s, p.id) ?? s.input?.lead_id ?? s.input?.lead?.id;
     if (idRaw == null) throw new Error("crm.send_to_review_queue requires `id`.");
     const reason = String(resolveOrLiteral(s, p.reason) ?? "Sent to review by automation");
     const priority = String(resolveOrLiteral(s, p.priority) ?? "normal");
@@ -762,24 +777,195 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     return { __branch: branch, value: result };
   },
   "crm.npi_lookup": async (s) => {
-    // Catalog declares a single `npi` param. The NPPES helper supports both
-    // raw NPI numbers (10-digit) and "first last" strings, so we accept both
-    // shapes here for operator convenience.
+    // Verify a treating provider against the CMS NPPES registry. Accepts either
+    // a 10-digit NPI (authoritative) or a name + city + state search. Branches:
+    //   verified    → exactly the claimed provider, all gates passed
+    //   ambiguous   → NPPES answered but the claim did not verify cleanly
+    //   unavailable → NPPES was unreachable (never treat as a mismatch)
+    // The verified branch surfaces the provider's practice fax so a downstream
+    // node can send the HIPAA medical-records request without re-querying.
     const p = s.node.data?.params ?? {};
-    const npi = String(resolveOrLiteral(s, p.npi ?? s.input?.npi) ?? "").trim();
-    if (!npi) throw new Error("crm.npi_lookup requires `npi` (NPI number or 'first last').");
-    let first = "", last = "", diagnosis = "";
-    if (/^\d{10}$/.test(npi)) {
-      // Raw NPI — we don't have a direct number lookup wired; fall back to
-      // surfacing the number so downstream nodes can use it.
-      return { npi, lookup: "deferred", note: "Direct NPI-by-number lookup not wired; use first/last query." };
+
+    // Load the lead (firm-scoped) when a leadId is resolvable so the provider
+    // fields work regardless of trigger-payload shape (lead_created /
+    // inbound_call payloads do not carry the physician fields inline).
+    let npiLeadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(npiLeadId)) npiLeadId = Number(s.input?.lead_id ?? s.input?.lead?.id);
+    let npiLead: typeof leadsTable.$inferSelect | undefined;
+    if (Number.isInteger(npiLeadId)) {
+      const [row] = await db
+        .select()
+        .from(leadsTable)
+        .where(
+          s.ctx.firmId == null
+            ? eq(leadsTable.id, npiLeadId)
+            : and(eq(leadsTable.id, npiLeadId), eq(leadsTable.firm_id, s.ctx.firmId)),
+        )
+        .limit(1);
+      if (!row) throw new Error(`crm.npi_lookup: lead ${npiLeadId} not found in firm ${s.ctx.firmId}.`);
+      npiLead = row;
     }
-    const parts = npi.split(/\s+/);
-    first = parts[0] ?? ""; last = parts.slice(1).join(" ");
-    diagnosis = String(resolveOrLiteral(s, s.input?.diagnosis) ?? "");
-    if (!first || !last) throw new Error("crm.npi_lookup `npi` must be a 10-digit NPI or 'first last'.");
-    const result = await lookupNpiAndMatch(first, last, diagnosis);
-    return result;
+
+    const npiRaw = String(resolveOrLiteral(s, p.npi ?? s.input?.npi) ?? "").trim();
+    const npi = /^\d{10}$/.test(npiRaw) ? npiRaw : undefined;
+
+    // Name may come from an explicit param, the loaded lead, or the inline input.
+    const nameParam = String(resolveOrLiteral(s, p.name) ?? "").trim();
+    const first = String(resolveOrLiteral(s, p.firstName ?? s.input?.lead?.physician_first_name) ?? npiLead?.physician_first_name ?? "").trim();
+    const last = String(resolveOrLiteral(s, p.lastName ?? s.input?.lead?.physician_last_name) ?? npiLead?.physician_last_name ?? "").trim();
+    const name = nameParam || [first, last].filter(Boolean).join(" ").trim();
+    const city = String(resolveOrLiteral(s, p.city ?? s.input?.lead?.city) ?? npiLead?.city ?? "").trim();
+    const state = String(resolveOrLiteral(s, p.state ?? s.input?.lead?.state) ?? npiLead?.state ?? "").trim();
+    const organization = String(resolveOrLiteral(s, p.organization ?? s.input?.lead?.hospital_name) ?? npiLead?.hospital_name ?? "").trim();
+    const specialty = String(resolveOrLiteral(s, p.specialty) ?? "").trim();
+
+    if (!npi && !name && !organization) {
+      throw new Error("crm.npi_lookup requires an `npi` (10 digits) or a provider `name`/`organization` to search.");
+    }
+
+    const result = await verifyProvider({
+      npi,
+      expected: {
+        name: name || undefined,
+        organization: organization || undefined,
+        city: city || undefined,
+        state: state || undefined,
+        specialty: specialty || undefined,
+      },
+    });
+
+    const branch =
+      result.status === "UNAVAILABLE" ? "unavailable" : result.verified ? "verified" : "ambiguous";
+
+    return {
+      __branch: branch,
+      value: {
+        status: result.status,
+        verified: result.verified,
+        confidence: result.confidence,
+        method: result.method,
+        candidates_returned: result.candidates_returned ?? null,
+        provider: result.provider,
+        provider_fax: result.provider?.fax || null,
+        provider_phone: result.provider?.phone || null,
+        npi: result.provider?.npi ?? npi ?? null,
+        checks: result.checks,
+      },
+    };
+  },
+  "crm.consent_gate": async (s) => {
+    // Gate the claimant on a valid consent artifact appropriate to their
+    // intake channel before any outbound contact. Routes invalid/missing
+    // consent to the review queue (via the `invalid` branch). Never advances
+    // without a real artifact on file.
+    const p = s.node.data?.params ?? {};
+    let leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) leadId = Number(s.input?.lead_id ?? s.input?.lead?.id);
+    if (!Number.isInteger(leadId)) throw new Error("crm.consent_gate requires a resolvable leadId.");
+    const [lead] = await db
+      .select()
+      .from(leadsTable)
+      .where(
+        s.ctx.firmId == null
+          ? eq(leadsTable.id, leadId)
+          : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId)),
+      )
+      .limit(1);
+    if (!lead) throw new Error(`crm.consent_gate: lead ${leadId} not found in firm ${s.ctx.firmId}.`);
+
+    const channel = resolveConsentChannel({
+      override: p.channel ? String(resolveOrLiteral(s, p.channel)) : null,
+      contactPreference: lead.contact_preference,
+      source: lead.source,
+      hasVendor: lead.vendor_id != null,
+    });
+
+    // Voice channel needs a recorded call with a transcript on file.
+    let hasRecordedCall = false;
+    if (channel === "voice") {
+      const calls = await db
+        .select({ recording_url: callLogsTable.recording_url, transcript: callLogsTable.transcript })
+        .from(callLogsTable)
+        .where(
+          s.ctx.firmId == null
+            ? eq(callLogsTable.lead_id, leadId)
+            : and(eq(callLogsTable.lead_id, leadId), eq(callLogsTable.firm_id, s.ctx.firmId)),
+        );
+      hasRecordedCall = calls.some(
+        (c) => !!c.recording_url && Array.isArray(c.transcript) && c.transcript.length > 0,
+      );
+    }
+
+    const verdict = evaluateConsent({
+      tcpaConsent: !!lead.tcpa_consent,
+      trustedformCertUrl: lead.trustedform_cert_url,
+      hasRecordedCall,
+      channel,
+    });
+
+    return {
+      __branch: verdict.valid ? "valid" : "invalid",
+      value: {
+        lead_id: leadId,
+        channel: verdict.channel,
+        valid: verdict.valid,
+        reason: verdict.reason,
+        evidence: {
+          tcpa_consent: !!lead.tcpa_consent,
+          trustedform_cert_url: lead.trustedform_cert_url ?? null,
+          has_recorded_call: hasRecordedCall,
+        },
+      },
+    };
+  },
+  "documents.esign_all_signed": async (s) => {
+    // Gate downstream actions until the claimant's e-sign packet is fully
+    // executed. Branches all_signed / pending. `pending` should route to a
+    // wait/review path — it must never silently behave like all_signed.
+    const p = s.node.data?.params ?? {};
+    let leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) leadId = Number(s.input?.lead_id ?? s.input?.lead?.id);
+    if (!Number.isInteger(leadId)) throw new Error("documents.esign_all_signed requires a resolvable leadId.");
+
+    // Firm-scope: confirm the lead belongs to the running firm before reading
+    // its e-sign envelopes, so a cross-tenant id can't leak signature state.
+    const [ownedLead] = await db
+      .select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(
+        s.ctx.firmId == null
+          ? eq(leadsTable.id, leadId)
+          : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId)),
+      )
+      .limit(1);
+    if (!ownedLead) throw new Error(`documents.esign_all_signed: lead ${leadId} not found in firm ${s.ctx.firmId}.`);
+
+    let requiredTemplateIds: number[] | undefined;
+    const rawReq = resolveOrLiteral(s, p.requiredTemplateIds);
+    if (Array.isArray(rawReq)) {
+      requiredTemplateIds = rawReq.map((n) => Number(n)).filter((n) => Number.isFinite(n));
+    }
+    const minSignedRaw = resolveOrLiteral(s, p.minSigned);
+    const minSigned = minSignedRaw != null && minSignedRaw !== "" ? Number(minSignedRaw) : undefined;
+
+    const envelopes = await db
+      .select({ template_id: documentEnvelopesTable.template_id, status: documentEnvelopesTable.status })
+      .from(documentEnvelopesTable)
+      .where(eq(documentEnvelopesTable.lead_id, leadId));
+
+    const verdict = evaluateEsignCompletion({ envelopes, requiredTemplateIds, minSigned });
+
+    return {
+      __branch: verdict.complete ? "all_signed" : "pending",
+      value: {
+        lead_id: leadId,
+        complete: verdict.complete,
+        signed: verdict.signed,
+        total: verdict.total,
+        pending_template_ids: verdict.pendingTemplateIds,
+        reason: verdict.reason,
+      },
+    };
   },
   "crm.decision_engine": async (s) => {
     const leadIdRaw = resolveOrLiteral(s, s.node.data?.params?.leadId ?? s.input?.lead_id ?? s.input?.lead?.id);

@@ -2,6 +2,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { seedFormConfigurations } from "./lib/form-config-service";
 import { seedDefaultFirm, seedSuperAdmin, backfillEmailVerifiedAt } from "./lib/firm-bootstrap";
+import { seedIntakeWorkflows } from "./lib/automations/seed-intake-workflows";
 import { workerLoop } from "./worker";
 import { db, automationWorkflowsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
@@ -113,6 +114,15 @@ app.listen(port, async (err) => {
     await seedDefaultFirm();
   } catch (e) {
     logger.error({ err: e }, "Default firm seed failed on boot");
+  }
+
+  // Seed the three intake-to-medical-records automation workflows (one per
+  // lead-entry flow). Idempotent and seeded disabled — operators fill in
+  // per-firm e-sign template ids in the Automations editor, then enable.
+  try {
+    await seedIntakeWorkflows();
+  } catch (e) {
+    logger.error({ err: e }, "Intake automation workflows seed failed on boot");
   }
 
   // Super-admin bootstrap — no-op unless SEED_ADMIN_EMAIL + SEED_ADMIN_PASSWORD are set.

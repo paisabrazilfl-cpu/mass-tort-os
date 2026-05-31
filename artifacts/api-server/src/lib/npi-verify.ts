@@ -44,6 +44,7 @@ interface NpiAddress {
   state?: string;
   postal_code?: string;
   telephone_number?: string;
+  fax_number?: string;
 }
 
 interface NpiTaxonomy {
@@ -93,6 +94,11 @@ export interface ProviderSummary {
     state: string;
     postal_code: string;
   };
+  // Surfaced for downstream automation (e.g. faxing a HIPAA medical-records
+  // request to the verified provider). NPPES returns these on the practice
+  // LOCATION address; either may be blank if the provider never registered one.
+  phone: string;
+  fax: string;
 }
 
 // Three-way honest verdict: VERIFIED means we got data back from NPPES and
@@ -340,6 +346,8 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
       state: primary.state ?? "",
       postal_code: primary.postal_code ?? "",
     },
+    phone: primary.telephone_number ?? "",
+    fax: primary.fax_number ?? "",
   };
 }
 

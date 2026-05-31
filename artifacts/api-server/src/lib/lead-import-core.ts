@@ -79,6 +79,14 @@ export const COLUMN_ALIASES: Record<string, string> = {
   "location": "location_name",
   "location name": "location_name",
   "ad spend": "ad_spend",
+  "tcpa consent": "tcpa_consent",
+  "tcpa": "tcpa_consent",
+  "consent": "tcpa_consent",
+  "trustedform": "trustedform_cert_url",
+  "trustedform cert": "trustedform_cert_url",
+  "trustedform cert url": "trustedform_cert_url",
+  "cert url": "trustedform_cert_url",
+  "contact preference": "contact_preference",
 };
 
 export const LEAD_FIELDS = new Set([
@@ -90,6 +98,7 @@ export const LEAD_FIELDS = new Set([
   "hospital_fax", "hospital_contact_info", "medications", "npi_number",
   "source", "law_firm", "client_id", "notes", "exposure_start",
   "exposure_end", "location_name", "ad_spend", "tort_type",
+  "tcpa_consent", "trustedform_cert_url", "contact_preference",
 ]);
 
 export function parseCSV(text: string): { headers: string[]; rows: Record<string, string>[] } {

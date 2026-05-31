@@ -331,12 +331,41 @@ export const NODE_CATALOG: NodeDefinition[] = [
     ], outputs: ["clear", "flagged", "error"],
   },
   {
-    type: "crm.npi_lookup", label: "NPI Lookup", category: "crm",
-    description: "Resolve a healthcare provider via the NPPES NPI registry.",
+    type: "crm.npi_lookup", label: "Verify Provider (NPI)", category: "crm",
+    description: "Verify a treating provider against the CMS NPPES registry by NPI or name + city/state. Branches verified / ambiguous / unavailable and surfaces the provider's practice fax.",
     icon: "Stethoscope", color: "bg-violet-600",
     params: [
-      { key: "npi", label: "NPI number (or path)", type: "string", required: true, placeholder: "input.npi" },
-    ],
+      { key: "npi", label: "NPI number (optional, 10 digits)", type: "string", placeholder: "input.lead.npi_number" },
+      { key: "name", label: "Provider name (or path)", type: "string", placeholder: "input.lead.physician_last_name" },
+      { key: "organization", label: "Organization / hospital (optional)", type: "string", placeholder: "input.lead.hospital_name" },
+      { key: "city", label: "City (optional)", type: "string", placeholder: "input.lead.city" },
+      { key: "state", label: "State (optional)", type: "string", placeholder: "input.lead.state" },
+      { key: "specialty", label: "Specialty (optional)", type: "string", placeholder: "cardiology" },
+    ], outputs: ["verified", "ambiguous", "unavailable"],
+  },
+  {
+    type: "crm.consent_gate", label: "Consent / TCPA Gate", category: "crm",
+    description: "Confirm a valid consent artifact (TrustedForm cert for web/vendor, recorded call + transcript for voice) plus TCPA opt-in before any outbound contact. Branches valid / invalid.",
+    icon: "ShieldCheck", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id (or path)", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "channel", label: "Channel override (optional)", type: "select", options: [
+        { label: "Auto (from lead)", value: "" },
+        { label: "Web / Text+Email", value: "web" },
+        { label: "Vendor", value: "vendor" },
+        { label: "Voice / Agent", value: "voice" },
+      ], help: "Leave blank to derive from the lead's contact preference / source." },
+    ], outputs: ["valid", "invalid"],
+  },
+  {
+    type: "documents.esign_all_signed", label: "All Documents Signed?", category: "documents",
+    description: "Check whether the claimant's e-sign packet is fully executed. Branches all_signed / pending.",
+    icon: "FileCheck2", color: "bg-indigo-600",
+    params: [
+      { key: "leadId", label: "Lead id (or path)", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "requiredTemplateIds", label: "Required template ids (JSON array, optional)", type: "json", placeholder: "[1,2,3]", help: "If set, every listed template must have a signed envelope. Otherwise all envelopes on the lead must be signed." },
+      { key: "minSigned", label: "Minimum signed (optional)", type: "number", help: "Alternative to required ids: at least N signed." },
+    ], outputs: ["all_signed", "pending"],
   },
   {
     type: "crm.decision_engine", label: "Decision Engine Score", category: "crm",
