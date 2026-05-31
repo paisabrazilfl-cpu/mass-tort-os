@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **314 checked / 46 public / 268 protected / 0 unprotected.**
+Boot-time count: **315 checked / 46 public / 269 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -645,6 +645,7 @@ Boot-time count: **314 checked / 46 public / 268 protected / 0 unprotected.**
 | auth | GET | `/api/auth/verify-email` |  |  |  |  | ✓ | — | — | ✓ |
 | automation-webhook | _ALL | `/api/automation-webhook/:slug` |  |  | ✓ |  |  | — | — | — |
 | automation-webhook | POST | `/api/automation-webhook/:slug` |  |  | ✓ |  |  | — | — | — |
+| automations | POST | `/api/automations/:id/clone` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
 | automations | POST | `/api/automations/:id/run` | ✓ | ✓ |  |  |  | — | `automations:execute` | ✓ |
 | automations | GET | `/api/automations/:id/runs` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | automations | DELETE | `/api/automations/:id` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
