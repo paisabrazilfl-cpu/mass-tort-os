@@ -236,6 +236,7 @@ function buildGraph(spec: FlowSpec): Graph {
     const normalize = node("normalize_contact", "script.javascript", x(), MAIN_Y, "Normalize contact (script)", {
       code: "const digits = String(vars.leadPhone||'').replace(/\\D/g,'');\nreturn { phone_digits: digits, has_email: !!vars.leadEmail };",
       timeoutMs: 3000,
+      approved: true,
     });
     edge(ackSms, normalize);
     cursor = normalize;
@@ -263,12 +264,10 @@ function buildGraph(spec: FlowSpec): Graph {
     });
     edge(summarize, logAi);
 
-    // Both branches of the recording check converge on the consent gate.
-    // (the false branch skips transcription)
-    cursor = "__ai_converge__"; // handled below: consent gate is the converge target
-    // We wire both hasRec(false) and logAi into the consent gate after it is created.
-    // Stash the ids we need to connect post-creation.
-    (spec as any).__convergeFrom = ["has_recording#false", "log_call_summary"];
+    // Both branches of the recording check converge on the consent gate, which
+    // is created in the shared backbone below (the false branch skips
+    // transcription). cursor is unused for this flow.
+    cursor = "log_call_summary";
   } else {
     // vendor
     const certGate = node("cert_present", "logic.if", x(), MAIN_Y, "TrustedForm cert present?", {
@@ -282,6 +281,7 @@ function buildGraph(spec: FlowSpec): Graph {
     const certScript = node("validate_cert", "script.javascript", x(), MAIN_Y, "Validate cert URL (script)", {
       code: "const u = String(vars.trustedformCertUrl||'');\nreturn { cert_url: u, looks_valid: /^https?:\\/\\/cert\\.trustedform\\.com\\//.test(u) };",
       timeoutMs: 3000,
+      approved: true,
     });
     edge(certGate, certScript, "true");
 
@@ -340,14 +340,11 @@ function buildGraph(spec: FlowSpec): Graph {
   review("rq_qual_review", qualX, REVIEW_Y,
     "Qualification returned 'review' — uncertain. Hold for human decision.");
   edge(qual, "rq_qual_review", "review");
-  // Rejected → mark status + end (not a review item; it's a clean decline).
-  const rejectStatus = node("set_status_rejected", "crm.set_lead_status", qualX, REVIEW_Y + 130,
-    "Mark Rejected", { leadId: "vars.leadId", status: "rejected" });
-  edge(qual, rejectStatus, "rejected");
-  const endRejected = node("end_rejected", "utility.end", qualX + COL, REVIEW_Y + 130, "End (rejected)", {
-    output: { status: "rejected" },
-  });
-  edge(rejectStatus, endRejected);
+  // Rejected → review queue too. Never auto-decline a potential claimant on the
+  // engine's say-so: a human confirms the decline before the lead is closed.
+  review("rq_qual_rejected", qualX, REVIEW_Y + 130,
+    "Auto-qualification declined this lead. Confirm the decline before closing — do not auto-reject.", "normal");
+  edge(qual, "rq_qual_rejected", "rejected");
 
   const npi = node("npi_verify", "crm.npi_lookup", x(), MAIN_Y, "Verify Provider (NPI)", {
     leadId: "vars.leadId",
@@ -499,9 +496,6 @@ function buildGraph(spec: FlowSpec): Graph {
   });
   edge(auditDone, end);
 
-  // Cleanup the transient marker we may have stashed on the spec.
-  delete (spec as any).__convergeFrom;
-
   return { nodes, edges };
 }
 
@@ -542,6 +536,7 @@ export async function seedIntakeWorkflows(): Promise<SeedIntakeWorkflowsResult> 
         id: automationWorkflowsTable.id,
         graph: automationWorkflowsTable.graph,
         trigger_config: automationWorkflowsTable.trigger_config,
+        enabled: automationWorkflowsTable.enabled,
       })
       .from(automationWorkflowsTable)
       .where(
@@ -567,11 +562,14 @@ export async function seedIntakeWorkflows(): Promise<SeedIntakeWorkflowsResult> 
       continue;
     }
 
-    // Already seeded — refresh to the latest template ONLY if the operator has
-    // not edited the graph since we last wrote it. We detect an edit by
-    // comparing the stored fingerprint against the current graph's fingerprint.
-    // Legacy rows (seeded before fingerprinting) have no stored sha; we treat
-    // them as managed/unedited and upgrade them once.
+    // Already seeded. We only auto-refresh a DISABLED row: once an operator has
+    // enabled a workflow they have adopted it as live, so we never clobber it.
+    // For disabled rows we refresh to the latest template ONLY if the operator
+    // has not edited the graph since we last wrote it, detected by comparing the
+    // stored fingerprint against the current graph's fingerprint. Legacy rows
+    // (seeded before fingerprinting) have no stored sha; since they are still
+    // disabled and predate versioning we treat them as managed/unedited and
+    // upgrade them once.
     const storedSha =
       (existing.trigger_config as Record<string, unknown> | null)?.["seed_graph_sha"] as
         | string
@@ -579,7 +577,7 @@ export async function seedIntakeWorkflows(): Promise<SeedIntakeWorkflowsResult> 
     const currentSha = graphFingerprint(existing.graph as Graph);
     const unedited = storedSha == null ? true : storedSha === currentSha;
 
-    if (unedited && fingerprint !== currentSha) {
+    if (!existing.enabled && unedited && fingerprint !== currentSha) {
       await db
         .update(automationWorkflowsTable)
         .set({
