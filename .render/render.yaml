@@ -35,6 +35,10 @@ services:
         sync: false
       - key: ENCRYPTION_KEY_V2
         sync: false
+      - key: VAPI_PUBLIC_KEY
+        sync: false
+      - key: VAPI_API_KEY
+        sync: false
 
   - type: worker
     name: mtos-worker
