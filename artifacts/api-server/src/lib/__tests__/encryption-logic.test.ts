@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { encrypt, decrypt } from "../encryption";
+import { encrypt, decrypt } from "../encryption.js";
 
 test("encryption and decryption with various AAD configurations", () => {
   const plaintext = "Hello, Bolt!";

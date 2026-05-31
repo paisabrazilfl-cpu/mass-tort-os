@@ -28,8 +28,8 @@ const CURRENT_KEY_VERSION = 1;
 
 const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
 
-const keyCache = new Map<number, Buffer>();
-const aadCache = new Map<string, Buffer>();
+let keyCache: Map<number, Buffer> | undefined;
+let aadCache: Map<string, Buffer> | undefined;
 
 /**
  * Resolve the AES-256 key for a given version. Strict, no silent fallbacks
@@ -42,6 +42,7 @@ const aadCache = new Map<string, Buffer>();
  */
 function getKey(version?: number): Buffer {
   const keyVersion = version ?? CURRENT_KEY_VERSION;
+  if (!keyCache) keyCache = new Map();
   const cached = keyCache.get(keyVersion);
   if (cached) return cached;
 
@@ -82,6 +83,7 @@ export function isKeyConfigured(version: number): boolean {
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
   if (!entityId) {
+    if (!aadCache) aadCache = new Map();
     const cached = aadCache.get(fieldName);
     if (cached) return cached;
     const buf = Buffer.from(fieldName, "utf8");
