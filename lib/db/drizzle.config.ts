@@ -1,7 +1,13 @@
 import { defineConfig } from "drizzle-kit";
 import path from "path";
 
-if (!process.env.DATABASE_URL) {
+// `drizzle-kit generate` produces DDL purely from the TypeScript schema and
+// never opens a database connection, so it must work offline (e.g. in the
+// Render build container, which has no network route to the private DB). Only
+// connection-bound commands (`push`, `drift`) actually require DATABASE_URL.
+const isOfflineGenerate = process.argv.some((arg) => arg === "generate");
+
+if (!process.env.DATABASE_URL && !isOfflineGenerate) {
   throw new Error("DATABASE_URL, ensure the database is provisioned");
 }
 

@@ -17,9 +17,10 @@ services:
       npm install -g pnpm@10.26.1
       pnpm install --frozen-lockfile
       pnpm --filter @workspace/api-spec run codegen
+      pnpm --filter @workspace/db run generate
       pnpm --filter @workspace/mtos-crm run build
       pnpm --filter @workspace/api-server run build
-    startCommand: node --enable-source-maps artifacts/api-server/dist/server/index.mjs
+    startCommand: node lib/db/apply-schema.mjs && node --enable-source-maps artifacts/api-server/dist/server/index.mjs
     envVars:
       - key: NODE_ENV
         value: production
