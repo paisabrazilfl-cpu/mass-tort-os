@@ -35,6 +35,18 @@ The application is deployed on **Render** (not Railway or Replit autoscale).
 - The `RENDER_API_KEY` secret is the Render account key (used for API-triggered deploys / service management). Auto-deploy on push does not require it.
 - Railway is no longer the deployment target. The legacy Railway config files (`railway.json`, `mtos-crm.railway.json`, `scripts/railway-deploy.sh`) have been removed from the repo.
 
+## Custom Domain (mtosvelocity.com)
+
+The custom domain is attached to the Render web service `mtos-api` (id `srv-d8ea7h3bc2fs73ccsjvg`, default URL `https://mtos-api-2b4x.onrender.com`). Both `mtosvelocity.com` (apex) and `www.mtosvelocity.com` (subdomain, configured to redirect to the apex) are registered on Render and start as `unverified` until DNS is in place.
+
+**DNS records the OWNER must set at the registrar** (registrar access is owner-only):
+- Apex `mtosvelocity.com` → **A** record to `216.24.57.1` (Render's anycast IP). If the registrar supports ALIAS/ANAME at the apex, you may instead point it to `mtos-api-2b4x.onrender.com`.
+- `www.mtosvelocity.com` → **CNAME** to `mtos-api-2b4x.onrender.com`.
+
+After the records propagate, Render auto-verifies the domains and issues TLS certificates; `https://mtosvelocity.com` then serves the CRM. Verification status can be re-checked via `GET /v1/services/srv-d8ea7h3bc2fs73ccsjvg/custom-domains`.
+
+Security: rotate the `RENDER_API_KEY` after go-live, since it was used during domain setup.
+
 # Git Push / Branch Convention
 
 Every push to GitHub goes to a **new dedicated branch** — never a force-push, reset, or rebase over `main`. Branch names are **methodical notes, never random**: always `YYYY-MM-DD` followed by a short description of what changed (e.g. `2026-05-31-automations-abby-planner-crm-read`). Each pushed branch must represent the **full latest version of the CRM merged with zero loss of functionality** — it contains every prior feature plus the new work; never drop existing work when creating it.
