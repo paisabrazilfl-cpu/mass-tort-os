@@ -141,22 +141,36 @@ before(async () => {
 after(async () => {
   // api_key_audit has ON DELETE CASCADE from api_keys so it is cleaned up
   // automatically. Delete api_keys first (FK to users + firms), then users,
-  // then firms.
-  const keyIds = [firmAKeyId, firmBKeyId, scopeKeyId].filter((n) => n > 0);
-  if (keyIds.length > 0) {
-    await db
-      .execute(sql`DELETE FROM api_keys WHERE id = ANY(${keyIds})`)
-      .catch(() => {});
-  }
-  await db
-    .execute(
+  // then firms. Match on the run-unique names rather than `id = ANY(array)` —
+  // the array binding silently no-op'd (errors swallowed by .catch), which let
+  // every run leak its three keys (and, via the resulting FK errors, its firm +
+  // users) into the shared dev DB until 500+ rows piled up.
+  //
+  // Teardown deletes deliberately do NOT swallow errors anymore: a cleanup
+  // failure must surface so CI catches the leak immediately instead of silently
+  // accumulating test garbage. We still guarantee the server is closed via the
+  // finally block so a teardown throw can't leak the listening socket.
+  try {
+    await db.execute(
+      sql`DELETE FROM api_keys WHERE name IN (${`firm-a-key-${TS}`}, ${`firm-b-key-${TS}`}, ${`scope-test-key-${TS}`})`,
+    );
+    await db.execute(
       sql`DELETE FROM mtos_users WHERE email IN (${FIRM_A_ADMIN_EMAIL}, ${FIRM_B_ADMIN_EMAIL})`,
-    )
-    .catch(() => {});
-  if (firmBId > 0) {
-    await db.execute(sql`DELETE FROM firms WHERE id = ${firmBId}`).catch(() => {});
+    );
+    if (firmBId > 0) {
+      await db.execute(sql`DELETE FROM firms WHERE id = ${firmBId}`);
+    }
+    // Prove the cleanup actually removed our rows — a silent no-op here is the
+    // exact failure mode that caused the original leak.
+    const leftover = await db.execute(
+      sql`SELECT COUNT(*)::int AS n FROM api_keys
+          WHERE name IN (${`firm-a-key-${TS}`}, ${`firm-b-key-${TS}`}, ${`scope-test-key-${TS}`})`,
+    );
+    const n = ((leftover as unknown as { rows?: Array<{ n: number }> }).rows ?? [])[0]?.n ?? 0;
+    assert.equal(n, 0, `teardown left ${n} api_keys behind — fix cleanup before it leaks`);
+  } finally {
+    await close();
   }
-  await close();
 });
 
 // ---------------------------------------------------------------------------

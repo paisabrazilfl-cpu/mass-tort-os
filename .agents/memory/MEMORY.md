@@ -5,3 +5,4 @@
 - [Dev vs prod database](dev-vs-prod-database.md) — workspace DATABASE_URL (host `helium`) is the DEV DB, not Render prod; data fixes here are dev-only.
 - [Voice phone-number wiring](voice-phone-number-wiring.md) — one shared `config.phone_number_id` covers ALL agents' outbound; dedicated numbers are inbound-only (tort_phone_numbers). Don't buy per-agent.
 - [Automation system templates](automation-system-templates.md) — null-firm workflows are shared templates: tag-gate cross-tenant visibility, keep trigger_config secret (redact on read + blank on clone), keep writes firm-scoped.
+- [Test data leaks into dev DB](test-data-leaks-shared-dev-db.md) — api-server integration tests hit the shared DATABASE_URL; never swallow teardown deletes or they silently leak rows that show up as "mock data" in the live UI.
