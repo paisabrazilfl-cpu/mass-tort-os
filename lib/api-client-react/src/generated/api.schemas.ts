@@ -1442,6 +1442,10 @@ export interface WebhookResendEnvelope {
 export type ListLeadsParams = {
   status?: ListLeadsStatus;
   tort_type?: string;
+  /**
+   * Exact lead source channel (e.g. web_form_<slug>)
+   */
+  source?: string;
   search?: string;
   vendor_id?: number;
   law_firm?: string;

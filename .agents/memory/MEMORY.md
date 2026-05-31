@@ -9,3 +9,4 @@
 - [Test data leaks into dev DB](test-data-leaks-shared-dev-db.md) — api-server integration tests hit the shared DATABASE_URL; never swallow teardown deletes or they silently leak rows that show up as "mock data" in the live UI.
 - [Git push / branch convention](git-push-branch-convention.md) — push to a NEW branch `YYYY-MM-DD-what-changed`, full merge w/ zero loss, never force; run on a task agent.
 - [Production host reality](production-deploy-host.md) — live mtosvelocity.com is OLD Railway (disregard); NO Render service exists yet; Render must be created from the blueprint.
+- [SITES lead-source keying & rebuild verify](site-lead-source-keying.md) — per-site counts/filters key on stable `web_form_<slug>` source not the renameable label; rebuild-all verifies the serviceable spine, not the latest builder field set.

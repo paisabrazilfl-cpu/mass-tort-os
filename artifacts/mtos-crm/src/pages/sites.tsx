@@ -166,7 +166,12 @@ export default function SitesPage() {
   }
 
   function viewLeads(site: SiteRow) {
-    navigate(`/leads?tort_type=${encodeURIComponent(site.label)}`);
+    // Filter by the STABLE per-site lead source (`web_form_<slug>`), keyed by
+    // the immutable slug — NOT the renameable tort label. `label` is passed only
+    // for the filter banner's display text.
+    navigate(
+      `/leads?source=${encodeURIComponent(`web_form_${site.slug}`)}&label=${encodeURIComponent(site.label)}`,
+    );
   }
 
   async function rebuildAll() {
@@ -495,6 +500,13 @@ function SiteMakerWizard({
   const [proposal, setProposal] = useState<ScaffoldProposal | null>(null);
   const [acceptedKeys, setAcceptedKeys] = useState<Set<string>>(new Set());
 
+  // Step 5 — route-backed draft preview (create mode). Edit mode iframes the
+  // live /api/web-forms/:slug/preview route; create mode has no row yet, so it
+  // POSTs the draft to /api/sites/preview and renders the authoritative HTML.
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
   // Step 6 — publish
   const [publishing, setPublishing] = useState(false);
 
@@ -633,6 +645,40 @@ function SiteMakerWizard({
     () => (proposal?.eligibilityRules ?? []).filter(r => acceptedKeys.has(r.field)),
     [proposal, acceptedKeys],
   );
+
+  // Create-mode preview: when the operator reaches the preview step (step 4),
+  // POST the draft to the route-backed /api/sites/preview and render the
+  // returned HTML. Edit mode skips this (it iframes the live preview route).
+  useEffect(() => {
+    if (step !== 4 || isEdit || !open) return;
+    let cancelled = false;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    (async () => {
+      try {
+        const res = await apiFetchRaw("/api/sites/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            label: displayName.trim() || "Your tort",
+            headline: headline.trim() || undefined,
+            subhead: subhead.trim() || undefined,
+            custom_fields: publishFields,
+            eligibility_rules: publishRules,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || `Preview failed (${res.status})`);
+        if (!cancelled) setPreviewHtml(typeof body.html === "string" ? body.html : null);
+      } catch (err) {
+        if (!cancelled) setPreviewError(describeError(err));
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, isEdit, open, displayName, headline, subhead, publishFields, publishRules]);
 
   async function publish() {
     if (!displayName.trim() || !category) {
@@ -878,33 +924,24 @@ function SiteMakerWizard({
                 src={`/api/web-forms/${encodeURIComponent(initialSite!.slug)}/preview`}
                 className="h-[420px] w-full rounded-lg border"
               />
+            ) : previewLoading ? (
+              <div className="flex h-[420px] w-full items-center justify-center rounded-lg border">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : previewError ? (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+                Could not render preview: {previewError}
+              </div>
+            ) : previewHtml ? (
+              <iframe
+                title="Draft site preview"
+                srcDoc={previewHtml}
+                sandbox=""
+                className="h-[420px] w-full rounded-lg border"
+              />
             ) : (
-              <div className="space-y-4 rounded-lg border p-4">
-                <div className="space-y-1">
-                  <div className="text-lg font-semibold">{headline.trim() || displayName || "Your tort"}</div>
-                  <div className="text-sm text-muted-foreground">
-                    {subhead.trim() || `See if you may qualify for a ${displayName || "this"} claim.`}
-                  </div>
-                </div>
-                {introText.trim() && <p className="text-sm">{introText.trim()}</p>}
-                <Separator />
-                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Intake questions
-                </div>
-                <ul className="space-y-1 text-sm">
-                  <li className="text-muted-foreground">+ 10 canonical contact &amp; eligibility fields (locked)</li>
-                  {publishFields.map(f => (
-                    <li key={f.key} className="flex items-center gap-2">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                      {f.label}
-                      <Badge variant="outline" className="text-[10px]">{f.section}</Badge>
-                    </li>
-                  ))}
-                </ul>
-                <Separator />
-                <p className="text-[11px] text-muted-foreground">
-                  Not a law firm. The <code>[COMPANY]</code> disclaimer appears in the footer and above every submit button.
-                </p>
+              <div className="flex h-[420px] w-full items-center justify-center rounded-lg border text-sm text-muted-foreground">
+                Preview will appear here.
               </div>
             )}
           </div>

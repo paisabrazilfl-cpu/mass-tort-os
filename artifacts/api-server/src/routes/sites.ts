@@ -40,10 +40,19 @@ import {
   type CanonicalCategory,
 } from "../lib/form-config-service";
 import { scaffoldTortSite } from "../lib/site-scaffold";
+import { buildCanonicalWebFormConfig } from "../lib/comprehensive-tort-forms";
+import { renderDraftIntakePreviewHtml } from "../lib/site-render";
 import { logger } from "../lib/logger";
+import type { WebFormField } from "@workspace/db";
 
 const router = Router();
 router.use(authMiddleware);
+
+// Stable per-site lead source. Web-form submissions are stamped with this exact
+// value (see routes/web-forms.ts), keyed by the immutable slug — NOT the label.
+function siteLeadSource(slug: string): string {
+  return `web_form_${slug}`;
+}
 
 // Strict host pattern: alphanumerics, dot, hyphen, optional :port.
 const SAFE_HOST = /^[a-zA-Z0-9.-]+(?::\d{1,5})?$/;
@@ -71,24 +80,29 @@ router.get(
       const baseUrl = resolveBaseUrl(req);
       const configs = await getAllFormConfigs();
 
-      // Lead counts grouped by tort_type (== label). Firm-scoped unless
-      // super_admin sees all firms.
-      const labels = configs.map(c => c.label);
-      const countByLabel = new Map<string, number>();
-      if (labels.length > 0) {
-        const conds = [inArray(leadsTable.tort_type, labels)];
+      // Lead counts keyed by the STABLE per-site source `web_form_<slug>` — the
+      // slug (form_configurations.id) never changes, whereas the tort label CAN
+      // be renamed on edit/republish, which would silently mis-attribute counts.
+      // Counting by source ties each lead to the exact site that produced it.
+      // Firm-scoped unless super_admin sees all firms.
+      const sources = configs.map(c => siteLeadSource(c.id));
+      const countBySource = new Map<string, number>();
+      if (sources.length > 0) {
+        const conds = [inArray(leadsTable.source, sources)];
         if (user.role !== "super_admin") {
           conds.push(eq(leadsTable.firm_id, user.firm_id));
         }
         const rows = await db
           .select({
-            tort_type: leadsTable.tort_type,
+            source: leadsTable.source,
             n: sql<number>`count(*)::int`,
           })
           .from(leadsTable)
           .where(and(...conds))
-          .groupBy(leadsTable.tort_type);
-        for (const r of rows) countByLabel.set(r.tort_type, Number(r.n) || 0);
+          .groupBy(leadsTable.source);
+        for (const r of rows) {
+          if (r.source) countBySource.set(r.source, Number(r.n) || 0);
+        }
       }
 
       const sites = configs.map(c => {
@@ -105,7 +119,7 @@ router.get(
           live: c.active && formEnabled,
           field_count: wf?.fields?.length ?? 0,
           rule_count: wf?.eligibility_rules?.length ?? 0,
-          lead_count: countByLabel.get(c.label) ?? 0,
+          lead_count: countBySource.get(siteLeadSource(c.id)) ?? 0,
           landing_url: baseUrl ? `${baseUrl}/c/${encodeURIComponent(c.category)}/${encodeURIComponent(c.id)}` : null,
           intake_url: baseUrl ? `${baseUrl}/intake/${encodeURIComponent(c.id)}` : null,
           updated_at: c.updated_at,
@@ -252,6 +266,56 @@ router.post(
   },
 );
 
+// ── POST /api/sites/preview — route-backed draft preview (no persistence) ─────
+// Renders the SAME canonical intake chrome the public `/intake/:slug` page uses
+// (verbatim header block, locked base fields, [COMPANY] disclaimer) from an
+// in-memory draft config — so the wizard's create-mode preview is authoritative
+// and identical to what publish produces, without writing a row first. The live
+// page mounts the interactive embed.js form; this static render mirrors the
+// exact canonical fields it will contain. View-level permission: nothing is
+// persisted or exposed publicly.
+const previewReqSchema = z.object({
+  label: z.string().min(1).max(255),
+  headline: z.string().max(180).optional(),
+  subhead: z.string().max(400).optional(),
+  custom_fields: z.array(webFormFieldSchema).max(30).default([]),
+  eligibility_rules: z.array(eligibilityRuleSchema).max(30).default([]),
+});
+
+router.post(
+  "/preview",
+  requirePermission(Permission.FORMS_CONFIG_VIEW),
+  async (req, res) => {
+    const parsed = previewReqSchema.safeParse(req.body);
+    if (!parsed.success) {
+      badRequest(res, "Invalid preview payload", parsed.error.flatten());
+      return;
+    }
+    const body = parsed.data;
+    try {
+      const label = body.label.trim();
+      const headline = (body.headline ?? label).trim();
+      const subhead = (body.subhead ?? `See if you may qualify for a ${label} claim.`).trim();
+      const eligibilityExtra = body.custom_fields.filter((f: WebFormField) => f.section === "eligibility");
+      const storyExtra = body.custom_fields.filter((f: WebFormField) => f.section !== "eligibility");
+      // Same builder the create/republish paths use — the canonical spine is
+      // always re-attached, so the preview can never omit the locked guardrails.
+      const cfg = buildCanonicalWebFormConfig({
+        headline,
+        subhead,
+        eligibilityExtra,
+        storyExtra,
+        rulesExtra: body.eligibility_rules,
+      });
+      const html = renderDraftIntakePreviewHtml(cfg, label);
+      res.json({ status: "ok", html });
+    } catch (err) {
+      logger.error({ err }, "Failed to render site preview");
+      serverError(res, "Failed to render preview");
+    }
+  },
+);
+
 // ── PUT /api/sites/:slug — edit / toggle ──────────────────────────────────────
 const updateReqSchema = z.object({
   label: z.string().min(2).max(255).optional(),
@@ -360,10 +424,16 @@ router.delete(
   },
 );
 
-// ── POST /api/sites/rebuild-all — super_admin backfill ────────────────────────
-// Backfills web_form_config from the canonical comprehensive forms for any
-// built-in tort row that is missing one. Does NOT touch admin-edited sites
-// that already have a web form. super_admin only.
+// ── POST /api/sites/rebuild-all — super_admin re-verify + backfill ────────────
+// Re-verifies that EVERY registry row resolves to a live-serviceable site, not
+// just the ones missing a web form. For each row it reloads via getFormConfig
+// (which lazily backfills web_form_config from the canonical comprehensive
+// forms), then validates the resolved config has the serviceable spine intact
+// (the canonical contact fields, a TCPA consent field, and at least one
+// eligibility rule — the minimum to capture and route a real lead). Returns detailed
+// verification counts plus a list of any rows that still fail to resolve so the
+// operator can act. Non-destructive — seeding already backfills on boot; this
+// just forces + audits the resolution. super_admin only.
 router.post(
   "/rebuild-all",
   requireRole("super_admin"),
@@ -371,15 +441,53 @@ router.post(
     try {
       const configs = await getAllFormConfigs();
       let rebuilt = 0;
-      const missing = configs.filter(c => !c.web_form_config);
-      // Nothing destructive here — seedFormConfigurations already backfills on
-      // boot; this endpoint just reports + re-runs the lazy backfill via reads.
-      for (const c of missing) {
+      let verified = 0;
+      const failures: Array<{ slug: string; reason: string }> = [];
+
+      for (const c of configs) {
+        const hadConfig = Boolean(c.web_form_config);
         const refreshed = await getFormConfig(c.id);
-        if (refreshed?.web_form_config) rebuilt += 1;
+        const cfg = refreshed?.web_form_config;
+        if (!cfg) {
+          failures.push({ slug: c.id, reason: "web_form_config could not be resolved" });
+          continue;
+        }
+        if (!hadConfig) rebuilt += 1;
+        // Validate the SERVICEABLE spine — the minimum a resolved config needs
+        // to capture and route a real lead from the public intake page: the
+        // four canonical contact fields, a TCPA consent field, and at least one
+        // eligibility rule. We intentionally do NOT require the latest
+        // comprehensive field set here, because legitimately-seeded older sites
+        // carry a different (but fully serviceable) field roster.
+        const fieldKeys = new Set((cfg.fields ?? []).map(f => f.key));
+        const requiredFields = ["first_name", "last_name", "email", "phone", "tcpa_consent"];
+        const missingFields = requiredFields.filter(k => !fieldKeys.has(k));
+        const ruleCount = (cfg.eligibility_rules ?? []).length;
+        if (missingFields.length > 0 || ruleCount < 1) {
+          failures.push({
+            slug: c.id,
+            reason:
+              `serviceable spine incomplete` +
+              (missingFields.length ? ` (missing fields: ${missingFields.join(", ")})` : "") +
+              (ruleCount < 1 ? ` (no eligibility rules)` : ""),
+          });
+          continue;
+        }
+        verified += 1;
       }
-      logger.info({ rebuilt, scanned: configs.length, userId: req.user!.id }, "Site rebuild-all");
-      res.json({ status: "ok", scanned: configs.length, rebuilt });
+
+      logger.info(
+        { scanned: configs.length, rebuilt, verified, failed: failures.length, userId: req.user!.id },
+        "Site rebuild-all",
+      );
+      res.json({
+        status: "ok",
+        scanned: configs.length,
+        rebuilt,
+        verified,
+        failed: failures.length,
+        failures,
+      });
     } catch (err) {
       logger.error({ err }, "rebuild-all failed");
       serverError(res, "rebuild-all failed");

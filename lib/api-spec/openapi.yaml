@@ -75,6 +75,12 @@ paths:
           required: false
           schema:
             type: string
+        - name: source
+          in: query
+          required: false
+          description: Exact lead source channel (e.g. web_form_<slug>)
+          schema:
+            type: string
         - name: search
           in: query
           required: false

@@ -22,6 +22,10 @@ export const ListLeadsQueryParams = zod.object({
     .enum(["new", "qualified", "signed", "rejected", "review_required"])
     .optional(),
   tort_type: zod.coerce.string().optional(),
+  source: zod.coerce
+    .string()
+    .optional()
+    .describe("Exact lead source channel (e.g. web_form_<slug>)"),
   search: zod.coerce.string().optional(),
   vendor_id: zod.coerce.number().optional(),
   law_firm: zod.coerce.string().optional(),

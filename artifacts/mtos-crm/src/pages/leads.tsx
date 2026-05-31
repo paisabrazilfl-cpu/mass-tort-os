@@ -213,6 +213,10 @@ export default function Leads() {
   const searchString = useSearch();
   const urlParams = new URLSearchParams(searchString);
   const tortFilter = urlParams.get("tort_type") ?? "";
+  // Per-site lead filter: SITES "View leads" links here with a stable
+  // `source=web_form_<slug>` plus a `label` for human-friendly banner display.
+  const sourceFilter = urlParams.get("source") ?? "";
+  const sourceLabel = urlParams.get("label") ?? "";
   const [search, setSearch] = useState(urlParams.get("search") ?? "");
   const [status, setStatus] = useState<ListLeadsStatus | "all">("all");
   const [exportOpen, setExportOpen] = useState(false);
@@ -221,6 +225,7 @@ export default function Leads() {
     ...(search ? { search } : {}),
     ...(status !== "all" ? { status: status as ListLeadsStatus } : {}),
     ...(tortFilter ? { tort_type: tortFilter } : {}),
+    ...(sourceFilter ? { source: sourceFilter } : {}),
   };
 
   const { data: leads, isLoading } = useListLeads(params, {
@@ -294,11 +299,18 @@ export default function Leads() {
         </Select>
       </div>
 
-      {tortFilter && (
+      {(tortFilter || sourceFilter) && (
         <div className="flex items-center gap-2 text-sm">
-          <Badge variant="secondary" className="gap-1">
-            Tort: {tortFilter}
-          </Badge>
+          {tortFilter && (
+            <Badge variant="secondary" className="gap-1">
+              Tort: {tortFilter}
+            </Badge>
+          )}
+          {sourceFilter && (
+            <Badge variant="secondary" className="gap-1">
+              Site: {sourceLabel || sourceFilter}
+            </Badge>
+          )}
           <Link href="/leads" className="text-muted-foreground underline-offset-4 hover:underline">
             Clear filter
           </Link>
