@@ -65,6 +65,7 @@ export const navigation: NavSection[] = [
     color: "violet",
     items: [
       { name: "Site Manager", href: "/sites", icon: Grid3x3 },
+      { name: "Sites AI Assistant", href: "/sites-ai", icon: Sparkles },
     ],
   },
 

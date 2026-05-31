@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **324 checked / 46 public / 278 protected / 0 unprotected.**
+Boot-time count: **333 checked / 46 public / 287 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | DELETE | `/api/:slug` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
@@ -589,6 +589,14 @@ Boot-time count: **324 checked / 46 public / 278 protected / 0 unprotected.**
 | (root) | PUT | `/api/:slug` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | POST | `/api/chat` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
+| (root) | GET | `/api/conversations/:id/messages/:messageId/attachments/:index` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
+| (root) | POST | `/api/conversations/:id/messages/:messageId/cancel` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
+| (root) | POST | `/api/conversations/:id/messages/:messageId/confirm` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
+| (root) | POST | `/api/conversations/:id/messages` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
+| (root) | DELETE | `/api/conversations/:id` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
+| (root) | GET | `/api/conversations/:id` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
+| (root) | GET | `/api/conversations` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
+| (root) | POST | `/api/conversations` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
 | (root) | GET | `/api/` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
 | (root) | GET | `/api/navigation` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | GET | `/api/pages` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -600,6 +608,7 @@ Boot-time count: **324 checked / 46 public / 278 protected / 0 unprotected.**
 | (root) | POST | `/api/seo/rebuild-all` | ✓ | ✓ |  |  |  | `super_admin` | — | ✓ |
 | (root) | GET | `/api/snapshot` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
 | (root) | GET | `/api/tools` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
+| (root) | POST | `/api/uploads/request-url` | ✓ | ✓ |  |  |  | — | `forms:config:view` | ✓ |
 | admin-ai-constitution | GET | `/api/admin-ai-constitution/` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | admin-api-keys | GET | `/api/admin-api-keys/_meta/scopes` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |
 | admin-api-keys | GET | `/api/admin-api-keys/:id/audit` | ✓ | ✓ |  |  |  | — | `api_keys:manage` | ✓ |

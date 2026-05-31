@@ -42,7 +42,7 @@ import {
 import { scaffoldTortSite } from "../lib/site-scaffold";
 import { buildCanonicalWebFormConfig } from "../lib/comprehensive-tort-forms";
 import { renderDraftIntakePreviewHtml } from "../lib/site-render";
-import { buildSeoManifest } from "../lib/seo-pages";
+import { rebuildAllSites, rebuildSeoNetwork } from "../lib/site-rebuild";
 import { logger } from "../lib/logger";
 import type { WebFormField } from "@workspace/db";
 
@@ -440,55 +440,8 @@ router.post(
   requireRole("super_admin"),
   async (req, res) => {
     try {
-      const configs = await getAllFormConfigs();
-      let rebuilt = 0;
-      let verified = 0;
-      const failures: Array<{ slug: string; reason: string }> = [];
-
-      for (const c of configs) {
-        const hadConfig = Boolean(c.web_form_config);
-        const refreshed = await getFormConfig(c.id);
-        const cfg = refreshed?.web_form_config;
-        if (!cfg) {
-          failures.push({ slug: c.id, reason: "web_form_config could not be resolved" });
-          continue;
-        }
-        if (!hadConfig) rebuilt += 1;
-        // Validate the SERVICEABLE spine — the minimum a resolved config needs
-        // to capture and route a real lead from the public intake page: the
-        // four canonical contact fields, a TCPA consent field, and at least one
-        // eligibility rule. We intentionally do NOT require the latest
-        // comprehensive field set here, because legitimately-seeded older sites
-        // carry a different (but fully serviceable) field roster.
-        const fieldKeys = new Set((cfg.fields ?? []).map(f => f.key));
-        const requiredFields = ["first_name", "last_name", "email", "phone", "tcpa_consent"];
-        const missingFields = requiredFields.filter(k => !fieldKeys.has(k));
-        const ruleCount = (cfg.eligibility_rules ?? []).length;
-        if (missingFields.length > 0 || ruleCount < 1) {
-          failures.push({
-            slug: c.id,
-            reason:
-              `serviceable spine incomplete` +
-              (missingFields.length ? ` (missing fields: ${missingFields.join(", ")})` : "") +
-              (ruleCount < 1 ? ` (no eligibility rules)` : ""),
-          });
-          continue;
-        }
-        verified += 1;
-      }
-
-      logger.info(
-        { scanned: configs.length, rebuilt, verified, failed: failures.length, userId: req.user!.id },
-        "Site rebuild-all",
-      );
-      res.json({
-        status: "ok",
-        scanned: configs.length,
-        rebuilt,
-        verified,
-        failed: failures.length,
-        failures,
-      });
+      const result = await rebuildAllSites(req.user!.id);
+      res.json({ status: "ok", ...result });
     } catch (err) {
       logger.error({ err }, "rebuild-all failed");
       serverError(res, "rebuild-all failed");
@@ -511,25 +464,8 @@ router.post(
   requireRole("super_admin"),
   async (req, res) => {
     try {
-      const configs = await getAllFormConfigs();
-      const manifest = buildSeoManifest(configs);
-
-      logger.info(
-        {
-          scanned: configs.length,
-          ...manifest.counts,
-          duplicates: manifest.duplicates.length,
-          userId: req.user!.id,
-        },
-        "SEO rebuild-all",
-      );
-
-      res.json({
-        status: manifest.duplicates.length === 0 ? "ok" : "warn",
-        scanned: configs.length,
-        counts: manifest.counts,
-        duplicates: manifest.duplicates,
-      });
+      const result = await rebuildSeoNetwork(req.user!.id);
+      res.json(result);
     } catch (err) {
       logger.error({ err }, "SEO rebuild-all failed");
       serverError(res, "SEO rebuild-all failed");

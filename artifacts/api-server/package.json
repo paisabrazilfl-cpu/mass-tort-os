@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@google-cloud/storage": "^7.19.0",
     "@simplewebauthn/server": "^13.3.0",
     "@types/pdf-parse": "^1.1.5",
     "@workspace/api-zod": "workspace:*",
@@ -30,6 +31,7 @@
     "drizzle-orm": "catalog:",
     "express": "^5",
     "express-rate-limit": "^8.3.2",
+    "google-auth-library": "^10.6.2",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "pdf-lib": "^1.17.1",
