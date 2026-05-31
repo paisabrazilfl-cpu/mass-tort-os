@@ -8,7 +8,7 @@
 // (no DB row exists yet), so it server-renders the same canonical fields as a
 // static, read-only mirror of what will go live on publish.
 
-import type { Response } from "express";
+import type { Request, Response } from "express";
 import type { WebFormConfig, WebFormField } from "@workspace/db";
 
 // ── canonical guardrail copy (LOCKED — appears on every generated page) ───────
@@ -99,6 +99,28 @@ ${body}
 
 export function disclaimerHtml(): string {
   return `<p class="disclaimer">${htmlEscape(NOT_A_LAW_FIRM_DISCLAIMER)}</p>`;
+}
+
+// Strict host pattern: alphanumerics, dot, hyphen, optional :port.
+const SAFE_HOST = /^[a-zA-Z0-9.-]+(?::\d{1,5})?$/;
+
+/**
+ * Resolve the absolute base URL (scheme + host) for an incoming request, used
+ * to build canonical/OG URLs and sitemap entries. Prefers the configured
+ * PUBLIC_API_BASE_URL; otherwise derives it from the (validated) Host header
+ * and forwarded proto. Returns null when the host/proto can't be trusted.
+ */
+export function resolveBaseUrl(req: Request): string | null {
+  const fromEnv = process.env.PUBLIC_API_BASE_URL?.trim();
+  if (fromEnv) return fromEnv.replace(/\/+$/, "");
+  const host = req.get("host") ?? "";
+  if (!SAFE_HOST.test(host)) return null;
+  const proto = (req.get("x-forwarded-proto") ?? req.protocol ?? "https")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  if (proto !== "http" && proto !== "https") return null;
+  return `${proto}://${host}`;
 }
 
 export function setPublicHeaders(res: Response): void {

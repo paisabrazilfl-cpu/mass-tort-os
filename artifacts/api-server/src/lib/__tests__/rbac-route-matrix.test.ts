@@ -188,6 +188,7 @@ describe("public allowlist (validateRouteTable policy)", () => {
       "automation-webhook",
       "vendor-portal",
       "public-sites",
+      "public-seo",
     ]);
     for (const r of publicRouters) {
       assert.ok(expected.has(r), `unexpected public router: ${r}`);
@@ -415,6 +416,11 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       // landing (/c/:category/:slug) sites. Non-/api GETs mounted at root,
       // before the SPA fallback. No session, no PII — the slug IS the lookup.
       "public-sites": "",
+      // Public SEO page network: category hubs (/c/:category), per-tort
+      // supporting pages (/c/:category/:slug/:topic), /glossary, /how-it-works,
+      // /sitemap.xml, /robots.txt. Non-/api GETs mounted at root, before the SPA
+      // fallback. No session, no PII — content is derived from the live registry.
+      "public-seo": "",
       // SPA fallback: serves the React shell (index.html) for any non-/api GET
       // when the CRM static bundle is present. No PII, no auth required.
       spa: "",
@@ -430,6 +436,10 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       "/api/vendor-portal/",
       "/intake/",
       "/c/",
+      "/glossary",
+      "/how-it-works",
+      "/sitemap.xml",
+      "/robots.txt",
     ];
     for (const p of booted.policy) {
       if (p.status !== "public") continue;

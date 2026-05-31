@@ -8,6 +8,7 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import publicSitesRouter from "./routes/public-sites";
+import publicSeoRouter from "./routes/public-seo";
 import { logger } from "./lib/logger";
 import { idsMiddleware } from "./lib/ids";
 import { markPublic, validateRouteTable } from "./lib/route-protection";
@@ -167,6 +168,13 @@ app.use("/api", (req: express.Request, res: express.Response) => {
 // The /intake and /c path prefixes are registered to this artifact's proxy
 // services so the shared proxy routes them here.
 app.use(publicSitesRouter);
+
+// Public SEO page network (Task #130) — category hubs (/c/:category), per-tort
+// supporting pages (/c/:category/:slug/:topic), /glossary, /how-it-works,
+// /sitemap.xml and /robots.txt. Mounted BEFORE the SPA fallback; the router is
+// markPublic. Its standalone paths are registered to this artifact's proxy
+// services (artifact.toml) so the shared proxy routes them here.
+app.use(publicSeoRouter);
 
 // Production SPA serving — when deployed to Replit Autoscale (or any
 // single-process target), this same Express server also serves the built

@@ -147,6 +147,7 @@ export default function SitesPage() {
   const [editSite, setEditSite] = useState<SiteEditDetail | null>(null);
   const [editLoading, setEditLoading] = useState<string | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildingSeo, setRebuildingSeo] = useState(false);
 
   const isSuperAdmin = user?.role === "super_admin";
 
@@ -192,6 +193,29 @@ export default function SitesPage() {
       toast({ title: "Rebuild failed", description: describeError(err), variant: "destructive" });
     } finally {
       setRebuilding(false);
+    }
+  }
+
+  async function rebuildAllSeo() {
+    if (!confirm("Recompute the public SEO page network (hubs, supporting pages, glossary, sitemap) from the live registry? This is read-only and never changes a site.")) {
+      return;
+    }
+    setRebuildingSeo(true);
+    try {
+      const res = await apiFetchRaw("/api/sites/seo/rebuild-all", { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || `SEO rebuild failed (${res.status})`);
+      const c = body.counts ?? {};
+      const dupes = (body.duplicates ?? []).length;
+      toast({
+        title: dupes === 0 ? "SEO pages rebuilt" : "SEO rebuilt with warnings",
+        description: `${c.total ?? 0} pages · ${c.landing ?? 0} landing · ${c.supporting ?? 0} supporting · ${c.hubs ?? 0} hubs${dupes ? ` · ${dupes} duplicate paths` : ""}`,
+        variant: dupes === 0 ? undefined : "destructive",
+      });
+    } catch (err) {
+      toast({ title: "SEO rebuild failed", description: describeError(err), variant: "destructive" });
+    } finally {
+      setRebuildingSeo(false);
     }
   }
 
@@ -284,6 +308,12 @@ export default function SitesPage() {
             <Button variant="outline" onClick={rebuildAll} disabled={rebuilding} className="gap-2">
               {rebuilding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Hammer className="h-4 w-4" />}
               {rebuilding ? "Rebuilding…" : "Rebuild all sites"}
+            </Button>
+          )}
+          {isSuperAdmin && (
+            <Button variant="outline" onClick={rebuildAllSeo} disabled={rebuildingSeo} className="gap-2">
+              {rebuildingSeo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
+              {rebuildingSeo ? "Rebuilding…" : "Rebuild all SEO pages"}
             </Button>
           )}
           <Button onClick={() => { setEditSite(null); setWizardOpen(true); }} className="gap-2">

@@ -42,6 +42,7 @@ import {
 import { scaffoldTortSite } from "../lib/site-scaffold";
 import { buildCanonicalWebFormConfig } from "../lib/comprehensive-tort-forms";
 import { renderDraftIntakePreviewHtml } from "../lib/site-render";
+import { buildSeoManifest } from "../lib/seo-pages";
 import { logger } from "../lib/logger";
 import type { WebFormField } from "@workspace/db";
 
@@ -491,6 +492,47 @@ router.post(
     } catch (err) {
       logger.error({ err }, "rebuild-all failed");
       serverError(res, "rebuild-all failed");
+    }
+  },
+);
+
+// ── POST /api/sites/seo/rebuild-all — super_admin SEO page-network rebuild ─────
+// The SEO page network (category hubs, per-tort supporting pages, glossary,
+// how-it-works, sitemap.xml, robots.txt) is rendered on-demand straight from
+// the live form-config registry — there is no cached/materialised copy to
+// regenerate. This action therefore recomputes the canonical SEO manifest from
+// the current ACTIVE rows and reports exactly what is live (page counts by kind,
+// tort/category coverage) plus any duplicate paths (which must always be empty).
+// It is fully idempotent — calling it twice with no registry change yields an
+// identical manifest — and is the operator's authoritative "what is indexed?"
+// view + integrity check. super_admin only.
+router.post(
+  "/seo/rebuild-all",
+  requireRole("super_admin"),
+  async (req, res) => {
+    try {
+      const configs = await getAllFormConfigs();
+      const manifest = buildSeoManifest(configs);
+
+      logger.info(
+        {
+          scanned: configs.length,
+          ...manifest.counts,
+          duplicates: manifest.duplicates.length,
+          userId: req.user!.id,
+        },
+        "SEO rebuild-all",
+      );
+
+      res.json({
+        status: manifest.duplicates.length === 0 ? "ok" : "warn",
+        scanned: configs.length,
+        counts: manifest.counts,
+        duplicates: manifest.duplicates,
+      });
+    } catch (err) {
+      logger.error({ err }, "SEO rebuild-all failed");
+      serverError(res, "SEO rebuild-all failed");
     }
   },
 );
