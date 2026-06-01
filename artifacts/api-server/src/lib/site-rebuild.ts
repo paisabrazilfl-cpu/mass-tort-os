@@ -1,9 +1,8 @@
 // Reusable Site rebuild/verification routines.
 //
-// Extracted from routes/sites.ts so BOTH the operator route
-// (POST /api/sites/rebuild-all, /api/sites/seo/rebuild-all) and the Sites AI
-// chat action executor call the exact same logic. Keeping one implementation
-// means the chat assistant can never drift from the audited operator path.
+// Extracted from routes/sites.ts so the operator route
+// (POST /api/sites/rebuild-all, /api/sites/seo/rebuild-all) has a single,
+// audited implementation it can reuse.
 //
 // Both functions are non-destructive: rebuild-all forces + audits the lazy
 // web_form_config backfill and verifies the serviceable spine; seo-rebuild-all
