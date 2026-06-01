@@ -33,6 +33,12 @@ import {
   type ChatHistoryEntry,
 } from "../lib/sites-ai/assistant";
 import { executeProposal } from "../lib/sites-ai/actions";
+import {
+  buildAttachmentContext,
+  checkAttachmentsPolicy,
+  checkUploadPolicy,
+  verifyStoredAttachments,
+} from "../lib/sites-ai/attachments";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { logger } from "../lib/logger";
 
@@ -216,6 +222,14 @@ router.post(
       if (attachments.some((a) => !a.objectPath.startsWith(allowedPrefix))) {
         return badRequest(res, "Invalid attachment path");
       }
+      // Re-enforce the upload policy (MIME allowlist + size cap) at attach time
+      // so the signed-URL check can't be bypassed by posting a raw objectPath.
+      const attachPolicy = checkAttachmentsPolicy(attachments);
+      if (!attachPolicy.ok) return badRequest(res, attachPolicy.message);
+      // Hard-enforce against the STORED object metadata (real size + type), not
+      // the client-declared values, closing the falsified-metadata bypass.
+      const storedPolicy = await verifyStoredAttachments(attachments);
+      if (!storedPolicy.ok) return badRequest(res, storedPolicy.message);
       const [userMsg] = await db
         .insert(messages)
         .values({
@@ -248,10 +262,16 @@ router.post(
         enabled: Boolean(c.web_form_config?.enabled),
       }));
 
+      // Extract bounded text from the uploaded attachments so the assistant
+      // can actually reason over their content (honest: binary/unsupported
+      // formats are noted, not faked).
+      const attachmentContext = await buildAttachmentContext(attachments);
+
       const result = await runSitesAssistant({
         userMessage: parsed.data.content,
         history,
         registry,
+        attachmentContext,
       });
 
       if (!result.ok) {
@@ -453,6 +473,17 @@ router.post(
   async (req, res) => {
     const parsed = uploadUrlSchema.safeParse(req.body);
     if (!parsed.success) return badRequest(res, "Invalid request", parsed.error.flatten());
+    // Enforce the MIME allowlist + size cap before minting a signed URL.
+    //
+    // NOTE: the Replit object-storage sidecar signs only {bucket, object,
+    // method, expires} — it does NOT support content-length-range / content-type
+    // conditions, so the cap cannot be bound into the signed PUT itself (this is
+    // the app-wide upload pattern). We therefore HARD-enforce against the real
+    // stored object metadata at attach time (verifyStoredAttachments) and again
+    // in the extraction path, so an oversized/disallowed object can never be
+    // used in chat or read cross-firm even if a client overwrites the URL.
+    const policy = checkUploadPolicy(parsed.data.contentType, parsed.data.size);
+    if (!policy.ok) return badRequest(res, policy.message);
     try {
       const user = req.user!;
       const uploadURL = await objectStorageService.getObjectEntityUploadURL(

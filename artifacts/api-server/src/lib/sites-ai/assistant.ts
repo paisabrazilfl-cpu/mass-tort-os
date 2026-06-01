@@ -177,6 +177,9 @@ export interface AssistInput {
   userMessage: string;
   history: ChatHistoryEntry[];
   registry: SiteRegistryEntry[];
+  // Bounded text extracted from the operator's uploaded attachments (may be
+  // empty). Injected into the user prompt so replies/proposals can use it.
+  attachmentContext?: string;
 }
 
 export async function runSitesAssistant(
@@ -184,9 +187,13 @@ export async function runSitesAssistant(
   opts?: { maxAttempts?: number; maxTotalMs?: number },
 ): Promise<AssistantResult> {
   const systemPrompt = buildSystemPrompt(input.registry);
+  const attachmentBlock = input.attachmentContext?.trim()
+    ? ["", input.attachmentContext.trim()]
+    : [];
   const baseUserPrompt = [
     "Conversation so far:",
     buildHistoryBlock(input.history, input.userMessage),
+    ...attachmentBlock,
     "",
     "Respond now as the Sites AI Assistant.",
   ].join("\n");
