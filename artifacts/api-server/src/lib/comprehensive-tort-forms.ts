@@ -13,6 +13,7 @@
  * hand-edits via the CRM Edit dialog are never overwritten.
  */
 import { TORT_REGISTRY } from "./tort-engine";
+import { CLAIMANT_CONSENT_ACKNOWLEDGMENT } from "./consent-copy";
 import type {
   WebFormConfig,
   WebFormField,
@@ -140,7 +141,7 @@ export const ANTI_FRAUD_FIELDS: WebFormField[] = [
 
 export const TCPA_FIELD: WebFormField = {
   key: "tcpa_consent",
-  label: "I consent to be contacted by phone, text, or email about my potential claim, including via automated systems. Message & data rates may apply. Consent is not a condition of representation.",
+  label: CLAIMANT_CONSENT_ACKNOWLEDGMENT,
   type: "checkbox",
   section: "story",
   required: true,

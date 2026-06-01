@@ -17,6 +17,7 @@ import { findExistingLeadForIntake } from "../lib/lead-dedup";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { runBackgroundCheck } from "../lib/background-check";
 import { isIntakeIdentityGateEnabled, verifyGoogleIdToken } from "../lib/intake-identity";
+import { withCanonicalConsent } from "../lib/consent-copy";
 
 const router: IRouter = Router();
 
@@ -819,7 +820,7 @@ router.get("/:tortId", async (req, res) => {
       enabled: cfg.enabled,
       intro_headline: cfg.intro_headline,
       intro_subhead: cfg.intro_subhead,
-      fields: cfg.fields,
+      fields: withCanonicalConsent(cfg.fields ?? []),
       eligibility_rules: cfg.eligibility_rules,
     });
   } catch (err) {
@@ -1053,7 +1054,7 @@ function generateWebFormEmbed(
     tortLabel: label,
     introHeadline: cfg.intro_headline,
     introSubhead: cfg.intro_subhead,
-    fields: cfg.fields,
+    fields: withCanonicalConsent(cfg.fields ?? []),
     rules: cfg.eligibility_rules,
     vt: vendorToken ?? "",
     // When the HIPAA identity gate is on, the embed refuses to submit until a

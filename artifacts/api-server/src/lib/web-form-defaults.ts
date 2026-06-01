@@ -1,4 +1,5 @@
 import { TORT_REGISTRY, type TortDefinition } from "./tort-engine";
+import { CLAIMANT_CONSENT_ACKNOWLEDGMENT } from "./consent-copy";
 import type {
   WebFormConfig,
   WebFormField,
@@ -160,8 +161,7 @@ export function buildDefaultWebFormConfig(tort: TortDefinition): WebFormConfig {
     },
     {
       key: "tcpa_consent",
-      label:
-        "I consent to be contacted by phone, SMS, or email about my potential claim, including via automated systems. Message and data rates may apply. Consent is not a condition of representation.",
+      label: CLAIMANT_CONSENT_ACKNOWLEDGMENT,
       type: "checkbox",
       section: "story",
       required: true,

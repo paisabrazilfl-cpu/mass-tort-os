@@ -28,6 +28,7 @@ import {
 } from "../lib/form-config-service";
 import { customFieldSchema, webFormConfigSchema, type WebFormConfig } from "@workspace/db";
 import { findExistingLeadForIntake } from "../lib/lead-dedup";
+import { CLAIMANT_CONSENT_ACKNOWLEDGMENT } from "../lib/consent-copy";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { updateWebFormConfig } from "./web-forms";
 import { buildDefaultWebFormConfig } from "../lib/web-form-defaults";
@@ -1561,7 +1562,7 @@ form.appendChild(section("Hospital Information",[
 ],{accent:"#dc2626",note:"All hospital fields are mandatory. Leads without complete hospital information will be rejected."}));
 
 var compSection=section("Compliance",[
-  input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:"I consent to being contacted via phone, SMS, and email regarding my legal claim. I understand that this is not a condition of service."}),
+  input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:CLAIMANT_CONSENT_ACKNOWLEDGMENT}),
 ],{accent:"#2563eb"});
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormCertUrl",id:"xxTrustedFormCertUrl_0",value:""}));
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormPingUrl",id:"xxTrustedFormPingUrl_0",value:""}));
