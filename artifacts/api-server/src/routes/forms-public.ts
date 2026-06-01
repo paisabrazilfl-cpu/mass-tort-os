@@ -1,13 +1,13 @@
 import { Router, type IRouter, type Request } from "express";
 import rateLimit from "express-rate-limit";
 import { getFormConfig } from "../lib/form-config-service";
-import { generateEmbedScript, runSubmissionPipeline } from "./forms";
+import { generateEmbedScript, runSubmissionPipeline, type EmbedRequiredSpec } from "./forms";
 import { validateEmail } from "../lib/email-validator";
 import { validateAddress } from "../lib/address-validator";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { badRequest, notFound, serverError } from "../lib/http-errors";
-import { db, vendorsTable } from "@workspace/db";
+import { db, vendorsTable, type ShowIfCondition } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
@@ -254,6 +254,22 @@ router.post("/submit/:tortId", async (req, res) => {
       logger.warn({ err, tortId }, "audit_log write failed for public submission result");
     });
   });
+
+  // Tell the pipeline EXACTLY which fields this tort's legacy embed renders so
+  // every rendered field is server-required, matching the embed's HTML required
+  // attributes. The conditions map mirrors the embed's FIELD_CONDITIONS
+  // (derived from web_form_config.fields[].show_if); the pipeline evaluates it
+  // so a conditional field is required only when visible.
+  const fieldConditions: Record<string, ShowIfCondition> = {};
+  for (const f of config.web_form_config?.fields ?? []) {
+    if (f.show_if) fieldConditions[f.key] = f.show_if;
+  }
+  (req as Request & { embedRequired?: EmbedRequiredSpec }).embedRequired = {
+    extra_fields: config.extra_fields ?? [],
+    exposure_fields: config.exposure_fields ?? [],
+    custom_fields: config.custom_fields ?? [],
+    field_conditions: fieldConditions,
+  };
 
   await runSubmissionPipeline(req, res);
 });

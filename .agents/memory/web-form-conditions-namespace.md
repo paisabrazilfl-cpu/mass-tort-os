@@ -19,3 +19,13 @@ A tort's intake form has **two parallel field structures** in `comprehensive-tor
 **Why:** FIELD_CONDITIONS derivation source (web_form_config) and the render source (custom_fields) are deliberately different layers; the condition is a cross-layer reference by key name.
 
 **How to apply:** When adding/verifying a `show_if`: declare it on a `web_form_config` field (for FIELD_CONDITIONS), but make `show_if.field` + `value` match an actually-RENDERED field — i.e. a `custom_fields` key and its real option text. Verify empirically by fetching `/api/forms-public/embed/<tort>` and confirming both the condition's target key and source `field` (or its `cf_`-prefixed form) appear as rendered inputs with the expected option string. The intake SSR page (`/intake/:slug`) just loads the same `embed.js`, so there is no second conditional renderer to keep in sync.
+
+# Server-side show_if enforcement must read the SOURCE the way the embed renders it
+
+"All fields mandatory" is enforced server-side, not just via HTML `required` (a direct POST ignores HTML). Both forms decide required-when-visible via a shared deterministic evaluator (`conditionMet` + `normalizeConditionValue` in `lib/web-form-fields.ts`, mirroring the embed's `mtosCondMet`/`mtosFieldValue`): a conditional field is required ONLY when its `show_if` is currently met. Modern path = `validateAgainstFields` (`routes/web-forms.ts`); legacy embed path = `runSubmissionPipeline` STEP1 (`routes/forms.ts`), fed `field_conditions` by `routes/forms-public.ts`.
+
+**The bypass trap (caught in review):** when resolving a condition's SOURCE value, you must resolve it the SAME way the embed rendered that source, or a direct POST can spoof it. Custom-field sources render ONLY as `cf_<key>`, so the legacy resolver must read `data["cf_<key>"]` when the source key is in `custom_fields` — never fall back to the bare key. The earlier "bare key first, then cf_" resolution let an attacker send a valid `cf_depo_duration='2 yrs'` plus a spoofed bare `depo_duration='<1 yr'` to flip a visible required field to "hidden" and omit it.
+
+**Why:** server visibility must exactly equal browser visibility; any asymmetry is either a false rejection (hidden field demanded) or a silent bypass (visible required field skippable).
+
+**How to apply:** keep the server evaluator's operator + normalization semantics identical to the embed's. Resolve each conditional source by where it actually renders (custom → `cf_<key>` only; base → bare key). Verify a fix empirically: condition-false omission must PASS, condition-true omission must FAIL, and condition-true-plus-spoofed-bare-source must STILL FAIL — on BOTH `/api/web-forms/:t/submit` and `/api/forms-public/submit/:t`.

@@ -11,6 +11,7 @@
 import type { Request, Response } from "express";
 import type { WebFormConfig, WebFormField, SiteProfile } from "@workspace/db";
 import { withCanonicalConsent } from "./consent-copy";
+import { forceFieldsRequired } from "./web-form-fields";
 
 // ── canonical guardrail copy (LOCKED — appears on every generated page) ───────
 // Not-a-law-firm positioning + [COMPANY] disclaimer. Rendered in the footer of
@@ -273,7 +274,7 @@ function renderPreviewField(f: WebFormField): string {
 function renderPreviewFieldsHtml(cfg: WebFormConfig): string {
   const order: Array<WebFormField["section"]> = ["eligibility", "contact", "story"];
   const parts: string[] = [];
-  const canonicalFields = withCanonicalConsent(cfg.fields ?? []);
+  const canonicalFields = forceFieldsRequired(withCanonicalConsent(cfg.fields ?? []));
   for (const section of order) {
     const fields = canonicalFields.filter((f) => f.section === section);
     if (fields.length === 0) continue;

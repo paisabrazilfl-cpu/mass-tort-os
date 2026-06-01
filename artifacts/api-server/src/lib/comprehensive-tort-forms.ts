@@ -14,6 +14,7 @@
  */
 import { TORT_REGISTRY } from "./tort-engine";
 import { CLAIMANT_CONSENT_ACKNOWLEDGMENT } from "./consent-copy";
+import { forceFieldsRequired } from "./web-form-fields";
 import type {
   WebFormConfig,
   WebFormField,
@@ -168,7 +169,7 @@ export const DAMAGE_FIELDS: WebFormField[] = [
 
 export const DESCRIPTION_FIELD: WebFormField = {
   key: "brief_description",
-  label: "In your own words, briefly describe what happened (optional)",
+  label: "In your own words, briefly describe what happened",
   type: "textarea",
   section: "story",
   required: false,
@@ -1514,7 +1515,7 @@ export function buildCanonicalWebFormConfig(input: BuildCanonicalWebFormInput): 
     enabled: true,
     intro_headline: input.headline,
     intro_subhead: input.subhead,
-    fields: [
+    fields: forceFieldsRequired([
       ...BASE_ELIGIBILITY,
       ...eligibilityExtra,
       ...CONTACT_FIELDS,
@@ -1524,7 +1525,7 @@ export function buildCanonicalWebFormConfig(input: BuildCanonicalWebFormInput): 
       ...ANTI_FRAUD_FIELDS,
       DESCRIPTION_FIELD,
       TCPA_FIELD,
-    ],
+    ]),
     eligibility_rules: [...BASE_RULES, ...rulesExtra, ...ANTI_FRAUD_RULES],
     send_confirmation_email: true,
     confirmation_subject: `We received your ${input.headline} inquiry`,
