@@ -16,7 +16,12 @@
 import type { Response } from "express";
 import type { WebFormConfig, WebFormField } from "@workspace/db";
 import type { FormConfigPublic } from "./form-config-service";
-import { htmlEscape, NOT_A_LAW_FIRM_DISCLAIMER } from "./site-render";
+import {
+  htmlEscape,
+  NOT_A_LAW_FIRM_DISCLAIMER,
+  brandingRootStyle,
+  type ShellBranding,
+} from "./site-render";
 
 // og:site_name + visible brand. The whole system renders `[COMPANY]` as the
 // to-be-replaced brand token (see NOT_A_LAW_FIRM_DISCLAIMER), so we stay
@@ -255,6 +260,7 @@ const SEO_STYLES = `
   .crumbs a:hover{color:var(--brand)}
   .crumbs .sep{margin:0 6px;color:#cbd5e1}
   .eyebrow{text-transform:uppercase;letter-spacing:.08em;font-size:12px;font-weight:700;color:var(--brand)}
+  img.hero{display:block;width:100%;height:auto;border-radius:14px;margin:6px 0 18px;border:1px solid var(--line)}
   h1{font-size:30px;line-height:1.2;margin:8px 0 12px}
   h2{font-size:21px;margin:32px 0 12px}
   h3{font-size:17px;margin:20px 0 8px}
@@ -342,6 +348,30 @@ export function breadcrumbHtml(items: BreadcrumbItem[]): string {
   );
 }
 
+/**
+ * Render structured, plain-text content blocks (from seo-content.ts) into safe
+ * HTML. Every string is escaped here, so builders never emit raw markup.
+ */
+export function renderArticleBlocks(
+  blocks: { heading?: string; paragraphs?: string[]; bullets?: string[] }[],
+): string {
+  return blocks
+    .map((b) => {
+      const parts: string[] = [];
+      if (b.heading) parts.push(`<h2>${htmlEscape(b.heading)}</h2>`);
+      for (const p of b.paragraphs ?? []) parts.push(`<p>${htmlEscape(p)}</p>`);
+      if (b.bullets && b.bullets.length) {
+        parts.push(
+          `<ul class="checklist">${b.bullets
+            .map((li) => `<li>${htmlEscape(li)}</li>`)
+            .join("")}</ul>`,
+        );
+      }
+      return parts.join("\n");
+    })
+    .join("\n");
+}
+
 /** A "related pages" block — the spoke links that keep the network connected. */
 export function relatedHtml(title: string, links: BreadcrumbItem[]): string {
   if (links.length === 0) return "";
@@ -362,17 +392,30 @@ export function disclaimerHtml(): string {
  * every rendered page satisfies the hub-and-spoke "links into ≥2 other pages"
  * requirement automatically.
  */
-export function seoPageShell(head: SeoHead, baseUrl: string, body: string): string {
+export function seoPageShell(
+  head: SeoHead,
+  baseUrl: string,
+  body: string,
+  branding?: ShellBranding,
+): string {
   const robots = head.robots ?? "index,follow";
   const ogType = head.ogType ?? "website";
   const titleWithBrand = `${head.title} | ${SEO_BRAND}`;
   const jsonLdHtml = (head.jsonLd ?? []).map(jsonLdScript).join("\n");
+  const faviconTag = branding?.faviconUrl
+    ? `\n<link rel="icon" href="${htmlEscape(branding.faviconUrl)}" />`
+    : "";
+  const ogImage = branding?.ogImageUrl;
+  const ogImageTag = ogImage
+    ? `\n<meta property="og:image" content="${htmlEscape(ogImage)}" />\n<meta name="twitter:image" content="${htmlEscape(ogImage)}" />`
+    : "";
+  const twitterCard = ogImage ? "summary_large_image" : "summary";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>${htmlEscape(titleWithBrand)}</title>
+<title>${htmlEscape(titleWithBrand)}</title>${faviconTag}
 <meta name="description" content="${htmlEscape(head.description)}" />
 <meta name="robots" content="${htmlEscape(robots)}" />
 <link rel="canonical" href="${htmlEscape(head.canonical)}" />
@@ -380,12 +423,12 @@ export function seoPageShell(head: SeoHead, baseUrl: string, body: string): stri
 <meta property="og:title" content="${htmlEscape(head.title)}" />
 <meta property="og:description" content="${htmlEscape(head.description)}" />
 <meta property="og:url" content="${htmlEscape(head.canonical)}" />
-<meta property="og:site_name" content="${htmlEscape(SEO_BRAND)}" />
-<meta name="twitter:card" content="summary" />
+<meta property="og:site_name" content="${htmlEscape(SEO_BRAND)}" />${ogImageTag}
+<meta name="twitter:card" content="${twitterCard}" />
 <meta name="twitter:title" content="${htmlEscape(head.title)}" />
 <meta name="twitter:description" content="${htmlEscape(head.description)}" />
 ${jsonLdHtml}
-<style>${SEO_STYLES}</style>
+<style>${SEO_STYLES}</style>${brandingRootStyle(branding)}
 </head>
 <body>
 ${topNavHtml(baseUrl)}

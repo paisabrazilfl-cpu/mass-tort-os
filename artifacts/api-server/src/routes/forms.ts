@@ -1333,6 +1333,10 @@ interface EmbedConfig {
   exposure_fields: string[];
   intro_text: string | null;
   custom_fields: CustomField[];
+  /** Opt-in: render the intake as a multi-step wizard (progress + next/back). */
+  multi_step?: boolean;
+  /** Per-field conditional visibility, keyed by field key (show_if predicate). */
+  field_conditions?: Record<string, { field: string; op: string; value: string | number | string[] }>;
 }
 
 export function escapeJs(s: string): string {
@@ -1357,6 +1361,8 @@ var TORT_LABEL="${escapeJs(config.label)}";
 var TORT_INTRO="${introText}";
 var EXTRA_FIELDS=${JSON.stringify(extraFields)};
 var CUSTOM_FIELDS=${customFieldsJson};
+var MULTI_STEP=${config.multi_step ? "true" : "false"};
+var FIELD_CONDITIONS=${JSON.stringify(config.field_conditions ?? {})};
 
 function el(tag,attrs,children){
   var e=document.createElement(tag);
@@ -1565,16 +1571,114 @@ form.appendChild(compSection);
 form.appendChild(el("input",{type:"hidden",name:"tort_type",value:TORT_LABEL}));
 form.appendChild(el("input",{type:"hidden",name:"source",value:"form_embed_"+TORT_ID}));
 
+// ---- Conditional visibility (show_if) — active in both single & multi-step modes ----
+function mtosFieldValue(key){
+  var inp=form.querySelector('[name="'+key+'"]')||form.querySelector('[name="cf_'+key+'"]');
+  if(!inp)return "";
+  if(inp.type==="checkbox")return inp.checked?"true":"";
+  return inp.value==null?"":String(inp.value);
+}
+function mtosCondMet(c){
+  var v=mtosFieldValue(c.field);
+  var t=c.value;
+  switch(c.op){
+    case "eq":return Array.isArray(t)?t.indexOf(v)>=0:String(t)===v;
+    case "ne":return Array.isArray(t)?t.indexOf(v)<0:String(t)!==v;
+    case "in":return Array.isArray(t)?t.indexOf(v)>=0:false;
+    case "not_in":return Array.isArray(t)?t.indexOf(v)<0:true;
+    case "lt":return parseFloat(v)<parseFloat(String(t));
+    case "gt":return parseFloat(v)>parseFloat(String(t));
+    default:return true;
+  }
+}
+function mtosApplyConditions(){
+  Object.keys(FIELD_CONDITIONS).forEach(function(key){
+    var c=FIELD_CONDITIONS[key];
+    var inp=form.querySelector('[name="cf_'+key+'"]')||form.querySelector('[name="'+key+'"]');
+    if(!inp)return;
+    var wrap=inp.closest?inp.closest("div"):inp.parentNode;
+    var met=mtosCondMet(c);
+    if(wrap)wrap.style.display=met?"":"none";
+    inp.disabled=!met;
+  });
+}
+form.addEventListener("input",mtosApplyConditions);
+form.addEventListener("change",mtosApplyConditions);
+
+// ---- Multi-step wizard (opt-in via MULTI_STEP) ----
+var current=0;var panels=[];var progSegs=[];var stepLabelEl=null;
+function showStep(i){
+  if(!panels.length)return;
+  if(i<0)i=0;if(i>panels.length-1)i=panels.length-1;
+  current=i;
+  panels.forEach(function(p,idx){p.node.style.display=idx===current?"block":"none";});
+  progSegs.forEach(function(s,idx){s.style.background=idx<=current?"#1d4ed8":"#e5e7eb";});
+  if(stepLabelEl)stepLabelEl.textContent="Step "+(current+1)+" of "+panels.length+(panels[current].title?" — "+panels[current].title:"");
+  if(typeof mtosBackBtn!=="undefined"&&mtosBackBtn)mtosBackBtn.style.display=current>0?"inline-block":"none";
+  if(typeof mtosNextBtn!=="undefined"&&mtosNextBtn)mtosNextBtn.style.display=current<panels.length-1?"inline-block":"none";
+  mtosApplyConditions();
+}
+function mtosValidatePanel(){
+  if(!panels.length)return true;
+  var inputs=panels[current].node.querySelectorAll("input,select,textarea");
+  for(var i=0;i<inputs.length;i++){var inp=inputs[i];if(inp.disabled)continue;if(!inp.checkValidity()){inp.reportValidity();return false;}}
+  return true;
+}
+if(MULTI_STEP){
+  var titleStep={"Personal Information":1,"Medical Information":2,"Additional Information":3,"Physician Information":4,"Hospital Information":5,"Compliance":6};
+  var stepTitles={1:"Your Information",2:"Medical Details",3:"Additional Questions",4:"Physician",5:"Hospital & Documents",6:"Review & Consent"};
+  var docNote=section("Documents to Prepare",[el("p",{style:{gridColumn:"1 / -1",fontSize:"13px",lineHeight:"1.5",color:"#374151",margin:"0"}},"An intake specialist will securely collect supporting records during your follow-up. It helps to have these ready: a government photo ID, proof of the medication or product use (pharmacy records or prescriptions), and any related medical records or diagnosis paperwork.")]);
+  form.appendChild(docNote);
+  var blocks=[];
+  Array.prototype.slice.call(form.children).forEach(function(ch){
+    if(ch.tagName==="H2"||ch.tagName==="P")return;
+    if(ch.tagName==="INPUT")return;
+    blocks.push(ch);
+  });
+  function mtosBlockStep(b){
+    if(b===docNote)return 5;
+    var h=b.querySelector?b.querySelector("h3"):null;
+    if(h&&titleStep[h.textContent.trim()])return titleStep[h.textContent.trim()];
+    return 2;
+  }
+  var stepNums=[];
+  blocks.forEach(function(b){var s=mtosBlockStep(b);if(stepNums.indexOf(s)<0)stepNums.push(s);});
+  stepNums.sort(function(a,b){return a-b;});
+  var prog=el("div",{style:{display:"flex",gap:"6px",marginBottom:"10px"}});
+  stepNums.forEach(function(){var seg=el("div",{style:{flex:"1",height:"6px",borderRadius:"3px",background:"#e5e7eb"}});progSegs.push(seg);prog.appendChild(seg);});
+  stepLabelEl=el("p",{style:{fontSize:"13px",color:"#6b7280",marginBottom:"14px",fontWeight:"600"}});
+  form.appendChild(prog);
+  form.appendChild(stepLabelEl);
+  stepNums.forEach(function(n){
+    var panel=el("div",{});
+    blocks.filter(function(b){return mtosBlockStep(b)===n;}).forEach(function(b){panel.appendChild(b);});
+    panel.style.display="none";
+    form.appendChild(panel);
+    panels.push({step:n,node:panel,title:stepTitles[n]||""});
+  });
+}
+
 var msgDiv=el("div",{id:"mtos-msg",style:{marginBottom:"12px",padding:"12px",borderRadius:"6px",display:"none"}});
 form.appendChild(msgDiv);
 
 var btnRow=el("div",{style:{display:"flex",gap:"12px",marginTop:"8px"}});
 var submitBtn=el("button",{type:"submit",style:{padding:"10px 24px",background:"#1d4ed8",color:"#fff",border:"none",borderRadius:"6px",fontSize:"14px",fontWeight:"600",cursor:"pointer"}},"Submit Claim");
+var mtosBackBtn=null,mtosNextBtn=null;
+if(MULTI_STEP){
+  mtosBackBtn=el("button",{type:"button",style:{padding:"10px 24px",background:"#e5e7eb",color:"#111827",border:"none",borderRadius:"6px",fontSize:"14px",fontWeight:"600",cursor:"pointer",display:"none"}},"Back");
+  mtosNextBtn=el("button",{type:"button",style:{padding:"10px 24px",background:"#1d4ed8",color:"#fff",border:"none",borderRadius:"6px",fontSize:"14px",fontWeight:"600",cursor:"pointer"}},"Next");
+  mtosBackBtn.addEventListener("click",function(){showStep(current-1);});
+  mtosNextBtn.addEventListener("click",function(){if(mtosValidatePanel())showStep(current+1);});
+  btnRow.appendChild(mtosBackBtn);
+  btnRow.appendChild(mtosNextBtn);
+}
 btnRow.appendChild(submitBtn);
 form.appendChild(btnRow);
+if(MULTI_STEP)showStep(0);
 
 form.addEventListener("submit",function(e){
   e.preventDefault();
+  if(MULTI_STEP&&panels.length&&current<panels.length-1){if(mtosValidatePanel())showStep(current+1);return;}
   submitBtn.disabled=true;
   submitBtn.textContent="Submitting...";
   msgDiv.style.display="none";

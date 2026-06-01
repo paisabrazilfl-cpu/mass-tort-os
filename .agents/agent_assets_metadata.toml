@@ -1,5 +1,28 @@
 uploads = []
-generated = []
+
+[[generated]]
+id = "sZl4-fnmXwL86O-SPv5i1"
+uri = "file://artifacts/api-server/assets/brand/depo-provera/hero.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "LYDq0NQAla4xGKJGoan4k"
+uri = "file://artifacts/api-server/assets/brand/depo-provera/og.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "9MyfKH65WtD6FubqFmN1u"
+uri = "file://artifacts/api-server/assets/brand/depo-provera/favicon.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "FlIAOWczjohDexdjKAZ_x"
+uri = "file://artifacts/api-server/assets/brand/depo-provera/logo.png"
+type = "image"
+title = "generated_image"
 
 [[outputs]]
 id = "C4bPm5HiXuqVirNkO8qef"

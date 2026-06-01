@@ -6,11 +6,14 @@ import type {
   WebFormConfig,
   WebFormField,
   EligibilityRule,
+  SiteProfile,
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { TORT_REGISTRY, TortDefinition } from "./tort-engine";
 import {
   getComprehensiveTortForm,
+  getTortSiteProfile,
+  getTortSolMonths,
   buildCanonicalWebFormConfig,
   CANONICAL_CATEGORIES,
   CANONICAL_BASE_FIELD_KEYS,
@@ -40,6 +43,7 @@ export interface FormConfigPublic {
   mdl_status: string | null;
   sol_months: number | null;
   web_form_config: WebFormConfig | null;
+  site_profile: SiteProfile | null;
   updated_at: string;
 }
 
@@ -76,6 +80,8 @@ export async function seedFormConfigurations(): Promise<void> {
           intro_text: comp?.intro_text ?? null,
           active: true,
           web_form_config: comp?.web_form_config ?? null,
+          sol_months: getTortSolMonths(id),
+          site_profile: getTortSiteProfile(id),
         });
         if (comp?.web_form_config) webFormsFilled++;
         inserted++;
@@ -106,20 +112,44 @@ export async function seedFormConfigurations(): Promise<void> {
             patch["intro_text"] = comp.intro_text;
           }
         }
+        // NULL-fill per-tort branding + SOL screening window so registry
+        // additions flow through without clobbering admin/CRM edits.
+        if (row.site_profile == null) {
+          const profile = getTortSiteProfile(id);
+          if (profile) patch["site_profile"] = profile;
+        }
+        if (row.sol_months == null) {
+          const sol = getTortSolMonths(id);
+          if (sol != null) patch["sol_months"] = sol;
+        }
         await db
           .update(formConfigurationsTable)
           .set(patch as never)
           .where(eq(formConfigurationsTable.id, id));
         refreshed++;
       } else {
-        // Admin-edited row. Only fill web_form_config if it's still null —
-        // never overwrite admin-edited fields.
+        // Admin-edited row. Only NULL-fill columns that are still empty —
+        // never overwrite admin-edited fields. This lets registry-added
+        // branding/SOL reach rows whose form fields were hand-tuned.
+        const patch: Record<string, unknown> = {};
         if (comp && !row.web_form_config) {
+          patch["web_form_config"] = comp.web_form_config;
+          webFormsFilled++;
+        }
+        if (row.site_profile == null) {
+          const profile = getTortSiteProfile(id);
+          if (profile) patch["site_profile"] = profile;
+        }
+        if (row.sol_months == null) {
+          const sol = getTortSolMonths(id);
+          if (sol != null) patch["sol_months"] = sol;
+        }
+        if (Object.keys(patch).length > 0) {
+          patch["updated_at"] = new Date();
           await db
             .update(formConfigurationsTable)
-            .set({ web_form_config: comp.web_form_config, updated_at: new Date() })
+            .set(patch as never)
             .where(eq(formConfigurationsTable.id, id));
-          webFormsFilled++;
         }
       }
     }
@@ -151,6 +181,7 @@ function toPublic(row: FormConfiguration): FormConfigPublic {
     mdl_status: row.mdl_status ?? null,
     sol_months: row.sol_months ?? null,
     web_form_config: row.web_form_config ?? null,
+    site_profile: row.site_profile ?? null,
     updated_at: row.updated_at?.toISOString?.() ?? new Date().toISOString(),
   };
 }
@@ -200,6 +231,7 @@ export async function getFormConfig(tortId: string): Promise<FormConfigPublic | 
       sol_months: null,
       updated_at: new Date().toISOString(),
       web_form_config: comp?.web_form_config ?? null,
+      site_profile: null,
     };
   }
   return toPublic(rows[0]);
@@ -221,6 +253,8 @@ export interface FormConfigUpdate {
   avg_settlement_high?: number | null;
   mdl_status?: string | null;
   sol_months?: number | null;
+  web_form_config?: WebFormConfig | null;
+  site_profile?: SiteProfile | null;
 }
 
 export async function updateFormConfig(
@@ -259,6 +293,8 @@ export async function updateFormConfig(
       required_exposure: updates.required_exposure ?? existing.required_exposure,
       intro_text: updates.intro_text ?? existing.intro_text,
       active: updates.active ?? existing.active,
+      web_form_config: updates.web_form_config ?? existing.web_form_config,
+      site_profile: updates.site_profile ?? existing.site_profile,
       updated_by: userId,
     });
   }

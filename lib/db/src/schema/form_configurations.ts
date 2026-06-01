@@ -33,6 +33,9 @@ export const formConfigurationsTable = pgTable("form_configurations", {
   // configured by `custom_fields` / `extra_fields` etc. above. Null until an
   // admin (or the seeder) populates it.
   web_form_config: jsonb("web_form_config").$type<WebFormConfig | null>(),
+  // Per-tort branding + image library for the public marketing/intake surfaces
+  // (colors, fonts, and a named image asset map). Null ⇒ system default brand.
+  site_profile: jsonb("site_profile").$type<SiteProfile | null>(),
   updated_by: integer("updated_by"),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
@@ -85,9 +88,25 @@ export type WebFormFieldType =
   | "radio"
   | "textarea"
   | "checkbox"
-  | "state";
+  | "state"
+  | "file"
+  | "signature";
 
 export type WebFormSection = "eligibility" | "contact" | "story";
+
+export type ShowIfOp = "eq" | "ne" | "in" | "not_in" | "lt" | "gt";
+
+/**
+ * Conditional-visibility predicate. A field carrying `show_if` is rendered (and
+ * validated) only when the referenced field's current value satisfies the
+ * predicate. Used to build branching, multi-step intake flows without a separate
+ * rules engine.
+ */
+export interface ShowIfCondition {
+  field: string;
+  op: ShowIfOp;
+  value: string | number | string[];
+}
 
 export interface WebFormField {
   key: string;
@@ -99,6 +118,12 @@ export interface WebFormField {
   helper_text?: string;
   options?: string[];
   max_length?: number;
+  /** 1-based wizard step (multi-step intake). Absent ⇒ rendered in section order. */
+  step?: number;
+  /** Conditional visibility — field only shows/validates when this matches. */
+  show_if?: ShowIfCondition;
+  /** For `file` uploads: comma-separated accept hint, e.g. ".pdf,.jpg,image/*". */
+  accept?: string;
 }
 
 export type EligibilityOp = "eq" | "ne" | "in" | "not_in" | "lt" | "gt";
@@ -122,12 +147,46 @@ export interface WebFormConfig {
   confirmation_body_html: string;
 }
 
+/**
+ * Per-tort branding + image library for the public marketing/intake surfaces.
+ * All fields optional — a missing value falls back to the system default brand.
+ * `images` values are URLs (absolute, or app-relative like
+ * `/api/brand-assets/<tort>/<file>.png`) served same-origin so they satisfy the
+ * SEO pages' tight `img-src 'self'` CSP.
+ */
+export interface SiteProfile {
+  brand_name?: string;
+  colors?: {
+    primary?: string;
+    primary_dark?: string;
+    accent?: string;
+  };
+  fonts?: {
+    heading?: string;
+    body?: string;
+  };
+  images?: {
+    logo?: string;
+    favicon?: string;
+    hero?: string;
+    og?: string;
+    [key: string]: string | undefined;
+  };
+}
+
+export const showIfConditionSchema = z.object({
+  field: z.string().min(1).max(100),
+  op: z.enum(["eq", "ne", "in", "not_in", "lt", "gt"]),
+  value: z.union([z.string().max(500), z.number(), z.array(z.string().max(200)).max(50)]),
+});
+
 export const webFormFieldSchema = z.object({
   key: z.string().min(1).max(100).regex(/^[a-z][a-z0-9_]*$/, "key must be snake_case"),
   label: z.string().min(1).max(255),
   type: z.enum([
     "text", "email", "tel", "date", "number",
     "select", "radio", "textarea", "checkbox", "state",
+    "file", "signature",
   ]),
   section: z.enum(["eligibility", "contact", "story"]),
   required: z.boolean(),
@@ -135,6 +194,9 @@ export const webFormFieldSchema = z.object({
   helper_text: z.string().max(500).optional(),
   options: z.array(z.string().max(200)).optional(),
   max_length: z.number().int().positive().max(10000).optional(),
+  step: z.number().int().min(1).max(12).optional(),
+  show_if: showIfConditionSchema.optional(),
+  accept: z.string().max(200).optional(),
 });
 
 export const eligibilityRuleSchema = z.object({
@@ -149,7 +211,7 @@ export const webFormConfigSchema = z.object({
   enabled: z.boolean(),
   intro_headline: z.string().max(255).default(""),
   intro_subhead: z.string().max(1000).default(""),
-  fields: z.array(webFormFieldSchema).max(40),
+  fields: z.array(webFormFieldSchema).max(80),
   eligibility_rules: z.array(eligibilityRuleSchema).max(40),
   send_confirmation_email: z.boolean(),
   confirmation_subject: z.string().max(255),

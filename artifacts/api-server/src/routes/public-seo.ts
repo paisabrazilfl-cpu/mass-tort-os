@@ -1,26 +1,27 @@
-// Public SSR router for the SEO page network (Task #130).
+// Public SSR router for the 60-page-per-tort SEO network.
 //
-//   GET /c/:category                 — category hub (lists live torts in the
-//                                      category as cards → their landing pages).
-//   GET /c/:category/:slug/:topic    — per-tort supporting topical page, where
-//                                      :topic ∈ { symptoms, diagnosis, faq }.
-//   GET /glossary                    — evergreen domain glossary.
-//   GET /how-it-works                — evergreen process explainer.
-//   GET /sitemap.xml                 — XML sitemap of every live SEO page.
-//   GET /robots.txt                  — crawl policy (disallows /api + /intake).
+//   GET /c/:category                          — category hub.
+//   GET /c/:category/:slug/:topic             — core authority supporting page,
+//                                               :topic ∈ CORE_TOPICS (9).
+//   GET /c/:category/:slug/state/:state       — state SEO page (20 per tort).
+//   GET /c/:category/:slug/city/:city         — city SEO page (15 per tort).
+//   GET /c/:category/:slug/blog/:blogSlug     — educational blog post (10).
+//   GET /c/:category/:slug/resources/:slug    — resource / backlink page (5).
+//   GET /glossary                             — evergreen domain glossary.
+//   GET /how-it-works                         — evergreen process explainer.
+//   GET /sitemap.xml                          — XML sitemap of every live page.
+//   GET /robots.txt                           — crawl policy.
 //
-// This router is PUBLIC (markPublic) — no JWT. It is mounted BEFORE the SPA
-// fallback in app.ts, and its /glossary, /how-it-works, /sitemap.xml and
-// /robots.txt path prefixes are registered to the api-server artifact
-// (artifact.toml services.paths) so the proxy routes them here, not to the SPA.
-// (/c is already registered for the landing pages in public-sites.ts.)
+// PUBLIC (markPublic) — no JWT. Mounted BEFORE the SPA fallback in app.ts.
+// Every fact rendered here is grounded in the DB-backed tort registry; no tort
+// facts are invented (see seo-render.ts / seo-content.ts HARD RULES).
 
 import { Router } from "express";
 import { getAllFormConfigs, getFormConfig } from "../lib/form-config-service";
 import type { FormConfigPublic } from "../lib/form-config-service";
 import { markPublic } from "../lib/route-protection";
 import { logger } from "../lib/logger";
-import { htmlEscape, resolveBaseUrl, disclaimerHtml } from "../lib/site-render";
+import { htmlEscape, resolveBaseUrl, disclaimerHtml, brandingFromProfile } from "../lib/site-render";
 import {
   CATEGORY_LABELS,
   CATEGORY_BLURBS,
@@ -39,16 +40,42 @@ import {
   faqJsonLd,
   itemListJsonLd,
   relatedHtml,
+  renderArticleBlocks,
   seoPageShell,
   setSeoHeaders,
   type BreadcrumbItem,
 } from "../lib/seo-render";
 import { buildSeoManifest, TORT_TOPICS, type TortTopic } from "../lib/seo-pages";
+import {
+  CORE_TOPICS,
+  CORE_TOPIC_TITLES,
+  isCoreArticleTopic,
+  buildCoreArticle,
+  SEO_STATES,
+  SEO_CITIES,
+  findState,
+  findCity,
+  BLOG_SLUGS,
+  isBlogSlug,
+  buildBlogArticle,
+  RESOURCE_SLUGS,
+  isResourceSlug,
+  buildResourceArticle,
+  buildStateArticle,
+  buildCityArticle,
+  slugify,
+  type CoreTopic,
+  type SeoArticle,
+} from "../lib/seo-content";
 
 const router = Router();
 
 function isTortTopic(value: string): value is TortTopic {
   return (TORT_TOPICS as readonly string[]).includes(value);
+}
+
+function isCoreTopic(value: string): value is CoreTopic {
+  return (CORE_TOPICS as readonly string[]).includes(value);
 }
 
 function notFound(res: import("express").Response, baseUrl: string, canonical: string): void {
@@ -76,6 +103,101 @@ function homeCrumb(baseUrl: string): BreadcrumbItem {
   return { name: "Home", url: `${baseUrl}/how-it-works` };
 }
 
+// ── per-tort URL + CTA helpers (shared by every article page) ─────────────────
+
+interface TortUrls {
+  hub: string;
+  landing: string;
+  eligibility: string;
+  intake: string;
+}
+
+function tortUrls(baseUrl: string, category: string, slug: string): TortUrls {
+  const safeCat = encodeURIComponent(category);
+  const safeSlug = encodeURIComponent(slug);
+  const landing = `${baseUrl}/c/${safeCat}/${safeSlug}`;
+  return {
+    hub: `${baseUrl}/c/${safeCat}`,
+    landing,
+    eligibility: `${landing}/eligibility`,
+    intake: `${baseUrl}/intake/${safeSlug}`,
+  };
+}
+
+function ctaHtml(href: string, text: string): string {
+  return `<div style="margin:22px 0"><a class="cta" href="${htmlEscape(href)}">${htmlEscape(text)} →</a></div>`;
+}
+
+/** Standard internal links every article page carries (intake + eligibility + landing). */
+function standardRelated(urls: TortUrls, label: string): BreadcrumbItem[] {
+  return [
+    { name: `${label}: Overview & eligibility check`, url: urls.landing },
+    { name: `${label} claim eligibility`, url: urls.eligibility },
+    { name: `Free ${label} case review`, url: urls.intake },
+  ];
+}
+
+/**
+ * Render a full article page (state / city / blog / resource / core-article)
+ * with breadcrumbs, top/middle/bottom CTAs, related links, and JSON-LD. The
+ * eligibility CTA is woven into the middle of the content; intake CTAs bookend
+ * it, satisfying the "every page has top/middle/bottom CTA" linking rule.
+ */
+function renderTortArticle(opts: {
+  baseUrl: string;
+  config: FormConfigPublic;
+  article: SeoArticle;
+  canonical: string;
+  crumbs: BreadcrumbItem[];
+  related: BreadcrumbItem[];
+  extraJsonLd?: object[];
+}): string {
+  const { baseUrl, config, article, canonical, crumbs, related, extraJsonLd = [] } = opts;
+  const urls = tortUrls(baseUrl, config.category, config.id);
+
+  const rendered = article.blocks.map((b) => renderArticleBlocks([b]));
+  const midCta = ctaHtml(urls.eligibility, "See if you may qualify");
+  let content = "";
+  rendered.forEach((h, i) => {
+    content += `${h}\n`;
+    if (i === 0 && rendered.length > 1) content += `${midCta}\n`;
+  });
+
+  const body = `<div class="wrap">
+  ${breadcrumbHtml(crumbs)}
+  <span class="eyebrow">${htmlEscape(config.label)}</span>
+  <h1>${htmlEscape(article.title)}</h1>
+  ${ctaHtml(urls.intake, "Start your free case review")}
+  ${content}
+  ${ctaHtml(urls.intake, "Begin your free case review")}
+  ${relatedHtml("Related pages", related)}
+  ${disclaimerHtml()}
+</div>`;
+
+  const jsonLd: object[] = [
+    webPageJsonLd({ name: article.title, description: article.description, url: canonical }),
+    breadcrumbJsonLd(crumbs),
+    ...extraJsonLd,
+  ];
+
+  return seoPageShell(
+    { title: article.title, description: clampDescription(article.description), canonical, jsonLd },
+    baseUrl,
+    body,
+    brandingFromProfile(config.site_profile, baseUrl),
+  );
+}
+
+/** Load + validate an active tort by slug + category, or null. */
+async function loadActiveTort(
+  slug: string,
+  category: string,
+): Promise<FormConfigPublic | null> {
+  const config = await getFormConfig(slug);
+  if (!config || !config.active || config.category !== category) return null;
+  return config;
+}
+
 // ── GET /c/:category — category hub ──────────────────────────────────────────
 router.get("/c/:category", async (req, res) => {
   const category = String(req.params.category);
@@ -91,10 +213,6 @@ router.get("/c/:category", async (req, res) => {
       .filter((c) => c.active && c.category === category)
       .sort((a, b) => a.label.localeCompare(b.label));
 
-    // Hubs are only published for non-empty categories — this mirrors
-    // buildSeoManifest() exactly so the served routes never drift from the
-    // sitemap/rebuild manifest. An empty category 404s instead of serving a
-    // thin, unindexed page.
     if (!torts.length) return notFound(res, baseUrl, canonical);
 
     const label = categoryLabel(category);
@@ -153,7 +271,186 @@ router.get("/c/:category", async (req, res) => {
   }
 });
 
-// ── GET /c/:category/:slug/:topic — supporting topical page ───────────────────
+// ── GET /c/:category/:slug/state/:state — state SEO page ──────────────────────
+router.get("/c/:category/:slug/state/:state", async (req, res) => {
+  const category = String(req.params.category);
+  const slug = String(req.params.slug);
+  const stateSlug = String(req.params.state);
+  try {
+    const baseUrl = resolveBaseUrl(req);
+    if (!baseUrl) return badRequest(res);
+    const canonical = `${baseUrl}/c/${encodeURIComponent(category)}/${encodeURIComponent(slug)}/state/${encodeURIComponent(stateSlug)}`;
+
+    const state = findState(stateSlug);
+    if (!state) return notFound(res, baseUrl, canonical);
+    const config = await loadActiveTort(slug, category);
+    if (!config) return notFound(res, baseUrl, canonical);
+
+    const urls = tortUrls(baseUrl, category, slug);
+    const article = buildStateArticle(state, config);
+    const crumbs: BreadcrumbItem[] = [
+      homeCrumb(baseUrl),
+      { name: `${categoryLabel(config.category)} claims`, url: urls.hub },
+      { name: config.label, url: urls.landing },
+      { name: state.name, url: canonical },
+    ];
+    const otherStates = SEO_STATES.filter((s) => s.slug !== state.slug)
+      .slice(0, 3)
+      .map((s) => ({
+        name: `${config.label} lawsuit in ${s.name}`,
+        url: `${urls.landing}/state/${s.slug}`,
+      }));
+    const related = [...standardRelated(urls, config.label), ...otherStates];
+
+    setSeoHeaders(res);
+    res.send(renderTortArticle({ baseUrl, config, article, canonical, crumbs, related }));
+  } catch (err) {
+    logger.error({ err, category, slug, stateSlug }, "Failed to render state page");
+    res.status(500).type("html").send("<h1>Something went wrong</h1>");
+  }
+});
+
+// ── GET /c/:category/:slug/city/:city — city SEO page ─────────────────────────
+router.get("/c/:category/:slug/city/:city", async (req, res) => {
+  const category = String(req.params.category);
+  const slug = String(req.params.slug);
+  const citySlug = String(req.params.city);
+  try {
+    const baseUrl = resolveBaseUrl(req);
+    if (!baseUrl) return badRequest(res);
+    const canonical = `${baseUrl}/c/${encodeURIComponent(category)}/${encodeURIComponent(slug)}/city/${encodeURIComponent(citySlug)}`;
+
+    const city = findCity(citySlug);
+    if (!city) return notFound(res, baseUrl, canonical);
+    const config = await loadActiveTort(slug, category);
+    if (!config) return notFound(res, baseUrl, canonical);
+
+    const urls = tortUrls(baseUrl, category, slug);
+    const article = buildCityArticle(city, config);
+    const crumbs: BreadcrumbItem[] = [
+      homeCrumb(baseUrl),
+      { name: `${categoryLabel(config.category)} claims`, url: urls.hub },
+      { name: config.label, url: urls.landing },
+      { name: `${city.name}, ${city.stateAbbr}`, url: canonical },
+    ];
+    const stateForCity = findState(require_slug(city.stateName));
+    const cityExtras: BreadcrumbItem[] = [];
+    if (stateForCity) {
+      cityExtras.push({
+        name: `${config.label} lawsuit in ${stateForCity.name}`,
+        url: `${urls.landing}/state/${stateForCity.slug}`,
+      });
+    }
+    cityExtras.push(
+      ...SEO_CITIES.filter((c) => c.slug !== city.slug)
+        .slice(0, 2)
+        .map((c) => ({
+          name: `${config.label} lawsuit in ${c.name}`,
+          url: `${urls.landing}/city/${c.slug}`,
+        })),
+    );
+    const related = [...standardRelated(urls, config.label), ...cityExtras];
+
+    setSeoHeaders(res);
+    res.send(renderTortArticle({ baseUrl, config, article, canonical, crumbs, related }));
+  } catch (err) {
+    logger.error({ err, category, slug, citySlug }, "Failed to render city page");
+    res.status(500).type("html").send("<h1>Something went wrong</h1>");
+  }
+});
+
+function require_slug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+// ── GET /c/:category/:slug/blog/:blogSlug — educational blog post ─────────────
+router.get("/c/:category/:slug/blog/:blogSlug", async (req, res) => {
+  const category = String(req.params.category);
+  const slug = String(req.params.slug);
+  const blogSlug = String(req.params.blogSlug);
+  try {
+    const baseUrl = resolveBaseUrl(req);
+    if (!baseUrl) return badRequest(res);
+    const canonical = `${baseUrl}/c/${encodeURIComponent(category)}/${encodeURIComponent(slug)}/blog/${encodeURIComponent(blogSlug)}`;
+
+    if (!isBlogSlug(blogSlug)) return notFound(res, baseUrl, canonical);
+    const config = await loadActiveTort(slug, category);
+    if (!config) return notFound(res, baseUrl, canonical);
+
+    const urls = tortUrls(baseUrl, category, slug);
+    const article = buildBlogArticle(blogSlug, config);
+    const crumbs: BreadcrumbItem[] = [
+      homeCrumb(baseUrl),
+      { name: `${categoryLabel(config.category)} claims`, url: urls.hub },
+      { name: config.label, url: urls.landing },
+      { name: article.title, url: canonical },
+    ];
+    const otherBlogs = BLOG_SLUGS.filter((b) => b !== blogSlug)
+      .slice(0, 3)
+      .map((b) => ({
+        name: buildBlogArticle(b, config).title,
+        url: `${urls.landing}/blog/${b}`,
+      }));
+    const related = [
+      ...standardRelated(urls, config.label),
+      ...otherBlogs,
+      { name: `${config.label} resource center`, url: `${urls.landing}/resources/resource-center` },
+    ];
+
+    setSeoHeaders(res);
+    res.send(renderTortArticle({ baseUrl, config, article, canonical, crumbs, related }));
+  } catch (err) {
+    logger.error({ err, category, slug, blogSlug }, "Failed to render blog post");
+    res.status(500).type("html").send("<h1>Something went wrong</h1>");
+  }
+});
+
+// ── GET /c/:category/:slug/resources/:resourceSlug — resource page ────────────
+router.get("/c/:category/:slug/resources/:resourceSlug", async (req, res) => {
+  const category = String(req.params.category);
+  const slug = String(req.params.slug);
+  const resourceSlug = String(req.params.resourceSlug);
+  try {
+    const baseUrl = resolveBaseUrl(req);
+    if (!baseUrl) return badRequest(res);
+    const canonical = `${baseUrl}/c/${encodeURIComponent(category)}/${encodeURIComponent(slug)}/resources/${encodeURIComponent(resourceSlug)}`;
+
+    if (!isResourceSlug(resourceSlug)) return notFound(res, baseUrl, canonical);
+    const config = await loadActiveTort(slug, category);
+    if (!config) return notFound(res, baseUrl, canonical);
+
+    const urls = tortUrls(baseUrl, category, slug);
+    const article = buildResourceArticle(resourceSlug, config);
+    const crumbs: BreadcrumbItem[] = [
+      homeCrumb(baseUrl),
+      { name: `${categoryLabel(config.category)} claims`, url: urls.hub },
+      { name: config.label, url: urls.landing },
+      { name: article.title, url: canonical },
+    ];
+    const otherResources = RESOURCE_SLUGS.filter((r) => r !== resourceSlug)
+      .slice(0, 3)
+      .map((r) => ({
+        name: buildResourceArticle(r, config).title,
+        url: `${urls.landing}/resources/${r}`,
+      }));
+    const related = [
+      ...standardRelated(urls, config.label),
+      ...otherResources,
+      { name: `${config.label} FAQ`, url: `${urls.landing}/faq` },
+    ];
+
+    setSeoHeaders(res);
+    res.send(renderTortArticle({ baseUrl, config, article, canonical, crumbs, related }));
+  } catch (err) {
+    logger.error({ err, category, slug, resourceSlug }, "Failed to render resource page");
+    res.status(500).type("html").send("<h1>Something went wrong</h1>");
+  }
+});
+
+// ── GET /c/:category/:slug/:topic — core authority supporting page ────────────
 router.get("/c/:category/:slug/:topic", async (req, res) => {
   const category = String(req.params.category);
   const slug = String(req.params.slug);
@@ -163,44 +460,52 @@ router.get("/c/:category/:slug/:topic", async (req, res) => {
     if (!baseUrl) return badRequest(res);
     const canonical = `${baseUrl}/c/${encodeURIComponent(category)}/${encodeURIComponent(slug)}/${encodeURIComponent(topic)}`;
 
-    if (!isTortTopic(topic)) return notFound(res, baseUrl, canonical);
+    if (!isCoreTopic(topic)) return notFound(res, baseUrl, canonical);
 
-    const config = await getFormConfig(slug);
-    if (!config || !config.active || config.category !== category) {
-      return notFound(res, baseUrl, canonical);
-    }
+    const config = await loadActiveTort(slug, category);
+    if (!config) return notFound(res, baseUrl, canonical);
 
-    const safeCat = encodeURIComponent(config.category);
-    const safeSlug = encodeURIComponent(config.id);
-    const landingUrl = `${baseUrl}/c/${safeCat}/${safeSlug}`;
-    const hubUrl = `${baseUrl}/c/${safeCat}`;
+    const urls = tortUrls(baseUrl, config.category, config.id);
     const label = config.label;
 
-    // Spoke links: landing + sibling topics + hub (≥2 outbound links always).
+    // Spoke links: landing + a few sibling core pages + hub.
     const siblingLinks: BreadcrumbItem[] = [
-      { name: `${label}: Overview & eligibility check`, url: landingUrl },
-      ...TORT_TOPICS.filter((t) => t !== topic).map((t) => ({
-        name: `${label}: ${TOPIC_TITLES[t]}`,
-        url: `${landingUrl}/${t}`,
-      })),
-      { name: `${categoryLabel(config.category)} claims`, url: hubUrl },
+      ...standardRelated(urls, label),
+      ...CORE_TOPICS.filter((t) => t !== topic && t !== "eligibility")
+        .slice(0, 3)
+        .map((t) => ({ name: `${label}: ${CORE_TOPIC_TITLES[t]}`, url: `${urls.landing}/${t}` })),
+      { name: `${categoryLabel(config.category)} claims`, url: urls.hub },
     ];
-
-    const { title, description, content, faqItems } = renderTopic(topic, config);
 
     const crumbs: BreadcrumbItem[] = [
       homeCrumb(baseUrl),
-      { name: `${categoryLabel(config.category)} claims`, url: hubUrl },
-      { name: label, url: landingUrl },
-      { name: TOPIC_TITLES[topic], url: canonical },
+      { name: `${categoryLabel(config.category)} claims`, url: urls.hub },
+      { name: label, url: urls.landing },
+      { name: CORE_TOPIC_TITLES[topic], url: canonical },
     ];
+
+    // The six new core topics are article-driven; symptoms/diagnosis/faq keep
+    // their bespoke grounded renderers.
+    if (isCoreArticleTopic(topic)) {
+      const article = buildCoreArticle(topic, config);
+      setSeoHeaders(res);
+      return res.send(
+        renderTortArticle({ baseUrl, config, article, canonical, crumbs, related: siblingLinks }),
+      );
+    }
+
+    // Legacy topics: symptoms / diagnosis / faq.
+    const legacy = topic as TortTopic;
+    const { title, description, content, faqItems } = renderTopic(legacy, config);
 
     const body = `<div class="wrap">
   ${breadcrumbHtml(crumbs)}
   <span class="eyebrow">${htmlEscape(label)}</span>
   <h1>${htmlEscape(title)}</h1>
+  ${ctaHtml(urls.intake, "Start your free case review")}
   ${content}
-  <div style="margin:22px 0"><a class="cta" href="${htmlEscape(landingUrl)}">Check if you qualify →</a></div>
+  ${ctaHtml(urls.eligibility, "See if you may qualify")}
+  ${ctaHtml(urls.intake, "Begin your free case review")}
   ${relatedHtml(`More on ${label} claims`, siblingLinks)}
   ${disclaimerHtml()}
 </div>`;
@@ -212,18 +517,19 @@ router.get("/c/:category/:slug/:topic", async (req, res) => {
     if (faqItems && faqItems.length) jsonLd.push(faqJsonLd(faqItems));
 
     setSeoHeaders(res);
-    res.send(seoPageShell({ title, description, canonical, jsonLd }, baseUrl, body));
+    res.send(
+      seoPageShell(
+        { title, description, canonical, jsonLd },
+        baseUrl,
+        body,
+        brandingFromProfile(config.site_profile, baseUrl),
+      ),
+    );
   } catch (err) {
     logger.error({ err, category, slug, topic }, "Failed to render supporting page");
     res.status(500).type("html").send("<h1>Something went wrong</h1>");
   }
 });
-
-const TOPIC_TITLES: Record<TortTopic, string> = {
-  symptoms: "Symptoms & eligibility",
-  diagnosis: "Qualifying diagnoses & filing window",
-  faq: "Frequently asked questions",
-};
 
 interface RenderedTopic {
   title: string;

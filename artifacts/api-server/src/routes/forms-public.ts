@@ -303,6 +303,12 @@ router.get("/embed/:tortId", async (req, res) => {
       notFound(res, "Tort campaign not found");
       return;
     }
+    const webFields = config.web_form_config?.fields ?? [];
+    const fieldConditions: Record<string, { field: string; op: string; value: string | number | string[] }> = {};
+    for (const f of webFields) {
+      if (f.show_if) fieldConditions[f.key] = { field: f.show_if.field, op: f.show_if.op, value: f.show_if.value };
+    }
+    const multiStep = webFields.some((f) => (f.step ?? 0) > 1) || Object.keys(fieldConditions).length > 0;
     const embedScript = generateEmbedScript(
       tortId,
       {
@@ -311,6 +317,8 @@ router.get("/embed/:tortId", async (req, res) => {
         exposure_fields: config.exposure_fields,
         intro_text: config.intro_text,
         custom_fields: config.custom_fields,
+        multi_step: multiStep,
+        field_conditions: fieldConditions,
       },
       baseUrl,
     );

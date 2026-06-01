@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **333 checked / 46 public / 287 protected / 0 unprotected.**
+Boot-time count: **334 checked / 47 public / 287 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | DELETE | `/api/:slug` | ✓ | ✓ |  |  |  | — | `forms:config:manage` | ✓ |
@@ -679,6 +679,7 @@ Boot-time count: **333 checked / 46 public / 287 protected / 0 unprotected.**
 | billing | GET | `/api/billing/invoices` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
 | billing | POST | `/api/billing/portal` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
 | billing | GET | `/api/billing/state` | ✓ | ✓ |  |  |  | — | `billing:manage` | ✓ |
+| brand-assets | GET | `/api/brand-assets/:tort/:file` |  |  | ✓ |  |  | — | — | — |
 | buyers | DELETE | `/api/buyers/:id` | ✓ | ✓ |  |  |  | — | `buyers:manage` | ✓ |
 | buyers | GET | `/api/buyers/:id` | ✓ | ✓ |  |  |  | — | `buyers:view` | ✓ |
 | buyers | PUT | `/api/buyers/:id` | ✓ | ✓ |  |  |  | — | `buyers:manage` | ✓ |

@@ -28,6 +28,7 @@ import {
   setPublicHeaders,
   eligibilityChecklistItems,
   resolveBaseUrl,
+  brandingFromProfile,
 } from "../lib/site-render";
 import {
   categoryLabel,
@@ -90,7 +91,13 @@ router.get("/intake/:slug", async (req, res) => {
 <script src="${htmlEscape(baseUrl)}/api/web-forms/${safeSlug}/embed.js"></script>`;
 
     setPublicHeaders(res);
-    res.send(pageShell(`${headline} — Intake`, body));
+    res.send(
+      pageShell(
+        `${headline} — Intake`,
+        body,
+        brandingFromProfile(config.site_profile, baseUrl),
+      ),
+    );
   } catch (err) {
     logger.error({ err, slug }, "Failed to render intake page");
     res.status(500).type("html").send(pageShell("Error", `<div class="wrap"><h1>Something went wrong</h1></div>`));
@@ -167,8 +174,14 @@ router.get("/c/:category/:slug", async (req, res) => {
       `${config.label} claim review${dx.length ? `: qualifying conditions include ${dx.slice(0, 3).join(", ")}.` : "."} Free, confidential eligibility check — no fees unless you win.`,
     );
 
+    const branding = brandingFromProfile(config.site_profile, baseUrl);
+    const heroHtml = branding?.heroUrl
+      ? `<img class="hero" src="${htmlEscape(branding.heroUrl)}" alt="${htmlEscape(config.label)}" loading="eager" />`
+      : "";
+
     const body = `<div class="wrap">
   ${breadcrumbHtml(crumbs)}
+  ${heroHtml}
   <span class="eyebrow">${htmlEscape(config.label)}</span>
   <h1>${htmlEscape(headline)}</h1>
   <p class="sub">${htmlEscape(subhead)}</p>
@@ -210,6 +223,7 @@ ${ctaDisabled ? "" : `<div class="sticky"><a class="cta" href="${htmlEscape(inta
         },
         baseUrl,
         body,
+        branding,
       ),
     );
   } catch (err) {

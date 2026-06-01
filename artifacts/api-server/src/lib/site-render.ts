@@ -9,7 +9,7 @@
 // static, read-only mirror of what will go live on publish.
 
 import type { Request, Response } from "express";
-import type { WebFormConfig, WebFormField } from "@workspace/db";
+import type { WebFormConfig, WebFormField, SiteProfile } from "@workspace/db";
 
 // ── canonical guardrail copy (LOCKED — appears on every generated page) ───────
 // Not-a-law-firm positioning + [COMPANY] disclaimer. Rendered in the footer of
@@ -49,13 +49,84 @@ export function htmlEscape(s: string): string {
   );
 }
 
-export function pageShell(title: string, body: string): string {
+// ── per-tort branding (from form_configurations.site_profile) ────────────────
+// Resolved, render-ready branding for the public page shells. Colors are
+// sanitized to a safe CSS-token whitelist; image URLs are absolutized against
+// the request base so they satisfy the pages' same-origin `img-src` CSP.
+export interface ShellBranding {
+  primary?: string;
+  primaryDark?: string;
+  faviconUrl?: string;
+  ogImageUrl?: string;
+  heroUrl?: string;
+  brandName?: string;
+}
+
+// Only allow hex, simple named colors, or rgb()/hsl() — never arbitrary text,
+// so a profile value can't break out of the `<style>` block (CSS injection).
+function safeColor(v?: string): string | undefined {
+  if (!v) return undefined;
+  const s = v.trim();
+  if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;
+  if (/^[a-zA-Z]{3,20}$/.test(s)) return s;
+  if (/^(rgb|hsl)a?\([0-9.,%\s/]+\)$/i.test(s)) return s;
+  return undefined;
+}
+
+export function brandingFromProfile(
+  profile: SiteProfile | null | undefined,
+  baseUrl: string,
+): ShellBranding | undefined {
+  if (!profile) return undefined;
+  const base = baseUrl.replace(/\/+$/, "");
+  const abs = (u?: string): string | undefined => {
+    if (!u) return undefined;
+    if (/^https?:\/\//i.test(u)) return u;
+    return `${base}${u.startsWith("/") ? "" : "/"}${u}`;
+  };
+  const b: ShellBranding = {
+    primary: safeColor(profile.colors?.primary),
+    primaryDark: safeColor(profile.colors?.primary_dark),
+    faviconUrl: abs(profile.images?.favicon),
+    ogImageUrl: abs(profile.images?.og),
+    heroUrl: abs(profile.images?.hero),
+    brandName: profile.brand_name,
+  };
+  if (!b.primary && !b.primaryDark && !b.faviconUrl && !b.ogImageUrl && !b.heroUrl) {
+    return undefined;
+  }
+  return b;
+}
+
+// Extra <head> tags injected when branding is present: favicon + social image.
+export function brandingHeadTags(b?: ShellBranding): string {
+  if (!b) return "";
+  const tags: string[] = [];
+  if (b.faviconUrl) tags.push(`<link rel="icon" href="${htmlEscape(b.faviconUrl)}" />`);
+  if (b.ogImageUrl) {
+    tags.push(`<meta property="og:image" content="${htmlEscape(b.ogImageUrl)}" />`);
+    tags.push(`<meta name="twitter:card" content="summary_large_image" />`);
+    tags.push(`<meta name="twitter:image" content="${htmlEscape(b.ogImageUrl)}" />`);
+  }
+  return tags.length ? "\n" + tags.join("\n") : "";
+}
+
+// :root color overrides — must be emitted AFTER the base <style> to win.
+export function brandingRootStyle(b?: ShellBranding): string {
+  if (!b || (!b.primary && !b.primaryDark)) return "";
+  const decls: string[] = [];
+  if (b.primary) decls.push(`--brand:${b.primary}`);
+  if (b.primaryDark) decls.push(`--brand-dark:${b.primaryDark}`);
+  return `\n<style>:root{${decls.join(";")}}</style>`;
+}
+
+export function pageShell(title: string, body: string, branding?: ShellBranding): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>${htmlEscape(title)}</title>
+<title>${htmlEscape(title)}</title>${brandingHeadTags(branding)}
 <style>
   :root{--ink:#0f172a;--muted:#64748b;--brand:#1d4ed8;--brand-dark:#1e3a8a;--bg:#f8fafc;--line:#e2e8f0}
   *{box-sizing:border-box}
@@ -89,7 +160,7 @@ export function pageShell(title: string, body: string): string {
   .field .opt{display:flex;align-items:center;gap:8px;font-size:14px;margin:4px 0;color:var(--ink)}
   .preview-note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:10px 14px;font-size:13px;margin:14px 0}
   .submit-mock{display:inline-block;background:var(--brand);color:#fff;font-weight:700;padding:12px 24px;border-radius:10px;font-size:15px;opacity:.65}
-</style>
+</style>${brandingRootStyle(branding)}
 </head>
 <body>
 ${body}

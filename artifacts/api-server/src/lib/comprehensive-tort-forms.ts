@@ -18,6 +18,7 @@ import type {
   WebFormField,
   EligibilityRule,
   CustomField,
+  SiteProfile,
 } from "@workspace/db";
 
 export interface ComprehensiveTortForm {
@@ -391,7 +392,7 @@ const WEB_FORMS: Record<string, WebFormConfig> = Object.fromEntries([
       { key: "depo_duration_use", label: "How long did you use Depo-Provera injections?", type: "select", section: "story", required: true, options: ["Less than 1 year", "1–2 years", "3–4 years", "5–9 years", "10+ years"] },
       { key: "depo_start_year", label: "Approximately what year did you start Depo-Provera?", type: "number", section: "story", required: true, placeholder: "YYYY" },
       { key: "depo_end_year", label: "What year did you stop using Depo-Provera?", type: "number", section: "story", required: false, placeholder: "YYYY (leave blank if still using)" },
-      { key: "depo_total_injections", label: "Approximately how many injections did you receive in total?", type: "select", section: "story", required: false, options: ["1–4 injections", "5–12 injections", "13–24 injections", "25–48 injections", "More than 48 (4+ years)", "Unsure"] },
+      { key: "depo_total_injections", label: "Approximately how many injections did you receive in total?", type: "select", section: "story", required: false, options: ["1–4 injections", "5–12 injections", "13–24 injections", "25–48 injections", "More than 48 (4+ years)", "Unsure"], show_if: { field: "depo_duration", op: "ne", value: "<1 yr" } },
       { key: "tumor_type", label: "What type of brain tumor were you diagnosed with?", type: "select", section: "story", required: true, options: ["Meningioma (benign)", "Meningioma (atypical / Grade II)", "Meningioma (malignant / Grade III)", "Other brain tumor", "Still awaiting pathology"] },
       { key: "tumor_location", label: "Tumor location (if known)", type: "text", section: "story", required: false, placeholder: "e.g., frontal lobe, spinal meningioma" },
       { key: "diagnosis_year", label: "Year of brain tumor diagnosis", type: "number", section: "story", required: true, placeholder: "YYYY" },
@@ -1316,6 +1317,50 @@ export function getComprehensiveTortForm(tortId: string): ComprehensiveTortForm 
     rules,
     web_form_config: webForm,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PER-TORT SITE BRANDING + SCREENING METADATA
+// ─────────────────────────────────────────────────────────────────────────
+// Branding (colors/fonts/image asset map) consumed by the SSR landing/intake/
+// SEO renderers via brandingFromProfile(). Image paths are same-origin static
+// files served by routes/brand-assets.ts (/api/brand-assets/:tort/:file) so the
+// public pages' `img-src 'self'` CSP is satisfied. Seeded with NULL-fill
+// semantics — admin hand-edits via the CRM are never overwritten.
+export const TORT_SITE_PROFILES: Record<string, SiteProfile> = {
+  "depo-provera": {
+    brand_name: "Depo-Provera Brain Tumor Claim Review",
+    colors: {
+      primary: "#0d9488",
+      primary_dark: "#0f3a52",
+      accent: "#1e3a5f",
+    },
+    fonts: {
+      heading: "Georgia, 'Times New Roman', serif",
+      body: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    },
+    images: {
+      logo: "/api/brand-assets/depo-provera/logo.png",
+      favicon: "/api/brand-assets/depo-provera/favicon.png",
+      hero: "/api/brand-assets/depo-provera/hero.jpg",
+      og: "/api/brand-assets/depo-provera/og.jpg",
+    },
+  },
+};
+
+// Internal statute-of-limitations screening window (months from diagnosis /
+// discovery). NOT legal advice — a conservative intake-triage default used to
+// flag potentially time-barred inquiries for human review.
+export const TORT_SOL_MONTHS: Record<string, number> = {
+  "depo-provera": 24,
+};
+
+export function getTortSiteProfile(tortId: string): SiteProfile | null {
+  return TORT_SITE_PROFILES[tortId] ?? null;
+}
+
+export function getTortSolMonths(tortId: string): number | null {
+  return TORT_SOL_MONTHS[tortId] ?? null;
 }
 
 export function getAllComprehensiveTortForms(): Record<string, ComprehensiveTortForm> {

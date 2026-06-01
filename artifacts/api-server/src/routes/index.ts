@@ -15,6 +15,7 @@ import sitesRouter from "./sites";
 import sitesAiRouter from "./sites-ai";
 import formsPublicRouter from "./forms-public";
 import webFormsRouter from "./web-forms";
+import brandAssetsRouter from "./brand-assets";
 import vendorsRouter from "./vendors";
 import securityRouter from "./security";
 import timelineRouter from "./timeline";
@@ -69,6 +70,7 @@ import { subscriptionGateMiddleware } from "../lib/subscription-gate";
 markPublic(healthRouter, "health");
 markPublic(formsPublicRouter, "forms-public");
 markPublic(webFormsRouter, "web-forms");
+markPublic(brandAssetsRouter, "brand-assets");
 markPublic(webhooksRouter, "webhooks");
 markPublic(vendorPortalRouter, "vendor-portal");
 // Automation webhook triggers: slug+secret is the credential, no Bearer.
@@ -138,6 +140,11 @@ router.use("/forms-public", formsPublicRouter);
 // surface from /api/forms-public/* — these are the simpler embed-on-a-
 // landing-page forms with per-tort field/eligibility configuration.
 router.use("/web-forms", webFormsRouter);
+
+// Public, read-only per-tort brand assets (/api/brand-assets/:tort/:file)
+// referenced by site_profile. Same-origin static images so the public pages'
+// `img-src 'self'` CSP is satisfied. Strictly validated + path-traversal safe.
+router.use("/brand-assets", brandAssetsRouter);
 // Provider webhooks must be PUBLIC (callbacks have no Bearer token).
 // Each handler verifies provider signatures internally and always returns 200.
 router.use("/webhooks", webhooksRouter);

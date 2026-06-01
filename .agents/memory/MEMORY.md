@@ -13,3 +13,4 @@
 - [Git push / branch convention](git-push-branch-convention.md) — push to a NEW branch `YYYY-MM-DD-what-changed`, full merge w/ zero loss, never force; run on a task agent.
 - [Production host reality](production-deploy-host.md) — live mtosvelocity.com is OLD Railway (disregard); NO Render service exists yet; Render must be created from the blueprint.
 - [SITES lead-source keying & rebuild verify](site-lead-source-keying.md) — per-site counts/filters key on stable `web_form_<slug>` source not the renameable label; rebuild-all verifies the serviceable spine, not the latest builder field set.
+- [Web form show_if namespace](web-form-conditions-namespace.md) — FIELD_CONDITIONS derive from web_form_config show_if, but embed renders custom_fields; show_if.field must name a RENDERED custom_field key, not a web_form_config key (looks dangling, isn't).

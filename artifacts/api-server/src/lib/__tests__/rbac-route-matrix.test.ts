@@ -189,6 +189,7 @@ describe("public allowlist (validateRouteTable policy)", () => {
       "vendor-portal",
       "public-sites",
       "public-seo",
+      "brand-assets",
     ]);
     for (const r of publicRouters) {
       assert.ok(expected.has(r), `unexpected public router: ${r}`);
@@ -421,6 +422,10 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       // /sitemap.xml, /robots.txt. Non-/api GETs mounted at root, before the SPA
       // fallback. No session, no PII — content is derived from the live registry.
       "public-seo": "",
+      // Per-tort branding assets (favicon/logo/hero/OG images) served for the
+      // public SSR landing/intake/SEO sites. Static images keyed by tort slug
+      // + filename; no session, no PII — the path IS the lookup.
+      "brand-assets": "/api/brand-assets",
       // SPA fallback: serves the React shell (index.html) for any non-/api GET
       // when the CRM static bundle is present. No PII, no auth required.
       spa: "",
@@ -434,6 +439,7 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       "/api/vapi-tools/",
       "/api/automations/webhook/",
       "/api/vendor-portal/",
+      "/api/brand-assets/",
       "/intake/",
       "/c/",
       "/glossary",

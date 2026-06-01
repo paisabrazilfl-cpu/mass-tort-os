@@ -8,12 +8,24 @@
 
 import type { FormConfigPublic } from "./form-config-service";
 import { CATEGORY_LABELS } from "./seo-render";
+import {
+  CORE_TOPICS,
+  SEO_STATES,
+  SEO_CITIES,
+  BLOG_SLUGS,
+  RESOURCE_SLUGS,
+} from "./seo-content";
 
 export type SeoPageKind =
   | "landing"
   | "symptoms"
   | "diagnosis"
   | "faq"
+  | "core"
+  | "state"
+  | "city"
+  | "blog"
+  | "resource"
   | "category-hub"
   | "glossary"
   | "how-it-works";
@@ -48,6 +60,10 @@ export interface SeoManifest {
     total: number;
     landing: number;
     supporting: number;
+    states: number;
+    cities: number;
+    blogs: number;
+    resources: number;
     hubs: number;
     static: number;
     torts: number;
@@ -96,28 +112,75 @@ export function buildSeoManifest(configs: FormConfigPublic[]): SeoManifest {
     });
   }
 
-  // Per-tort landing + supporting topical pages.
+  // Per-tort 60-page network:
+  //   1 landing + 9 core authority supporting pages
+  //   + 20 state pages + 15 city pages + 10 blog posts + 5 resource pages.
   for (const c of active) {
     const base = `/c/${enc(c.category)}/${enc(c.id)}`;
     add({ path: base, kind: "landing", changefreq: "weekly", priority: 0.8 });
-    for (const topic of TORT_TOPICS) {
+
+    // Core authority supporting pages (symptoms/diagnosis/faq keep their kinds;
+    // the other six fall under the generic "core" kind for counting).
+    for (const topic of CORE_TOPICS) {
+      const kind: SeoPageKind =
+        (TOPIC_KIND as Record<string, SeoPageKind | undefined>)[topic] ?? "core";
       add({
-        path: `${base}/${topic}`,
-        kind: TOPIC_KIND[topic],
+        path: `${base}/${enc(topic)}`,
+        kind,
         changefreq: "monthly",
         priority: 0.6,
       });
     }
+
+    // State SEO pages.
+    for (const state of SEO_STATES) {
+      add({
+        path: `${base}/state/${enc(state.slug)}`,
+        kind: "state",
+        changefreq: "monthly",
+        priority: 0.5,
+      });
+    }
+
+    // City SEO pages.
+    for (const city of SEO_CITIES) {
+      add({
+        path: `${base}/city/${enc(city.slug)}`,
+        kind: "city",
+        changefreq: "monthly",
+        priority: 0.5,
+      });
+    }
+
+    // Educational blog posts.
+    for (const blog of BLOG_SLUGS) {
+      add({
+        path: `${base}/blog/${enc(blog)}`,
+        kind: "blog",
+        changefreq: "monthly",
+        priority: 0.5,
+      });
+    }
+
+    // Resource / backlink pages.
+    for (const resource of RESOURCE_SLUGS) {
+      add({
+        path: `${base}/resources/${enc(resource)}`,
+        kind: "resource",
+        changefreq: "monthly",
+        priority: 0.5,
+      });
+    }
   }
 
-  const landing = pages.filter((p) => p.kind === "landing").length;
-  const hubs = pages.filter((p) => p.kind === "category-hub").length;
-  const staticCount = pages.filter(
-    (p) => p.kind === "glossary" || p.kind === "how-it-works",
-  ).length;
-  const supporting = pages.filter(
-    (p) => p.kind === "symptoms" || p.kind === "diagnosis" || p.kind === "faq",
-  ).length;
+  const countKind = (k: SeoPageKind): number =>
+    pages.filter((p) => p.kind === k).length;
+
+  const landing = countKind("landing");
+  const hubs = countKind("category-hub");
+  const staticCount = countKind("glossary") + countKind("how-it-works");
+  const supporting =
+    countKind("symptoms") + countKind("diagnosis") + countKind("faq") + countKind("core");
 
   return {
     pages,
@@ -125,6 +188,10 @@ export function buildSeoManifest(configs: FormConfigPublic[]): SeoManifest {
       total: pages.length,
       landing,
       supporting,
+      states: countKind("state"),
+      cities: countKind("city"),
+      blogs: countKind("blog"),
+      resources: countKind("resource"),
       hubs,
       static: staticCount,
       torts: active.length,
