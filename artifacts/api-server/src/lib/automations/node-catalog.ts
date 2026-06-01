@@ -706,7 +706,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
   },
   {
     type: "integration.n8n_execute", label: "Run n8n Workflow", category: "integration",
-    description: "Execute a workflow in your connected n8n instance (via the n8n MCP server) and return its execution id. Requires N8N_MCP_URL + N8N_MCP_TOKEN.",
+    description: "Execute a workflow in your firm's connected n8n instance (via the n8n MCP server) and return its execution id. Set your firm's n8n MCP server URL (api_url) + access token (api_key) under Integrations — each firm uses its own connection.",
     icon: "Workflow", color: "bg-rose-600",
     params: [
       { key: "workflowId", label: "n8n Workflow ID", type: "string", required: true, placeholder: "the workflow's id from n8n (e.g. from Run n8n Workflows list)" },

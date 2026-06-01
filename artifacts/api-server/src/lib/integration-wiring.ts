@@ -239,7 +239,7 @@ const REGISTRY: Record<string, WiringInfo> = {
   // Automation — receive lead.created events
   n8n: {
     status: "live",
-    note: "Receives lead.created webhook events. Set api_key to enable HMAC-SHA256 signing (X-MTOS-Signature).",
+    note: "Bidirectional. INBOUND: receives lead.created webhook events at webhook_url (set api_key to enable HMAC-SHA256 signing, X-MTOS-Signature). OUTBOUND: CRM automations RUN your n8n workflows via the MCP bridge — set api_url to your n8n MCP server URL and api_key to its access token. Per-firm isolation: each firm's automations use that firm's own n8n connection, never the owner's global instance.",
   },
   zapier: {
     status: "live",

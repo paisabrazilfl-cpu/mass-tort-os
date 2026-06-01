@@ -116,6 +116,33 @@ export async function getIntegrationCredentials(provider: string, firmId?: numbe
   return decryptRowCredentials(active[0]);
 }
 
+/**
+ * Resolve a firm's OUTBOUND n8n MCP connection (CRM → n8n workflow execution).
+ *
+ * Per-firm credential isolation: the MCP server URL lives in the n8n
+ * integration's plaintext `api_url` column and the access token in its
+ * encrypted `api_key`. Returns null when the firm has no active n8n
+ * integration or the connection is incomplete. Callers MUST treat null as
+ * "this firm is not connected" and never fall back to the owner's global env
+ * instance — that fallback is the cross-tenant leak this isolation prevents.
+ */
+export async function getN8nConnForFirm(firmId: number): Promise<{ url: string; token: string } | null> {
+  const rows = await db
+    .select()
+    .from(integrationsTable)
+    .where(and(eq(integrationsTable.provider, "n8n"), eq(integrationsTable.firm_id, firmId)))
+    .orderBy(desc(integrationsTable.created_at));
+  const row = rows.find((r) => r.status === "active");
+  if (!row) return null;
+  const url = (row.api_url || "").trim();
+  if (!url) return null;
+  const creds = await decryptRowCredentials(row);
+  if (creds._decryption_errors && creds._decryption_errors.length > 0) return null;
+  const token = typeof creds.api_key === "string" ? creds.api_key.trim() : "";
+  if (!token) return null;
+  return { url, token };
+}
+
 router.get("/categories", requirePermission(Permission.INTEGRATIONS_MANAGE), (_req, res) => {
   const cats = Array.from(new Set(PRESET_INTEGRATIONS.map(p => p.category))).sort();
   res.json(cats);

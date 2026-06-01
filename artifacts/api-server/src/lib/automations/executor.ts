@@ -35,8 +35,8 @@ import crypto from "node:crypto";
 import dns from "node:dns/promises";
 import net from "node:net";
 import { getNodeDefinition } from "./node-catalog";
-import { getIntegrationCredentials } from "../../routes/integrations";
-import { n8nConfigured, n8nExecuteWorkflow } from "./n8n-mcp";
+import { getIntegrationCredentials, getN8nConnForFirm } from "../../routes/integrations";
+import { readEnvConn, selectN8nConn, n8nExecuteWorkflow } from "./n8n-mcp";
 import { getEmailAdapter } from "../email/sendgrid";
 import { getFaxAdapter } from "../fax";
 import { sendSms } from "../sms/telnyx";
@@ -450,10 +450,17 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
         inputs = rawInputs as Record<string, unknown>;
       }
     }
-    if (!n8nConfigured()) {
-      throw new Error("n8n is not connected. Set N8N_MCP_URL and N8N_MCP_TOKEN in the environment.");
-    }
-    const out = await n8nExecuteWorkflow({ workflowId, inputs, executionMode });
+    // Per-firm credential isolation: a firm-scoped run uses THAT firm's own
+    // n8n connection from the vault; the owner's global env instance is used
+    // only for system-scope (firmId == null) runs. selectN8nConn throws
+    // honestly when no permissible connection exists — it never crosses the
+    // tenancy boundary.
+    const conn = selectN8nConn({
+      firmId: s.ctx.firmId,
+      envConn: readEnvConn(),
+      firmConn: s.ctx.firmId != null ? await getN8nConnForFirm(s.ctx.firmId) : null,
+    });
+    const out = await n8nExecuteWorkflow(conn, { workflowId, inputs, executionMode });
     return { ok: true, workflowId, executionMode, executionId: out.executionId, result: out.data ?? out.text };
   },
   "integration.send_fax": async (s) => {

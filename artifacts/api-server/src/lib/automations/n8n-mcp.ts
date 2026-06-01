@@ -21,31 +21,56 @@
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "mtos-crm", version: "1.0.0" } as const;
 
-interface McpConn {
+export interface McpConn {
   url: string;
   token: string;
 }
 
-function readConn(): McpConn | null {
+/**
+ * The platform owner's GLOBAL n8n instance, read from process env. This is the
+ * SYSTEM connection — used only for system-scope automations (firmId == null,
+ * e.g. shared templates / scheduled platform jobs) and the owner-only
+ * /api/automations/n8n/* control plane. It is NEVER used for a firm-scoped run.
+ */
+export function readEnvConn(): McpConn | null {
   const url = process.env["N8N_MCP_URL"]?.trim();
   const token = process.env["N8N_MCP_TOKEN"]?.trim();
   if (!url || !token) return null;
   return { url, token };
 }
 
-/** True when both N8N_MCP_URL and N8N_MCP_TOKEN are present. */
+/** True when the global env-configured n8n instance (N8N_MCP_URL+TOKEN) is present. */
 export function n8nConfigured(): boolean {
-  return readConn() !== null;
+  return readEnvConn() !== null;
 }
 
-function requireConn(): McpConn {
-  const conn = readConn();
-  if (!conn) {
+/**
+ * Tenancy-critical connection selector (per-firm credential isolation).
+ *
+ * - A firm-scoped run (`firmId != null`) may ONLY use that firm's own vault
+ *   connection (`firmConn`). It must NEVER reach the owner's global env
+ *   instance — otherwise a firm admin who drops a "Run n8n Workflow" node into
+ *   a firm workflow would drive the owner's n8n account (cross-tenant leak).
+ * - A system-scope run (`firmId == null`) uses the global env instance.
+ *
+ * Throws (honesty invariant) when no permissible connection exists, rather than
+ * silently degrading or falling back across the tenancy boundary.
+ */
+export function selectN8nConn(args: {
+  firmId: number | null;
+  envConn: McpConn | null;
+  firmConn: McpConn | null;
+}): McpConn {
+  if (args.firmId == null) {
+    if (args.envConn) return args.envConn;
     throw new Error(
-      "n8n is not connected. Set N8N_MCP_URL and N8N_MCP_TOKEN in the environment.",
+      "n8n is not connected for system-scope automations. Set N8N_MCP_URL and N8N_MCP_TOKEN in the environment.",
     );
   }
-  return conn;
+  if (args.firmConn) return args.firmConn;
+  throw new Error(
+    `Firm ${args.firmId} has no n8n connection configured. Add an n8n integration under Integrations and set its MCP server URL (api_url) plus access token (api_key). The owner's global n8n is never used for firm-scoped automations.`,
+  );
 }
 
 function headers(conn: McpConn, sessionId?: string): Record<string, string> {
@@ -204,10 +229,10 @@ export interface N8nToolResult {
  * error, or a tool result flagged isError.
  */
 export async function n8nCallTool(
+  conn: McpConn,
   name: string,
   args: Record<string, unknown> = {},
 ): Promise<N8nToolResult> {
-  const conn = requireConn();
   const sessionId = await initialize(conn);
   const res = await post(
     conn,
@@ -247,8 +272,7 @@ export interface N8nPingResult {
 }
 
 /** Health check: initialize + tools/list. Throws on failure. */
-export async function n8nPing(): Promise<N8nPingResult> {
-  const conn = requireConn();
+export async function n8nPing(conn: McpConn): Promise<N8nPingResult> {
   const initRes = await post(conn, {
     jsonrpc: "2.0",
     id: idCounter++,
@@ -295,7 +319,7 @@ export async function n8nPing(): Promise<N8nPingResult> {
 }
 
 /** Search workflows in the connected n8n instance. */
-export async function n8nSearchWorkflows(opts: {
+export async function n8nSearchWorkflows(conn: McpConn, opts: {
   query?: string;
   limit?: number;
   projectId?: string;
@@ -304,7 +328,7 @@ export async function n8nSearchWorkflows(opts: {
   if (opts.query) args.query = opts.query;
   if (opts.limit != null) args.limit = opts.limit;
   if (opts.projectId) args.projectId = opts.projectId;
-  return n8nCallTool("search_workflows", args);
+  return n8nCallTool(conn, "search_workflows", args);
 }
 
 export interface N8nExecuteResult {
@@ -330,7 +354,7 @@ function findExecutionId(data: unknown, text: string): string | null {
 }
 
 /** Execute an n8n workflow by id. Returns the execution id (n8n returns it immediately). */
-export async function n8nExecuteWorkflow(opts: {
+export async function n8nExecuteWorkflow(conn: McpConn, opts: {
   workflowId: string;
   inputs?: Record<string, unknown>;
   executionMode?: string;
@@ -338,7 +362,7 @@ export async function n8nExecuteWorkflow(opts: {
   const args: Record<string, unknown> = { workflowId: opts.workflowId };
   if (opts.inputs && Object.keys(opts.inputs).length > 0) args.inputs = opts.inputs;
   if (opts.executionMode) args.executionMode = opts.executionMode;
-  const out = await n8nCallTool("execute_workflow", args);
+  const out = await n8nCallTool(conn, "execute_workflow", args);
   return {
     executionId: findExecutionId(out.data, out.text),
     text: out.text,
@@ -347,7 +371,7 @@ export async function n8nExecuteWorkflow(opts: {
 }
 
 /** Fetch execution details by workflow + execution id. */
-export async function n8nGetExecution(opts: {
+export async function n8nGetExecution(conn: McpConn, opts: {
   workflowId: string;
   executionId: string;
   includeData?: boolean;
@@ -357,5 +381,5 @@ export async function n8nGetExecution(opts: {
     executionId: opts.executionId,
   };
   if (opts.includeData != null) args.includeData = opts.includeData;
-  return n8nCallTool("get_execution", args);
+  return n8nCallTool(conn, "get_execution", args);
 }

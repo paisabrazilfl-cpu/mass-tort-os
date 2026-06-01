@@ -7,7 +7,7 @@ import { badRequest, notFound, forbidden } from "../lib/http-errors";
 import { NODE_CATALOG } from "../lib/automations/node-catalog";
 import { runWorkflow } from "../lib/automations/executor";
 import {
-  n8nConfigured,
+  readEnvConn,
   n8nPing,
   n8nSearchWorkflows,
   n8nExecuteWorkflow,
@@ -107,21 +107,24 @@ router.get("/node-catalog", requirePermission(Permission.AUTOMATIONS_VIEW), (_re
 // Registered BEFORE the "/:id" routes so "/n8n/..." is not captured by the
 // numeric-id matcher.
 //
-// TENANCY: the n8n connection is a SINGLE global instance configured by the
-// platform owner via process env (N8N_MCP_URL/TOKEN) — there is no per-firm
-// n8n credential vault. These endpoints drive that owner-level control plane
-// (list/execute ANY workflow in the connected account), so they are gated to
-// `super_admin` (the owner) ONLY, not to per-firm AUTOMATIONS_* permissions —
+// TENANCY: these /n8n/* endpoints are the owner-level SYSTEM control plane.
+// They use ONLY the global env instance (N8N_MCP_URL/TOKEN via readEnvConn) to
+// list/execute ANY workflow in the owner's connected account, so they are gated
+// to `super_admin` (the owner) ONLY, not to per-firm AUTOMATIONS_* permissions —
 // otherwise any firm admin could enumerate/run workflows in the owner's n8n
 // account (cross-tenant capability leak). requireRole("super_admin") admits
-// only the top of the role hierarchy.
+// only the top of the role hierarchy. NOTE: per-firm n8n isolation DOES exist
+// for automation RUNS — the executor's integration.n8n_execute node resolves
+// each firm's OWN vault connection via selectN8nConn/getN8nConnForFirm and never
+// touches this global env instance. The env instance is system-scope only.
 router.get("/n8n/status", requireRole("super_admin"), async (_req, res) => {
-  if (!n8nConfigured()) {
+  const conn = readEnvConn();
+  if (!conn) {
     res.json({ configured: false, ok: false, message: "Set N8N_MCP_URL and N8N_MCP_TOKEN to connect your n8n instance." });
     return;
   }
   try {
-    const ping = await n8nPing();
+    const ping = await n8nPing(conn);
     res.json({ configured: true, ok: ping.ok, serverInfo: ping.serverInfo ?? null, toolCount: ping.toolCount ?? null });
   } catch (err) {
     res.json({ configured: true, ok: false, error: err instanceof Error ? err.message : "n8n unreachable" });
@@ -129,14 +132,15 @@ router.get("/n8n/status", requireRole("super_admin"), async (_req, res) => {
 });
 
 router.get("/n8n/workflows", requireRole("super_admin"), async (req, res) => {
-  if (!n8nConfigured()) {
+  const conn = readEnvConn();
+  if (!conn) {
     badRequest(res, "n8n is not connected. Set N8N_MCP_URL and N8N_MCP_TOKEN.");
     return;
   }
   const query = typeof req.query.query === "string" ? req.query.query : undefined;
   const limit = Math.min(Math.max(Number(req.query.limit ?? 25) || 25, 1), 100);
   try {
-    const out = await n8nSearchWorkflows({ query, limit });
+    const out = await n8nSearchWorkflows(conn, { query, limit });
     res.json({ ok: true, workflows: out.data ?? out.text ?? null });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : "n8n workflow search failed" });
@@ -149,7 +153,8 @@ const n8nExecuteBody = z.object({
   executionMode: z.enum(["production", "test"]).optional(),
 });
 router.post("/n8n/execute", requireRole("super_admin"), async (req, res) => {
-  if (!n8nConfigured()) {
+  const conn = readEnvConn();
+  if (!conn) {
     badRequest(res, "n8n is not connected. Set N8N_MCP_URL and N8N_MCP_TOKEN.");
     return;
   }
@@ -159,7 +164,7 @@ router.post("/n8n/execute", requireRole("super_admin"), async (req, res) => {
     return;
   }
   try {
-    const out = await n8nExecuteWorkflow({
+    const out = await n8nExecuteWorkflow(conn, {
       workflowId: parsed.data.workflowId,
       inputs: parsed.data.inputs ?? {},
       executionMode: parsed.data.executionMode ?? "production",
