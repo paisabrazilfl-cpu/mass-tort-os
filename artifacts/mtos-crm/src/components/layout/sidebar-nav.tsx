@@ -53,6 +53,7 @@ export const navigation: NavSection[] = [
       { name: "Intake Form",  href: "/form-engine", icon: AppWindow  },
       { name: "Public Forms", href: "/web-forms",   icon: ListChecks },
       { name: "Form API",     href: "/forms-api",   icon: Library    },
+      { name: "Background Check", href: "/background-check", icon: ShieldCheck },
     ],
   },
 

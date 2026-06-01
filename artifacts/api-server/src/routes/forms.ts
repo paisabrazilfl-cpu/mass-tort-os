@@ -16,7 +16,7 @@ import { runFraudDetection } from "../lib/fraud-engine";
 import { finalArbiter } from "../lib/final-arbiter";
 import { auditLog } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { Permission, requirePermission, auditAction, authMiddleware } from "../lib/rbac";
+import { Permission, requirePermission, auditAction, authMiddleware, canBypassOwnership, denyForbidden } from "../lib/rbac";
 import {
   getAllFormConfigs,
   getFormConfig,
@@ -1158,6 +1158,24 @@ router.post("/background-check/lead/:id", requirePermission(Permission.FORMS_BAC
       return;
     }
 
+    // Ownership gate: FORMS_BACKGROUND_CHECK alone is not enough. A role that
+    // can only see its own leads (e.g. agent/paralegal) must not run a check
+    // against a lead it neither created nor is assigned to. Bypassed for roles
+    // with the any-lead privilege. Mirrors leads.ts `ensureLeadAccess`.
+    const user = req.user!;
+    if (
+      !canBypassOwnership(user) &&
+      leadRow.created_by_user_id !== user.id &&
+      leadRow.assigned_to !== user.id
+    ) {
+      denyForbidden(req, res, "lead_ownership_denied", "Insufficient permissions", {
+        lead_id: leadId,
+        owner_user_id: leadRow.created_by_user_id,
+        assigned_to: leadRow.assigned_to,
+      });
+      return;
+    }
+
     // Decrypt PII fields (e.g. first_name/last_name when stored encrypted) so
     // the validators see real values, not `enc:v1:...` ciphertext. Same
     // pattern as the bg-hub route below and every other lead-reading path.
@@ -1215,6 +1233,22 @@ router.post(
       const [leadRow] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
       if (!leadRow) {
         notFound(res, "Lead not found");
+        return;
+      }
+      // Ownership gate (see /background-check/lead/:id above): permission alone
+      // does not authorize running the hub against a lead the operator cannot
+      // see. Own-scope roles are restricted to their own/assigned leads.
+      const user = req.user!;
+      if (
+        !canBypassOwnership(user) &&
+        leadRow.created_by_user_id !== user.id &&
+        leadRow.assigned_to !== user.id
+      ) {
+        denyForbidden(req, res, "lead_ownership_denied", "Insufficient permissions", {
+          lead_id: leadId,
+          owner_user_id: leadRow.created_by_user_id,
+          assigned_to: leadRow.assigned_to,
+        });
         return;
       }
       // Decrypt PII fields before passing to BG hub. Without this, encrypted
@@ -1284,6 +1318,32 @@ router.get(
     const limitRaw = Number(req.query["limit"] ?? 10);
     const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 10, 1), 50);
     try {
+      // Ownership gate before exposing snapshot history. Own-scope roles can
+      // only read snapshots for leads they created or are assigned to.
+      const [ownerRow] = await db
+        .select({
+          created_by_user_id: leadsTable.created_by_user_id,
+          assigned_to: leadsTable.assigned_to,
+        })
+        .from(leadsTable)
+        .where(eq(leadsTable.id, leadId));
+      if (!ownerRow) {
+        notFound(res, "Lead not found");
+        return;
+      }
+      const user = req.user!;
+      if (
+        !canBypassOwnership(user) &&
+        ownerRow.created_by_user_id !== user.id &&
+        ownerRow.assigned_to !== user.id
+      ) {
+        denyForbidden(req, res, "lead_ownership_denied", "Insufficient permissions", {
+          lead_id: leadId,
+          owner_user_id: ownerRow.created_by_user_id,
+          assigned_to: ownerRow.assigned_to,
+        });
+        return;
+      }
       const rows = await db
         .select()
         .from(leadBackgroundCheckSnapshotsTable)

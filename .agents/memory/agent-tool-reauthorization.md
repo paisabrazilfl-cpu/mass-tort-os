@@ -47,3 +47,22 @@ resolve (and dial on behalf of) a lead owned by firm B. Cross-tenant leak.
 executor handler or its helpers, thread `s.ctx.firmId` through and apply the
 null-vs-scoped branch. Tables with no `firm_id` column can't be row-scoped —
 restrict those to super_admin / system context instead of widening.
+
+## Companion rule: lead-scoped routes outside leads.ts need their own ownership gate
+
+**Rule:** `ensureLeadAccess` (the own-scope ownership check) is a private helper
+inside `routes/leads.ts` — it is NOT shared. Any lead-scoped endpoint living in
+another router (e.g. the background-check endpoints in `routes/forms.ts`) only
+inherits its `requirePermission(...)` gate, which is a PERMISSION check, not an
+OWNERSHIP check. Permission ≠ ownership: a role with `FORMS_BACKGROUND_CHECK`
+plus only `LEAD_VIEW_OWN` could otherwise run/read a check against ANY lead id.
+
+**Why:** a code review flagged this as an IDOR — a UI page that drives the lead
+id from the URL (`/background-check?leadId=`) made it trivial to exercise. Fixed
+by replicating the `canBypassOwnership` else `created_by_user_id`/`assigned_to`
+check inline in each forms.ts bg-hub endpoint (run, hub-run, snapshots).
+
+**How to apply:** whenever you add a `/.../lead/:id`-style route in any router
+other than leads.ts, add the ownership check inline (load the lead's owner
+columns, `canBypassOwnership(user)` short-circuit, else compare to `user.id`,
+`denyForbidden` on mismatch). Don't assume the permission gate covers it.

@@ -27,6 +27,7 @@ import Paralegals from "@/pages/paralegals";
 import Documents from "@/pages/documents";
 import OcrInbox from "@/pages/ocr-inbox";
 import NpiLookup from "@/pages/npi-lookup";
+import BackgroundCheck from "@/pages/background-check";
 import Cases from "@/pages/cases";
 import CaseNew from "@/pages/case-new";
 import CaseDetail from "@/pages/case-detail";
@@ -121,6 +122,7 @@ function AuthedRoutes() {
           <Route path="/documents" component={Documents} />
           <Route path="/ocr-inbox" component={OcrInbox} />
           <Route path="/npi-lookup" component={NpiLookup} />
+          <Route path="/background-check" component={BackgroundCheck} />
           <Route path="/review-queue" component={ReviewQueue} />
           <Route path="/cases" component={Cases} />
           <Route path="/cases/new" component={CaseNew} />
