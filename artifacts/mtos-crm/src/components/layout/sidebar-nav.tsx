@@ -6,7 +6,7 @@ import {
   Building2, ShieldCheck, FileSearch, Clock, Wand2, Brain, Plug, Newspaper,
   TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings,
   Activity, CreditCard, Phone, Workflow, Eye, BookOpen, Library,
-  Webhook, Wrench, Search, ListChecks, Bot, Skull, Sparkles, PhoneCall,
+  Webhook, Wrench, Search, ListChecks, Bot, Sparkles, PhoneCall,
   HeartPulse, ChevronDown, X, Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -192,18 +192,6 @@ export const navigation: NavSection[] = [
       { name: "Billing",           href: "/billing",              icon: CreditCard  },
       { name: "Compliance",        href: "/compliance",           icon: Shield      },
       { name: "Security",          href: "/security",             icon: ShieldCheck },
-    ],
-  },
-
-  // ── BOS-OMEGA ───────────────────────────────────────────────────────────────
-  // Owner-only control panel. Never visible to any role below super_admin.
-  {
-    section: "BOS-OMEGA",
-    icon: Skull,
-    color: "red",
-    superAdminOnly: true,
-    items: [
-      { name: "Dark Room", href: "/dark-room", icon: Skull, superAdminOnly: true },
     ],
   },
 ];

@@ -58,7 +58,6 @@ import JobQueue from "@/pages/job-queue";
 import CallsPage from "@/pages/calls";
 import DialerPage from "@/pages/dialer";
 import VoiceAgentsPage from "@/pages/voice-agents";
-import DarkRoomPage from "@/pages/dark-room";
 import AutomationsPage from "@/pages/automations";
 import AutomationDocsPage from "@/pages/automation-docs";
 import AutomationEditorPage from "@/pages/automation-editor";
@@ -153,7 +152,6 @@ function AuthedRoutes() {
           <Route path="/workflow-settings" component={WorkflowSettingsPage} />
           <Route path="/web-forms" component={WebFormsPage} />
           <Route path="/job-queue" component={JobQueue} />
-          <Route path="/dark-room" component={DarkRoomPage} />
           <Route path="/automations" component={AutomationsPage} />
           <Route path="/automation-docs" component={AutomationDocsPage} />
           <Route path="/n8n-setup" component={N8nSetupPage} />
