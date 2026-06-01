@@ -32,7 +32,7 @@ import {
   type SiteRegistryEntry,
   type ChatHistoryEntry,
 } from "../lib/sites-ai/assistant";
-import { executeProposal } from "../lib/sites-ai/actions";
+import { executeProposal, summarizeExecResult } from "../lib/sites-ai/actions";
 import {
   buildAttachmentContext,
   checkAttachmentsPolicy,
@@ -400,7 +400,7 @@ router.post(
           .values({
             conversationId: id,
             role: "assistant",
-            content: "Done — the action completed successfully.",
+            content: summarizeExecResult(proposal.kind, exec.result),
             proposalResult: exec.result,
           })
           .returning();

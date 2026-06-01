@@ -24,6 +24,73 @@ export type ExecuteResult =
   | { ok: true; result: Record<string, unknown> }
   | { ok: false; code: "forbidden" | "bad_request" | "not_found" | "error"; message: string };
 
+// Build an HONEST, result-derived confirmation line from the real persisted
+// execute result. We never emit a generic "done" — the operator must be able to
+// see exactly what happened (real counts/identities) so a completed action can
+// never be mistaken for a hallucinated one.
+export function summarizeExecResult(
+  kind: SitesActionProposal["kind"],
+  result: Record<string, unknown>,
+): string {
+  const num = (k: string): number | null =>
+    typeof result[k] === "number" ? (result[k] as number) : null;
+  const str = (k: string): string | null =>
+    typeof result[k] === "string" ? (result[k] as string) : null;
+
+  switch (kind) {
+    case "rebuild_all": {
+      const scanned = num("scanned") ?? 0;
+      const verified = num("verified") ?? 0;
+      const rebuilt = num("rebuilt") ?? 0;
+      const failed = num("failed") ?? 0;
+      let line =
+        `Rebuild-all complete: scanned ${scanned} site${scanned === 1 ? "" : "s"} ` +
+        `(all sites, active and archived) — ${verified} verified, ${rebuilt} backfilled, ${failed} failed.`;
+      const failures = Array.isArray(result["failures"])
+        ? (result["failures"] as Array<{ slug?: string; reason?: string }>)
+        : [];
+      if (failures.length > 0) {
+        line +=
+          " Failures: " +
+          failures
+            .slice(0, 10)
+            .map((f) => `${f.slug ?? "?"} (${f.reason ?? "unknown"})`)
+            .join("; ");
+      }
+      return line;
+    }
+    case "seo_rebuild_all": {
+      const scanned = num("scanned") ?? 0;
+      const status = str("status") ?? "ok";
+      const counts = (result["counts"] ?? {}) as Record<string, unknown>;
+      const total = typeof counts["total"] === "number" ? (counts["total"] as number) : null;
+      const dups = Array.isArray(result["duplicates"])
+        ? (result["duplicates"] as unknown[]).length
+        : 0;
+      return (
+        `SEO rebuild complete (${status}): scanned ${scanned} live site${scanned === 1 ? "" : "s"}` +
+        (total != null ? `, ${total} pages in the manifest` : "") +
+        (dups > 0 ? `, ${dups} duplicate URL${dups === 1 ? "" : "s"} flagged` : ", no duplicate URLs") +
+        "."
+      );
+    }
+    case "create_site": {
+      const label = str("label") ?? "(unnamed)";
+      const slug = str("slug") ?? "?";
+      const category = str("category") ?? "?";
+      return `Created site "${label}" (slug ${slug}, category ${category}).`;
+    }
+    case "edit_site": {
+      const label = str("label") ?? "(unnamed)";
+      const slug = str("slug") ?? "?";
+      const category = str("category") ?? "?";
+      return `Updated site "${label}" (slug ${slug}, category ${category}).`;
+    }
+    default:
+      return "Action completed.";
+  }
+}
+
 interface AuditMeta {
   ip_address?: string;
   user_agent?: string;
