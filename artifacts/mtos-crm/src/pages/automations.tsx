@@ -8,8 +8,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Workflow, Plus, Play, Trash2, Pencil, Upload, Copy } from "lucide-react";
+import { Workflow, Plus, Play, Trash2, Pencil, Upload, Copy, Plug } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
+import { useAuth } from "@/contexts/auth-context";
 
 interface Wf {
   id: number;
@@ -25,6 +26,8 @@ interface Wf {
 export default function AutomationsPage() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
   const [items, setItems] = useState<Wf[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -119,6 +122,11 @@ export default function AutomationsPage() {
           <p className="text-sm text-muted-foreground">Drag-and-drop workflows. Wire any CRM action together — triggers, logic, scripts, integrations.</p>
         </div>
         <div className="flex gap-2">
+          {isSuperAdmin && (
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/n8n-control"><Plug className="h-4 w-4 mr-1" /> n8n Control Panel</Link>
+            </Button>
+          )}
           <label className="inline-flex">
             <input type="file" accept="application/json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) importJson(f); e.target.value = ""; }} />
             <Button variant="outline" size="sm" asChild><span className="cursor-pointer"><Upload className="h-4 w-4 mr-1" /> Import JSON</span></Button>

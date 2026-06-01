@@ -155,6 +155,7 @@ export const navigation: NavSection[] = [
     color: "teal",
     items: [
       { name: "Automations",   href: "/automations",           icon: Workflow },
+      { name: "n8n Control Panel", href: "/n8n-control",       icon: Plug, superAdminOnly: true },
       { name: "Automation Docs", href: "/automation-docs",     icon: BookOpen },
       { name: "Self-Heal",     href: "/self-heal",             icon: Wrench   },
       { name: "Webhook Log",   href: "/automation-deliveries", icon: Webhook  },
