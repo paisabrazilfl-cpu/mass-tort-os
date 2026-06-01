@@ -35,6 +35,15 @@ const settingsSchema = z.object({
   notify_on_failure_email: z.email().nullish(),
   med_records_cover_letter_template_id: z.number().int().nullish(),
   notes: z.string().nullish(),
+  // Automatic welcome SMS sent on lead.created. Persisted into the
+  // workflow_settings.metadata jsonb (no dedicated columns). Opt-in: OFF
+  // until the operator turns it on AND a from-number is configured.
+  welcome_sms: z
+    .object({
+      enabled: z.boolean().optional(),
+      template: z.string().max(1600).nullish(),
+    })
+    .optional(),
 });
 
 router.get("/", requirePermission(Permission.WORKFLOW_SETTINGS_VIEW), async (_req, res) => {
@@ -68,6 +77,7 @@ router.get("/:scope", requirePermission(Permission.WORKFLOW_SETTINGS_VIEW), asyn
       max_send_retries: 3,
       notify_on_failure_email: null,
       med_records_cover_letter_template_id: null,
+      metadata: {},
       notes: null,
       _is_default: true,
     });
@@ -85,19 +95,37 @@ router.put("/", requirePermission(Permission.WORKFLOW_SETTINGS_MANAGE), auditAct
     badRequest(res, "Invalid request body", parsed.error.flatten());
     return;
   }
-  const d = parsed.data;
+  // `welcome_sms` is not a column — it is merged into the metadata jsonb so
+  // we never try to write a non-existent column. Strip it from the column set.
+  const { welcome_sms, ...columns } = parsed.data;
   const [existing] = await db
     .select()
     .from(workflowSettingsTable)
-    .where(eq(workflowSettingsTable.scope, d.scope));
+    .where(eq(workflowSettingsTable.scope, columns.scope));
   // settingsSchema validates the request body to a partial of the
   // workflow_settings columns; cast to the drizzle insert/update shape
   // so we don't need `any` to widen optional FK + json fields.
   type WorkflowSettingsInsert = typeof workflowSettingsTable.$inferInsert;
   type WorkflowSettingsUpdate = Partial<WorkflowSettingsInsert>;
+
+  // Merge welcome_sms into existing metadata, preserving other metadata keys.
+  function mergeMetadata(
+    current: Record<string, unknown> | null | undefined,
+  ): Record<string, unknown> | undefined {
+    if (welcome_sms === undefined) return undefined;
+    const base = current && typeof current === "object" ? current : {};
+    const prevWelcome =
+      (base.welcome_sms && typeof base.welcome_sms === "object"
+        ? (base.welcome_sms as Record<string, unknown>)
+        : {});
+    return { ...base, welcome_sms: { ...prevWelcome, ...welcome_sms } };
+  }
+
   if (existing) {
+    const mergedMeta = mergeMetadata(existing.metadata);
     const updatePayload: WorkflowSettingsUpdate = {
-      ...(d as WorkflowSettingsUpdate),
+      ...(columns as WorkflowSettingsUpdate),
+      ...(mergedMeta ? { metadata: mergedMeta } : {}),
       updated_by_user_id: req.user?.id ?? null,
       updated_at: new Date(),
     };
@@ -109,8 +137,10 @@ router.put("/", requirePermission(Permission.WORKFLOW_SETTINGS_MANAGE), auditAct
     res.json(row);
     return;
   }
+  const mergedMeta = mergeMetadata(undefined);
   const insertPayload: WorkflowSettingsInsert = {
-    ...(d as WorkflowSettingsInsert),
+    ...(columns as WorkflowSettingsInsert),
+    ...(mergedMeta ? { metadata: mergedMeta } : {}),
     updated_by_user_id: req.user?.id ?? null,
   };
   const [row] = await db

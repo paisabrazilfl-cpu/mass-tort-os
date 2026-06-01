@@ -591,6 +591,15 @@ async function runWebFormPipeline(
       },
     });
 
+    // Automatic welcome SMS (opt-in; TCPA-gated; audited). Fire-and-forget so
+    // a slow SMS provider never blocks the submitter's response. Consent +
+    // phone are checked inside enqueueWelcomeSms against the persisted lead.
+    void import("../lib/workflow-engine")
+      .then(({ enqueueWelcomeSms }) =>
+        enqueueWelcomeSms(leadId, { source: `web_form_${tortId}`, firmId: null }),
+      )
+      .catch((err) => logger.error({ err, leadId }, "welcome SMS dispatch failed"));
+
     // Fan out to internal automation workflows whose entry node is
     // `trigger.form_submitted`. The submission payload + lead reference
     // become the trigger input, so a graph can wire `documents.fax_medical_records`

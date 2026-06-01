@@ -444,6 +444,16 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
         source: "lead_created",
       });
 
+      // Automatic welcome SMS (opt-in; TCPA-gated; audited). Fire-and-forget.
+      void import("../lib/workflow-engine")
+        .then(({ enqueueWelcomeSms }) =>
+          enqueueWelcomeSms(lead.id, {
+            source: lead.source ?? "operator_intake",
+            firmId: lead.firm_id ?? null,
+          }),
+        )
+        .catch((err) => logger.error({ err, lead_id: lead.id }, "welcome SMS dispatch failed"));
+
       res.status(201).json({
         ...decryptLeadFields(lead, String(lead.id)),
         _conflict: {
@@ -533,6 +543,16 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
     firmId: lead.firm_id ?? null,
     source: "lead_created",
   });
+
+  // Automatic welcome SMS (opt-in; TCPA-gated; audited). Fire-and-forget.
+  void import("../lib/workflow-engine")
+    .then(({ enqueueWelcomeSms }) =>
+      enqueueWelcomeSms(lead.id, {
+        source: lead.source ?? "operator_intake",
+        firmId: lead.firm_id ?? null,
+      }),
+    )
+    .catch((err) => logger.error({ err, lead_id: lead.id }, "welcome SMS dispatch failed"));
 
   res.status(201).json(decryptLeadFields(lead, String(lead.id)));
 });

@@ -829,25 +829,43 @@ interface SendWorkflowSmsPayload {
 }
 
 export async function handleSendWorkflowSms(payload: SendWorkflowSmsPayload): Promise<void> {
-  const { sendSms } = await import("./sms/telnyx");
+  // Route through the provider router so the operator's configured SMS
+  // provider + from-number (Workflow Settings) drives delivery, falling
+  // back to the Telnyx default when no provider is explicitly chosen.
+  const { sendSmsViaRouter } = await import("./sms/send");
 
+  const source = payload.source ?? null;
   const [lead] = await db
     .select()
     .from(leadsTable)
     .where(eq(leadsTable.id, payload.lead_id));
   if (!lead) {
     logger.warn({ lead_id: payload.lead_id }, "send_workflow_sms: lead not found");
+    await auditLog("lead", String(payload.lead_id), "workflow_sms_skipped", {
+      reason: "lead_not_found",
+      source,
+    });
     return;
   }
+  // Leads carry two encrypted phone columns: web-form intake populates `phone`,
+  // operator intake populates `phone_primary`. Accept either so a queued SMS
+  // reaches leads from both paths (otherwise operator-intake leads are dropped
+  // here after being enqueued — a silent delivery failure).
   const decrypted = decryptLeadFields(lead, String(lead.id));
-  const phone = typeof decrypted.phone === "string" ? decrypted.phone.trim() : "";
+  const phone =
+    (typeof decrypted.phone === "string" ? decrypted.phone.trim() : "") ||
+    (typeof decrypted.phone_primary === "string" ? decrypted.phone_primary.trim() : "");
   if (!phone) {
     logger.warn({ lead_id: payload.lead_id }, "send_workflow_sms: lead has no phone — skipping");
+    await auditLog("lead", String(payload.lead_id), "workflow_sms_skipped", {
+      reason: "no_phone",
+      source,
+    });
     return;
   }
 
   const firmId = payload.firm_id ?? lead.firm_id ?? null;
-  const result = await sendSms({
+  const result = await sendSmsViaRouter({
     to: phone,
     body: payload.body,
     firmId,
@@ -856,10 +874,18 @@ export async function handleSendWorkflowSms(payload: SendWorkflowSmsPayload): Pr
 
   if (!result.ok) {
     // Persistent provider error → throw so worker retries up to job_queue.attempts.
-    throw new Error(`telnyx send failed: ${result.error ?? "unknown"}`);
+    await auditLog("lead", String(payload.lead_id), "workflow_sms_failed", {
+      reason: result.error ?? "unknown",
+      source,
+    });
+    throw new Error(`sms send failed: ${result.error ?? "unknown"}`);
   }
+  await auditLog("lead", String(payload.lead_id), "workflow_sms_sent", {
+    sms_message_id: result.smsMessageId ?? null,
+    source,
+  });
   logger.info(
-    { lead_id: payload.lead_id, sms_message_id: result.smsMessageId, source: payload.source ?? null },
+    { lead_id: payload.lead_id, sms_message_id: result.smsMessageId, source },
     "Workflow SMS sent",
   );
 }

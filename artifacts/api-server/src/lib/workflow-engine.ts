@@ -7,12 +7,13 @@
  * All operations are best-effort: provider misses are logged + audited but never throw.
  * Idempotent on (lead_id, template_id) — re-approving a lead does not create duplicate envelopes.
  */
-import { db, leadsTable, documentTemplatesTable, templateAssignmentsTable, documentEnvelopesTable, buyersTable } from "@workspace/db";
+import { db, leadsTable, documentTemplatesTable, templateAssignmentsTable, documentEnvelopesTable, buyersTable, workflowSettingsTable } from "@workspace/db";
 import { eq, and, isNull, or } from "drizzle-orm";
 import { enqueueJob } from "./queue";
 import { auditLog } from "./audit";
 import { logger } from "./logger";
 import { getSignerFromLead } from "./workflow-handlers";
+import { decryptLeadFields } from "./encryption";
 
 export interface ApprovalDispatchResult {
   lead_id: number;
@@ -292,5 +293,150 @@ export async function enqueueLeadFollowUpSms(
       job_id: null,
       reason: `enqueue_error: ${err instanceof Error ? err.message : String(err)}`,
     };
+  }
+}
+
+// =============================================================================
+// Welcome SMS — fires on lead.created to immediately acknowledge a new lead.
+//
+// Opt-in per the operator's Workflow Settings (metadata.welcome_sms.enabled,
+// default OFF) because auto-texting every inbound lead is a TCPA-significant,
+// metered action a firm must consciously turn on. When enabled it:
+//   1. only texts leads who affirmatively gave TCPA consent (tcpa_consent=true),
+//   2. needs a phone on file,
+//   3. enqueues a deterministic, retryable `send_workflow_sms` job that routes
+//      through the operator's configured SMS provider + from-number.
+// Every outcome (enqueued OR skipped) is written to audit_log so there is no
+// silent success or silent drop. Never throws back to the lead-create path.
+// =============================================================================
+
+/** Canonical default body. Placeholders: {{first_name}}, {{last_name}}, {{tort}}. */
+export const DEFAULT_WELCOME_SMS_TEMPLATE =
+  "Hi {{first_name}}, thanks for reaching out about your {{tort}} matter. " +
+  "A member of our team will be in touch with you shortly. Reply STOP to opt out.";
+
+interface WelcomeSmsConfig {
+  enabled: boolean;
+  template: string;
+}
+
+/**
+ * Read the global welcome-SMS config off workflow_settings.metadata. Disabled
+ * by default; a blank/missing template falls back to the canonical default.
+ */
+async function getWelcomeSmsConfig(): Promise<WelcomeSmsConfig> {
+  try {
+    const [row] = await db
+      .select({ metadata: workflowSettingsTable.metadata })
+      .from(workflowSettingsTable)
+      .where(eq(workflowSettingsTable.scope, "global"));
+    const ws = (row?.metadata as { welcome_sms?: { enabled?: unknown; template?: unknown } } | null)
+      ?.welcome_sms;
+    const enabled = ws?.enabled === true;
+    const template =
+      typeof ws?.template === "string" && ws.template.trim().length > 0
+        ? ws.template.trim()
+        : DEFAULT_WELCOME_SMS_TEMPLATE;
+    return { enabled, template };
+  } catch (err) {
+    logger.error({ err }, "getWelcomeSmsConfig: failed to load workflow_settings");
+    return { enabled: false, template: DEFAULT_WELCOME_SMS_TEMPLATE };
+  }
+}
+
+function renderWelcomeBody(
+  template: string,
+  lead: { first_name: string | null; last_name: string | null; tort_type: string | null },
+): string {
+  const first = (lead.first_name ?? "").trim() || "there";
+  const last = (lead.last_name ?? "").trim();
+  const tort = (lead.tort_type ?? "").trim() || "legal";
+  return template
+    .replace(/\{\{\s*first_name\s*\}\}/gi, first)
+    .replace(/\{\{\s*last_name\s*\}\}/gi, last)
+    .replace(/\{\{\s*(tort|tort_type)\s*\}\}/gi, tort)
+    .trim();
+}
+
+/**
+ * Dispatch the automatic welcome SMS for a freshly-created lead. Best-effort:
+ * returns a structured outcome and never throws. Call as fire-and-forget from
+ * the lead.created paths.
+ */
+export async function enqueueWelcomeSms(
+  leadId: number,
+  opts: { source?: string; firmId?: number | null } = {},
+): Promise<{ enqueued: boolean; job_id?: number; reason?: string }> {
+  const source = opts.source ?? "lead_created";
+  if (!Number.isFinite(leadId) || leadId <= 0) {
+    return { enqueued: false, reason: "invalid_lead_id" };
+  }
+
+  const cfg = await getWelcomeSmsConfig();
+  if (!cfg.enabled) {
+    // Feature off — not a failure; stay quiet to avoid audit noise.
+    return { enqueued: false, reason: "welcome_sms_disabled" };
+  }
+
+  let lead;
+  try {
+    [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+  } catch (err) {
+    logger.error({ err, lead_id: leadId }, "enqueueWelcomeSms: failed to load lead");
+    return { enqueued: false, reason: "lead_load_error" };
+  }
+  if (!lead) return { enqueued: false, reason: "lead_not_found" };
+
+  // TCPA gate — only text leads who affirmatively consented at intake.
+  if (lead.tcpa_consent !== true) {
+    await auditLog("lead", String(leadId), "welcome_sms_skipped", {
+      reason: "no_tcpa_consent",
+      source,
+    });
+    return { enqueued: false, reason: "no_tcpa_consent" };
+  }
+
+  // Leads carry two phone columns: web-form intake populates `phone`,
+  // operator intake populates `phone_primary`. Accept either so the welcome
+  // text reaches leads from both paths.
+  const decrypted = decryptLeadFields(lead, String(lead.id));
+  const phone =
+    (typeof decrypted.phone === "string" ? decrypted.phone.trim() : "") ||
+    (typeof decrypted.phone_primary === "string" ? decrypted.phone_primary.trim() : "");
+  if (!phone) {
+    await auditLog("lead", String(leadId), "welcome_sms_skipped", {
+      reason: "no_phone",
+      source,
+    });
+    return { enqueued: false, reason: "no_phone" };
+  }
+
+  const body = renderWelcomeBody(cfg.template, {
+    first_name: lead.first_name ?? null,
+    last_name: lead.last_name ?? null,
+    tort_type: lead.tort_type ?? null,
+  });
+
+  try {
+    const jobId = await enqueueJob("send_workflow_sms", {
+      lead_id: leadId,
+      body,
+      firm_id: opts.firmId ?? lead.firm_id ?? null,
+      source: "welcome_sms",
+    });
+    await auditLog("lead", String(leadId), "welcome_sms_enqueued", {
+      job_id: jobId,
+      source,
+      body_len: body.length,
+    });
+    return { enqueued: true, job_id: jobId };
+  } catch (err) {
+    logger.error({ err, lead_id: leadId }, "enqueueWelcomeSms: failed to enqueue job");
+    await auditLog("lead", String(leadId), "welcome_sms_skipped", {
+      reason: "enqueue_error",
+      error: err instanceof Error ? err.message : String(err),
+      source,
+    });
+    return { enqueued: false, reason: "enqueue_error" };
   }
 }
