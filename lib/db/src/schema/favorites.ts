@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, varchar, text, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, varchar, text, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -17,6 +17,9 @@ export const favoritesTable = pgTable(
   },
   (t) => ({
     byUser: index("favorites_user_idx").on(t.user_id),
+    // One row per (user, url): a user can't save the same link twice. Backs the
+    // upsert/skip-duplicate logic in the favorites routes.
+    uniqUserUrl: uniqueIndex("favorites_user_url_unique").on(t.user_id, t.url),
   }),
 );
 

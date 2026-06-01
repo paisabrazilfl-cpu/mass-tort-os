@@ -88,6 +88,12 @@ app.listen(port, async (err) => {
     // favorites table — per-user saved URLs (Favorites tab); missing on older production DBs
     { table: "favorites", column: "id",                      ddl: "CREATE TABLE IF NOT EXISTS favorites (id SERIAL PRIMARY KEY, firm_id INTEGER, user_id INTEGER NOT NULL, url TEXT NOT NULL, label VARCHAR(255), created_at TIMESTAMP NOT NULL DEFAULT NOW(), updated_at TIMESTAMP NOT NULL DEFAULT NOW())" },
     { table: "favorites", column: "favorites_user_idx",      ddl: "CREATE INDEX IF NOT EXISTS favorites_user_idx ON favorites (user_id)" },
+    // Collapse any pre-existing duplicate (user_id, url) rows down to the oldest
+    // one BEFORE the unique index, or the CREATE UNIQUE INDEX would throw on a
+    // dirty table and leave de-dup unenforced.
+    { table: "favorites", column: "favorites_dedup",         ddl: "DELETE FROM favorites a USING favorites b WHERE a.user_id = b.user_id AND a.url = b.url AND a.id > b.id" },
+    // One row per (user, url): enforces de-dup at the database level.
+    { table: "favorites", column: "favorites_user_url_unique", ddl: "CREATE UNIQUE INDEX IF NOT EXISTS favorites_user_url_unique ON favorites (user_id, url)" },
   ];
   for (const m of startupMigrations) {
     try {

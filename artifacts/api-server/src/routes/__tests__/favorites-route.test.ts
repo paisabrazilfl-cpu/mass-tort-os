@@ -180,6 +180,80 @@ test("(c) DELETE /api/favorites/:id against another user's row returns 404 and t
   assert.equal(r.length, 1, "user A's favorite must still exist after B's delete attempt");
 });
 
+test("(e) de-dup: POST the same URL twice creates ONE row (label upserts, not duplicated)", async () => {
+  const dupUrl = "https://dup-test.example.com/page";
+  // First add — creates the row.
+  const first = await fetch(`${baseUrl}/api/favorites`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ url: dupUrl, label: "first label" }),
+  });
+  assert.equal(first.status, 201);
+  const firstRow = (await first.json()) as { id: number; label: string };
+
+  // Second add of the SAME url — must NOT create a second row; updates label.
+  const second = await fetch(`${baseUrl}/api/favorites`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ url: dupUrl, label: "second label" }),
+  });
+  assert.equal(second.status, 201);
+  const secondRow = (await second.json()) as { id: number; label: string };
+  assert.equal(secondRow.id, firstRow.id, "re-adding a URL must reuse the same row, not insert a new one");
+  assert.equal(secondRow.label, "second label", "re-adding with a label must update the existing label");
+
+  // Exactly one row exists for (user A, dupUrl).
+  const rows = await db.execute(
+    sql`SELECT id FROM favorites WHERE user_id = ${userAId} AND url = ${dupUrl}`,
+  );
+  const r = (rows as unknown as { rows?: Array<{ id: number }> }).rows ?? [];
+  assert.equal(r.length, 1, "adding the same URL twice must leave exactly one favorites row");
+
+  // Cleanup this test's row so it doesn't leak into the shared dev DB.
+  await db.execute(sql`DELETE FROM favorites WHERE user_id = ${userAId} AND url = ${dupUrl}`);
+});
+
+test("(f) bulk: already-saved URLs are skipped as duplicates, not re-inserted", async () => {
+  const keep = "https://bulk-existing.example.com/page";
+  // Seed one URL via single POST.
+  const seed = await fetch(`${baseUrl}/api/favorites`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ url: keep }),
+  });
+  assert.equal(seed.status, 201);
+
+  // Bulk import that includes the already-saved URL plus one new one.
+  const fresh = "https://bulk-fresh.example.com/page";
+  const bulk = await fetch(`${baseUrl}/api/favorites/bulk`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ urls: `${keep}\n${fresh}` }),
+  });
+  assert.equal(bulk.status, 201);
+  const body = (await bulk.json()) as {
+    addedCount: number;
+    duplicates: string[];
+    skipped: string[];
+  };
+  assert.equal(body.addedCount, 1, "only the new URL should be added");
+  assert.ok(
+    body.duplicates.includes(keep),
+    "the already-saved URL must be reported in duplicates",
+  );
+
+  // Still exactly one row for the pre-existing URL.
+  const rows = await db.execute(
+    sql`SELECT id FROM favorites WHERE user_id = ${userAId} AND url = ${keep}`,
+  );
+  const r = (rows as unknown as { rows?: Array<{ id: number }> }).rows ?? [];
+  assert.equal(r.length, 1, "bulk import must not duplicate an already-saved URL");
+
+  await db.execute(
+    sql`DELETE FROM favorites WHERE user_id = ${userAId} AND url IN (${keep}, ${fresh})`,
+  );
+});
+
 test("(d) positive control: user A can PATCH then DELETE their own favorite", async () => {
   const patchRes = await fetch(`${baseUrl}/api/favorites/${favAId}`, {
     method: "PATCH",

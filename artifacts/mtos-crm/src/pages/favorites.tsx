@@ -117,7 +117,7 @@ export default function FavoritesPage() {
 
   const addBulk = useMutation({
     mutationFn: () =>
-      mutateJson<{ addedCount: number; skipped: string[] }>(
+      mutateJson<{ addedCount: number; skipped: string[]; duplicates?: string[] }>(
         "/api/favorites/bulk",
         "POST",
         { urls: bulkText },
@@ -125,12 +125,13 @@ export default function FavoritesPage() {
     onSuccess: (res) => {
       setBulkText("");
       invalidate();
-      const skipped = res.skipped?.length
-        ? ` ${res.skipped.length} skipped (invalid).`
-        : "";
+      const parts: string[] = [];
+      if (res.skipped?.length) parts.push(`${res.skipped.length} skipped (invalid)`);
+      if (res.duplicates?.length) parts.push(`${res.duplicates.length} already saved`);
+      const description = parts.length ? `${parts.join(", ")}.` : undefined;
       toast({
         title: `Added ${res.addedCount} favorite${res.addedCount === 1 ? "" : "s"}`,
-        description: skipped || undefined,
+        description,
       });
     },
     onError: (e) =>

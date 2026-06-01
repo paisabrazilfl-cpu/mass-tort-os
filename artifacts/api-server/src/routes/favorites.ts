@@ -10,11 +10,11 @@
 // (req.user.id); firm_id is recorded for tenancy/reporting.
 
 import { Router } from "express";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db, favoritesTable } from "@workspace/db";
 import { z } from "zod/v4";
 import { authMiddleware, auditAction } from "../lib/rbac";
-import { badRequest, notFound } from "../lib/http-errors";
+import { badRequest, notFound, conflict } from "../lib/http-errors";
 
 const router = Router();
 router.use(authMiddleware);
@@ -76,6 +76,9 @@ router.post("/", auditAction("create_favorite"), async (req, res) => {
     return;
   }
   const label = parsed.data.label?.trim() || null;
+  // Upsert on (user_id, url): re-saving a URL the user already has does NOT
+  // create a second row. A new label overwrites the old; omitting the label
+  // (null) keeps the existing one via COALESCE so a bare re-add never wipes it.
   const [row] = await db
     .insert(favoritesTable)
     .values({
@@ -83,6 +86,13 @@ router.post("/", auditAction("create_favorite"), async (req, res) => {
       firm_id: req.user!.firm_id ?? null,
       url,
       label,
+    })
+    .onConflictDoUpdate({
+      target: [favoritesTable.user_id, favoritesTable.url],
+      set: {
+        label: sql`coalesce(excluded.label, ${favoritesTable.label})`,
+        updated_at: new Date(),
+      },
     })
     .returning();
   res.status(201).json(row);
@@ -119,19 +129,40 @@ router.post("/bulk", auditAction("create_favorites_bulk"), async (req, res) => {
     return;
   }
 
-  const inserted = await db
-    .insert(favoritesTable)
-    .values(
-      valid.map((url) => ({
-        user_id: req.user!.id,
-        firm_id: req.user!.firm_id ?? null,
-        url,
-        label: null,
-      })),
-    )
-    .returning();
+  // Skip URLs the user has already saved: look up existing rows for this user
+  // among the candidate URLs, then only insert the ones that are genuinely new.
+  const existingRows = await db
+    .select({ url: favoritesTable.url })
+    .from(favoritesTable)
+    .where(and(eq(favoritesTable.user_id, req.user!.id), inArray(favoritesTable.url, valid)));
+  const existing = new Set(existingRows.map((r) => r.url));
+  const duplicates = valid.filter((url) => existing.has(url));
+  const toInsert = valid.filter((url) => !existing.has(url));
 
-  res.status(201).json({ created: inserted, addedCount: inserted.length, skipped: invalid });
+  // onConflictDoNothing guards against a race where the same URL is inserted
+  // concurrently (the unique (user_id, url) index would otherwise throw).
+  const inserted =
+    toInsert.length > 0
+      ? await db
+          .insert(favoritesTable)
+          .values(
+            toInsert.map((url) => ({
+              user_id: req.user!.id,
+              firm_id: req.user!.firm_id ?? null,
+              url,
+              label: null,
+            })),
+          )
+          .onConflictDoNothing({ target: [favoritesTable.user_id, favoritesTable.url] })
+          .returning()
+      : [];
+
+  res.status(201).json({
+    created: inserted,
+    addedCount: inserted.length,
+    skipped: invalid,
+    duplicates,
+  });
 });
 
 router.patch("/:id", auditAction("update_favorite"), async (req, res) => {
@@ -156,16 +187,39 @@ router.patch("/:id", auditAction("update_favorite"), async (req, res) => {
       return;
     }
     patch.url = url;
+    // Editing a favorite's URL to one the user already has would violate the
+    // unique (user_id, url) index. Catch it here and report a friendly 409
+    // instead of letting the DB throw a 500.
+    const [clash] = await db
+      .select({ id: favoritesTable.id })
+      .from(favoritesTable)
+      .where(and(eq(favoritesTable.user_id, req.user!.id), eq(favoritesTable.url, url)));
+    if (clash && clash.id !== id) {
+      conflict(res, "duplicate_url", "You've already saved that URL");
+      return;
+    }
   }
   if (parsed.data.label !== undefined) {
     patch.label = parsed.data.label?.trim() || null;
   }
 
-  const [row] = await db
-    .update(favoritesTable)
-    .set(patch)
-    .where(and(eq(favoritesTable.id, id), eq(favoritesTable.user_id, req.user!.id)))
-    .returning();
+  let row;
+  try {
+    [row] = await db
+      .update(favoritesTable)
+      .set(patch)
+      .where(and(eq(favoritesTable.id, id), eq(favoritesTable.user_id, req.user!.id)))
+      .returning();
+  } catch (e) {
+    // Backstop for the race the pre-check above can't cover: a concurrent
+    // insert of the same (user_id, url) between the check and this update
+    // trips the unique index (Postgres error 23505). Report it as a 409.
+    if ((e as { code?: string }).code === "23505") {
+      conflict(res, "duplicate_url", "You've already saved that URL");
+      return;
+    }
+    throw e;
+  }
   if (!row) {
     notFound(res, "not_found");
     return;
