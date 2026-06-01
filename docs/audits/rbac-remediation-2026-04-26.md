@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **322 checked / 48 public / 274 protected / 0 unprotected.**
+Boot-time count: **325 checked / 48 public / 277 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -653,6 +653,9 @@ Boot-time count: **322 checked / 48 public / 274 protected / 0 unprotected.**
 | automations | PUT | `/api/automations/:id` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
 | automations | POST | `/api/automations/assist` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
 | automations | GET | `/api/automations/` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
+| automations | POST | `/api/automations/n8n/execute` | ✓ | ✓ |  |  |  | `super_admin` | — | ✓ |
+| automations | GET | `/api/automations/n8n/status` | ✓ | ✓ |  |  |  | `super_admin` | — | ✓ |
+| automations | GET | `/api/automations/n8n/workflows` | ✓ | ✓ |  |  |  | `super_admin` | — | ✓ |
 | automations | GET | `/api/automations/node-catalog` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | automations | POST | `/api/automations/` | ✓ | ✓ |  |  |  | — | `automations:manage` | ✓ |
 | automations | GET | `/api/automations/runs/:runId` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |

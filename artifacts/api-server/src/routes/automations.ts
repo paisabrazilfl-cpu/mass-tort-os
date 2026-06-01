@@ -2,10 +2,16 @@ import { Router } from "express";
 import { db, automationWorkflowsTable, automationRunsTable } from "@workspace/db";
 import { eq, desc, and, or, isNull, sql, arrayContains } from "drizzle-orm";
 import { z } from "zod/v4";
-import { authMiddleware, Permission, requirePermission } from "../lib/rbac";
+import { authMiddleware, Permission, requirePermission, requireRole } from "../lib/rbac";
 import { badRequest, notFound, forbidden } from "../lib/http-errors";
 import { NODE_CATALOG } from "../lib/automations/node-catalog";
 import { runWorkflow } from "../lib/automations/executor";
+import {
+  n8nConfigured,
+  n8nPing,
+  n8nSearchWorkflows,
+  n8nExecuteWorkflow,
+} from "../lib/automations/n8n-mcp";
 import {
   assistGraphSchema,
   assistRequestSchema,
@@ -95,6 +101,73 @@ const runBodySchema = z.object({
 
 router.get("/node-catalog", requirePermission(Permission.AUTOMATIONS_VIEW), (_req, res) => {
   res.json({ nodes: NODE_CATALOG });
+});
+
+// ── n8n MCP bridge (CRM → n8n outbound) ──────────────────────────────
+// Registered BEFORE the "/:id" routes so "/n8n/..." is not captured by the
+// numeric-id matcher.
+//
+// TENANCY: the n8n connection is a SINGLE global instance configured by the
+// platform owner via process env (N8N_MCP_URL/TOKEN) — there is no per-firm
+// n8n credential vault. These endpoints drive that owner-level control plane
+// (list/execute ANY workflow in the connected account), so they are gated to
+// `super_admin` (the owner) ONLY, not to per-firm AUTOMATIONS_* permissions —
+// otherwise any firm admin could enumerate/run workflows in the owner's n8n
+// account (cross-tenant capability leak). requireRole("super_admin") admits
+// only the top of the role hierarchy.
+router.get("/n8n/status", requireRole("super_admin"), async (_req, res) => {
+  if (!n8nConfigured()) {
+    res.json({ configured: false, ok: false, message: "Set N8N_MCP_URL and N8N_MCP_TOKEN to connect your n8n instance." });
+    return;
+  }
+  try {
+    const ping = await n8nPing();
+    res.json({ configured: true, ok: ping.ok, serverInfo: ping.serverInfo ?? null, toolCount: ping.toolCount ?? null });
+  } catch (err) {
+    res.json({ configured: true, ok: false, error: err instanceof Error ? err.message : "n8n unreachable" });
+  }
+});
+
+router.get("/n8n/workflows", requireRole("super_admin"), async (req, res) => {
+  if (!n8nConfigured()) {
+    badRequest(res, "n8n is not connected. Set N8N_MCP_URL and N8N_MCP_TOKEN.");
+    return;
+  }
+  const query = typeof req.query.query === "string" ? req.query.query : undefined;
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 25) || 25, 1), 100);
+  try {
+    const out = await n8nSearchWorkflows({ query, limit });
+    res.json({ ok: true, workflows: out.data ?? out.text ?? null });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "n8n workflow search failed" });
+  }
+});
+
+const n8nExecuteBody = z.object({
+  workflowId: z.string().min(1),
+  inputs: z.record(z.string(), z.any()).optional(),
+  executionMode: z.enum(["production", "test"]).optional(),
+});
+router.post("/n8n/execute", requireRole("super_admin"), async (req, res) => {
+  if (!n8nConfigured()) {
+    badRequest(res, "n8n is not connected. Set N8N_MCP_URL and N8N_MCP_TOKEN.");
+    return;
+  }
+  const parsed = n8nExecuteBody.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    badRequest(res, "Invalid request body", parsed.error.flatten());
+    return;
+  }
+  try {
+    const out = await n8nExecuteWorkflow({
+      workflowId: parsed.data.workflowId,
+      inputs: parsed.data.inputs ?? {},
+      executionMode: parsed.data.executionMode ?? "production",
+    });
+    res.json({ ok: true, executionId: out.executionId, result: out.data ?? out.text ?? null });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "n8n execute failed" });
+  }
 });
 
 router.get("/", requirePermission(Permission.AUTOMATIONS_VIEW), async (req, res) => {

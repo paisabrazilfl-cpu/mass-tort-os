@@ -36,6 +36,7 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import { getNodeDefinition } from "./node-catalog";
 import { getIntegrationCredentials } from "../../routes/integrations";
+import { n8nConfigured, n8nExecuteWorkflow } from "./n8n-mcp";
 import { getEmailAdapter } from "../email/sendgrid";
 import { getFaxAdapter } from "../fax";
 import { sendSms } from "../sms/telnyx";
@@ -430,6 +431,30 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const result = await adapter.send(creds, { to, subject, html, fromEmail });
     if (!result.ok) throw new Error(`SendGrid send failed: ${result.code}: ${result.message}`);
     return { ok: true, messageId: result.externalMessageId };
+  },
+  "integration.n8n_execute": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const workflowId = String(resolveOrLiteral(s, p.workflowId) ?? "").trim();
+    if (!workflowId) throw new Error("integration.n8n_execute requires a workflowId.");
+    const executionMode = String(resolveOrLiteral(s, p.executionMode) ?? "production").trim() || "production";
+    let inputs: Record<string, unknown> = {};
+    const rawInputs = resolveOrLiteral(s, p.inputs);
+    if (rawInputs != null && rawInputs !== "") {
+      if (typeof rawInputs === "string") {
+        try {
+          inputs = JSON.parse(rawInputs) as Record<string, unknown>;
+        } catch {
+          throw new Error("integration.n8n_execute: inputs must be valid JSON.");
+        }
+      } else if (typeof rawInputs === "object") {
+        inputs = rawInputs as Record<string, unknown>;
+      }
+    }
+    if (!n8nConfigured()) {
+      throw new Error("n8n is not connected. Set N8N_MCP_URL and N8N_MCP_TOKEN in the environment.");
+    }
+    const out = await n8nExecuteWorkflow({ workflowId, inputs, executionMode });
+    return { ok: true, workflowId, executionMode, executionId: out.executionId, result: out.data ?? out.text };
   },
   "integration.send_fax": async (s) => {
     const p = s.node.data?.params ?? {};

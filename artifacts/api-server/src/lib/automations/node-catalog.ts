@@ -704,6 +704,18 @@ export const NODE_CATALOG: NodeDefinition[] = [
       { key: "headers", label: "Headers (JSON)", type: "json", placeholder: '{"Authorization":"Bearer …"}' },
     ],
   },
+  {
+    type: "integration.n8n_execute", label: "Run n8n Workflow", category: "integration",
+    description: "Execute a workflow in your connected n8n instance (via the n8n MCP server) and return its execution id. Requires N8N_MCP_URL + N8N_MCP_TOKEN.",
+    icon: "Workflow", color: "bg-rose-600",
+    params: [
+      { key: "workflowId", label: "n8n Workflow ID", type: "string", required: true, placeholder: "the workflow's id from n8n (e.g. from Run n8n Workflows list)" },
+      { key: "inputs", label: "Inputs (JSON)", type: "json", placeholder: '{"lead_id":"input.lead.id","email":"input.lead.email"}', help: "Passed to the n8n workflow's trigger as input data. Field paths like input.lead.id are resolved before sending." },
+      { key: "executionMode", label: "Mode", type: "select", default: "production", options: [
+        { label: "Production", value: "production" }, { label: "Test", value: "test" },
+      ]},
+    ],
+  },
 
   // ──────────────── AI ────────────────
   {
