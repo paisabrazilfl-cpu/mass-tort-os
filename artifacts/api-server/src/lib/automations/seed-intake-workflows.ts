@@ -3,17 +3,21 @@
  * lead-entry flow (self-service / AI-agent / vendor) — that all feed the same
  * mandated compliance backbone:
  *
- *   trigger → consent + TCPA gate → background-check hub → qualification
+ *   trigger → background-check hub → qualification
  *   (decision engine / qualify) → NPI provider verification → 3-document
  *   e-sign packet (HIPAA + Retainer + Personal Truth Affidavit) → all-signed
  *   gate → fax medical-records request to the verified provider → assign +
  *   activate + notify.
  *
- * Every gate has an explicit branch to the Review Queue (form invalid, consent
- * invalid, background flagged/errored, decision rejected/review, NPI
- * ambiguous/unavailable, e-sign pending, fax failed) so a lead is NEVER
- * auto-advanced on uncertain evidence — humans only do final review, per the
- * AI Constitution failure protocol.
+ * NOTE: The in-pipeline consent/TCPA gate was removed from all three flows per
+ * owner decision — consent is established upstream (web-form TrustedForm cert,
+ * recorded call + transcript, or vendor-supplied TrustedForm cert URL) before a
+ * lead reaches this pipeline.
+ *
+ * Every remaining gate has an explicit branch to the Review Queue (form invalid,
+ * background flagged/errored, decision rejected/review, NPI ambiguous/unavailable,
+ * e-sign pending, fax failed) so a lead is NEVER auto-advanced on uncertain
+ * evidence — humans only do final review, per the AI Constitution failure protocol.
  *
  * Each flow is deliberately exhaustive, exercising a broad slice of the node
  * catalog (triggers, logic, data transforms, scripts, AI voice/transcribe/
@@ -45,7 +49,7 @@ import type { ConsentChannel } from "./gates";
 
 const SEED_TAG = "seed:intake-pipeline";
 /** Bump when the template graphs change so already-seeded, unedited rows refresh. */
-const SEED_VERSION = 2;
+const SEED_VERSION = 3;
 
 type FlowKey = "self_service" | "ai_agent" | "vendor";
 
@@ -63,7 +67,7 @@ const FLOWS: FlowSpec[] = [
     key: "self_service",
     name: "Intake → Med Records — Self-Service (Text/Email)",
     description:
-      "Self-service web flow (contact_preference=text_email). Consent artifact is the web-form TrustedForm certificate. Validate submission → consent/TCPA gate → background check → qualify → NPI verify → 3-doc e-sign packet → all-signed gate → fax provider → assign/activate/notify, with review-queue branches at every gate.",
+      "Self-service web flow (contact_preference=text_email). Consent is enforced upstream by the web form (TrustedForm certificate), so there is no in-pipeline consent gate. Validate submission → background check → qualify → NPI verify → 3-doc e-sign packet → all-signed gate → fax provider → assign/activate/notify, with review-queue branches at every remaining gate.",
     triggerType: "trigger.form_submitted",
     triggerLabel: "On Web Form Submitted",
     channel: "web",
@@ -72,7 +76,7 @@ const FLOWS: FlowSpec[] = [
     key: "ai_agent",
     name: "Intake → Med Records — AI Agent (Voice)",
     description:
-      "AI voice/chat agent flow (contact_preference=agent). Consent artifact is the recorded call + transcript on the claimant. Transcribe + summarize the call → consent/TCPA gate → background check → qualify → NPI verify → 3-doc e-sign packet → all-signed gate (voice re-engagement on pending) → fax provider → assign/activate/notify, with review-queue branches at every gate.",
+      "AI voice/chat agent flow (contact_preference=agent). Consent artifact is the recorded call + transcript on the claimant, established upstream, so there is no in-pipeline consent gate. Transcribe + summarize the call → background check → qualify → NPI verify → 3-doc e-sign packet → all-signed gate (voice re-engagement on pending) → fax provider → assign/activate/notify, with review-queue branches at every remaining gate.",
     triggerType: "trigger.inbound_call",
     triggerLabel: "On Inbound Call",
     channel: "voice",
@@ -81,7 +85,7 @@ const FLOWS: FlowSpec[] = [
     key: "vendor",
     name: "Intake → Med Records — Vendor Leads",
     description:
-      "Vendor / lead-import flow. Vendor must supply a TrustedForm certificate URL per lead. Cert presence gate → consent/TCPA gate → background check → decision engine → NPI verify → 3-doc e-sign packet → all-signed gate → fax provider → assign/activate → vendor postback + notify, with review-queue branches at every gate.",
+      "Vendor / lead-import flow. Vendor must supply a TrustedForm certificate URL per lead (the consent artifact), so there is no separate in-pipeline consent gate. Cert presence gate → background check → decision engine → NPI verify → 3-doc e-sign packet → all-signed gate → fax provider → assign/activate → vendor postback + notify, with review-queue branches at every remaining gate.",
     triggerType: "trigger.lead_created",
     triggerLabel: "On Lead Created",
     channel: "vendor",
@@ -264,9 +268,9 @@ function buildGraph(spec: FlowSpec): Graph {
     });
     edge(summarize, logAi);
 
-    // Both branches of the recording check converge on the consent gate, which
-    // is created in the shared backbone below (the false branch skips
-    // transcription). cursor is unused for this flow.
+    // Both branches of the recording check converge on the Background Check Hub
+    // in the shared backbone below (the false branch skips transcription).
+    // cursor is unused for this flow.
     cursor = "log_call_summary";
   } else {
     // vendor
@@ -301,27 +305,23 @@ function buildGraph(spec: FlowSpec): Graph {
     cursor = certAudit;
   }
 
-  // ───────── Shared backbone: consent → bg → qualify → npi → e-sign → fax → done ─────────
-  const consent = node("consent_gate", "crm.consent_gate", x(), MAIN_Y, "Consent / TCPA Gate", {
-    leadId: "vars.leadId",
-    channel: spec.channel,
-  });
-  if (spec.key === "ai_agent") {
-    // Converge both recording branches here.
-    edge("has_recording", consent, "false");
-    edge("log_call_summary", consent);
-  } else {
-    edge(cursor, consent);
-  }
-  const consentX = nodes.find((n) => n.id === consent)!.position.x;
-  review("rq_consent", consentX, REVIEW_Y,
-    `Consent/TCPA gate failed (${spec.channel} flow) — missing or invalid consent artifact. Do not contact.`);
-  edge(consent, "rq_consent", "invalid");
-
+  // ───────── Shared backbone: bg → qualify → npi → e-sign → fax → done ─────────
+  // NOTE: The in-pipeline consent/TCPA gate was removed from ALL THREE flows per
+  // owner decision. Consent is established upstream before a lead ever reaches
+  // this pipeline (web-form TrustedForm certificate, recorded call + transcript,
+  // or vendor-supplied TrustedForm cert URL), so re-gating here was redundant and
+  // could wrongly stall already-consented leads. Each flow's head now runs
+  // straight into the Background Check Hub.
   const bg = node("background_check", "crm.background_check", x(), MAIN_Y, "Background Check Hub", {
     leadId: "vars.leadId",
   });
-  edge(consent, bg, "valid");
+  if (spec.key === "ai_agent") {
+    // Converge both recording branches directly into the background check.
+    edge("has_recording", bg, "false");
+    edge("log_call_summary", bg);
+  } else {
+    edge(cursor, bg);
+  }
   const bgX = nodes.find((n) => n.id === bg)!.position.x;
   review("rq_bg_flagged", bgX, REVIEW_Y,
     "Background check flagged — needs human review before contact.");
