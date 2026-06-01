@@ -1,9 +1,11 @@
 /**
- * Phone provenance via Telnyx Number Lookup
- * (https://developers.telnyx.com/api/number-lookup).
+ * Phone provenance / line-type intelligence.
  *
- * Telnyx's Lookup API returns the carrier + line type for any North
- * American number. We derive a burner-risk signal from those fields:
+ * Primary provider: Twilio Lookup v2 (https://www.twilio.com/docs/lookup/v2-api)
+ * Fallback provider: Telnyx Number Lookup (https://developers.telnyx.com/api/number-lookup)
+ *
+ * Both APIs return the carrier + line type for a North American number. We
+ * derive a burner-risk signal from those fields:
  *
  *   line_type=mobile, carrier known         → low risk
  *   line_type=fixed_voip                    → moderate risk (Google Voice,
@@ -16,10 +18,11 @@
  *                                              via a toll-free number)
  *   carrier unknown + recently-ported       → high risk
  *
- * We reuse the existing `telnyx` integration row's api_key — no
- * separate signup. The Lookup endpoint is billed at fractions of a
- * cent per call so this adds minimal operating cost while catching the
- * single biggest fraud-vector signal in lead intake.
+ * Provider selection: if a `twilio_lookup` integration is connected in the
+ * vault we use Twilio Lookup v2 (account_sid + auth token); otherwise we fall
+ * back to the `telnyx` integration row's api_key. Either Lookup endpoint is
+ * billed at fractions of a cent per call so this adds minimal operating cost
+ * while catching the single biggest fraud-vector signal in lead intake.
  */
 import { logger } from "../logger";
 import { getIntegrationCredentials } from "../../routes/integrations";
@@ -27,17 +30,28 @@ import { getIntegrationCredentials } from "../../routes/integrations";
 const TELNYX_LOOKUP_BASE = process.env["TELNYX_LOOKUP_BASE"] || "https://api.telnyx.com";
 const TELNYX_LOOKUP_TIMEOUT_MS = Number(process.env["TELNYX_LOOKUP_TIMEOUT_MS"] ?? 8_000);
 
+const TWILIO_LOOKUP_BASE = process.env["TWILIO_LOOKUP_BASE"] || "https://lookups.twilio.com";
+const TWILIO_LOOKUP_TIMEOUT_MS = Number(process.env["TWILIO_LOOKUP_TIMEOUT_MS"] ?? 8_000);
+// Twilio Lookup "Fields" (data packages) to request. `line_type_intelligence`
+// is the standard package every account can call and is all we need for
+// VoIP/carrier filtering. SIM-swap is a separately-entitled package — enable it
+// by setting TWILIO_LOOKUP_FIELDS=line_type_intelligence,sim_swap once the
+// account has that add-on; the parser reads it defensively if present.
+const TWILIO_LOOKUP_FIELDS = process.env["TWILIO_LOOKUP_FIELDS"] || "line_type_intelligence";
+
 export interface PhoneLookupResult {
   status: "ok" | "unconfigured" | "error";
+  /** Which adapter produced this result, for the audit trail. */
+  provider?: "twilio_lookup" | "telnyx";
   /** E.164 phone number we queried, echoed back for the audit trail. */
   phone: string;
   /** mobile / landline / fixed_voip / non_fixed_voip / toll_free / null */
   line_type: string | null;
-  /** Carrier name as returned by Telnyx. */
+  /** Carrier name as returned by the provider. */
   carrier: string | null;
   /** Two-letter country code. */
   country_code: string | null;
-  /** True when Telnyx reported the number has been ported in the last 60d. */
+  /** True when the provider reported a recent port-in / SIM-swap. */
   recently_ported: boolean;
   /** Adapter's burner-risk verdict. */
   risk: "low" | "moderate" | "high" | "unknown";
@@ -54,6 +68,40 @@ function normalizeToE164(raw: string): string | null {
   return null;
 }
 
+function errEnvelope(
+  phone: string,
+  provider: PhoneLookupResult["provider"],
+  note: string,
+): PhoneLookupResult {
+  return {
+    status: "error",
+    provider,
+    phone,
+    line_type: null,
+    carrier: null,
+    country_code: null,
+    recently_ported: false,
+    risk: "unknown",
+    flags: ["phone_lookup_unreachable"],
+    note,
+  };
+}
+
+async function resolveTwilioLookupCreds(
+  firmId?: number,
+): Promise<{ accountSid: string; authToken: string } | null> {
+  try {
+    const creds = await getIntegrationCredentials("twilio_lookup", firmId);
+    const accountSid = creds && typeof creds.account_sid === "string" ? creds.account_sid : "";
+    const authToken = creds && typeof creds.api_key === "string" ? creds.api_key : "";
+    if (accountSid && authToken) return { accountSid, authToken };
+    return null;
+  } catch (err) {
+    logger.warn({ err }, "Twilio Lookup credential resolve failed");
+    return null;
+  }
+}
+
 async function resolveTelnyxKey(firmId?: number): Promise<string | null> {
   try {
     const creds = await getIntegrationCredentials("telnyx", firmId);
@@ -66,9 +114,10 @@ async function resolveTelnyxKey(firmId?: number): Promise<string | null> {
 }
 
 /**
- * Run a Telnyx Number Lookup. Network-safe: every error path returns a
- * typed envelope, never throws. The caller (bg-hub adapter) maps the
- * envelope onto lane flags.
+ * Run a phone line-type lookup. Provider-aware: prefers Twilio Lookup v2 when
+ * a `twilio_lookup` integration is connected, else falls back to Telnyx.
+ * Network-safe: every error path returns a typed envelope, never throws. The
+ * caller (bg-hub phone adapter) maps the envelope onto lane flags.
  */
 export async function lookupPhoneProvenance(rawPhone: string, firmId?: number): Promise<PhoneLookupResult> {
   const phone = normalizeToE164(String(rawPhone || ""));
@@ -85,21 +134,99 @@ export async function lookupPhoneProvenance(rawPhone: string, firmId?: number): 
       note: "Could not normalize to E.164",
     };
   }
-  const apiKey = await resolveTelnyxKey(firmId);
-  if (!apiKey) {
-    return {
-      status: "unconfigured",
-      phone,
-      line_type: null,
-      carrier: null,
-      country_code: null,
-      recently_ported: false,
-      risk: "unknown",
-      flags: ["phone_provenance_unconfigured"],
-      note: "No Telnyx integration configured — phone-provenance check skipped.",
-    };
-  }
 
+  const twilio = await resolveTwilioLookupCreds(firmId);
+  if (twilio) return lookupViaTwilio(phone, twilio.accountSid, twilio.authToken);
+
+  const telnyxKey = await resolveTelnyxKey(firmId);
+  if (telnyxKey) return lookupViaTelnyx(phone, telnyxKey);
+
+  return {
+    status: "unconfigured",
+    phone,
+    line_type: null,
+    carrier: null,
+    country_code: null,
+    recently_ported: false,
+    risk: "unknown",
+    flags: ["phone_provenance_unconfigured"],
+    note: "No Twilio Lookup or Telnyx integration configured — phone line-type check skipped.",
+  };
+}
+
+/** Map Twilio Lookup v2 line-type values onto the classify() taxonomy. */
+function mapTwilioLineType(t: string | null | undefined): string | null {
+  if (!t) return null;
+  switch (t) {
+    case "nonFixedVoip":
+      return "non_fixed_voip";
+    case "fixedVoip":
+      return "fixed_voip";
+    case "tollFree":
+      return "toll_free";
+    default:
+      return t.toLowerCase();
+  }
+}
+
+async function lookupViaTwilio(
+  phone: string,
+  accountSid: string,
+  authToken: string,
+): Promise<PhoneLookupResult> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TWILIO_LOOKUP_TIMEOUT_MS);
+  try {
+    const url =
+      `${TWILIO_LOOKUP_BASE.replace(/\/$/, "")}/v2/PhoneNumbers/${encodeURIComponent(phone)}` +
+      `?Fields=${encodeURIComponent(TWILIO_LOOKUP_FIELDS)}`;
+    const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        "Authorization": `Basic ${auth}`,
+        "Accept": "application/json",
+        "User-Agent": "mass-tort-os/bg-hub-phone",
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return errEnvelope(phone, "twilio_lookup", `Twilio Lookup HTTP ${res.status}: ${text.slice(0, 200)}`);
+    }
+    const json = (await res.json()) as {
+      valid?: boolean;
+      country_code?: string | null;
+      line_type_intelligence?: { type?: string | null; carrier_name?: string | null; error_code?: number | null } | null;
+      sim_swap?: { last_sim_swap?: { swapped_in_period?: boolean | null } | null } | null;
+    };
+    const lti = json.line_type_intelligence ?? null;
+    const lineType = mapTwilioLineType(lti?.type ?? null);
+    const carrierName = lti?.carrier_name ?? null;
+    const countryCode = json.country_code ?? null;
+    const recentlyPorted = !!json.sim_swap?.last_sim_swap?.swapped_in_period;
+    const verdict = classify(lineType, carrierName, recentlyPorted);
+    return {
+      status: "ok",
+      provider: "twilio_lookup",
+      phone,
+      line_type: lineType,
+      carrier: carrierName,
+      country_code: countryCode,
+      recently_ported: recentlyPorted,
+      risk: verdict.risk,
+      flags: verdict.flags,
+    };
+  } catch (err) {
+    if ((err as { name?: string }).name === "AbortError") {
+      return errEnvelope(phone, "twilio_lookup", `Twilio Lookup timeout after ${TWILIO_LOOKUP_TIMEOUT_MS}ms`);
+    }
+    return errEnvelope(phone, "twilio_lookup", `Twilio Lookup network error: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function lookupViaTelnyx(phone: string, apiKey: string): Promise<PhoneLookupResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TELNYX_LOOKUP_TIMEOUT_MS);
   try {
@@ -114,17 +241,7 @@ export async function lookupPhoneProvenance(rawPhone: string, firmId?: number): 
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      return {
-        status: "error",
-        phone,
-        line_type: null,
-        carrier: null,
-        country_code: null,
-        recently_ported: false,
-        risk: "unknown",
-        flags: ["phone_lookup_unreachable"],
-        note: `Telnyx Lookup HTTP ${res.status}: ${text.slice(0, 200)}`,
-      };
+      return errEnvelope(phone, "telnyx", `Telnyx Lookup HTTP ${res.status}: ${text.slice(0, 200)}`);
     }
     const json = (await res.json()) as {
       data?: {
@@ -144,6 +261,7 @@ export async function lookupPhoneProvenance(rawPhone: string, firmId?: number): 
     const verdict = classify(lineType, carrierName, recentlyPorted);
     return {
       status: "ok",
+      provider: "telnyx",
       phone,
       line_type: lineType,
       carrier: carrierName,
@@ -154,29 +272,9 @@ export async function lookupPhoneProvenance(rawPhone: string, firmId?: number): 
     };
   } catch (err) {
     if ((err as { name?: string }).name === "AbortError") {
-      return {
-        status: "error",
-        phone,
-        line_type: null,
-        carrier: null,
-        country_code: null,
-        recently_ported: false,
-        risk: "unknown",
-        flags: ["phone_lookup_unreachable"],
-        note: `Telnyx Lookup timeout after ${TELNYX_LOOKUP_TIMEOUT_MS}ms`,
-      };
+      return errEnvelope(phone, "telnyx", `Telnyx Lookup timeout after ${TELNYX_LOOKUP_TIMEOUT_MS}ms`);
     }
-    return {
-      status: "error",
-      phone,
-      line_type: null,
-      carrier: null,
-      country_code: null,
-      recently_ported: false,
-      risk: "unknown",
-      flags: ["phone_lookup_unreachable"],
-      note: `Telnyx Lookup network error: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    return errEnvelope(phone, "telnyx", `Telnyx Lookup network error: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     clearTimeout(timer);
   }
@@ -194,7 +292,7 @@ function classify(
     flags.push("phone_carrier_unknown");
     risk = "moderate";
   }
-  // Telnyx returns `non_fixed_voip` for SIP / softphone / Google Voice /
+  // Providers return `non_fixed_voip` for SIP / softphone / Google Voice /
   // TextNow class numbers. These are the canonical burner signal.
   // Risk transitions: low → moderate → high. We use a numeric weight
   // internally to avoid the cascade of "if risk !== 'high'" guards.

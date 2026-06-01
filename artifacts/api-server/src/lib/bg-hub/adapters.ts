@@ -9,6 +9,7 @@ import { searchPcl } from "../pacer/pcl-client";
 import { searchEdgar } from "./sec-edgar";
 import { searchClAttorney } from "./courtlistener-attorney";
 import { checkFccRnd } from "./fcc-rnd";
+import { lookupPhoneProvenance } from "./phone-provenance";
 
 import { BACKGROUND_SOURCES } from "./sources";
 import { statusFromFlags } from "./escalation";
@@ -167,92 +168,108 @@ export async function adaptPhone(lead: LeadLike): Promise<BackgroundLaneResult> 
   // Normalize: strip leading country code if present.
   const normalized = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
 
-  // Attempt FCC RND check — vault-gated, degrades gracefully when unconfigured.
+  const flags: string[] = [];
+  const warnings: string[] = [];
+  const details: Record<string, unknown> = { input: raw, normalized };
+
+  // Line-type / carrier intelligence — Twilio Lookup (primary) → Telnyx
+  // (fallback). Vault-gated: returns a typed envelope (never throws) and is a
+  // silent no-op when no phone-lookup provider is connected. This is what
+  // "filters VoIP and prepaid numbers in lead intake": VoIP / non-genuine
+  // numbers raise the `voip` flag (REVIEW_REQUIRED on the phone lane).
+  try {
+    const lookup = await lookupPhoneProvenance(raw);
+    if (lookup.status === "ok") {
+      const lt = (lookup.line_type ?? "").toLowerCase();
+      const isVoip = lt === "non_fixed_voip" || lt === "fixed_voip" || lt === "voip";
+      const isBurner =
+        lookup.flags.includes("phone_non_fixed_voip") || lookup.flags.includes("phone_known_burner_carrier");
+      if (isVoip || isBurner) {
+        if (!flags.includes("voip")) flags.push("voip");
+        warnings.push(
+          `Phone line type "${lookup.line_type ?? "voip"}"${lookup.carrier ? ` (${lookup.carrier})` : ""} is a VoIP / non-genuine number — a common burner signal in lead intake. Operator: verify reachability before qualifying.`,
+        );
+      }
+      if (!lookup.carrier && !flags.includes("carrier_unknown")) {
+        flags.push("carrier_unknown");
+      }
+      details["line_intelligence"] = {
+        provider: lookup.provider ?? null,
+        status: lookup.status,
+        line_type: lookup.line_type,
+        carrier: lookup.carrier,
+        country_code: lookup.country_code,
+        recently_ported: lookup.recently_ported,
+        risk: lookup.risk,
+      };
+    } else if (lookup.status === "error") {
+      details["line_intelligence"] = { provider: lookup.provider ?? null, status: "error", note: lookup.note };
+      warnings.push(
+        `Phone line-type lookup unavailable: ${lookup.note ?? "provider error"}. VoIP/prepaid filtering skipped for this number.`,
+      );
+    } else {
+      // unconfigured — no phone-lookup provider connected; FCC RND still runs.
+      details["line_intelligence"] = { status: "unconfigured", note: lookup.note };
+    }
+  } catch (err) {
+    logger.warn({ err }, "bg-hub: adaptPhone line-type lookup threw unexpectedly");
+  }
+
+  // FCC RND reassignment check — vault-gated, degrades gracefully when unconfigured.
   try {
     const fcc = await checkFccRnd(normalized);
 
     switch (fcc.status) {
       case "unconfigured":
-        // No key — same honest stub behavior as before.
-        return makeResult(
-          "phone",
-          ["phone_not_checked"],
-          {
-            input: raw,
-            normalized,
-            fcc_rnd: "not_configured — add FCC_RND_API_KEY to vault for TCPA reassignment check (free: rnd.fcc.gov)",
-          },
-        );
+        if (!flags.includes("phone_not_checked")) flags.push("phone_not_checked");
+        details["fcc_rnd"] =
+          "not_configured — add FCC_RND_API_KEY to vault for TCPA reassignment check (free: rnd.fcc.gov)";
+        break;
 
       case "clean":
         // FCC confirms number not reassigned within lookback — no adverse flag.
-        return makeResult(
-          "phone",
-          [],
-          {
-            input: raw,
-            normalized,
-            fcc_rnd: {
-              status: "clean",
-              call_date: fcc.call_date,
-              checked_at: fcc.checked_at,
-              note: "Number not reassigned within FCC RND lookback period.",
-            },
-          },
-        );
+        details["fcc_rnd"] = {
+          status: "clean",
+          call_date: fcc.call_date,
+          checked_at: fcc.checked_at,
+          note: "Number not reassigned within FCC RND lookback period.",
+        };
+        break;
 
       case "reassigned":
-        return makeResult(
-          "phone",
-          ["fcc_rnd_reassigned"],
-          {
-            input: raw,
-            normalized,
-            fcc_rnd: {
-              status: "reassigned",
-              call_date: fcc.call_date,
-              last_assigned_date: fcc.last_assigned_date,
-              checked_at: fcc.checked_at,
-              note: "TCPA risk: number was reassigned after the consent lookback date. Operator must re-verify consent with current subscriber.",
-            },
-          },
-          [
-            `FCC RND: phone number ${normalized} was reassigned after ${fcc.call_date}. TCPA risk — operator must re-verify consent.`,
-          ],
+        flags.push("fcc_rnd_reassigned");
+        details["fcc_rnd"] = {
+          status: "reassigned",
+          call_date: fcc.call_date,
+          last_assigned_date: fcc.last_assigned_date,
+          checked_at: fcc.checked_at,
+          note: "TCPA risk: number was reassigned after the consent lookback date. Operator must re-verify consent with current subscriber.",
+        };
+        warnings.push(
+          `FCC RND: phone number ${normalized} was reassigned after ${fcc.call_date}. TCPA risk — operator must re-verify consent.`,
         );
+        break;
 
       case "invalid":
-        return makeResult(
-          "phone",
-          ["fcc_rnd_not_in_rnd"],
-          {
-            input: raw,
-            normalized,
-            fcc_rnd: { status: "not_in_rnd", note: fcc.note },
-          },
-          [`FCC RND: ${fcc.note}`],
-        );
+        flags.push("fcc_rnd_not_in_rnd");
+        details["fcc_rnd"] = { status: "not_in_rnd", note: fcc.note };
+        warnings.push(`FCC RND: ${fcc.note}`);
+        break;
 
       case "unavailable":
-        return makeResult(
-          "phone",
-          ["fcc_rnd_unavailable", "phone_not_checked"],
-          {
-            input: raw,
-            normalized,
-            fcc_rnd: { status: "unavailable", note: fcc.note },
-          },
-          [`FCC RND unavailable: ${fcc.note}. TCPA reassignment check skipped.`],
-        );
+        flags.push("fcc_rnd_unavailable");
+        if (!flags.includes("phone_not_checked")) flags.push("phone_not_checked");
+        details["fcc_rnd"] = { status: "unavailable", note: fcc.note };
+        warnings.push(`FCC RND unavailable: ${fcc.note}. TCPA reassignment check skipped.`);
+        break;
     }
   } catch (err) {
     logger.warn({ err }, "bg-hub: adaptPhone FCC check threw unexpectedly");
-    return makeResult(
-      "phone",
-      ["fcc_rnd_unavailable", "phone_not_checked"],
-      { input: raw, normalized },
-    );
+    flags.push("fcc_rnd_unavailable");
+    if (!flags.includes("phone_not_checked")) flags.push("phone_not_checked");
   }
+
+  return makeResult("phone", flags, details, warnings);
 }
 
 // ---------------------------------------------------------------------------
