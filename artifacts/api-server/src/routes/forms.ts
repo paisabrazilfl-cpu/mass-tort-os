@@ -1562,7 +1562,7 @@ form.appendChild(section("Hospital Information",[
 ],{accent:"#dc2626",note:"All hospital fields are mandatory. Leads without complete hospital information will be rejected."}));
 
 var compSection=section("Compliance",[
-  input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:CLAIMANT_CONSENT_ACKNOWLEDGMENT}),
+  input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:${JSON.stringify(CLAIMANT_CONSENT_ACKNOWLEDGMENT)}}),
 ],{accent:"#2563eb"});
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormCertUrl",id:"xxTrustedFormCertUrl_0",value:""}));
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormPingUrl",id:"xxTrustedFormPingUrl_0",value:""}));
