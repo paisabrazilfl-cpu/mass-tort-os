@@ -116,7 +116,7 @@ router.get("/intake/:slug", async (req, res) => {
   </div>
   ${disclaimerHtml()}
 </div>
-${gateScripts}<script src="${htmlEscape(baseUrl)}/api/web-forms/${safeSlug}/embed.js"></script>`;
+${gateScripts}<script src="${htmlEscape(baseUrl)}/api/web-forms/${safeSlug}/embed.js?chrome=0"></script>`;
 
     setPublicHeaders(res);
     res.send(

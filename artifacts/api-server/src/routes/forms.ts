@@ -26,8 +26,10 @@ import {
   removeCustomField,
   type CustomField,
 } from "../lib/form-config-service";
-import { customFieldSchema, webFormConfigSchema, type WebFormConfig } from "@workspace/db";
+import { customFieldSchema, webFormConfigSchema, type WebFormConfig, type ShowIfCondition } from "@workspace/db";
+import { conditionMet, normalizeConditionValue } from "../lib/web-form-fields";
 import { findExistingLeadForIntake } from "../lib/lead-dedup";
+import { CLAIMANT_CONSENT_ACKNOWLEDGMENT } from "../lib/consent-copy";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { updateWebFormConfig } from "./web-forms";
 import { buildDefaultWebFormConfig } from "../lib/web-form-defaults";
@@ -443,6 +445,24 @@ function extractCustomFieldValues(
   return out;
 }
 
+// Describes EXACTLY which extra fields the legacy embed renders for a given
+// tort, so the server can require every rendered field (not just the static
+// base set). Attached to the request by the public embed route before it
+// delegates into the pipeline; the auth CRM intake route never sets it, so
+// the broadened enforcement applies only to the public embed surface.
+export interface EmbedRequiredSpec {
+  extra_fields: string[];
+  exposure_fields: string[];
+  custom_fields: CustomField[];
+  /**
+   * Conditional-visibility predicates keyed by the field key they gate (the
+   * same map the embed uses for FIELD_CONDITIONS). A keyed field is required
+   * only when its predicate is met (visible), evaluated server-side so a direct
+   * POST cannot omit a field that the browser would have shown.
+   */
+  field_conditions: Record<string, ShowIfCondition>;
+}
+
 // Shared 10-step submission pipeline. Used by:
 //   - POST /api/forms/submit            (auth-required, CRM intake)
 //   - POST /api/forms-public/submit/:id (anonymous, third-party embed)
@@ -469,6 +489,67 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
     for (const field of requiredFields) {
       if (!data[field] || (typeof data[field] === "string" && !data[field].trim())) {
         step1.errors.push(`MISSING_${field.toUpperCase()}`);
+      }
+    }
+
+    // When invoked from the public embed, forms-public attaches the exact set
+    // of fields that tort's legacy form renders. The embed marks ALL of them
+    // required in HTML, so without matching server enforcement a direct POST
+    // could omit them and "all fields mandatory" would hold only in the
+    // browser. Require every rendered field here. Conditional fields (those
+    // carrying a show_if predicate) are required only when their condition is
+    // met — i.e. when the embed would show them — so hidden conditionals never
+    // trigger a false rejection while visible ones cannot be bypassed.
+    const embedRequired = (req as Request & { embedRequired?: EmbedRequiredSpec })
+      .embedRequired;
+    if (embedRequired) {
+      const conditions = embedRequired.field_conditions;
+      // Custom fields render (and therefore submit) ONLY as `cf_<key>`; base
+      // fields submit under their bare key. Resolve a condition's source the
+      // same way so a direct POST cannot spoof a bare `key` to flip visibility
+      // of a conditional custom field (the embed reads the rendered input only).
+      const customKeys = new Set(embedRequired.custom_fields.map((c) => c.key));
+      const getValue = (key: string): string =>
+        normalizeConditionValue(
+          customKeys.has(key) ? data[`cf_${key}`] : data[key],
+        );
+      // A field is visible (and therefore required) unless it carries a
+      // condition that is currently not met — exactly mirroring the embed.
+      const isVisible = (key: string): boolean => {
+        const c = conditions[key];
+        return c ? conditionMet(c, getValue) : true;
+      };
+      // `condKey` is the bare field key used for the show_if lookup; `name` is
+      // the actual payload key (custom fields submit as `cf_<key>`).
+      const requireText = (condKey: string, name = condKey) => {
+        if (!isVisible(condKey)) return;
+        if (!data[name] || (typeof data[name] === "string" && !data[name].trim())) {
+          step1.errors.push(`MISSING_${name.toUpperCase()}`);
+        }
+      };
+      const requireChecked = (condKey: string, name = condKey) => {
+        if (!isVisible(condKey)) return;
+        if (data[name] !== true && data[name] !== "true" && data[name] !== "on") {
+          step1.errors.push(`MISSING_${name.toUpperCase()}`);
+        }
+      };
+      // Medical free-text + qualification checkboxes the embed always renders.
+      requireText("medications");
+      requireChecked("diagnosis_confirmed");
+      requireChecked("was_at_location");
+      // Location / exposure fields, required only when the embed renders them.
+      const extraKeys = [
+        ...embedRequired.extra_fields,
+        ...embedRequired.exposure_fields,
+      ];
+      for (const k of ["location_name", "exposure_start", "exposure_end"]) {
+        if (extraKeys.includes(k)) requireText(k);
+      }
+      // Custom fields render as cf_<key>; checkbox customs must be checked.
+      for (const cf of embedRequired.custom_fields) {
+        const name = `cf_${cf.key}`;
+        if (cf.type === "checkbox") requireChecked(cf.key, name);
+        else requireText(cf.key, name);
       }
     }
 
@@ -1395,6 +1476,7 @@ function input(name,label,type,opts){
   } else if(type==="checkbox"){
     var cw=el("div",{style:{display:"flex",alignItems:"flex-start",gap:"8px"}});
     inp=el("input",{type:"checkbox",name:name,style:{marginTop:"3px"}});
+    if(!opts.optional)inp.setAttribute("required","");
     cw.appendChild(inp);
     cw.appendChild(el("span",{style:{fontSize:"13px",lineHeight:"1.4"}},opts.checkLabel||label));
     wrap.appendChild(cw);
@@ -1486,7 +1568,7 @@ form.appendChild(section("Personal Information",[
 form.appendChild(section("Medical Information",[
   input("diagnosis","Diagnosis","text",{placeholder:"e.g. Non-Hodgkin Lymphoma"}),
   input("diagnosis_date","Diagnosis Date","date"),
-  input("medications","Medications","text",{placeholder:"Current medications (optional)",optional:true}),
+  input("medications","Medications","text",{placeholder:"Current medications"}),
   input("diagnosis_confirmed","Diagnosis Confirmed","checkbox",{checkLabel:"Medical diagnosis confirmed by a physician"}),
   input("was_at_location","Location Exposure","checkbox",{checkLabel:"Client was at the qualifying location for the required duration"}),
 ]));
@@ -1498,12 +1580,12 @@ if(EXTRA_FIELDS.indexOf("exposure_start")>=0){
   form.appendChild(input("exposure_start","Exposure Start Date","date"));
 }
 if(EXTRA_FIELDS.indexOf("exposure_end")>=0){
-  form.appendChild(input("exposure_end","Exposure End Date","date",{optional:true}));
+  form.appendChild(input("exposure_end","Exposure End Date","date"));
 }
 
 if(CUSTOM_FIELDS&&CUSTOM_FIELDS.length>0){
   var customNodes=CUSTOM_FIELDS.map(function(cf){
-    var opts={optional:!cf.required};
+    var opts={optional:false};
     if(cf.placeholder)opts.placeholder=cf.placeholder;
     if(cf.options)opts.options=cf.options;
     if(cf.max_length)opts.maxLength=String(cf.max_length);
@@ -1528,14 +1610,14 @@ form.appendChild(section("Physician Information",[
 form.appendChild(section("Hospital Information",[
   input("hospital_name","Hospital Name"),
   (function(){
-    var node=input("hospital_fax","Hospital Fax","tel",{placeholder:"555-555-0100",optional:true});
+    var node=input("hospital_fax","Hospital Fax","tel",{placeholder:"555-555-0100"});
     var inp=node.querySelector('input[name="hospital_fax"]');
     if(inp){
       var errDiv=el("div",{id:"mtos-hospital-fax-error",style:{color:"#dc2626",fontSize:"12px",marginTop:"4px",display:"none"}});
       node.appendChild(errDiv);
-      // Live validation mirrors the server normalizer (NANP E.164). Empty
-      // input is allowed (field is optional). Any non-empty value must
-      // pass the same check before the form will submit cleanly.
+      // Live validation mirrors the server normalizer (NANP E.164). The field
+      // is required (the HTML required attribute blocks an empty submit); this
+      // blur handler only validates FORMAT once a value is entered.
       inp.addEventListener("blur",function(){
         var v=(inp.value||"").trim();
         if(!v){errDiv.style.display="none";inp.style.borderColor="#d1d5db";return;}
@@ -1561,7 +1643,7 @@ form.appendChild(section("Hospital Information",[
 ],{accent:"#dc2626",note:"All hospital fields are mandatory. Leads without complete hospital information will be rejected."}));
 
 var compSection=section("Compliance",[
-  input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:"I consent to being contacted via phone, SMS, and email regarding my legal claim. I understand that this is not a condition of service."}),
+  input("tcpa_consent","TCPA Consent","checkbox",{checkLabel:${JSON.stringify(CLAIMANT_CONSENT_ACKNOWLEDGMENT)}}),
 ],{accent:"#2563eb"});
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormCertUrl",id:"xxTrustedFormCertUrl_0",value:""}));
 compSection.appendChild(el("input",{type:"hidden",name:"xxTrustedFormPingUrl",id:"xxTrustedFormPingUrl_0",value:""}));

@@ -113,6 +113,11 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   elevenlabs: ["api_key", "client_secret"],
   synthflow: ["api_key", "client_secret"],
 
+  // Phone Validation & Fraud — Twilio Lookup v2 adapter
+  // (lib/bg-hub/phone-provenance.ts) authenticates with HTTP Basic using
+  // account_sid + the auth token stored in api_key.
+  twilio_lookup: ["account_sid", "api_key"],
+
   // Medical Records — Fasten Health (patient-initiated FHIR aggregation).
   // The Connect adapter reads all three secret fields: client_id (public id),
   // api_key (private key), client_secret (webhook signing secret). The on-prem
@@ -182,6 +187,17 @@ const REGISTRY: Record<string, WiringInfo> = {
   bland_ai: { status: "live", note: "Voice AI agent via Bland AI v1 pathway API." },
   elevenlabs: { status: "live", note: "Voice AI agent via ElevenLabs Conversational + voices APIs." },
   synthflow: { status: "live", note: "Voice AI agent via Synthflow v2 assistants API." },
+
+  // Phone Validation & Fraud — line-type/carrier/SIM-swap intelligence.
+  // The adapter lives in lib/bg-hub/phone-provenance.ts and feeds the
+  // Background Check Hub "phone" lane (VoIP/prepaid filtering in lead intake).
+  // Like pacer/serpapi/fasten above, this is a real vault-consuming adapter
+  // that is NOT registered in the email/esign/fax/sms/voice/llm ADAPTERS maps,
+  // so assertWiringRegistryConsistency does not cross-check it.
+  twilio_lookup: {
+    status: "live",
+    note: "Phone line-type, carrier, and SIM-swap intelligence via Twilio Lookup v2 (lookups.twilio.com). Feeds the Background Check Hub phone lane to flag VoIP/non-genuine numbers in lead intake. Requires account_sid + auth token (api_key).",
+  },
 
   // Web Search
   serpapi: { status: "live", note: "Google/Bing/Yahoo search results as structured JSON via SerpAPI /search.json. Requires api_key." },

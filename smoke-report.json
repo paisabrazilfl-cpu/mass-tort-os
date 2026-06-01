@@ -1,0 +1,397 @@
+[
+  {
+    "section": "§2.1",
+    "capability": "UserRole defines five roles",
+    "outcome": "PASS",
+    "evidence": "rbac.ts UserRole union contains all 5 roles"
+  },
+  {
+    "section": "§2.1",
+    "capability": "ROLE_HIERARCHY assigns numeric weights",
+    "outcome": "PASS",
+    "evidence": "rbac.ts ROLE_HIERARCHY has all 5 weights"
+  },
+  {
+    "section": "§2.5",
+    "capability": "Access token TTL is 15 minutes",
+    "outcome": "PASS",
+    "evidence": "rbac.ts ACCESS_TOKEN_EXPIRY = '15m'"
+  },
+  {
+    "section": "§2.5",
+    "capability": "Refresh token TTL is 7 days",
+    "outcome": "PASS",
+    "evidence": "rbac.ts REFRESH_TOKEN_EXPIRY_MS = 7*24*60*60*1000"
+  },
+  {
+    "section": "§3.1-3.6",
+    "capability": "Permission enum has every documented bucket",
+    "outcome": "PASS",
+    "evidence": "Permission enum has 20 expected entries"
+  },
+  {
+    "section": "§3.7",
+    "capability": "ROLE_PERMISSIONS map super_admin → every permission",
+    "outcome": "PASS",
+    "evidence": "super_admin: new Set<Permission>(Object.values(Permission))"
+  },
+  {
+    "section": "§5.1",
+    "capability": "firm-scope helper exists with requireFirmId + leadFirmScope",
+    "outcome": "PASS",
+    "evidence": "lib/firm-scope.ts exports requireFirmId + leadFirmScope + MissingFirmContextError"
+  },
+  {
+    "section": "§5.4",
+    "capability": "Encryption pinned to V1 in CURRENT_KEY_VERSION",
+    "outcome": "PASS",
+    "evidence": "encryption.ts CURRENT_KEY_VERSION = 1"
+  },
+  {
+    "section": "§5.4",
+    "capability": "AES-256-GCM with field+entity AAD",
+    "outcome": "PASS",
+    "evidence": "encryption.ts uses aes-256-gcm + buildAAD(field, entityId)"
+  },
+  {
+    "section": "§5.6",
+    "capability": "AI Constitution loader exists",
+    "outcome": "PASS",
+    "evidence": "lib/ai-constitution.ts + docs/AI_CONSTITUTION.md both present"
+  },
+  {
+    "section": "§7.1",
+    "capability": "GET /api/leads route is mounted under leadsRouter",
+    "outcome": "PASS",
+    "evidence": "routes/index.ts mounts leads at /api/leads; GET / handler present"
+  },
+  {
+    "section": "§7.1",
+    "capability": "Lead routes are firm-scoped (post-7baf80e)",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "leadFirmScope import not found"
+  },
+  {
+    "section": "§7.2",
+    "capability": "POST /api/leads stamps firm_id on insert",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "firm_id: requireFirmId(req) not found"
+  },
+  {
+    "section": "§7.1",
+    "capability": "GET /api/leads/export hard cap = 50_000",
+    "outcome": "PASS",
+    "evidence": "leads.ts EXPORT_HARD_CAP = 50_000"
+  },
+  {
+    "section": "§7.5",
+    "capability": "GET /api/cases is firm-scoped via casesTable.firm_id",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "case firm filter not found"
+  },
+  {
+    "section": "§7.5",
+    "capability": "casesTable schema has firm_id column",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "firm_id column not found"
+  },
+  {
+    "section": "§9.1",
+    "capability": "Automations webhook (public) is mounted before authMiddleware",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "automationsWebhookRouter not imported"
+  },
+  {
+    "section": "§9.1",
+    "capability": "Automations webhook uses rawBody HMAC (not JSON.stringify)",
+    "outcome": "PASS",
+    "evidence": "automations-webhook.ts uses req.rawBody buffer for HMAC (comments mentioning the old bug are ignored)"
+  },
+  {
+    "section": "§9.1",
+    "capability": "app.ts attaches rawBody for both webhook surfaces",
+    "outcome": "PASS",
+    "evidence": "app.ts express.json verify hook captures rawBody for both prefixes"
+  },
+  {
+    "section": "§9.4",
+    "capability": "Workflow runs persist to automation_runs table",
+    "outcome": "PASS",
+    "evidence": "schema/automations.ts defines automation_runs + automation_workflows"
+  },
+  {
+    "section": "§9.7",
+    "capability": "Self-Heal returns 503 when JULES_API_KEY missing",
+    "outcome": "PASS",
+    "evidence": "admin-self-heal.ts returns 503 + code:jules_not_configured when key absent"
+  },
+  {
+    "section": "§9.7",
+    "capability": "Self-Heal list is firm-scoped via Drizzle (no SQL concat)",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "requireFirmId not found"
+  },
+  {
+    "section": "§9.7",
+    "capability": "Codebase-wide: no SQL `1=1` literal or `firm_id=\"+` concat in any route/lib",
+    "outcome": "PASS",
+    "evidence": "no `1=1` or `firm_id=\"+'` concat in any route/lib file"
+  },
+  {
+    "section": "§9.7",
+    "capability": "Codebase-wide: no `res.json([])` inside catch blocks",
+    "outcome": "PASS",
+    "evidence": "no silent `res.json([])` in catch blocks across routes/"
+  },
+  {
+    "section": "§9.8",
+    "capability": "Competitive Intel watchlist is firm-scoped",
+    "outcome": "PASS",
+    "evidence": "admin-competitive-intel.ts filters watchlist by firm_id"
+  },
+  {
+    "section": "§11.3",
+    "capability": "Decision Engine writes convexity_action on the lead row",
+    "outcome": "PASS",
+    "evidence": "decision-engine-service.ts writes convexity_score/action/rationale/etc"
+  },
+  {
+    "section": "§11.4",
+    "capability": "Praxis Predictive is documented as heuristic, not ML",
+    "outcome": "PASS",
+    "evidence": "predictive-scoring.ts honestly admits it's a weighted-feature heuristic"
+  },
+  {
+    "section": "§11.7",
+    "capability": "Background Check Hub has 11 lane adapters",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "phone_provenance adapter entry not found"
+  },
+  {
+    "section": "§11.7",
+    "capability": "bg-hub exposes final_status_live_lanes_only on result",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "live-lanes field not found"
+  },
+  {
+    "section": "§11.7",
+    "capability": "bg-hub lane results expose manual_action_urls",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "smart-link field not found"
+  },
+  {
+    "section": "§11.7",
+    "capability": "STUB_LANES is reduced to four (business_entity demoted)",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "business_entity still in STUB_LANES; SEC EDGAR adapter should have removed it"
+  },
+  {
+    "section": "§11.7",
+    "capability": "SEC EDGAR adapter exists and exports searchEdgar",
+    "outcome": "PASS",
+    "evidence": "sec-edgar.ts wired to https://www.sec.gov/files/company_tickers.json"
+  },
+  {
+    "section": "§11.7",
+    "capability": "Treasury OFAC SDN adapter exists",
+    "outcome": "PASS",
+    "evidence": "ofac-treasury.ts wired to treasury.gov SDN CSV"
+  },
+  {
+    "section": "§11.7",
+    "capability": "Garbo adapter scaffold exists with credential lookup",
+    "outcome": "PASS",
+    "evidence": "garbo.ts has credential lookup + 3 marked OPERATOR-CONFIRM blocks for the API contract"
+  },
+  {
+    "section": "§11.7",
+    "capability": "Phone provenance via Telnyx Lookup",
+    "outcome": "PASS",
+    "evidence": "phone-provenance.ts wired to Telnyx /v2/number_lookup"
+  },
+  {
+    "section": "§11.7",
+    "capability": "Email enrichment has curated disposable-domain list",
+    "outcome": "PASS",
+    "evidence": "email-enrichment.ts curated disposable list present"
+  },
+  {
+    "section": "§11.7",
+    "capability": "Smart-links module emits prefilled URLs for 4 lanes",
+    "outcome": "PASS",
+    "evidence": "smart-links.ts has 10 state-bar deep-links + state SoS deep-links"
+  },
+  {
+    "section": "§11.7",
+    "capability": "Tort-policy categorization covers Roblox + Camp Lejeune + Zantac",
+    "outcome": "PASS",
+    "evidence": "tort-policy.ts maps Roblox / Camp Lejeune / Zantac to the right categories"
+  },
+  {
+    "section": "§11.7",
+    "capability": "Tort-policy skips business_entity + attorney for child_safety",
+    "outcome": "PASS",
+    "evidence": "tort-policy.ts: child_safety category skips attorney + business_entity lanes"
+  },
+  {
+    "section": "§12.4",
+    "capability": "integrationsTable schema has firm_id",
+    "outcome": "PASS",
+    "evidence": "schema/integrations.ts has firm_id integer column + index"
+  },
+  {
+    "section": "§12.4",
+    "capability": "Integration CRUD routes use integrationFirmScope predicate",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "scope predicate not found"
+  },
+  {
+    "section": "§12.4",
+    "capability": "Integration sync returns 501 for unsupported providers",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "501 status not found"
+  },
+  {
+    "section": "§12.4",
+    "capability": "Garbo preset is registered in integration-presets.ts",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "garbo preset not found"
+  },
+  {
+    "section": "§12.4",
+    "capability": "integration-wiring.ts lists garbo with status:live",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "garbo: status:live not found"
+  },
+  {
+    "section": "§13.3",
+    "capability": "Automation node catalog ↔ handler parity",
+    "outcome": "PASS",
+    "evidence": "76 catalog nodes ↔ 76 handlers; perfect parity"
+  },
+  {
+    "section": "§13.7",
+    "capability": "43 schema modules in lib/db/src/schema/",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "expected 43 schema files, found 48"
+  },
+  {
+    "section": "§13.7",
+    "capability": "processed_webhook_events schema exists",
+    "outcome": "PASS",
+    "evidence": "schema/processed_webhook_events.ts has the documented idempotency table"
+  },
+  {
+    "section": "§13.11",
+    "capability": "webhook-idempotency helper exists and is wired into webhook handlers",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "called from webhooks.ts not found"
+  },
+  {
+    "section": "§13.12",
+    "capability": "Per-firm webhook URL variants wired",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "per-firm URL pattern not found"
+  },
+  {
+    "section": "§13.9",
+    "capability": "Lead status enum values are referenced somewhere in the codebase",
+    "outcome": "PASS",
+    "evidence": "Lead status enum: all 5 documented values referenced in code"
+  },
+  {
+    "section": "security",
+    "capability": "CI poller has cycle-in-flight mutex",
+    "outcome": "PASS",
+    "evidence": "ci-poller.ts has cycleInFlight mutex to prevent overlapping ticks"
+  },
+  {
+    "section": "security",
+    "capability": "Vapi tools log every failed bearer attempt with IP",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "clientIpOf helper not found"
+  },
+  {
+    "section": "security",
+    "capability": "Backfill SQL files exist for cases / integrations / webhook-events",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "scripts/backfill-cases-firm-id.sql missing"
+  },
+  {
+    "section": "security",
+    "capability": "Automation crm.* handlers firm-scope every lead touch",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "crm.qualify_lead handler missing s.ctx.firmId guard"
+  },
+  {
+    "section": "security",
+    "capability": "forms.create_lead_from_submission stamps firm_id",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "firm_id stamp missing"
+  },
+  {
+    "section": "manual citations",
+    "capability": "rbac.ts:51 actually contains UserRole union",
+    "outcome": "PASS",
+    "evidence": "rbac.ts:51 = \"export type UserRole = \"super_admin\" | \"admin\" | \"user_manager\" | \"attorney\" | \"\""
+  },
+  {
+    "section": "manual citations",
+    "capability": "encryption.ts:27 contains CURRENT_KEY_VERSION = 1",
+    "outcome": "PASS",
+    "evidence": "encryption.ts:27 = \"const CURRENT_KEY_VERSION = 1;\""
+  },
+  {
+    "section": "manual citations",
+    "capability": "hub.ts:31-43 has every ADAPTERS entry",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "ADAPTERS list has 10 entries, expected 11"
+  },
+  {
+    "section": "ai-resiliency v2",
+    "capability": "CircuitBreaker module exists with expected exports",
+    "outcome": "PASS",
+    "evidence": "lib/ai/circuit-breaker.ts: CircuitBreaker class + get/allow/recordSuccess/recordFailure"
+  },
+  {
+    "section": "ai-resiliency v2",
+    "capability": "ErrorClassifier module exists with four categories",
+    "outcome": "PASS",
+    "evidence": "lib/ai/error-classifier.ts: all 4 ErrorClass values + ProviderUnavailableError + PolicyViolationError"
+  },
+  {
+    "section": "ai-resiliency v2",
+    "capability": "Observer module exists with emitAiStateTransition + PII redactor",
+    "outcome": "PASS",
+    "evidence": "lib/ai/observer.ts: emitAiStateTransition + PII redactor (SSN/phone/email/date) + 100ms collapse"
+  },
+  {
+    "section": "ai-resiliency v2",
+    "capability": "Phase 2 wiring: resilient-retry wrapper exists and is gated by AI_RESILIENCY_V2 env flag",
+    "outcome": "FAIL",
+    "evidence": "",
+    "reason": "flag check imported into the route not found"
+  }
+]

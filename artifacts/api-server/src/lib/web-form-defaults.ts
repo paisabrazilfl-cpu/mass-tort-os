@@ -1,4 +1,6 @@
 import { TORT_REGISTRY, type TortDefinition } from "./tort-engine";
+import { CLAIMANT_CONSENT_ACKNOWLEDGMENT } from "./consent-copy";
+import { forceFieldsRequired } from "./web-form-fields";
 import type {
   WebFormConfig,
   WebFormField,
@@ -112,7 +114,7 @@ export function buildDefaultWebFormConfig(tort: TortDefinition): WebFormConfig {
             label: "Specific diagnosis",
             type: "select" as const,
             section: "story" as const,
-            required: false,
+            required: true,
             options: diagnosisOptions,
             helper_text: "If you remember the exact wording your doctor used.",
           },
@@ -121,7 +123,7 @@ export function buildDefaultWebFormConfig(tort: TortDefinition): WebFormConfig {
             label: "Year of diagnosis",
             type: "number" as const,
             section: "story" as const,
-            required: false,
+            required: true,
             placeholder: "YYYY",
           },
         ]
@@ -140,10 +142,10 @@ export function buildDefaultWebFormConfig(tort: TortDefinition): WebFormConfig {
       : []),
     {
       key: "hospital_fax",
-      label: "Doctor's or hospital fax number (optional)",
+      label: "Doctor's or hospital fax number",
       type: "tel",
       section: "story",
-      required: false,
+      required: true,
       placeholder: "(555) 555-5555",
       max_length: 20,
       helper_text:
@@ -151,17 +153,16 @@ export function buildDefaultWebFormConfig(tort: TortDefinition): WebFormConfig {
     },
     {
       key: "brief_description",
-      label: "Briefly describe what happened (optional)",
+      label: "Briefly describe what happened",
       type: "textarea",
       section: "story",
-      required: false,
+      required: true,
       max_length: 2000,
       helper_text: "A few sentences is fine — your paralegal will gather full details later.",
     },
     {
       key: "tcpa_consent",
-      label:
-        "I consent to be contacted by phone, SMS, or email about my potential claim, including via automated systems. Message and data rates may apply. Consent is not a condition of representation.",
+      label: CLAIMANT_CONSENT_ACKNOWLEDGMENT,
       type: "checkbox",
       section: "story",
       required: true,
@@ -217,7 +218,7 @@ export function buildDefaultWebFormConfig(tort: TortDefinition): WebFormConfig {
     intro_headline: `${tort.label} Claim Review`,
     intro_subhead:
       "Tell us a few details to see if you may qualify. Takes under two minutes — no fees unless we win.",
-    fields,
+    fields: forceFieldsRequired(fields),
     eligibility_rules,
     send_confirmation_email: true,
     confirmation_subject: `Thanks for reaching out about your ${tort.label} claim`,

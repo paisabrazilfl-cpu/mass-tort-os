@@ -17,6 +17,8 @@ import { findExistingLeadForIntake } from "../lib/lead-dedup";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { runBackgroundCheck } from "../lib/background-check";
 import { isIntakeIdentityGateEnabled, verifyGoogleIdToken } from "../lib/intake-identity";
+import { withCanonicalConsent } from "../lib/consent-copy";
+import { forceFieldsRequired, conditionMet, normalizeConditionValue } from "../lib/web-form-fields";
 
 const router: IRouter = Router();
 
@@ -145,7 +147,15 @@ function validateAgainstFields(
       v === null ||
       (typeof v === "string" && v.trim() === "") ||
       (f.type === "checkbox" && v !== true && v !== "true" && v !== "on");
-    if (f.required && empty) {
+    // A field is required if it is statically required, OR it is a conditional
+    // (show_if) field whose condition is currently met — i.e. it is visible.
+    // Hidden conditional fields stay optional so they never falsely reject.
+    const required =
+      f.required ||
+      (f.show_if
+        ? conditionMet(f.show_if, (k) => normalizeConditionValue(body[k]))
+        : false);
+    if (required && empty) {
       errors.push(`MISSING_${f.key.toUpperCase()}`);
       continue;
     }
@@ -239,7 +249,10 @@ async function runWebFormPipeline(
 
   // STEP 1: Schema validation against the configured fields.
   const step1: PipelineStep = { name: "SCHEMA_VALIDATION", status: "passed", errors: [] };
-  const schemaCheck = validateAgainstFields(cfg.fields, body);
+  const schemaCheck = validateAgainstFields(
+    forceFieldsRequired(withCanonicalConsent(cfg.fields ?? [])),
+    body,
+  );
   if (!schemaCheck.ok) {
     step1.errors = schemaCheck.errors;
     step1.status = "failed";
@@ -819,7 +832,7 @@ router.get("/:tortId", async (req, res) => {
       enabled: cfg.enabled,
       intro_headline: cfg.intro_headline,
       intro_subhead: cfg.intro_subhead,
-      fields: cfg.fields,
+      fields: forceFieldsRequired(withCanonicalConsent(cfg.fields ?? [])),
       eligibility_rules: cfg.eligibility_rules,
     });
   } catch (err) {
@@ -919,7 +932,10 @@ router.get("/:tortId/embed.js", async (req, res) => {
     // Pass vendor token through so the generated embed includes it in its submit URL.
     const vt = typeof req.query.v === "string" && /^[0-9a-f]{32,64}$/i.test(req.query.v)
       ? req.query.v : undefined;
-    const js = generateWebFormEmbed(tortId, config.label, cfg, baseUrl, vt);
+    // The MTOS-hosted intake page renders its own header, so it requests a
+    // headerless embed (`?chrome=0`) to avoid a duplicate title/description.
+    const showHeader = req.query.chrome !== "0";
+    const js = generateWebFormEmbed(tortId, config.label, cfg, baseUrl, vt, showHeader);
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
@@ -1046,14 +1062,20 @@ function generateWebFormEmbed(
   cfg: WebFormConfig,
   baseUrl: string,
   vendorToken?: string,
+  showHeader = true,
 ): string {
   const data = {
     api: `${baseUrl}/api/web-forms`,
     tortId,
     tortLabel: label,
-    introHeadline: cfg.intro_headline,
-    introSubhead: cfg.intro_subhead,
-    fields: cfg.fields,
+    // The MTOS-hosted intake page (`/intake/:slug`) renders its own prominent
+    // headline + subhead above the form card, so it requests a headerless embed
+    // (`?chrome=0`) to avoid showing the title/description twice. Standalone
+    // third-party embeds keep their header (showHeader=true) so they have a
+    // title on the host page.
+    introHeadline: showHeader ? cfg.intro_headline : undefined,
+    introSubhead: showHeader ? cfg.intro_subhead : undefined,
+    fields: forceFieldsRequired(withCanonicalConsent(cfg.fields ?? [])),
     rules: cfg.eligibility_rules,
     vt: vendorToken ?? "",
     // When the HIPAA identity gate is on, the embed refuses to submit until a
