@@ -5,8 +5,8 @@ description: Where mtosvelocity.com actually runs vs the intended Render target,
 
 # Production host reality
 
-- As of 2026-05-31, live `mtosvelocity.com` is served by **Railway** (response headers `server: railway-edge`, `x-railway-edge`). The owner says this is an OLD deployment to **disregard**.
-- The **intended** production target is **Render**, but **no Render service exists yet**. The `RENDER_API_KEY` values seen so far authenticate to accounts holding only unrelated apps; none deploys `mass-tort-os` or serves `mtosvelocity.com`.
+- As of 2026-05-31, live `mtosvelocity.com` is served by **Railway** (response headers `server: railway-edge`, `x-railway-edge`). The owner says this is an OLD deployment to **disregard**. DNS cutover to Render is still OWNER-ONLY and not yet done.
+- **UPDATE 2026-06-01: the Render service now EXISTS and deploys.** Web service `mtos-api` = `srv-d8ea7h3bc2fs73ccsjvg`, ownerId `tea-d8a836beo5us739g6cc0`, default URL `https://mtos-api-2b4x.onrender.com` (this onrender URL is the real verify target until DNS moves). `RENDER_API_KEY` authenticates to this owner and can PATCH the service + trigger deploys. The CRM serves correctly there (landing/intake/SEO/embed/brand-assets all 200 on a fresh DB).
 - `RAILWAY_TOKEN` authenticates as the owner account but lists no personal projects — the prod project is under a team/workspace.
 
 ## `.render/render.yaml` is now tracked on `main` (was the hidden blocker)

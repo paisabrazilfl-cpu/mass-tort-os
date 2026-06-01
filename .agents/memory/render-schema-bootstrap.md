@@ -34,5 +34,17 @@ makes the deploy reproducible.
   each deploy, never committed (project is push-based, no tracked migrations).
 - Bootstrap is **destructive only when `public.firms` is missing**. Don't drop
   that table as a recovery step or the next deploy will wipe/recreate the schema.
+- **The flip side bit hard (2026-06-01):** because the sentinel makes apply-schema
+  a no-op on a populated DB, **additive schema changes never reach an existing
+  Render DB** — new columns/tables from later commits are simply absent and every
+  DB-backed route 500s with `column "X" does not exist` (e.g. `form_configurations.site_profile`).
+  There is no migration path here; the only fix is a **fresh DB** (drop + rebuild +
+  reseed). So on Render, schema changes require wiping the DB, which is only safe
+  pre-launch (seed-only). Plan a real migration story before real ePHI lands.
+- One-shot reset mechanism that works without DB network access from an agent env:
+  set the service `preDeployCommand` (runs once per deploy, inside the container
+  which DOES have the DB route) to `DROP SCHEMA public CASCADE; CREATE SCHEMA public`
+  then `node lib/db/apply-schema.mjs`. **Run the inline `node -e` with cwd=`lib/db`**
+  or `import 'pg'` fails (pg only resolves from a package that declares it; not from repo root).
 - The **worker** service does NOT run apply-schema; on a truly fresh DB it can
   crash-loop until the web service finishes bootstrapping, then recovers.
