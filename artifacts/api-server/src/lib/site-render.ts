@@ -33,12 +33,17 @@ export const INTAKE_HEADER_TRUST =
 // our own embed.js endpoint (same origin), so 'self' is sufficient.
 export const PUBLIC_CSP = [
   "default-src 'self'",
-  "script-src 'self' https://api.trustedform.com https://*.trustedform.com",
+  // Google Identity Services (Sign in with Google) is permitted so the
+  // standalone intake pages can require identity verification before the
+  // form (HIPAA gate). The GSI client + button iframe + token exchange use
+  // the accounts.google.com/gsi endpoints below. These permissions are inert
+  // unless a page actually loads the GSI client.
+  "script-src 'self' https://api.trustedform.com https://*.trustedform.com https://accounts.google.com/gsi/client",
   "worker-src 'self' blob: https://*.trustedform.com",
-  "frame-src 'self' https://*.trustedform.com",
-  "style-src 'self' 'unsafe-inline'",
+  "frame-src 'self' https://*.trustedform.com https://accounts.google.com/gsi/",
+  "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
   "img-src 'self' data: https:",
-  "connect-src 'self' https://api.trustedform.com https://*.trustedform.com",
+  "connect-src 'self' https://api.trustedform.com https://*.trustedform.com https://accounts.google.com/gsi/",
   "base-uri 'self'",
   "form-action 'self'",
 ].join("; ");

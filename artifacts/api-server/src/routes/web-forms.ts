@@ -16,6 +16,7 @@ import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
 import { findExistingLeadForIntake } from "../lib/lead-dedup";
 import { leadLookupHash } from "../lib/lead-lookup-hash";
 import { runBackgroundCheck } from "../lib/background-check";
+import { isIntakeIdentityGateEnabled, verifyGoogleIdToken } from "../lib/intake-identity";
 
 const router: IRouter = Router();
 
@@ -37,6 +38,29 @@ const webFormsRateLimit = rateLimit({
 });
 
 router.use(webFormsRateLimit);
+
+// ── GET /intake-gate.js — HIPAA identity-gate helper for the intake page ─────
+// Served same-origin so it satisfies the public CSP `script-src 'self'` (the
+// intake page therefore needs no inline scripts). Google Identity Services
+// auto-init (via the page's #g_id_onload div) invokes window.mtosOnGoogleSignIn
+// with the signed credential; we stash it for the embed's submit to forward,
+// then reveal the intake form. Registered BEFORE the `/:tortId` routes so the
+// literal path is never captured as a tort id.
+router.get("/intake-gate.js", (_req, res) => {
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  res.send(`(function(){
+  function reveal(){
+    var g=document.getElementById("mtos-id-gate");if(g)g.style.display="none";
+    var f=document.getElementById("mtos-form-wrap");if(f)f.style.display="block";
+  }
+  window.mtosOnGoogleSignIn=function(resp){
+    if(resp&&resp.credential){window.__MTOS_GOOGLE_ID_TOKEN__=resp.credential;reveal();}
+    else{var e=document.getElementById("mtos-gate-err");if(e)e.textContent="Sign-in did not complete. Please try again.";}
+  };
+})();`);
+});
 
 // Strict host pattern: alphanumerics, dot, hyphen, optional :port.
 const SAFE_HOST = /^[a-zA-Z0-9.-]+(?::\d{1,5})?$/;
@@ -167,6 +191,51 @@ async function runWebFormPipeline(
 ): Promise<PipelineResult> {
   const pipeline: PipelineStep[] = [];
   const cfg = config.web_form_config;
+
+  // STEP 0: Identity verification (HIPAA gate). Only enforced when a Google
+  // OAuth client id is configured (GOOGLE_OAUTH_CLIENT_ID). When enabled, the
+  // standalone intake page requires the visitor to sign in with Google before
+  // the form is revealed; the embed forwards the signed Google ID token, which
+  // we verify server-side here against Google's keys. A missing or invalid
+  // token is a HARD reject — protected health information is never accepted
+  // without a verified identity. When the gate is OFF this step is skipped, so
+  // ungated deployments behave exactly as before.
+  if (isIntakeIdentityGateEnabled()) {
+    const step0: PipelineStep = { name: "IDENTITY_VERIFICATION", status: "passed", errors: [] };
+    const identity = await verifyGoogleIdToken(body.google_id_token);
+    if (!identity) {
+      step0.errors = ["IDENTITY_NOT_VERIFIED"];
+      step0.status = "failed";
+      pipeline.push(step0);
+      return {
+        status: 403,
+        body: {
+          status: "error",
+          code: "identity_required",
+          message:
+            "Please verify your identity with Google before submitting this secure intake.",
+          outcome: "rejected",
+          errors: step0.errors,
+          action: "VERIFY_IDENTITY",
+          pipeline,
+          failed_step: "IDENTITY_VERIFICATION",
+        },
+      };
+    }
+    step0.data = { email_verified: identity.emailVerified };
+    pipeline.push(step0);
+    // Durable HIPAA trail: record WHO authenticated for this submission. The
+    // verified email/sub come from Google's signed token (not user input), so
+    // this proves the identity behind the PHI we are about to store.
+    void auditLog("web_form_identity_verified", tortId, "web_form_embed", {
+      tort_id: tortId,
+      email: identity.email,
+      sub: identity.sub,
+      email_verified: identity.emailVerified,
+    }).catch((err) => logger.warn({ err, tortId }, "identity audit failed"));
+    // Never persist the raw token anywhere downstream.
+    delete body.google_id_token;
+  }
 
   // STEP 1: Schema validation against the configured fields.
   const step1: PipelineStep = { name: "SCHEMA_VALIDATION", status: "passed", errors: [] };
@@ -987,6 +1056,11 @@ function generateWebFormEmbed(
     fields: cfg.fields,
     rules: cfg.eligibility_rules,
     vt: vendorToken ?? "",
+    // When the HIPAA identity gate is on, the embed refuses to submit until a
+    // verified Google ID token is present (the intake page's gate helper sets
+    // window.__MTOS_GOOGLE_ID_TOKEN__ after sign-in). Belt-and-suspenders: the
+    // server re-verifies regardless.
+    requireIdentity: isIntakeIdentityGateEnabled(),
   };
   const json = JSON.stringify(data);
   // Note: the embed runtime is intentionally small (~3KB) and dependency-free
@@ -1121,6 +1195,12 @@ function init(){
         return;
       }
     }
+    if(DATA.requireIdentity&&!window.__MTOS_GOOGLE_ID_TOKEN__){
+      msg.appendChild(el("div",{"class":"wf-block",text:"Please verify your identity with Google above before submitting."}));
+      btn.disabled=false;btn.textContent="Submit";
+      return;
+    }
+    if(window.__MTOS_GOOGLE_ID_TOKEN__)payload.google_id_token=window.__MTOS_GOOGLE_ID_TOKEN__;
     fetch(DATA.api+"/"+DATA.tortId+"/submit"+(DATA.vt?"?v="+encodeURIComponent(DATA.vt):""),{
       method:"POST",
       headers:{"Content-Type":"application/json"},

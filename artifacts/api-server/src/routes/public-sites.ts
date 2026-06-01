@@ -18,6 +18,7 @@ import { Router } from "express";
 import { getFormConfig } from "../lib/form-config-service";
 import { markPublic } from "../lib/route-protection";
 import { logger } from "../lib/logger";
+import { getGoogleClientId, isIntakeIdentityGateEnabled } from "../lib/intake-identity";
 import {
   NOT_A_LAW_FIRM_DISCLAIMER,
   INTAKE_HEADER_EYEBROW,
@@ -77,18 +78,45 @@ router.get("/intake/:slug", async (req, res) => {
     const headline = cfg!.intro_headline || config.label;
     const subhead = cfg!.intro_subhead || `Tell us about your potential ${config.label} claim.`;
 
+    // HIPAA identity gate: when a Google OAuth client id is configured, the
+    // visitor must verify their identity with Google before the intake form
+    // (which collects protected health information) is revealed. The form is
+    // still rendered by the embed, just hidden until sign-in; the gate helper
+    // script (same-origin, CSP-safe) reveals it and stashes the Google ID
+    // token, which the embed forwards to the server for verification.
+    const googleClientId = getGoogleClientId();
+    const gateEnabled = isIntakeIdentityGateEnabled() && Boolean(googleClientId);
+
+    const gateCard = gateEnabled
+      ? `<div id="mtos-id-gate" class="card" style="text-align:center">
+    <span class="eyebrow">Secure intake</span>
+    <h2 style="margin:8px 0">Verify your identity to continue</h2>
+    <p class="sub">To protect your health information, please sign in with Google before starting your secure intake. We use this only to confirm it's really you.</p>
+    <div id="g_id_onload" data-client_id="${htmlEscape(googleClientId!)}" data-callback="mtosOnGoogleSignIn" data-auto_prompt="false"></div>
+    <div class="g_id_signin" data-type="standard" data-size="large" data-theme="filled_blue" data-text="signin_with" data-shape="rectangular" data-logo_alignment="left" style="display:inline-block;margin-top:8px"></div>
+    <div id="mtos-gate-err" style="color:#991b1b;margin-top:10px"></div>
+  </div>
+`
+      : "";
+
+    const gateScripts = gateEnabled
+      ? `<script src="https://accounts.google.com/gsi/client" async></script>
+<script src="${htmlEscape(baseUrl)}/api/web-forms/intake-gate.js"></script>
+`
+      : "";
+
     const body = `<div class="wrap">
   <span class="eyebrow">${htmlEscape(INTAKE_HEADER_EYEBROW)}</span>
   <h1>${htmlEscape(headline)}</h1>
   <p class="sub">${htmlEscape(subhead)}</p>
   <div class="trust">${htmlEscape(INTAKE_HEADER_TRUST)}</div>
-  <div class="card">
+  ${gateCard}<div id="mtos-form-wrap" class="card"${gateEnabled ? ` style="display:none"` : ""}>
     <div id="mtos-web-form"></div>
     <p class="above-submit">${htmlEscape(NOT_A_LAW_FIRM_DISCLAIMER)}</p>
   </div>
   ${disclaimerHtml()}
 </div>
-<script src="${htmlEscape(baseUrl)}/api/web-forms/${safeSlug}/embed.js"></script>`;
+${gateScripts}<script src="${htmlEscape(baseUrl)}/api/web-forms/${safeSlug}/embed.js"></script>`;
 
     setPublicHeaders(res);
     res.send(
