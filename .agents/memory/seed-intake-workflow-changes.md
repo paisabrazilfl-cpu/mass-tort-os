@@ -1,12 +1,13 @@
 ---
 name: Seeded intake workflow changes
-description: How to safely change the 3 seeded intake automation graphs, plus the owner decision to drop the in-pipeline consent gate.
+description: How to safely change the seeded intake automation graphs; the 5-workflow intake→medical-records architecture; SMS-only + embedded-signing-link + no-consent-gate decisions.
 ---
 
 # Seeded intake automation workflows
 
-The three system-wide (firm_id = NULL) seeded intake pipelines (self_service / ai_agent / vendor)
-are built in code and re-applied at API-server startup.
+The system-wide (firm_id = NULL) seeded intake pipelines are built in code and re-applied at
+API-server startup. As of the intake→medical-records refactor there are **5 seeded workflows**
+keyed by stable string keys (3 reused + 2 added), not 3.
 
 ## Refresh / idempotency gotcha (how to ship a graph change)
 - A seed row only auto-refreshes when it is **disabled AND unedited** (stored `seed_graph_sha`
@@ -16,28 +17,38 @@ are built in code and re-applied at API-server startup.
 - **How to apply:** after editing, restart the api-server; verify with a DB query that the seeded
   rows show the new `trigger_config->>'seed_version'` and the expected node set.
 
-## Decision: no in-pipeline consent/TCPA gate
-- The `crm.consent_gate` node was **removed from all three seeded flows**; each flow's head now
-  runs straight into the Background Check Hub. The node type still exists in the catalog/executor
-  (usable in custom workflows) — it's just not in the seeds.
-- **Why:** owner decision. Consent is established **upstream** before a lead ever reaches the
-  pipeline — web-form TrustedForm certificate (self-service), recorded call + transcript (voice),
-  vendor-supplied TrustedForm cert URL (vendor) — so re-gating inside the pipeline was redundant
-  and could wrongly stall already-consented leads.
-- **How to apply:** do not re-add an in-pipeline consent gate to the seeds without a new owner
-  decision. The tradeoff is that consent enforcement now depends entirely on those upstream
-  surfaces; if upstream enforcement is weakened, the seeds no longer backstop it.
+## Architecture: 5-workflow intake → medical-records pipeline
+The seeds are keyed (not positional); reuse a key to mutate a flow, add a key to add a flow.
+- **self_service** → Intake Form → E-Sign. UNIFIED entry for ALL lead sources
+  (trigger.form_submitted): validate → bg → extract provider → NPI → qualify → create case →
+  render docs → send e-sign packet (embedded) → status pending_signature.
+- **ai_agent** → Voice Lead Qualification (trigger.inbound_call): transcribe/summarize → ack SMS
+  → bg → send intake-form-link SMS → status waiting_for_intake_form. NO NPI/e-sign — voice/vendor
+  flows only qualify+hand off to the unified intake form.
+- **vendor** → Vendor Lead Qualification (trigger.lead_created): cert presence → ack SMS → bg →
+  send intake-form-link SMS → status waiting_for_intake_form. NO NPI/e-sign.
+- **document_signed** (added) → Documents Signed → Fax & Route (trigger.document_signed):
+  all-signed gate → fax HIPAA to provider → email retainer to ATTORNEY (internal) + store →
+  status medical_records_requested.
+- **inbound_fax** (added) → Inbound Medical Records Fax (trigger.inbound_fax): medical_extract →
+  match to case → store → status medical_records_received → review queue.
+- **Review branch at every gate**: each decision/qualify/fax/match node routes its failure handle
+  to the review queue rather than dead-ending.
 
-## Decision: SMS-first claimant comms + Vapi voice confirmation
-- **Every claimant-facing touchpoint in all three seeds is `comm.send_sms`** — acknowledgement,
-  "documents ready to sign", e-sign reminder, and final confirmation. There are **zero
-  `integration.send_email` nodes** in the seeds (the old ack/reminder/confirmation emails and the
-  calendar-invite email were all replaced).
+## Decision: no in-pipeline consent/TCPA gate
+- The `crm.consent_gate` node was **removed from all seeded flows**. The node type still exists in
+  the catalog/executor (usable in custom workflows) — it's just not in the seeds.
+- **Why:** owner decision. Consent is established **upstream** before a lead reaches the pipeline
+  (web-form TrustedForm cert, recorded call + transcript, vendor-supplied cert URL), so re-gating
+  inside was redundant and could wrongly stall already-consented leads.
+- **How to apply:** do not re-add an in-pipeline consent gate without a new owner decision. The
+  tradeoff is consent enforcement now depends entirely on those upstream surfaces.
+
+## Decision: SMS-only claimant comms, signing link INSIDE the SMS
+- **Every claimant-facing touchpoint is SMS** (`comm.send_sms`). There are **zero claimant-facing
+  email nodes**. Internal/attorney email (e.g. retainer copy to the attorney) IS allowed.
 - **Why:** owner decision — claimants are contacted by text, not email.
-- The **AI Agent (Voice)** flow additionally has a `ai.voice_agent` "Voice confirm details" node
-  between NPI `verified` and the e-sign packet (e-sign starts from its `completed` handle;
-  `failed` → review queue). The other two flows still start e-sign from NPI `verified`.
-- **`ai.voice_agent` nodes leave `agentId` blank on purpose** so the template stays firm-agnostic;
-  the executor resolves the lead's per-tort active Vapi assistant (`tort_voice_agents`) at runtime.
-- **How to apply:** keep claimant comms on SMS unless the owner reverses this. When adding any new
-  voice node to a shared/template workflow, leave `agentId` blank and rely on runtime resolution.
+- The e-sign packet uses **embedded signing**: the worker requests an embedded signer URL and texts
+  the claimant a same-origin link `/sign/<token>`. See [esign-embedded-signing-sms](esign-embedded-signing-sms.md).
+- **How to apply:** keep claimant comms on SMS unless the owner reverses this. Any new
+  claimant-facing notification in a seed must be SMS, never email.

@@ -477,6 +477,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
       { key: "signerEmail", label: "Signer email", type: "string", required: true, placeholder: "input.lead.email" },
       { key: "signerName", label: "Signer name", type: "string", required: true, placeholder: "input.lead.full_name" },
       { key: "fields", label: "Pre-fill fields (JSON)", type: "json", placeholder: '{"date_of_injury":"input.lead.injury_date"}' },
+      { key: "notifySigner", label: "Text signing link to claimant (embedded)", type: "boolean", placeholder: "false" },
     ],
   },
   {
@@ -488,6 +489,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
       { key: "signerEmail", label: "Signer email", type: "string", required: true, placeholder: "input.lead.email" },
       { key: "signerName", label: "Signer name", type: "string", required: true, placeholder: "input.lead.full_name" },
       { key: "fields", label: "Tab values (JSON)", type: "json", placeholder: '{"DateOfInjury":"input.lead.injury_date"}' },
+      { key: "notifySigner", label: "Text signing link to claimant (embedded)", type: "boolean", placeholder: "false" },
     ],
   },
   {
@@ -640,6 +642,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
       { key: "templateId", label: "Document template id", type: "string", required: true, placeholder: "retainer-v2" },
       { key: "signerEmail", label: "Signer email", type: "string", required: true, placeholder: "input.lead.email" },
       { key: "signerName", label: "Signer name", type: "string", required: true, placeholder: "input.lead.full_name" },
+      { key: "notifySigner", label: "Text signing link to claimant (embedded)", type: "boolean", placeholder: "false" },
     ],
   },
   {

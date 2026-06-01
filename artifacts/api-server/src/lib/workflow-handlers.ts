@@ -37,6 +37,12 @@ interface SendEsignPacketPayload {
   template_id: number;
   envelope_id?: number;
   explicit_integration_id?: number | null;
+  /**
+   * When true, request EMBEDDED signing and text the claimant a same-origin
+   * signing link (`/sign/<token>`) instead of relying on the provider's email.
+   * Drives the SMS-only intake flow. Defaults to false (legacy email behavior).
+   */
+  notify_signer?: boolean;
 }
 
 interface FaxMedRecordsPayload {
@@ -342,6 +348,11 @@ export async function handleSendEsignPacket(payload: SendEsignPacketPayload): Pr
         template_id: String(template_id),
         envelope_id: String(envelope.id),
       },
+      // SMS-only intake: request embedded signing so we can text the claimant a
+      // real signing link. Adapters fall back to email if embedded isn't
+      // available (e.g. Dropbox Sign without an app client_id) and simply omit
+      // signingUrl — never fail.
+      embedded: payload.notify_signer === true,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -404,6 +415,15 @@ export async function handleSendEsignPacket(payload: SendEsignPacketPayload): Pr
     return;
   }
 
+  // Persist embedded-signing artifacts (if any) into envelope metadata so the
+  // public /sign/<token> route can regenerate a fresh signer URL on each tap.
+  const baseMeta = (envelope.metadata as Record<string, unknown> | null) ?? {};
+  const mergedMeta: Record<string, unknown> = {
+    ...baseMeta,
+    signing_url: outcome.signingUrl ?? null,
+    embedded_signature_id: outcome.embeddedSignatureId ?? null,
+  };
+
   await db
     .update(documentEnvelopesTable)
     .set({
@@ -416,6 +436,7 @@ export async function handleSendEsignPacket(payload: SendEsignPacketPayload): Pr
         { type: "queued", at: new Date(Date.now() - 1000).toISOString() },
         { type: "sent", at: new Date().toISOString(), raw: { external_envelope_id: outcome.externalEnvelopeId } },
       ],
+      metadata: mergedMeta,
       updated_at: new Date(),
     })
     .where(eq(documentEnvelopesTable.id, envelope.id));
@@ -425,11 +446,88 @@ export async function handleSendEsignPacket(payload: SendEsignPacketPayload): Pr
     external_envelope_id: outcome.externalEnvelopeId,
     template: tpl.name,
     signer: signer.email,
+    embedded: payload.notify_signer === true,
+    signing_url_available: Boolean(outcome.signingUrl),
   });
 
   logger.info(
     { envelope_id: envelope.id, lead_id, template_id, provider: resolved.provider, external_id: outcome.externalEnvelopeId },
     "E-sign packet sent",
+  );
+
+  // SMS-only intake: text the claimant their signing link. Failure here is
+  // logged + audited but never thrown — the envelope is already sent, and
+  // re-running the whole packet job on an SMS hiccup would risk duplicate
+  // dispatch. The link points at /sign/<token>, which mints a FRESH provider
+  // signer URL on demand — so we include the link whenever embedded signing is
+  // RESOLVABLE at click time (adapter supports createSignerUrl + the envelope
+  // has an external id), NOT merely when this initial send captured a URL. A
+  // transient null signingUrl on send must not silently drop the claimant's
+  // link, since /sign can still regenerate it.
+  if (payload.notify_signer === true) {
+    const linkResolvable =
+      typeof adapter.createSignerUrl === "function" && Boolean(outcome.externalEnvelopeId);
+    await notifyClaimantSigningLink(lead, lead_id, linkResolvable, envelope.id);
+  }
+}
+
+/**
+ * Text the claimant a same-origin signing link (`/sign/<token>`). The link is
+ * included whenever embedded signing is RESOLVABLE — i.e. the /sign route will
+ * be able to mint a fresh provider signer URL on demand. When the provider
+ * lacks embedded support we still text — honestly — that their documents are
+ * ready and the team will follow up, so the claimant is never silently dropped
+ * and we never fall back to email.
+ */
+async function notifyClaimantSigningLink(
+  lead: typeof leadsTable.$inferSelect,
+  leadId: number,
+  linkResolvable: boolean,
+  envelopeId: number,
+): Promise<void> {
+  const { sendSms } = await import("./sms/telnyx");
+  const { mintSigningToken, getPublicBaseUrl } = await import("./esign/signing-token");
+
+  const decrypted = decryptLeadFields(lead, String(leadId));
+  const phone = typeof decrypted.phone === "string" ? decrypted.phone.trim() : "";
+  if (!phone) {
+    logger.warn({ lead_id: leadId, envelope_id: envelopeId }, "esign notify: lead has no phone — cannot text signing link");
+    await auditLog("document_envelope", String(envelopeId), "signing_sms_skipped", { lead_id: leadId, reason: "no_phone" });
+    return;
+  }
+
+  let body: string;
+  if (linkResolvable) {
+    const token = mintSigningToken(leadId);
+    const url = `${getPublicBaseUrl()}/sign/${token}`;
+    body = `Your case documents are ready to sign. Tap to review & sign securely: ${url} Reply STOP to opt out.`;
+  } else {
+    body = `Your case documents are ready to sign. Our team is preparing your secure signing request and will follow up shortly. Reply STOP to opt out.`;
+  }
+
+  let result: Awaited<ReturnType<typeof sendSms>>;
+  try {
+    result = await sendSms({ to: phone, body, firmId: lead.firm_id ?? null, leadId });
+  } catch (err) {
+    logger.error({ err, lead_id: leadId, envelope_id: envelopeId }, "esign notify: SMS send threw");
+    await auditLog("document_envelope", String(envelopeId), "signing_sms_failed", { lead_id: leadId, error: String((err as Error).message) });
+    return;
+  }
+
+  if (!result.ok) {
+    logger.error({ lead_id: leadId, envelope_id: envelopeId, error: result.error }, "esign notify: SMS send failed");
+    await auditLog("document_envelope", String(envelopeId), "signing_sms_failed", { lead_id: leadId, error: result.error ?? "unknown" });
+    return;
+  }
+
+  await auditLog("document_envelope", String(envelopeId), "signing_sms_sent", {
+    lead_id: leadId,
+    sms_message_id: result.smsMessageId,
+    link_included: linkResolvable,
+  });
+  logger.info(
+    { lead_id: leadId, envelope_id: envelopeId, sms_message_id: result.smsMessageId, link_included: linkResolvable },
+    "esign notify: signing SMS sent",
   );
 }
 

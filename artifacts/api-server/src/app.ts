@@ -9,6 +9,7 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import publicSitesRouter from "./routes/public-sites";
 import publicSeoRouter from "./routes/public-seo";
+import signRouter from "./routes/sign";
 import { logger } from "./lib/logger";
 import { idsMiddleware } from "./lib/ids";
 import { markPublic, validateRouteTable } from "./lib/route-protection";
@@ -168,6 +169,13 @@ app.use("/api", (req: express.Request, res: express.Response) => {
 // The /intake and /c path prefixes are registered to this artifact's proxy
 // services so the shared proxy routes them here.
 app.use(publicSitesRouter);
+
+// Public claimant signing redirect (/sign/:token). Mounted BEFORE the SPA
+// fallback so the texted signing link is served by the API server (which mints
+// a fresh provider signer URL) instead of the React shell. The router is
+// markPublic and its /sign prefix is registered to this artifact's proxy
+// services (artifact.toml) so the shared proxy routes it here.
+app.use(signRouter);
 
 // Public SEO page network (Task #130) — category hubs (/c/:category), per-tort
 // supporting pages (/c/:category/:slug/:topic), /glossary, /how-it-works,

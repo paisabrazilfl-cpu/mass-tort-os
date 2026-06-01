@@ -189,6 +189,7 @@ describe("public allowlist (validateRouteTable policy)", () => {
       "vendor-portal",
       "public-sites",
       "public-seo",
+      "sign",
       "brand-assets",
     ]);
     for (const r of publicRouters) {
@@ -427,6 +428,10 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       // /sitemap.xml, /robots.txt. Non-/api GETs mounted at root, before the SPA
       // fallback. No session, no PII — content is derived from the live registry.
       "public-seo": "",
+      // Public claimant signing redirect (/sign/:token). Non-/api GET mounted at
+      // root, before the SPA fallback. No session, no PII — the stateless signing
+      // token (lead id only) IS the credential; it mints a fresh provider URL.
+      sign: "",
       // Per-tort branding assets (favicon/logo/hero/OG images) served for the
       // public SSR landing/intake/SEO sites. Static images keyed by tort slug
       // + filename; no session, no PII — the path IS the lookup.
@@ -447,6 +452,7 @@ describe("public endpoints reachable unauthenticated (path-prefix contract)", ()
       "/api/brand-assets/",
       "/intake/",
       "/c/",
+      "/sign/",
       "/glossary",
       "/how-it-works",
       "/sitemap.xml",

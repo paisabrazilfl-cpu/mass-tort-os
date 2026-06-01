@@ -31,6 +31,7 @@ export interface JobPayload {
     template_id: number;
     envelope_id?: number;
     explicit_integration_id?: number | null;
+    notify_signer?: boolean;
   };
   fax_med_records_request: {
     lead_id: number;

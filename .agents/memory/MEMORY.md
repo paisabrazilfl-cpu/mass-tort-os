@@ -20,3 +20,5 @@
 - [Intake Google identity gate](intake-identity-gate.md) — HIPAA gate on /intake/:slug; flagged by GOOGLE_OAUTH_CLIENT_ID; enforce server-side & GLOBALLY in pipeline (a per-page flag is bypassable).
 - [Web form show_if namespace](web-form-conditions-namespace.md) — FIELD_CONDITIONS derive from web_form_config show_if, but embed renders custom_fields; show_if.field must name a RENDERED custom_field key, not a web_form_config key (looks dangling, isn't).
 - [Schema table removal lifecycle](schema-table-removal.md) — dropping a table = delete schema file + index export + dev DROP + ORPHANED_TABLES sweep in apply-schema.mjs; db-drift won't flag DB-only orphans.
+- [E-sign embedded signing via SMS](esign-embedded-signing-sms.md) — claimant signs via /sign/<token> (mints fresh provider URL on demand); include link whenever createSignerUrl exists, NOT only when send() returned a URL.
+- [markPublic router dual-allowlist](esign-embedded-signing-sms.md) — adding a markPublic router fails rbac-test TWICE: register it in BOTH the `expected` Set AND the ROUTER_PREFIX/ALLOWED_PUBLIC_PREFIXES block in rbac-route-matrix.test.ts.

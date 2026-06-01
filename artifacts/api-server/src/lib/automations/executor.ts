@@ -460,8 +460,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     // identity is resolved by the worker from the lead record. We surface the
     // catalog-supplied signer fields back to the caller for traceability so
     // operators can confirm which signer the workflow targeted.
-    const jobId = await enqueueJob("send_esign_packet", { lead_id: leadId, template_id: templateId });
-    return { enqueued: true, job_id: jobId, signer_email: signerEmail, signer_name: signerName };
+    const notifySigner = (p.notifySigner ?? p.notify_signer) === true;
+    const jobId = await enqueueJob("send_esign_packet", { lead_id: leadId, template_id: templateId, notify_signer: notifySigner });
+    return { enqueued: true, job_id: jobId, signer_email: signerEmail, signer_name: signerName, notify_signer: notifySigner };
   },
   "integration.webhook_out": async (s) => {
     const url = String(s.node.data?.params?.url ?? "");
@@ -1257,8 +1258,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
         : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId)))
       .limit(1);
     if (!owned) throw new Error(`documents.send_dropbox_sign: lead ${leadId} not in firm ${s.ctx.firmId}.`);
-    const jobId = await enqueueJob("send_esign_packet", { lead_id: leadId, template_id: templateId });
-    return { enqueued: true, job_id: jobId, signer_email: signerEmail, signer_name: signerName, prefill: fields, provider: "dropbox_sign" };
+    const notifySigner = (p.notifySigner ?? p.notify_signer) === true;
+    const jobId = await enqueueJob("send_esign_packet", { lead_id: leadId, template_id: templateId, notify_signer: notifySigner });
+    return { enqueued: true, job_id: jobId, signer_email: signerEmail, signer_name: signerName, prefill: fields, provider: "dropbox_sign", notify_signer: notifySigner };
   },
   "documents.send_docusign": async (s) => {
     const p = s.node.data?.params ?? {};
@@ -1279,8 +1281,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
         : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, s.ctx.firmId)))
       .limit(1);
     if (!owned) throw new Error(`documents.send_docusign: lead ${leadId} not in firm ${s.ctx.firmId}.`);
-    const jobId = await enqueueJob("send_esign_packet", { lead_id: leadId, template_id: templateId });
-    return { enqueued: true, job_id: jobId, signer_email: signerEmail, signer_name: signerName, tabs: fields, provider: "docusign" };
+    const notifySigner = (p.notifySigner ?? p.notify_signer) === true;
+    const jobId = await enqueueJob("send_esign_packet", { lead_id: leadId, template_id: templateId, notify_signer: notifySigner });
+    return { enqueued: true, job_id: jobId, signer_email: signerEmail, signer_name: signerName, tabs: fields, provider: "docusign", notify_signer: notifySigner };
   },
   "documents.fax_medical_records": async (s) => {
     // Conflict resolution (Task #65 + #66): keep Task #66's real fax
