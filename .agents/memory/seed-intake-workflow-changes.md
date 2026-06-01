@@ -27,3 +27,17 @@ are built in code and re-applied at API-server startup.
 - **How to apply:** do not re-add an in-pipeline consent gate to the seeds without a new owner
   decision. The tradeoff is that consent enforcement now depends entirely on those upstream
   surfaces; if upstream enforcement is weakened, the seeds no longer backstop it.
+
+## Decision: SMS-first claimant comms + Vapi voice confirmation
+- **Every claimant-facing touchpoint in all three seeds is `comm.send_sms`** — acknowledgement,
+  "documents ready to sign", e-sign reminder, and final confirmation. There are **zero
+  `integration.send_email` nodes** in the seeds (the old ack/reminder/confirmation emails and the
+  calendar-invite email were all replaced).
+- **Why:** owner decision — claimants are contacted by text, not email.
+- The **AI Agent (Voice)** flow additionally has a `ai.voice_agent` "Voice confirm details" node
+  between NPI `verified` and the e-sign packet (e-sign starts from its `completed` handle;
+  `failed` → review queue). The other two flows still start e-sign from NPI `verified`.
+- **`ai.voice_agent` nodes leave `agentId` blank on purpose** so the template stays firm-agnostic;
+  the executor resolves the lead's per-tort active Vapi assistant (`tort_voice_agents`) at runtime.
+- **How to apply:** keep claimant comms on SMS unless the owner reverses this. When adding any new
+  voice node to a shared/template workflow, leave `agentId` blank and rely on runtime resolution.

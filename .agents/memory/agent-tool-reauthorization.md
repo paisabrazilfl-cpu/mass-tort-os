@@ -30,3 +30,20 @@ escalation bypass.
 - On denial, return a polite in-chat note — do NOT 403 the whole conversation.
 - Keep the data helper free of the RBAC import: compute the gate in the route,
   pass plain flags (isSuperAdmin/userId/ownScope) into the helper.
+
+## Companion rule: automations executor lead/entity lookups are firm-scoped
+
+**Rule:** every lookup of a lead (or other firm-owned row) inside
+`lib/automations/executor.ts` node handlers MUST gate on `s.ctx.firmId` —
+`firmId == null` is the system/global context (unscoped), otherwise
+`and(eq(table.id, id), eq(table.firm_id, s.ctx.firmId))`. This is the same
+convention every existing lead-touching handler already uses.
+
+**Why:** a code review caught a new blank-`agentId` Vapi resolver that looked a
+lead up by id with no firm predicate — a workflow running in firm A could
+resolve (and dial on behalf of) a lead owned by firm B. Cross-tenant leak.
+
+**How to apply:** when you add ANY new DB read of a firm-owned entity to an
+executor handler or its helpers, thread `s.ctx.firmId` through and apply the
+null-vs-scoped branch. Tables with no `firm_id` column can't be row-scoped —
+restrict those to super_admin / system context instead of widening.

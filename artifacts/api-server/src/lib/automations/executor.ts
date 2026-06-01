@@ -24,6 +24,7 @@ import {
   workflowSettingsTable,
   callLogsTable,
   documentEnvelopesTable,
+  tortVoiceAgentsTable,
 } from "@workspace/db";
 import { eq, and, sql, asc } from "drizzle-orm";
 import path from "node:path";
@@ -1532,12 +1533,34 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     // /webhooks/voice/:provider route into the run trail). Errors map
     // to `failed` with a structured payload.
     const p = s.node.data?.params ?? {};
-    const agentId = String(resolveOrLiteral(s, p.agentId) ?? "").trim();
+    let agentId = String(resolveOrLiteral(s, p.agentId) ?? "").trim();
     const callIdRaw = resolveOrLiteral(s, p.callId);
     const to = String(resolveOrLiteral(s, p.to ?? s.input?.to ?? s.input?.lead?.phone) ?? "").trim();
-    const metadata = (resolveOrLiteral(s, p.metadata) ?? {}) as Record<string, any>;
+    // resolveOrLiteral is not recursive into object fields, so a metadata map
+    // authored as { lead_id: "vars.leadId" } would otherwise dispatch the
+    // literal string "vars.leadId". Resolve each value so webhook correlation
+    // (e.g. lead_id) carries the real runtime value.
+    const rawMetadata = (resolveOrLiteral(s, p.metadata) ?? {}) as Record<string, any>;
+    const metadata: Record<string, any> = Object.fromEntries(
+      Object.entries(rawMetadata).map(([k, v]) => [k, resolveOrLiteral(s, v)]),
+    );
+    // Vapi integration: when no explicit assistant is set (the seeded intake
+    // templates deliberately leave `agentId` blank so they stay per-firm
+    // agnostic), resolve the lead's per-tort provisioned Vapi assistant from
+    // tort_voice_agents. This wires the workflow voice node to the same agent
+    // system used for inbound/outbound dialing, so the AI Voice Agent flow can
+    // actually place and confirm calls without hardcoding an id per workflow.
     if (!agentId) {
-      return { __branch: "failed", value: { ok: false, code: "MISSING_AGENT_ID", error: "ai.voice_agent requires `agentId`." } };
+      const leadId = Number(
+        s.vars?.leadId ?? s.input?.lead?.id ?? (metadata as any)?.lead_id ?? (metadata as any)?.leadId,
+      );
+      if (Number.isFinite(leadId) && leadId > 0) {
+        const resolvedAgent = await resolveLeadVoiceAssistantId(leadId, s.ctx.firmId);
+        if (resolvedAgent) agentId = resolvedAgent;
+      }
+    }
+    if (!agentId) {
+      return { __branch: "failed", value: { ok: false, code: "MISSING_AGENT_ID", error: "ai.voice_agent requires `agentId` — none was set and the lead has no active per-tort Vapi assistant provisioned." } };
     }
     if (!to) {
       return { __branch: "failed", value: { ok: false, code: "MISSING_TO", error: "ai.voice_agent needs a destination number — set `to` or pass it via input.lead.phone / input.to." } };
@@ -1640,6 +1663,44 @@ function resolveOrLiteral(s: StepContext, raw: any): any {
     return resolvePath({ input: s.input, vars: s.vars }, raw);
   }
   return raw;
+}
+
+/**
+ * Resolve the per-tort provisioned Vapi assistant id for a lead.
+ *
+ * Used by the `ai.voice_agent` handler when a workflow node leaves `agentId`
+ * blank (as the seeded intake templates do): we look up the lead's tort and
+ * return its active Vapi assistant from `tort_voice_agents`. Returns null when
+ * the lead, its tort, or an active assistant can't be found so the caller can
+ * fall through to a structured `MISSING_AGENT_ID` failure (→ review queue).
+ *
+ * Firm tenancy: the lead lookup is scoped to `firmId` exactly like every other
+ * lead-touching handler in this executor — a workflow running in firm A can
+ * never resolve (and therefore never dial on behalf of) a lead owned by firm B.
+ * A null `firmId` is the system/global context and is left unscoped, matching
+ * the rest of the executor's `s.ctx.firmId == null` convention.
+ */
+async function resolveLeadVoiceAssistantId(
+  leadId: number,
+  firmId: number | null,
+): Promise<string | null> {
+  const [lead] = await db
+    .select({ tort: leadsTable.tort_type })
+    .from(leadsTable)
+    .where(
+      firmId == null
+        ? eq(leadsTable.id, leadId)
+        : and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId)),
+    )
+    .limit(1);
+  if (!lead?.tort) return null;
+  const [agent] = await db
+    .select({ assistantId: tortVoiceAgentsTable.vapi_assistant_id, status: tortVoiceAgentsTable.status })
+    .from(tortVoiceAgentsTable)
+    .where(eq(tortVoiceAgentsTable.tort_id, lead.tort))
+    .limit(1);
+  if (agent?.assistantId && agent.status === "active") return agent.assistantId;
+  return null;
 }
 
 async function stubIntegration(name: string, s: StepContext): Promise<any> {

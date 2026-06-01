@@ -21,8 +21,17 @@
  *
  * Each flow is deliberately exhaustive, exercising a broad slice of the node
  * catalog (triggers, logic, data transforms, scripts, AI voice/transcribe/
- * summarize, SQL, e-sign, fax, SMS/email, calendar, webhooks, audit) so an
- * operator has a complete, working template to clone and tune per firm.
+ * summarize, SQL, e-sign, fax, SMS, calendar, webhooks, audit) so an operator
+ * has a complete, working template to clone and tune per firm.
+ *
+ * Claimant communication is SMS-first across all three flows: every
+ * claimant-facing touchpoint — acknowledgement, "documents ready to sign",
+ * e-sign reminder, and final confirmation — is delivered via comm.send_sms.
+ * The AI Agent (Voice) flow additionally has the Vapi voice agent confirm the
+ * claimant's details before any documents are sent, and re-engage by voice when
+ * the e-sign packet is still pending. The ai.voice_agent nodes leave agentId
+ * blank on purpose — the executor resolves the lead's per-tort provisioned Vapi
+ * assistant (tort_voice_agents) at runtime, so the template stays firm-agnostic.
  *
  * State-passing contract: the trigger payload (lead id, form payload, call
  * recording url) is captured into `vars` by the first two transform nodes, so
@@ -49,7 +58,7 @@ import type { ConsentChannel } from "./gates";
 
 const SEED_TAG = "seed:intake-pipeline";
 /** Bump when the template graphs change so already-seeded, unedited rows refresh. */
-const SEED_VERSION = 3;
+const SEED_VERSION = 4;
 
 type FlowKey = "self_service" | "ai_agent" | "vendor";
 
@@ -67,7 +76,7 @@ const FLOWS: FlowSpec[] = [
     key: "self_service",
     name: "Intake → Med Records — Self-Service (Text/Email)",
     description:
-      "Self-service web flow (contact_preference=text_email). Consent is enforced upstream by the web form (TrustedForm certificate), so there is no in-pipeline consent gate. Validate submission → background check → qualify → NPI verify → 3-doc e-sign packet → all-signed gate → fax provider → assign/activate/notify, with review-queue branches at every remaining gate.",
+      "Self-service web flow (contact_preference=text_email). Consent is enforced upstream by the web form (TrustedForm certificate), so there is no in-pipeline consent gate. Validate submission → SMS acknowledgement → background check → qualify → NPI verify → 3-doc e-sign packet → docs-ready SMS → all-signed gate → fax provider → assign/activate → SMS confirmation, with review-queue branches at every remaining gate. All claimant touchpoints are via SMS/text.",
     triggerType: "trigger.form_submitted",
     triggerLabel: "On Web Form Submitted",
     channel: "web",
@@ -76,7 +85,7 @@ const FLOWS: FlowSpec[] = [
     key: "ai_agent",
     name: "Intake → Med Records — AI Agent (Voice)",
     description:
-      "AI voice/chat agent flow (contact_preference=agent). Consent artifact is the recorded call + transcript on the claimant, established upstream, so there is no in-pipeline consent gate. Transcribe + summarize the call → background check → qualify → NPI verify → 3-doc e-sign packet → all-signed gate (voice re-engagement on pending) → fax provider → assign/activate/notify, with review-queue branches at every remaining gate.",
+      "AI voice/chat agent flow (contact_preference=agent). Consent artifact is the recorded call + transcript on the claimant, established upstream, so there is no in-pipeline consent gate. Transcribe + summarize the call → SMS acknowledgement → background check → qualify → NPI verify → AI voice agent confirms details (Vapi; the lead's per-tort assistant is auto-resolved) → 3-doc e-sign packet → docs-ready SMS → all-signed gate (voice re-engagement on pending) → fax provider → assign/activate → SMS confirmation, with review-queue branches at every remaining gate. The Vapi voice agent confirms the claimant's details before any documents are sent.",
     triggerType: "trigger.inbound_call",
     triggerLabel: "On Inbound Call",
     channel: "voice",
@@ -85,7 +94,7 @@ const FLOWS: FlowSpec[] = [
     key: "vendor",
     name: "Intake → Med Records — Vendor Leads",
     description:
-      "Vendor / lead-import flow. Vendor must supply a TrustedForm certificate URL per lead (the consent artifact), so there is no separate in-pipeline consent gate. Cert presence gate → background check → decision engine → NPI verify → 3-doc e-sign packet → all-signed gate → fax provider → assign/activate → vendor postback + notify, with review-queue branches at every remaining gate.",
+      "Vendor / lead-import flow. Vendor must supply a TrustedForm certificate URL per lead (the consent artifact), so there is no separate in-pipeline consent gate. Cert presence gate → SMS acknowledgement → background check → decision engine → NPI verify → 3-doc e-sign packet → docs-ready SMS → all-signed gate → fax provider → assign/activate → vendor postback + SMS confirmation, with review-queue branches at every remaining gate. All claimant touchpoints are via SMS/text.",
     triggerType: "trigger.lead_created",
     triggerLabel: "On Lead Created",
     channel: "vendor",
@@ -223,19 +232,12 @@ function buildGraph(spec: FlowSpec): Graph {
       "Form submission failed TCPA / TrustedForm / field validation. Do not contact.");
     edge(validate, "rq_form_invalid", "invalid");
 
-    const ackEmail = node("ack_email", "integration.send_email", x(), MAIN_Y, "Send acknowledgement email", {
-      to: "vars.leadEmail",
-      subject: "We received your information",
-      html: "<p>Thank you for submitting your information. A member of our intake team will review it and reach out shortly.</p>",
-    });
-    edge(validate, ackEmail, "valid");
-
-    const ackSms = node("ack_sms", "comm.send_sms", x(), MAIN_Y, "Send acknowledgement SMS", {
+    const ackSms = node("ack_sms", "comm.send_sms", x(), MAIN_Y, "Acknowledgement SMS", {
       to: "vars.leadPhone",
-      body: "Thanks for reaching out. Our intake team has your information and will contact you soon. Reply STOP to opt out.",
+      body: "Thanks for reaching out. Our intake team has your information and will contact you shortly. Reply STOP to opt out.",
       leadId: "vars.leadId",
     });
-    edge(ackEmail, ackSms);
+    edge(validate, ackSms, "valid");
 
     const normalize = node("normalize_contact", "script.javascript", x(), MAIN_Y, "Normalize contact (script)", {
       code: "const digits = String(vars.leadPhone||'').replace(/\\D/g,'');\nreturn { phone_digits: digits, has_email: !!vars.leadEmail };",
@@ -268,10 +270,17 @@ function buildGraph(spec: FlowSpec): Graph {
     });
     edge(summarize, logAi);
 
-    // Both branches of the recording check converge on the Background Check Hub
-    // in the shared backbone below (the false branch skips transcription).
-    // cursor is unused for this flow.
-    cursor = "log_call_summary";
+    // Both branches of the recording check converge on an acknowledgement SMS,
+    // then flow into the shared Background Check Hub. The false branch (no
+    // recording) skips transcription/summarization and lands here directly.
+    const ackSms = node("ack_sms", "comm.send_sms", x(), MAIN_Y, "Acknowledgement SMS", {
+      to: "vars.leadPhone",
+      body: "Thanks for calling. We have your information and we're getting started on your case. Reply STOP to opt out.",
+      leadId: "vars.leadId",
+    });
+    edge("has_recording", ackSms, "false");
+    edge(logAi, ackSms);
+    cursor = ackSms;
   } else {
     // vendor
     const certGate = node("cert_present", "logic.if", x(), MAIN_Y, "TrustedForm cert present?", {
@@ -302,7 +311,14 @@ function buildGraph(spec: FlowSpec): Graph {
       details: { flow: "vendor", note: "TrustedForm certificate URL present on vendor lead." },
     });
     edge(history, certAudit);
-    cursor = certAudit;
+
+    const ackSms = node("ack_sms", "comm.send_sms", x(), MAIN_Y, "Acknowledgement SMS", {
+      to: "vars.leadPhone",
+      body: "Thanks — we received your information and our intake team is reviewing your case. Reply STOP to opt out.",
+      leadId: "vars.leadId",
+    });
+    edge(certAudit, ackSms);
+    cursor = ackSms;
   }
 
   // ───────── Shared backbone: bg → qualify → npi → e-sign → fax → done ─────────
@@ -315,13 +331,10 @@ function buildGraph(spec: FlowSpec): Graph {
   const bg = node("background_check", "crm.background_check", x(), MAIN_Y, "Background Check Hub", {
     leadId: "vars.leadId",
   });
-  if (spec.key === "ai_agent") {
-    // Converge both recording branches directly into the background check.
-    edge("has_recording", bg, "false");
-    edge("log_call_summary", bg);
-  } else {
-    edge(cursor, bg);
-  }
+  // Every flow's head now ends at `cursor` — self-service: normalize script;
+  // ai_agent: acknowledgement SMS where the recording-check branches converge;
+  // vendor: cert audit → acknowledgement SMS — so all three feed the hub here.
+  edge(cursor, bg);
   const bgX = nodes.find((n) => n.id === bg)!.position.x;
   review("rq_bg_flagged", bgX, REVIEW_Y,
     "Background check flagged — needs human review before contact.");
@@ -379,14 +392,48 @@ function buildGraph(spec: FlowSpec): Graph {
     edge(inj, send);
     return send;
   };
-  const hipaa = esignDoc("hipaa", "HIPAA Authorization", npi, "verified");
+  // AI Voice Agent flow: before any documents go out, the Vapi voice agent
+  // calls the claimant to confirm their captured details. The synchronous
+  // dispatch ack maps to `completed` (the spoken confirmation itself is
+  // reported back via the voice webhook into the run trail); a dispatch failure
+  // routes to review so a human confirms before documents are sent. agentId is
+  // left blank on purpose — the handler resolves the lead's per-tort
+  // provisioned Vapi assistant at runtime.
+  let esignFrom = npi;
+  let esignHandle: string | undefined = "verified";
+  if (spec.key === "ai_agent") {
+    const voiceConfirm = node("voice_confirm", "ai.voice_agent", x(), MAIN_Y, "Voice confirm details", {
+      agentId: "",
+      callId: "vars.callId",
+      to: "vars.leadPhone",
+      metadata: { lead_id: "vars.leadId", purpose: "confirm_intake" },
+    });
+    edge(npi, voiceConfirm, "verified");
+    const vcX = nodes.find((n) => n.id === voiceConfirm)!.position.x;
+    review("rq_voice_confirm_failed", vcX, REVIEW_Y,
+      "Voice confirmation call could not be placed — confirm the claimant's details manually before sending documents.");
+    edge(voiceConfirm, "rq_voice_confirm_failed", "failed");
+    esignFrom = voiceConfirm;
+    esignHandle = "completed";
+  }
+
+  const hipaa = esignDoc("hipaa", "HIPAA Authorization", esignFrom, esignHandle);
   const retainer = esignDoc("retainer", "Retainer Agreement", hipaa, undefined);
   const affidavit = esignDoc("affidavit", "Personal Truth Affidavit", retainer, undefined);
+
+  // "Documents ready to sign" SMS — the e-sign packet has been dispatched, so
+  // text the claimant to go sign (every claimant touchpoint is via text).
+  const docsReady = node("docs_ready_sms", "comm.send_sms", x(), MAIN_Y, "Docs ready to sign SMS", {
+    to: "vars.leadPhone",
+    body: "We just sent your case documents for signature. Please open the request we sent and sign all 3 to keep things moving. Reply STOP to opt out.",
+    leadId: "vars.leadId",
+  });
+  edge(affidavit, docsReady);
 
   const allSigned = node("esign_all_signed", "documents.esign_all_signed", x(), MAIN_Y, "All Documents Signed?", {
     leadId: "vars.leadId",
   });
-  edge(affidavit, allSigned);
+  edge(docsReady, allSigned);
   const allSignedX = nodes.find((n) => n.id === allSigned)!.position.x;
 
   // Pending branch: re-engage, then route to review (never behave like signed).
@@ -402,13 +449,13 @@ function buildGraph(spec: FlowSpec): Graph {
     edge(voiceRemind, "rq_esign_pending", "completed");
     edge(voiceRemind, "rq_esign_pending", "failed");
   } else {
-    const remind = node("esign_remind_email", "integration.send_email", allSignedX, REVIEW_Y, "E-sign reminder email", {
-      to: "vars.leadEmail",
-      subject: "Action needed: please sign your documents",
-      html: "<p>We still need your signature to proceed. Please check your email for the signing request and complete all documents.</p>",
+    const remind = node("esign_remind_sms", "comm.send_sms", allSignedX, REVIEW_Y, "E-sign reminder SMS", {
+      to: "vars.leadPhone",
+      body: "Reminder: we still need your signature to proceed. Please open the signing request we sent and complete all documents. Reply STOP to opt out.",
+      leadId: "vars.leadId",
     });
     edge(allSigned, remind, "pending");
-    review("rq_esign_pending", allSignedX + COL, REVIEW_Y, "E-sign packet still pending after reminder. Human follow-up.");
+    review("rq_esign_pending", allSignedX + COL, REVIEW_Y, "E-sign packet still pending after SMS reminder. Human follow-up.");
     edge(remind, "rq_esign_pending");
   }
 
@@ -449,14 +496,13 @@ function buildGraph(spec: FlowSpec): Graph {
   // Flow-specific notification tail.
   let notifyTail: string;
   if (spec.key === "self_service") {
-    const invite = node("calendar_invite", "comm.send_calendar_invite", x(), MAIN_Y, "Email Calendar Invite", {
-      to: "vars.leadEmail",
-      title: "Your intake follow-up call",
-      startsAt: "vars.followupAt",
-      body: "We've scheduled a follow-up call to discuss your case.",
+    const confirmSms = node("notify_sms", "comm.send_sms", x(), MAIN_Y, "Confirmation SMS", {
+      to: "vars.leadPhone",
+      body: "All set — your documents are in and your case is moving forward. We've scheduled your follow-up call and a paralegal will be in touch. Reply STOP to opt out.",
+      leadId: "vars.leadId",
     });
-    edge(cal, invite);
-    notifyTail = invite;
+    edge(cal, confirmSms);
+    notifyTail = confirmSms;
   } else if (spec.key === "ai_agent") {
     const sms = node("notify_sms", "comm.send_sms", x(), MAIN_Y, "Confirmation SMS", {
       to: "vars.leadPhone",
@@ -466,7 +512,8 @@ function buildGraph(spec: FlowSpec): Graph {
     edge(cal, sms);
     notifyTail = sms;
   } else {
-    // vendor: postback to the vendor, then confirmation email.
+    // vendor: postback to the vendor (machine-to-machine), then a claimant
+    // confirmation SMS.
     const postback = node("vendor_postback", "integration.webhook_out", x(), MAIN_Y, "Vendor Postback (set URL)", {
       url: "https://example.com/hooks/vendor-postback",
       method: "POST",
@@ -474,13 +521,13 @@ function buildGraph(spec: FlowSpec): Graph {
       body: { event: "lead.qualified", flow: "vendor" },
     });
     edge(cal, postback);
-    const email = node("notify_email", "integration.send_email", x(), MAIN_Y, "Confirmation email", {
-      to: "vars.leadEmail",
-      subject: "Your case is moving forward",
-      html: "<p>Thank you. Your documents are complete and your case is now active. A paralegal will reach out shortly.</p>",
+    const confirmSms = node("notify_sms", "comm.send_sms", x(), MAIN_Y, "Confirmation SMS", {
+      to: "vars.leadPhone",
+      body: "Thank you — your documents are complete and your case is now active. A paralegal will reach out shortly. Reply STOP to opt out.",
+      leadId: "vars.leadId",
     });
-    edge(postback, email);
-    notifyTail = email;
+    edge(postback, confirmSms);
+    notifyTail = confirmSms;
   }
 
   const auditDone = node("audit_complete", "crm.audit_log", x(), MAIN_Y, "Audit: pipeline complete", {
