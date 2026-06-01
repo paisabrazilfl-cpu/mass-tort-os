@@ -293,11 +293,25 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const text = String(resolvePath({ input: s.input, vars: s.vars }, String(s.node.data?.params?.text ?? "")) ?? "");
     const pattern = String(s.node.data?.params?.pattern ?? "");
     const flags = String(s.node.data?.params?.flags ?? "g");
+    if (!pattern) throw new Error("data.regex requires a non-empty pattern.");
+    const MAX_MATCHES = 10_000;
     const matches: string[][] = [];
-    const re = new RegExp(pattern, flags);
+    let re: RegExp;
+    try {
+      re = new RegExp(pattern, flags);
+    } catch (err) {
+      throw new Error(`data.regex invalid pattern/flags: ${err instanceof Error ? err.message : String(err)}`);
+    }
     if (flags.includes("g")) {
       let m: RegExpExecArray | null;
-      while ((m = re.exec(text)) !== null) matches.push([...m]);
+      while ((m = re.exec(text)) !== null) {
+        matches.push([...m]);
+        // Zero-width matches (e.g. pattern can match "") do not advance
+        // lastIndex, which would loop forever — bump it manually. Also cap the
+        // total to avoid unbounded memory growth on pathological inputs.
+        if (m.index === re.lastIndex) re.lastIndex++;
+        if (matches.length >= MAX_MATCHES) break;
+      }
     } else {
       const m = text.match(re);
       if (m) matches.push([...m]);
@@ -366,8 +380,10 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   "crm.add_note": async (s) => {
     // Notes are stored as audit_log entries with action "note_added".
     const entity = String(s.node.data?.params?.entity ?? "lead");
-    const id = String(resolveOrLiteral(s, s.node.data?.params?.id) ?? "");
-    const note = String(s.node.data?.params?.note ?? "");
+    const id = String(resolveOrLiteral(s, s.node.data?.params?.id) ?? "").trim();
+    const note = String(s.node.data?.params?.note ?? "").trim();
+    if (!id) throw new Error("crm.add_note requires a resolvable `id` (the entity the note attaches to).");
+    if (!note) throw new Error("crm.add_note requires a non-empty `note`.");
     await db.insert(auditLogTable).values({
       action: "note_added", entity_type: entity, entity_id: id, details: { note },
     } as any);
@@ -375,8 +391,9 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   },
   "crm.audit_log": async (s) => {
     const p = s.node.data?.params ?? {};
-    const action = String(resolveOrLiteral(s, p.action) ?? "");
-    const entityType = String(resolveOrLiteral(s, p.entityType) ?? "");
+    const action = String(resolveOrLiteral(s, p.action) ?? "").trim();
+    if (!action) throw new Error("crm.audit_log requires an `action` string.");
+    const entityType = String(resolveOrLiteral(s, p.entityType) ?? "").trim() || "automation_run";
     // Resolve the configured entity id template; fall back to the trigger lead
     // id so the audit row records the real id rather than a literal path string.
     const entityId = String(
@@ -526,8 +543,10 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       throw new Error(`${providerKey} credentials could not be loaded from the vault.`);
     }
     const out = await adapter.search(creds, { query, engine, location, num });
+    // No declared failure branch: throw so the step is honestly marked error
+    // rather than reporting "ok" for a search that returned no usable result.
     if (!out.ok) {
-      return { ok: false, code: out.code, retryable: out.retryable, error: out.message };
+      throw new Error(`integration.web_search: ${out.code ?? "SEARCH_FAILED"} — ${out.message ?? "search provider returned a non-ok result."}`);
     }
     return {
       ok: true,
@@ -1055,11 +1074,13 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const mediaUrl = String(resolveOrLiteral(s, p.mediaUrl) ?? "").trim();
     if (!to || !mediaUrl) throw new Error("comm.send_mms requires `to` and `mediaUrl`.");
     const resolved = await resolveProvider("sms");
+    // No declared failure branch: throw so the step is honestly marked error
+    // rather than reporting "ok" for an MMS that was never sent.
     if (!isResolved(resolved)) {
-      return { ok: false, code: "PROVIDER_NOT_CONFIGURED", reason: resolved.reason, error: resolved.details ?? "No SMS provider configured." };
+      throw new Error(`comm.send_mms: PROVIDER_NOT_CONFIGURED — ${resolved.details ?? "No SMS provider configured."}`);
     }
     if (resolved.provider !== "telnyx") {
-      return { ok: false, code: "MMS_NOT_SUPPORTED_BY_PROVIDER", error: `MMS not implemented for ${resolved.provider}. Use comm.send_sms with the asset URL inline.` };
+      throw new Error(`comm.send_mms: MMS not implemented for ${resolved.provider}. Use comm.send_sms with the asset URL inline.`);
     }
     const apiKey = (resolved.credentials.api_key ?? "").toString().trim();
     const cfg = (resolved.credentials.config && typeof resolved.credentials.config === "object" ? resolved.credentials.config : {}) as Record<string, unknown>;
@@ -1128,7 +1149,11 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       entity_id: String(s.ctx.runId),
       details: { params: s.node.data?.params, note: "No voicemail-drop provider wired in this deployment." } as any,
     } as any);
-    return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "Voicemail drop is not implemented. Wire a voicemail provider (e.g. Slybroadcast) or use comm.send_sms with a callback link." };
+    // This node has no declared failure branch, so returning {ok:false} would
+    // leave the step marked "ok" and the run "completed" — i.e. silently claim
+    // success for a drop that never happened. Throw so the step is honestly
+    // reported as an error (and route around it with a logic.if if desired).
+    throw new Error("Voicemail drop is not implemented (PROVIDER_NOT_CONFIGURED). Wire a voicemail provider (e.g. Slybroadcast) or use comm.send_sms with a callback link.");
   },
   "comm.send_calendar_invite": async (s) => {
     // Build an RFC-5545 .ics attachment and send via the configured
@@ -1177,11 +1202,13 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
         entity_id: String(s.ctx.runId),
         details: { to, title, startsAt, endsAt, location, ics_uid: uid, reason: resolved.reason, message: resolved.details } as any,
       } as any);
-      return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: resolved.details ?? "No email provider configured." };
+      // No declared failure branch: throw so the step is honestly marked error
+      // (the ICS payload is preserved in the audit row above).
+      throw new Error(`comm.send_calendar_invite: PROVIDER_NOT_CONFIGURED — ${resolved.details ?? "No email provider configured."}`);
     }
     const adapter = getEmailAdapter(resolved.provider);
     if (!adapter) {
-      return { ok: false, code: "ADAPTER_NOT_FOUND", error: `No email adapter for ${resolved.provider}.` };
+      throw new Error(`comm.send_calendar_invite: no email adapter for ${resolved.provider}.`);
     }
     const globalSettingsForCal = await db
       .select({ fromAddress: workflowSettingsTable.default_email_from_address })
@@ -1612,13 +1639,15 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       .where(and(eq(integrationsTable.provider, "openai"), eq(integrationsTable.status, "active")))
       .orderBy(sql`${integrationsTable.created_at} DESC`)
       .limit(1);
+    // No declared failure branch: throw so the step is honestly marked error
+    // rather than reporting "ok" for a transcription that never ran.
     if (!openaiRow) {
-      return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "ai.transcribe needs an active OpenAI integration in the vault (Whisper). Add one on the Integrations page." };
+      throw new Error("ai.transcribe: PROVIDER_NOT_CONFIGURED — needs an active OpenAI integration in the vault (Whisper). Add one on the Integrations page.");
     }
     const creds = await getIntegrationCredentialsById(openaiRow.id);
     const apiKey = creds?.api_key?.toString().trim();
     if (!apiKey) {
-      return { ok: false, code: "PROVIDER_NOT_CONFIGURED", error: "OpenAI integration is missing api_key." };
+      throw new Error("ai.transcribe: PROVIDER_NOT_CONFIGURED — OpenAI integration is missing api_key.");
     }
 
     // Download the audio asset, then upload to Whisper via multipart.
