@@ -932,7 +932,10 @@ router.get("/:tortId/embed.js", async (req, res) => {
     // Pass vendor token through so the generated embed includes it in its submit URL.
     const vt = typeof req.query.v === "string" && /^[0-9a-f]{32,64}$/i.test(req.query.v)
       ? req.query.v : undefined;
-    const js = generateWebFormEmbed(tortId, config.label, cfg, baseUrl, vt);
+    // The MTOS-hosted intake page renders its own header, so it requests a
+    // headerless embed (`?chrome=0`) to avoid a duplicate title/description.
+    const showHeader = req.query.chrome !== "0";
+    const js = generateWebFormEmbed(tortId, config.label, cfg, baseUrl, vt, showHeader);
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
@@ -1059,13 +1062,19 @@ function generateWebFormEmbed(
   cfg: WebFormConfig,
   baseUrl: string,
   vendorToken?: string,
+  showHeader = true,
 ): string {
   const data = {
     api: `${baseUrl}/api/web-forms`,
     tortId,
     tortLabel: label,
-    introHeadline: cfg.intro_headline,
-    introSubhead: cfg.intro_subhead,
+    // The MTOS-hosted intake page (`/intake/:slug`) renders its own prominent
+    // headline + subhead above the form card, so it requests a headerless embed
+    // (`?chrome=0`) to avoid showing the title/description twice. Standalone
+    // third-party embeds keep their header (showHeader=true) so they have a
+    // title on the host page.
+    introHeadline: showHeader ? cfg.intro_headline : undefined,
+    introSubhead: showHeader ? cfg.intro_subhead : undefined,
     fields: forceFieldsRequired(withCanonicalConsent(cfg.fields ?? [])),
     rules: cfg.eligibility_rules,
     vt: vendorToken ?? "",
