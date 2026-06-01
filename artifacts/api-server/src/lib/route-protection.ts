@@ -115,6 +115,13 @@ const AUTH_ONLY_ROUTES = new Set([
   // firm invites — any authenticated firm member can view or mint invite links.
   "auth GET /firm-invites",
   "auth POST /firm-invites",
+  // favorites router — personal per-user bookmarks; every authenticated user
+  // manages their own list (rows are scoped to req.user.id, no role gate).
+  "favorites GET /",
+  "favorites POST /",
+  "favorites POST /bulk",
+  "favorites PATCH /:id",
+  "favorites DELETE /:id",
 ]);
 
 interface RouteIssue {

@@ -7,7 +7,7 @@ import {
   TrendingUp, FileUp, Scale, Building, FileSignature, Grid3x3, Settings,
   Activity, CreditCard, Phone, Workflow, Eye, BookOpen, Library,
   Webhook, Wrench, Search, ListChecks, Bot, Skull, Sparkles, PhoneCall,
-  HeartPulse, ChevronDown, X, Globe,
+  HeartPulse, ChevronDown, X, Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -56,16 +56,14 @@ export const navigation: NavSection[] = [
     ],
   },
 
-  // ── SITES ─────────────────────────────────────────────────────────────────
-  // Tort campaign sites: live landing pages, compliant intake forms, and the
-  // public SEO page network. Promoted to its own top-level tab for visibility.
+  // ── FAVORITES ───────────────────────────────────────────────────────────────
+  // Personal saved links (bookmarks). Each operator manages their own list.
   {
-    section: "Sites",
-    icon: Globe,
-    color: "violet",
+    section: "Favorites",
+    icon: Star,
+    color: "amber",
     items: [
-      { name: "Site Manager", href: "/sites", icon: Grid3x3 },
-      { name: "Sites AI Assistant", href: "/sites-ai", icon: Sparkles },
+      { name: "Favorites", href: "/favorites", icon: Star },
     ],
   },
 
