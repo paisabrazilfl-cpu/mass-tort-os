@@ -8,6 +8,21 @@ const ENCODING = "base64" as const;
 
 /**
  * Current encryption key version used for ALL new encrypts.
+ * Decryption is version-aware and uses whatever version is embedded in the
+ * ciphertext header ("enc:v<N>:...").
+ *
+ * Key rotation policy:
+ *  - Bump this constant when introducing a new key.
+ *  - Keep the OLD key available as ENCRYPTION_KEY_V<old> in Replit Secrets
+ *    until every row has been re-encrypted by `scripts/rotate-encryption-key.ts`.
+ *  - Once migration is verified, delete the old version's secret.
+ *
+ * Currently pinned to v1: the legacy `ENCRYPTION_KEY` secret IS the v1 key
+ * (the resolver in `getKey()` accepts that name as the v1 fallback). Version 2
+ * was never actually deployed — no row in the database is tagged `enc:v2:`,
+ * and `ENCRYPTION_KEY_V2` was never provisioned. To roll forward to v2 in
+ * the future, provision `ENCRYPTION_KEY_V2`, run the rotation script to
+ * re-encrypt existing rows, then bump this constant.
  */
 const CURRENT_KEY_VERSION = 1;
 
@@ -19,7 +34,15 @@ const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
 const keyCache: Record<number, Buffer> = {};
 
 /**
- * Resolve the AES-256 key for a given version. Optimized with a cache.
+ * Resolve the AES-256 key for a given version. Strict, no silent fallbacks
+ * across versions (a missing v2 must NOT silently use v1, or you'd produce
+ * v2-tagged ciphertext encrypted with the v1 key — undetectable disaster).
+ *
+ * Backward-compat: v1 also reads the legacy `ENCRYPTION_KEY` name, because
+ * historical deployments stored the v1 key under that bare name (before
+ * versioning existed). This is the ONLY cross-name fallback allowed.
+ *
+ * Optimized with a cache to avoid redundant process.env lookups and hex decoding.
  */
 function getKey(version?: number): Buffer {
   const keyVersion = version ?? CURRENT_KEY_VERSION;
@@ -82,6 +105,9 @@ export function encrypt(plaintext: string, fieldName?: string, entityId?: string
 
 /**
  * Try to decrypt with a specific AAD configuration. Returns null on failure.
+ * Used by decrypt() to attempt multiple AAD variants for backward compatibility
+ * when historical data was encrypted with a different (or no) AAD than what the
+ * caller is now passing.
  */
 function tryDecryptWithAAD(
   payload: string,
@@ -105,8 +131,8 @@ function tryDecryptWithAAD(
 }
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
-  if (!ciphertext || !ciphertext.startsWith("enc:")) return ciphertext;
-
+  if (!ciphertext) return ciphertext;
+  if (!ciphertext.startsWith("enc:")) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
@@ -120,17 +146,23 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
     payload = ciphertext.slice(4);
   }
 
-  // Fallback chain for AAD
+  // Try the AAD configuration the ciphertext was tagged with first. If that
+  // fails, fall back through other AAD variants — historical inconsistencies
+  // (e.g. data encrypted before the entityId was known on insert) would
+  // otherwise be permanently unrecoverable. AES-GCM auth tag verification
+  // still prevents corruption: every fallback that succeeds is cryptographically
+  // valid for the key + IV.
+  const candidates: (Buffer | undefined)[] = [];
   if (hasAADFlag && fieldName) {
-    const res = tryDecryptWithAAD(payload, keyVersion, buildAAD(fieldName, entityId));
-    if (res !== null) return res;
-
-    const res2 = tryDecryptWithAAD(payload, keyVersion, buildAAD(fieldName, undefined));
-    if (res2 !== null) return res2;
+    candidates.push(buildAAD(fieldName, entityId));      // primary: field+entity
+    candidates.push(buildAAD(fieldName, undefined));     // fallback: field only
   }
+  candidates.push(undefined);                             // fallback: no AAD
 
-  const res3 = tryDecryptWithAAD(payload, keyVersion, undefined);
-  if (res3 !== null) return res3;
+  for (const aad of candidates) {
+    const result = tryDecryptWithAAD(payload, keyVersion, aad);
+    if (result !== null) return result;
+  }
 
   logger.error(
     { fieldName, hasAAD: !!hasAADFlag, keyVersion },
@@ -184,6 +216,19 @@ export function decryptLeadArray(leads: Record<string, any>[]): Record<string, a
 
 /**
  * Task #8: post-insert rebind of AAD to the freshly-assigned lead.id.
+ *
+ * Lead inserts cannot pass `entityId` to `encryptLeadFields` because the
+ * serial id is only known after `INSERT … RETURNING id`. Without rebind,
+ * the AAD-tagged ciphertexts are bound to (fieldName) only, and a future
+ * UPDATE on a different row can paste those bytes in without AES-GCM
+ * detecting the swap.
+ *
+ * This helper takes the just-inserted row, re-encrypts every populated
+ * encrypted field with `(fieldName, String(lead.id))` AAD, and writes
+ * the rebound ciphertexts back. The decrypt-side AAD-fallback chain in
+ * `decrypt()` makes this a no-op for already-bound rows and a one-shot
+ * upgrade for legacy rows; either way, any subsequent decrypt with the
+ * row's id verifies against the strict (field+entity) AAD first.
  */
 export async function rebindLeadEncryptionAad(
   db: { update: (...args: any[]) => any },
@@ -202,7 +247,8 @@ export async function rebindLeadEncryptionAad(
       if (plain === "[DECRYPTION_ERROR]") continue;
       update[field] = encrypt(plain, field, id);
     } catch {
-      // Skip individual field on rebind failure
+      // Skip individual field on rebind failure — the original ciphertext
+      // remains intact and decrypt-side fallback still recovers it.
     }
   }
   if (Object.keys(update).length === 0) return;
