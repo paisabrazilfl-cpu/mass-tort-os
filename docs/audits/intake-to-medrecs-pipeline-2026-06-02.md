@@ -110,13 +110,20 @@ These are real and not worked around silently:
    credentials do not exist in dev. The in-repo background-check **hub** path (worker
    `run_bg_check`) is exercisable and was verified to be picked up by the worker.
 
-2. **`DOCS_SIGNED` advances per-signed-envelope, not gated on all-three-signed.** The
-   e-sign hook (`applyEnvelopeEvent` signed-block) calls `applyDocumentsSigned` when an
-   envelope is signed. The task description envisioned an "all-three-signed → DOCS_SIGNED"
-   gate. The current implementation advances on the signed envelope and is idempotent per
-   envelope (`keySuffix=env<id>`), but does **not** yet count distinct required envelopes
-   before advancing. If the retainer/HIPAA/authorization are three separate envelopes,
-   a follow-up is needed to require all three before `DOCS_SIGNED`.
+2. **`DOCS_SIGNED` is gated on the lead's ENTIRE active signing packet, not the first
+   signature.** The e-sign hook (`applyEnvelopeEvent` signed-block) now re-reads every
+   envelope for the lead and only calls `applyDocumentsSigned` when `allDocumentsSigned(...)`
+   is true. The gate's deterministic rule is **"at least one envelope is `signed` and no
+   envelope is still in flight."** Dead/replaced envelopes
+   (`declined/voided/expired/cancelled/error/failed`) are **ignored**, so a voided draft
+   followed by a signed replacement still advances and a stale failed envelope cannot
+   deadlock the lead forever. Only an in-flight envelope (created/sent/delivered/viewed)
+   holds the lead before `DOCS_SIGNED`. The transition is keyed per-lead
+   (`keySuffix=lead<id>`) so the last-signed redelivery is a safe no-op. **Honest
+   limitation:** the `document_envelopes` schema has no per-document "required type" flag,
+   so "all required" is implemented as "nothing in flight" rather than a specific named set
+   (retainer + HIPAA + authorization). Requiring an explicit named set needs a
+   `doc_type`/required-set model — tracked as a follow-up.
 
 3. **Inbound-fax correlation depends on a cover-sheet / sender mapping.** Correlation is:
    explicit `lead:<id>` reference first, else an **unambiguous** sender-fax match against
@@ -138,13 +145,38 @@ These are real and not worked around silently:
    **Production (Render) picks it up on next deploy/runtime schema apply** — it has not
    been applied to prod from here (prod is owner-deployed via GitHub `main`).
 
+6. **`pipeline_events.firm_id` is intentionally nullable.** It mirrors `lead_dispositions`
+   (also nullable) and the fact that `leads.firm_id` is itself nullable — unscoped/legacy
+   leads exist and a `NOT NULL` constraint would make the pipeline unable to record events
+   for them, silently breaking the audit trail it exists to provide. Tenancy is enforced at
+   the *read* boundary instead: `routes/pipeline.ts` `loadLeadScoped` denies null-firm leads
+   to non-bypass users, so a nullable column never becomes a cross-tenant read. This is the
+   "documented narrow legacy exception" the review allowed.
+
+7. **Webhook retry-safety (bgcheck + inbound-fax).** Both endpoints claim the idempotency
+   ledger *before* applying (the claim dedups the non-idempotent **emails** the bg-check
+   stage sends). If the apply then throws, they now call `releaseWebhookClaim` and return
+   **503** so the provider retries, rather than acking 200 and dropping the event. A retry
+   is safe because every pipeline transition is `event_key`-idempotent, so a redelivery that
+   eventually succeeds cannot double-apply. Duplicate *successful* deliveries are still
+   suppressed by the ledger as before. **Residual failure mode (documented, not silent):**
+   if the ledger *release* itself fails (e.g. DB unavailable at that instant),
+   `releaseWebhookClaim` returns `false`, the route logs a `CRITICAL` line and returns
+   `retry_safe: false` in the 503 body — at that point the provider's retry would be
+   suppressed as a duplicate, so that single event needs a manual requeue. Fully closing
+   this would require folding the claim into the same DB transaction as the transition and
+   moving email side-effects to after commit; that is out of scope here and is surfaced
+   loudly rather than hidden.
+
 ---
 
 ## 7. Summary
 
 The deterministic pipeline, its audit trail, idempotency guarantees, inbound webhooks,
 control router, worker handler, and n8n orchestration are implemented and pass all
-type, RBAC, drift, and behavioral tests available in this environment. The honest gaps
-are the absence of live vendor credentials for a true end-to-end run, the per-envelope
-(vs all-three) `DOCS_SIGNED` gate, and production-correlation hardening for inbound fax —
-all enumerated above for follow-up.
+type, RBAC, drift, and behavioral tests available in this environment. The
+all-documents-signed `DOCS_SIGNED` gate and webhook retry-safety (release-claim + 503 on
+transient apply failure) are in place. The honest remaining gaps are the absence of live
+vendor credentials for a true end-to-end run, the lack of a per-document *required-type*
+model (so "all signed" means "no outstanding envelope" rather than a named set), and
+production-correlation hardening for inbound fax — all enumerated above for follow-up.

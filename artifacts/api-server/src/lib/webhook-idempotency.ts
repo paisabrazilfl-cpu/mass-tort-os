@@ -17,6 +17,7 @@
  * a unique-violation as the "lost the race" outcome.
  */
 import { db, processedWebhookEventsTable } from "@workspace/db";
+import { and, eq } from "drizzle-orm";
 import { logger } from "./logger";
 
 export interface MarkWebhookOptions {
@@ -68,5 +69,46 @@ export async function markWebhookProcessed(opts: MarkWebhookOptions): Promise<bo
       "webhook idempotency: ledger write failed — falling open to allow event through",
     );
     return true;
+  }
+}
+
+/**
+ * Release a previously-claimed (provider, external_event_id) pair so the
+ * provider's next retry is NOT suppressed. Call this when the handler claimed
+ * the event but then failed to apply it (and you intend to return a 5xx asking
+ * the provider to retry). The underlying pipeline transitions are
+ * `event_key`-idempotent, so a retry that eventually succeeds cannot
+ * double-apply. No-op when there is no external id to release.
+ */
+export async function releaseWebhookClaim(opts: {
+  provider: string;
+  externalEventId: string | null | undefined;
+}): Promise<boolean> {
+  const { provider, externalEventId } = opts;
+  if (!externalEventId || typeof externalEventId !== "string" || externalEventId.length === 0) {
+    // Nothing to release (no external id was claimed). Treat as success: the
+    // caller's 5xx retry will not be suppressed because no ledger row exists.
+    return true;
+  }
+  try {
+    await db
+      .delete(processedWebhookEventsTable)
+      .where(
+        and(
+          eq(processedWebhookEventsTable.provider, provider),
+          eq(processedWebhookEventsTable.external_event_id, externalEventId),
+        ),
+      );
+    return true;
+  } catch (err) {
+    // The claim could NOT be released. The provider's retry will now be
+    // suppressed as a duplicate, so this single event is at risk of being
+    // dropped. Surface it loudly so an operator can requeue it — do not pretend
+    // it succeeded.
+    logger.error(
+      { err, provider, externalEventId },
+      "CRITICAL webhook idempotency: failed to release claim — provider retry will be suppressed and this event may be dropped; manual requeue may be required",
+    );
+    return false;
   }
 }

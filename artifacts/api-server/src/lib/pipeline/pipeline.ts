@@ -36,6 +36,37 @@ function eventKey(stage: string, leadId: number, suffix?: string): string {
   return suffix ? `${stage}:${leadId}:${suffix}` : `${stage}:${leadId}`;
 }
 
+/**
+ * Deterministic "all required documents signed" gate for the DOCS_SIGNED stage.
+ *
+ * Given the statuses of EVERY envelope ever created for a lead, the lead's
+ * active signing packet is considered fully executed when at least one envelope
+ * is `signed` AND no envelope is still in flight. Envelopes that reached a
+ * terminal-WITHOUT-signature state (declined/voided/expired/cancelled/error) are
+ * **ignored**: they are dead/replaced envelopes and must not deadlock the lead
+ * forever — a voided draft followed by a signed replacement should still
+ * advance. Only an envelope still in flight (created/sent/delivered/viewed/etc.)
+ * blocks the advance, so the pipeline never reaches DOCS_SIGNED while a document
+ * is genuinely outstanding. The schema has no per-document "required" flag, so
+ * the honest deterministic reading is "at least one signed, nothing in flight".
+ */
+const DEAD_ENVELOPE_STATUSES: ReadonlySet<string> = new Set([
+  "declined",
+  "voided",
+  "expired",
+  "cancelled",
+  "canceled",
+  "error",
+  "failed",
+]);
+
+export function allDocumentsSigned(envelopeStatuses: readonly string[]): boolean {
+  // Drop dead/replaced envelopes — they no longer represent outstanding work.
+  const live = envelopeStatuses.filter((s) => !DEAD_ENVELOPE_STATUSES.has(s));
+  if (live.length === 0) return false; // nothing actually signed
+  return live.every((s) => s === "signed");
+}
+
 async function getLeadContact(leadId: number): Promise<{ name: string; email: string | null } | null> {
   const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!lead) return null;

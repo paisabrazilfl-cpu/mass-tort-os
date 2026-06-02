@@ -17,6 +17,7 @@ import {
   startLeadPipeline,
   applyBackgroundCheckVerdict,
   applyMedRecordsReceived,
+  allDocumentsSigned,
 } from "../pipeline/pipeline.js";
 
 async function makeLead(name: string): Promise<number> {
@@ -162,5 +163,38 @@ describe("pipeline orchestration (webhook-level)", () => {
     await applyMedRecordsReceived(leadId, { keySuffix: "fax-1", source: "test" });
     const afterTrail = await appliedTrail(leadId);
     assert.deepEqual(afterTrail, before, "duplicate inbound fax added no applied events");
+  });
+});
+
+describe("DOCS_SIGNED all-documents-signed gate", () => {
+  test("does not advance until EVERY envelope for the lead is signed", () => {
+    // No envelopes at all → not signed (nothing to execute).
+    assert.equal(allDocumentsSigned([]), false);
+    // A single signed envelope → fully signed.
+    assert.equal(allDocumentsSigned(["signed"]), true);
+    // Three required documents, only two signed → still gated.
+    assert.equal(allDocumentsSigned(["signed", "signed", "delivered"]), false);
+    // The last of the three signs → advance.
+    assert.equal(allDocumentsSigned(["signed", "signed", "signed"]), true);
+  });
+
+  test("a still-in-flight envelope blocks the advance", () => {
+    assert.equal(allDocumentsSigned(["created"]), false);
+    assert.equal(allDocumentsSigned(["viewed", "signed"]), false);
+    assert.equal(allDocumentsSigned(["signed", "sent"]), false);
+    assert.equal(allDocumentsSigned(["signed", "delivered"]), false);
+  });
+
+  test("dead/replaced envelopes are ignored, not deadlocking the lead", () => {
+    // A voided draft followed by a signed replacement should advance.
+    assert.equal(allDocumentsSigned(["voided", "signed"]), true);
+    assert.equal(allDocumentsSigned(["signed", "declined"]), true);
+    assert.equal(allDocumentsSigned(["signed", "expired"]), true);
+    assert.equal(allDocumentsSigned(["voided", "expired", "signed"]), true);
+    // But a dead envelope with nothing actually signed must NOT advance.
+    assert.equal(allDocumentsSigned(["voided"]), false);
+    assert.equal(allDocumentsSigned(["declined", "expired"]), false);
+    // A live in-flight envelope still blocks even alongside a signed one.
+    assert.equal(allDocumentsSigned(["voided", "signed", "sent"]), false);
   });
 });

@@ -46,7 +46,7 @@ import { fastenConnectionsTable } from "@workspace/db";
 import { enqueueJob } from "../lib/queue";
 import { dispatchTrigger } from "../lib/automations/dispatch";
 import { getEmailVerifier, getSmsVerifier, type VerifyContext, type SignatureStatus } from "../lib/webhook-verifiers";
-import { markWebhookProcessed } from "../lib/webhook-idempotency";
+import { markWebhookProcessed, releaseWebhookClaim } from "../lib/webhook-idempotency";
 import { invalidateStripeConfiguredCache } from "../lib/subscription-gate";
 import type Stripe from "stripe";
 
@@ -115,20 +115,35 @@ async function applyEnvelopeEvent(provider: string, evt: NormalizedEvent): Promi
     } catch (err) {
       logger.error({ err, envelope_id: env.id }, "onEnvelopeSigned threw — ignoring to keep webhook 200");
     }
-    // Intake-to-Med-Recs pipeline (T007): advance DOCS_SIGNED + fan-out. Each
-    // transition is idempotent and a lead that never entered the pipeline just
-    // logs illegal no-ops, so this is safe for non-pipeline envelopes too.
+    // Intake-to-Med-Recs pipeline (T007): advance DOCS_SIGNED + fan-out ONLY
+    // once the lead's ENTIRE signing packet is executed, never on the first
+    // individual signature. We re-read every envelope for the lead (this one is
+    // already persisted as `signed` above) and gate on all-signed. Each pipeline
+    // transition is itself idempotent and keyed per-lead, so a redelivery of the
+    // last signed event is a safe no-op; a lead that never entered the pipeline
+    // just logs illegal no-ops.
     if (env.lead_id) {
       try {
-        const { applyDocumentsSigned } = await import("../lib/pipeline/pipeline.js");
-        await applyDocumentsSigned(env.lead_id, {
-          keySuffix: `env${env.id}`,
-          envelopeId: env.id,
-          source: `webhook:${provider}`,
-          hipaaFaxed,
-        });
+        const leadEnvelopes = await db
+          .select({ status: documentEnvelopesTable.status })
+          .from(documentEnvelopesTable)
+          .where(eq(documentEnvelopesTable.lead_id, env.lead_id));
+        const { applyDocumentsSigned, allDocumentsSigned } = await import("../lib/pipeline/pipeline.js");
+        if (allDocumentsSigned(leadEnvelopes.map((e) => e.status))) {
+          await applyDocumentsSigned(env.lead_id, {
+            keySuffix: `lead${env.lead_id}`,
+            envelopeId: env.id,
+            source: `webhook:${provider}`,
+            hipaaFaxed,
+          });
+        } else {
+          logger.info(
+            { lead_id: env.lead_id, envelope_id: env.id, total: leadEnvelopes.length },
+            "pipeline: envelope signed but lead's document set is not yet fully signed — holding before DOCS_SIGNED",
+          );
+        }
       } catch (err) {
-        logger.error({ err, envelope_id: env.id }, "pipeline: applyDocumentsSigned failed — ignoring to keep webhook 200");
+        logger.error({ err, envelope_id: env.id }, "pipeline: applyDocumentsSigned gate failed — ignoring to keep webhook 200");
       }
     }
     // Dispatch internal automation trigger for trigger.document_signed workflows.
@@ -1549,8 +1564,13 @@ router.post("/bgcheck", async (req, res) => {
     });
     res.status(200).json({ ok: true, verdict: out.verdict });
   } catch (err) {
-    logger.error({ err, leadId, eventId }, "bgcheck webhook: failed to apply verdict");
-    res.status(200).json({ ok: true, note: "handler_error_logged" });
+    // The apply failed AFTER we claimed the idempotency ledger. Release the
+    // claim and return 5xx so the provider retries — the transitions are
+    // event_key-idempotent, so a successful retry cannot double-apply. Acking
+    // 200 here would silently drop the event and strand the lead.
+    logger.error({ err, leadId, eventId }, "bgcheck webhook: failed to apply verdict — releasing claim for retry");
+    const released = await releaseWebhookClaim({ provider: "bgcheck", externalEventId: eventId });
+    res.status(503).json({ ok: false, error: "apply_failed_retryable", retry_safe: released });
   }
 });
 
@@ -1656,8 +1676,12 @@ router.post("/inbound-fax/:provider", async (req, res) => {
     });
     res.status(200).json({ ok: true });
   } catch (err) {
-    logger.error({ err, leadId, provider }, "inbound-fax: failed to apply med-recs received");
-    res.status(200).json({ ok: true, note: "handler_error_logged" });
+    // Release the idempotency claim and ask the provider to retry rather than
+    // silently acking 200 and dropping a correlated medical-records delivery.
+    // applyMedRecordsReceived is event_key-idempotent, so a retry is safe.
+    logger.error({ err, leadId, provider }, "inbound-fax: failed to apply med-recs received — releasing claim for retry");
+    const released = await releaseWebhookClaim({ provider: `inbound_fax_${provider}`, externalEventId: externalId });
+    res.status(503).json({ ok: false, error: "apply_failed_retryable", retry_safe: released });
   }
 });
 
