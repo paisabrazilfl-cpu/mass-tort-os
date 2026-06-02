@@ -1642,6 +1642,19 @@ router.post("/inbound-fax/:provider", async (req, res) => {
   const receivedDid =
     pickFirstString(evt, ["to", "to_number", "toNumber", "DID", "did", "destination", "called", "ToNumber"]) ??
     pickFirstString((evt as { data?: AnyJson }).data, ["to", "to_number", "destination"]);
+  // The received PDF location. Providers vary widely on the field name, so we
+  // probe the common ones (and the nested `data`/`media` envelopes). When none
+  // is present we still record the receipt but flag the missing media downstream
+  // rather than fabricate a file location.
+  const mediaUrl =
+    pickFirstString(evt, [
+      "media_url", "mediaUrl", "file_url", "fileUrl", "document_url", "documentUrl",
+      "pdf_url", "pdfUrl", "url", "MediaUrl", "MediaUrl0",
+    ]) ??
+    pickFirstString((evt as { data?: AnyJson }).data, [
+      "media_url", "file_url", "document_url", "pdf_url", "url",
+    ]) ??
+    pickFirstString((evt as { media?: AnyJson }).media, ["url", "media_url", "file_url"]);
 
   // Idempotency first — drop retries before any correlation work.
   const first = await markWebhookProcessed({
@@ -1708,7 +1721,8 @@ router.post("/inbound-fax/:provider", async (req, res) => {
     const out = await applyMedRecordsReceived(leadId, {
       keySuffix: externalId || `nofaxid-${Date.now()}`,
       source: `webhook:inbound_fax_${provider}`,
-      payload: { provider, external_fax_id: externalId, sender: senderFaxRaw },
+      payload: { provider, external_fax_id: externalId, sender: senderFaxRaw, media_url: mediaUrl },
+      attachment: { fileUrl: mediaUrl ?? null, externalFaxId: externalId ?? null },
     });
     // Honest response: only claim COMPLETE when the transition actually applied.
     // An illegal edge (lead not in AWAITING_MED_RECS), firm_unresolved, or a
@@ -1717,8 +1731,8 @@ router.post("/inbound-fax/:provider", async (req, res) => {
     const applied = out.transitions.some((t) => t.applied);
     const reasons = [...new Set(out.transitions.filter((t) => !t.applied).map((t) => t.reason).filter(Boolean))];
     res.status(200).json(applied
-      ? { ok: true, applied: true }
-      : { ok: true, applied: false, parked: true, reasons });
+      ? { ok: true, applied: true, attached: out.attached, media: Boolean(mediaUrl) }
+      : { ok: true, applied: false, parked: true, attached: out.attached, media: Boolean(mediaUrl), reasons });
   } catch (err) {
     // Release the idempotency claim and ask the provider to retry rather than
     // silently acking 200 and dropping a correlated medical-records delivery.

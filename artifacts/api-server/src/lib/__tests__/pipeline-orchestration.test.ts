@@ -10,12 +10,13 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import { db, leadsTable, pipelineEventsTable, firmsTable } from "@workspace/db";
-import { eq, asc } from "drizzle-orm";
+import { db, leadsTable, pipelineEventsTable, firmsTable, auditLogTable, documentsTable } from "@workspace/db";
+import { eq, asc, and } from "drizzle-orm";
 import { PipelineStatus } from "../pipeline/state-machine.js";
 import {
   startLeadPipeline,
   applyBackgroundCheckVerdict,
+  applyDocumentsSigned,
   applyMedRecordsReceived,
   allDocumentsSigned,
 } from "../pipeline/pipeline.js";
@@ -71,6 +72,10 @@ describe("pipeline orchestration (webhook-level)", () => {
   after(async () => {
     for (const id of leadIds) {
       await db.delete(pipelineEventsTable).where(eq(pipelineEventsTable.lead_id, id));
+      await db.delete(documentsTable).where(eq(documentsTable.lead_id, id));
+      await db
+        .delete(auditLogTable)
+        .where(and(eq(auditLogTable.entity_type, "lead"), eq(auditLogTable.entity_id, String(id))));
       await db.delete(leadsTable).where(eq(leadsTable.id, id));
     }
     if (firmId) {
@@ -186,6 +191,158 @@ describe("pipeline orchestration (webhook-level)", () => {
     await applyMedRecordsReceived(leadId, { keySuffix: "fax-1", source: "test" });
     const afterTrail = await appliedTrail(leadId);
     assert.deepEqual(afterTrail, before, "duplicate inbound fax added no applied events");
+  });
+
+  test("fan-out advances to AWAITING_MED_RECS when HIPAA was faxed BEFORE the final (non-HIPAA) signature", async () => {
+    // Regression for the ordering bug: the HIPAA fax dispatch is driven by the
+    // HIPAA envelope being signed (onEnvelopeSigned writes `fax_request_enqueued`).
+    // If a NON-HIPAA document is the last signature that completes the packet,
+    // the current-event `hipaaFaxed` flag is false — yet the fax already went out
+    // earlier. The persisted-audit signal must still carry the lead through.
+    const leadId = await makeLead("HIPAA First Claimant");
+    leadIds.push(leadId);
+    const { transitionLead } = await import("../pipeline/state-machine.js");
+    const chain: Array<[string, string]> = [
+      [PipelineStatus.NEW, "t_new"],
+      [PipelineStatus.BG_CHECK_PENDING, "t_bgp"],
+      [PipelineStatus.BG_CHECK_CLEAR, "t_bgc"],
+      [PipelineStatus.INTAKE_SENT, "t_is"],
+      [PipelineStatus.INTAKE_COMPLETED, "t_ic"],
+      [PipelineStatus.NPI_PENDING, "t_np"],
+      [PipelineStatus.NPI_VERIFIED, "t_nv"],
+    ];
+    for (const [to, trig] of chain) {
+      await transitionLead({ leadId, to: to as never, trigger: trig, eventKey: `${trig}-${leadId}`, source: "test" });
+    }
+    assert.equal(await statusOf(leadId), PipelineStatus.NPI_VERIFIED);
+
+    // Simulate the HIPAA fax having been dispatched earlier (persisted audit).
+    await db.insert(auditLogTable).values({
+      entity_type: "lead",
+      entity_id: String(leadId),
+      action: "fax_request_enqueued",
+      details: { envelope_id: 1, job_id: 1, target_fax: "+15551234567" },
+    });
+
+    // Final signature completes the packet but is NOT the HIPAA doc, so the
+    // current-event flag is false. Persisted signal must carry it through.
+    await applyDocumentsSigned(leadId, { keySuffix: "final-sig", source: "test", hipaaFaxed: false });
+    assert.equal(await statusOf(leadId), PipelineStatus.AWAITING_MED_RECS);
+
+    const trail = await appliedTrail(leadId);
+    assert.ok(trail.includes(PipelineStatus.HIPAA_FAXED), "HIPAA_FAXED recorded from persisted signal");
+    assert.ok(trail.includes(PipelineStatus.AWAITING_MED_RECS), "advanced to AWAITING_MED_RECS");
+  });
+
+  test("fan-out PARKS at DOCS_SIGNED when no HIPAA fax has been dispatched (honest, not over-advanced)", async () => {
+    const leadId = await makeLead("No Fax Claimant");
+    leadIds.push(leadId);
+    const { transitionLead } = await import("../pipeline/state-machine.js");
+    const chain: Array<[string, string]> = [
+      [PipelineStatus.NEW, "t_new"],
+      [PipelineStatus.BG_CHECK_PENDING, "t_bgp"],
+      [PipelineStatus.BG_CHECK_CLEAR, "t_bgc"],
+      [PipelineStatus.INTAKE_SENT, "t_is"],
+      [PipelineStatus.INTAKE_COMPLETED, "t_ic"],
+      [PipelineStatus.NPI_PENDING, "t_np"],
+      [PipelineStatus.NPI_VERIFIED, "t_nv"],
+    ];
+    for (const [to, trig] of chain) {
+      await transitionLead({ leadId, to: to as never, trigger: trig, eventKey: `${trig}-${leadId}`, source: "test" });
+    }
+    // No fax_request_enqueued audit, no current-event flag → must NOT reach
+    // AWAITING_MED_RECS (we never claim we are awaiting records that were never
+    // requested).
+    await applyDocumentsSigned(leadId, { keySuffix: "final-sig", source: "test", hipaaFaxed: false });
+    assert.equal(await statusOf(leadId), PipelineStatus.DOCS_SIGNED);
+    const trail = await appliedTrail(leadId);
+    assert.ok(!trail.includes(PipelineStatus.AWAITING_MED_RECS), "did not over-advance");
+  });
+
+  test("inbound med-recs attaches the received PDF to the document store (idempotently)", async () => {
+    const leadId = await makeLead("Attach Claimant");
+    leadIds.push(leadId);
+    const { transitionLead } = await import("../pipeline/state-machine.js");
+    const chain: Array<[string, string]> = [
+      [PipelineStatus.NEW, "t_new"],
+      [PipelineStatus.BG_CHECK_PENDING, "t_bgp"],
+      [PipelineStatus.BG_CHECK_CLEAR, "t_bgc"],
+      [PipelineStatus.INTAKE_SENT, "t_is"],
+      [PipelineStatus.INTAKE_COMPLETED, "t_ic"],
+      [PipelineStatus.NPI_PENDING, "t_np"],
+      [PipelineStatus.NPI_VERIFIED, "t_nv"],
+      [PipelineStatus.DOCS_SENT, "t_ds"],
+      [PipelineStatus.DOCS_SIGNED, "t_dsi"],
+      [PipelineStatus.HIPAA_FAXED, "t_hf"],
+      [PipelineStatus.AWAITING_MED_RECS, "t_amr"],
+    ];
+    for (const [to, trig] of chain) {
+      await transitionLead({ leadId, to: to as never, trigger: trig, eventKey: `${trig}-${leadId}`, source: "test" });
+    }
+
+    const out = await applyMedRecordsReceived(leadId, {
+      keySuffix: "fax-attach-1",
+      source: "test",
+      attachment: { fileUrl: "https://fax.example/med-recs/abc.pdf", externalFaxId: "abc" },
+    });
+    assert.equal(out.attached, true, "reports the PDF was attached");
+    assert.equal(await statusOf(leadId), PipelineStatus.COMPLETE);
+
+    const docs = await db
+      .select()
+      .from(documentsTable)
+      .where(and(eq(documentsTable.lead_id, leadId), eq(documentsTable.document_type, "medical_records")));
+    assert.equal(docs.length, 1, "exactly one medical_records document attached");
+    assert.equal(docs[0]!.file_url, "https://fax.example/med-recs/abc.pdf");
+
+    // Replaying the same inbound fax must not duplicate the attachment.
+    await applyMedRecordsReceived(leadId, {
+      keySuffix: "fax-attach-1",
+      source: "test",
+      attachment: { fileUrl: "https://fax.example/med-recs/abc.pdf", externalFaxId: "abc" },
+    });
+    const docsAfter = await db
+      .select()
+      .from(documentsTable)
+      .where(and(eq(documentsTable.lead_id, leadId), eq(documentsTable.document_type, "medical_records")));
+    assert.equal(docsAfter.length, 1, "replay did not duplicate the attachment");
+  });
+
+  test("inbound med-recs with no media URL records receipt as an honest gap (no fabricated file)", async () => {
+    const leadId = await makeLead("No Media Claimant");
+    leadIds.push(leadId);
+    const { transitionLead } = await import("../pipeline/state-machine.js");
+    const chain: Array<[string, string]> = [
+      [PipelineStatus.NEW, "t_new"],
+      [PipelineStatus.BG_CHECK_PENDING, "t_bgp"],
+      [PipelineStatus.BG_CHECK_CLEAR, "t_bgc"],
+      [PipelineStatus.INTAKE_SENT, "t_is"],
+      [PipelineStatus.INTAKE_COMPLETED, "t_ic"],
+      [PipelineStatus.NPI_PENDING, "t_np"],
+      [PipelineStatus.NPI_VERIFIED, "t_nv"],
+      [PipelineStatus.DOCS_SENT, "t_ds"],
+      [PipelineStatus.DOCS_SIGNED, "t_dsi"],
+      [PipelineStatus.HIPAA_FAXED, "t_hf"],
+      [PipelineStatus.AWAITING_MED_RECS, "t_amr"],
+    ];
+    for (const [to, trig] of chain) {
+      await transitionLead({ leadId, to: to as never, trigger: trig, eventKey: `${trig}-${leadId}`, source: "test" });
+    }
+
+    const out = await applyMedRecordsReceived(leadId, {
+      keySuffix: "fax-nomedia-1",
+      source: "test",
+      attachment: { fileUrl: null, externalFaxId: "nomedia" },
+    });
+    assert.equal(out.attached, false, "reports no media was attached (honest)");
+    assert.equal(await statusOf(leadId), PipelineStatus.COMPLETE);
+
+    const docs = await db
+      .select()
+      .from(documentsTable)
+      .where(and(eq(documentsTable.lead_id, leadId), eq(documentsTable.document_type, "medical_records")));
+    assert.equal(docs.length, 1, "receipt row created");
+    assert.equal(docs[0]!.file_url, null, "no fabricated file URL");
   });
 });
 

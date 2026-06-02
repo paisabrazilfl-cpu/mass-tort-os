@@ -16,8 +16,9 @@ import {
   leadsTable,
   documentEnvelopesTable,
   documentsTable,
+  auditLogTable,
 } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, ilike } from "drizzle-orm";
 import { logger } from "../logger";
 import { auditLog } from "../audit";
 import { enqueueJob } from "../queue.js";
@@ -449,6 +450,32 @@ async function distributeRetainer(
  * `onEnvelopeSigned`/`fax_med_records_request` path; here we record the
  * pipeline state so the stage is auditable and cannot be skipped.
  */
+/**
+ * Has the HIPAA med-records fax already been dispatched for this lead?
+ *
+ * The dispatch is owned by `onEnvelopeSigned`, which fires the fax the moment
+ * the HIPAA envelope is signed and writes a persistent `fax_request_enqueued`
+ * audit row. That signing event may happen BEFORE the lead's other required
+ * documents are signed, so by the time the LAST signature completes the packet
+ * and `applyDocumentsSigned` runs, the "fax was just enqueued in THIS event"
+ * flag is false. We therefore read the persisted audit trail — not just the
+ * current event — so the fan-out advances regardless of signing order.
+ */
+async function hipaaFaxDispatched(leadId: number): Promise<boolean> {
+  const [row] = await db
+    .select({ id: auditLogTable.id })
+    .from(auditLogTable)
+    .where(
+      and(
+        eq(auditLogTable.entity_type, "lead"),
+        eq(auditLogTable.entity_id, String(leadId)),
+        eq(auditLogTable.action, "fax_request_enqueued"),
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
+}
+
 export async function applyDocumentsSigned(
   leadId: number,
   opts: { keySuffix: string; envelopeId?: number; source?: string; hipaaFaxed?: boolean },
@@ -480,8 +507,13 @@ export async function applyDocumentsSigned(
   );
 
   // Fan-out diamond. The HIPAA fax dispatch happens via onEnvelopeSigned; mark
-  // HIPAA_FAXED only when that path reports it was dispatched (hipaaFaxed).
-  if (opts.hipaaFaxed) {
+  // HIPAA_FAXED when that fax has been dispatched for this lead. We OR the
+  // current-event flag with the PERSISTED audit signal so the fan-out advances
+  // even when HIPAA was signed earlier and a non-HIPAA document is the final
+  // signature that completes the packet (otherwise the lead would strand at
+  // RETAINER_DISTRIBUTED and never reach AWAITING_MED_RECS).
+  const hipaaFaxed = opts.hipaaFaxed === true || (await hipaaFaxDispatched(leadId));
+  if (hipaaFaxed) {
     transitions.push(
       await transitionLead({
         leadId,
@@ -518,8 +550,9 @@ export async function applyDocumentsSigned(
   }
   // Advance to AWAITING_MED_RECS only once the HIPAA fax has gone out (that is
   // the gate for medical records). If it has not, the lead waits at the
-  // fan-out until the fax dispatches.
-  if (opts.hipaaFaxed) {
+  // fan-out until the fax dispatches. Uses the same persisted-aware signal so
+  // the advance is order-independent w.r.t. which document was signed last.
+  if (hipaaFaxed) {
     transitions.push(
       await transitionLead({
         leadId,
@@ -533,34 +566,6 @@ export async function applyDocumentsSigned(
   return { transitions };
 }
 
-/** Mark the HIPAA fax dispatched and advance to AWAITING_MED_RECS. */
-export async function markHipaaFaxed(
-  leadId: number,
-  opts: { keySuffix: string; source?: string },
-): Promise<{ transitions: TransitionResult[] }> {
-  const source = opts.source ?? "fax";
-  const transitions: TransitionResult[] = [];
-  transitions.push(
-    await transitionLead({
-      leadId,
-      to: PipelineStatus.HIPAA_FAXED,
-      trigger: "hipaa_faxed",
-      eventKey: eventKey("hipaa_faxed", leadId, opts.keySuffix),
-      source,
-    }),
-  );
-  transitions.push(
-    await transitionLead({
-      leadId,
-      to: PipelineStatus.AWAITING_MED_RECS,
-      trigger: "awaiting_med_recs",
-      eventKey: eventKey("awaiting_med_recs", leadId, opts.keySuffix),
-      source,
-    }),
-  );
-  return { transitions };
-}
-
 // ===========================================================================
 // STAGE: inbound medical records → complete
 // ===========================================================================
@@ -571,10 +576,21 @@ export async function markHipaaFaxed(
  */
 export async function applyMedRecordsReceived(
   leadId: number,
-  opts: { keySuffix: string; source?: string; payload?: Record<string, unknown> | null },
-): Promise<{ transitions: TransitionResult[] }> {
+  opts: {
+    keySuffix: string;
+    source?: string;
+    payload?: Record<string, unknown> | null;
+    attachment?: { fileUrl: string | null; fileName?: string | null; externalFaxId?: string | null } | null;
+  },
+): Promise<{ transitions: TransitionResult[]; attached: boolean }> {
   const source = opts.source ?? "inbound_fax";
   const transitions: TransitionResult[] = [];
+
+  // Attach the received PDF to the lead's document store BEFORE advancing the
+  // state. The fax document IS the medical records, so it must be on file for
+  // MED_RECS_RECEIVED to be honest. Idempotent: a replayed inbound fax with the
+  // same external id (or same media URL) does not create a duplicate row.
+  const attached = await attachInboundMedRecords(leadId, opts.attachment ?? null);
   transitions.push(
     await transitionLead({
       leadId,
@@ -594,7 +610,95 @@ export async function applyMedRecordsReceived(
       source,
     }),
   );
-  return { transitions };
+  return { transitions, attached };
+}
+
+/**
+ * Attach a received inbound-fax medical-records PDF to the lead's CRM document
+ * store (spec T008: "attaches the PDF to the file (and portal if present)").
+ *
+ * - Idempotent: dedupes on (lead_id, document_type='medical_records') by the
+ *   external fax id recorded in `notes`, or by the media URL, so a replayed
+ *   inbound fax does not create duplicate rows.
+ * - Honest blocker: if the provider gave us no retrievable media URL we record
+ *   the receipt with a null `file_url` and log it as a known gap rather than
+ *   fabricating a document location.
+ * - Portal: the publish-to-portal target reuses the document store; there is no
+ *   separate client portal surface yet, so that leg is logged as a known gap
+ *   (spec line 54-55) — never faked.
+ */
+async function attachInboundMedRecords(
+  leadId: number,
+  attachment: { fileUrl: string | null; fileName?: string | null; externalFaxId?: string | null } | null,
+): Promise<boolean> {
+  const fileUrl = attachment?.fileUrl ?? null;
+  const externalFaxId = attachment?.externalFaxId ?? null;
+  const fileName = attachment?.fileName ?? `med-records-lead-${leadId}${externalFaxId ? `-${externalFaxId}` : ""}.pdf`;
+  const faxTag = externalFaxId ? `inbound fax #${externalFaxId}` : "inbound fax";
+
+  try {
+    // Idempotency: a prior receipt of this same fax (by external id, else by
+    // media URL) already attached the document — do not duplicate.
+    const existing = await db
+      .select({ id: documentsTable.id })
+      .from(documentsTable)
+      .where(and(eq(documentsTable.lead_id, leadId), eq(documentsTable.document_type, "medical_records")));
+    const already = existing.length > 0 && (externalFaxId != null || fileUrl != null)
+      ? await db
+          .select({ id: documentsTable.id })
+          .from(documentsTable)
+          .where(
+            and(
+              eq(documentsTable.lead_id, leadId),
+              eq(documentsTable.document_type, "medical_records"),
+              externalFaxId != null
+                ? ilike(documentsTable.notes, `%${externalFaxId}%`)
+                : eq(documentsTable.file_url, fileUrl as string),
+            ),
+          )
+          .then((rows) => rows.length > 0)
+      : false;
+    if (already) {
+      return true;
+    }
+
+    if (!fileUrl) {
+      logger.warn(
+        { leadId, externalFaxId },
+        "inbound med-recs: no retrievable media URL on the fax payload — recording receipt without a file location (honest gap)",
+      );
+    }
+
+    await db.insert(documentsTable).values({
+      lead_id: leadId,
+      document_type: "medical_records",
+      file_name: fileName,
+      file_url: fileUrl,
+      signed: false,
+      notes: `Received via ${faxTag}${fileUrl ? "" : " (no media URL provided by fax provider)"}`,
+    });
+
+    await auditLog("lead", String(leadId), "med_records_attached", {
+      external_fax_id: externalFaxId,
+      file_url: fileUrl,
+      has_media: Boolean(fileUrl),
+    });
+
+    // Portal publish leg: no standalone client portal surface exists yet, so
+    // this reuses the document store. Log the portal gap honestly (do not fake
+    // a portal publish that did not happen).
+    await auditLog("lead", String(leadId), "med_records_portal_skipped", {
+      reason: "no_client_portal_surface",
+      attached_to: "crm_document_store",
+    });
+
+    return Boolean(fileUrl);
+  } catch (err) {
+    // A failed attachment must NOT silently let the lead march to COMPLETE as if
+    // the records are on file. Surface it so the caller (webhook) parks/retries.
+    logger.error({ err, leadId, externalFaxId }, "inbound med-recs: failed to attach PDF to document store");
+    throw err;
+  }
 }
 
 // ===========================================================================
