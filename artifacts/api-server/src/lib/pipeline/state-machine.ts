@@ -146,7 +146,7 @@ export async function transitionLead(req: TransitionRequest): Promise<Transition
   const result = await db.transaction(async (tx) => {
     // 1. Lock the lead row so concurrent transitions serialize.
     const [lead] = await tx
-      .select({ id: leadsTable.id, firm_id: leadsTable.firm_id, pipeline_status: leadsTable.pipeline_status })
+      .select({ id: leadsTable.id, pipeline_status: leadsTable.pipeline_status })
       .from(leadsTable)
       .where(eq(leadsTable.id, leadId))
       .for("update");
@@ -164,15 +164,10 @@ export async function transitionLead(req: TransitionRequest): Promise<Transition
     }
 
     const from = lead.pipeline_status ?? null;
-    const firmId = lead.firm_id ?? null;
 
-    // 1b. firm_id is recorded when known but NOT required (Task #168 spec T001,
-    // mirroring lead_dispositions). The primary intake path is the PUBLIC web
-    // form, whose torts are global — a lead legitimately has no firm at intake
-    // time; the firm is attached when an operator claims/assigns it. Gating on
-    // firm_id here would deadlock every public-intake lead before BG_CHECK.
-    // Per-tenant filtering still works (NULLs are unscoped) and access control
-    // is enforced on the READ side (routes/pipeline.ts loadLeadScoped).
+    // The pipeline audit trail is lead-scoped (no firm_id column). Tenancy is
+    // enforced on the READ side by scoping access to the lead itself
+    // (routes/pipeline.ts loadLeadScoped), so no firm gating is needed here.
 
     // 2. Idempotency: a prior event with this key already settled this step.
     if (eventKey) {
@@ -200,7 +195,6 @@ export async function transitionLead(req: TransitionRequest): Promise<Transition
       const [evt] = await tx
         .insert(pipelineEventsTable)
         .values({
-          firm_id: firmId,
           lead_id: leadId,
           from_status: from,
           to_status: to,
@@ -246,7 +240,6 @@ export async function transitionLead(req: TransitionRequest): Promise<Transition
       const [evt] = await tx
         .insert(pipelineEventsTable)
         .values({
-          firm_id: firmId,
           lead_id: leadId,
           from_status: from,
           to_status: to,

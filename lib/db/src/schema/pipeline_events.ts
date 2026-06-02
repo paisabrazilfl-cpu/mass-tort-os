@@ -22,14 +22,12 @@ import { z } from "zod/v4";
  * holds the current state; this table is the full ordered history that powers
  * the pipeline timeline and lets an operator see WHY a lead is where it is.
  *
- * firm_id is NULLABLE, mirroring lead_dispositions (Task #168 spec T001). The
- * primary intake path is the PUBLIC web form, whose torts are global (not
- * firm-owned), so a lead legitimately has no firm at intake time — the firm is
- * attached later when an operator claims/assigns it. Forcing NON-NULL here would
- * deadlock every public-intake lead before it could even enter BG_CHECK. We
- * therefore record firm_id when it is known and leave it null until then;
- * per-tenant filtering still works (NULLs are simply unscoped), and access
- * control is enforced on the READ side (routes/pipeline.ts loadLeadScoped).
+ * The table is LEAD-scoped (lead_id), not firm-scoped: a pipeline event belongs
+ * to its lead, and tenancy is enforced on the READ side by scoping access to the
+ * lead itself (routes/pipeline.ts loadLeadScoped). Carrying a firm_id here was
+ * removed by owner decision — it added a non-null/nullable tenancy ambiguity for
+ * firm-less public-intake leads without buying any access-control that the
+ * lead-level scoping does not already provide.
  *
  * event_key is the provider-supplied event id (or a deterministic synthetic
  * key) used for idempotency. The unique index means a webhook redelivery with
@@ -41,7 +39,6 @@ export const pipelineEventsTable = pgTable(
   "pipeline_events",
   {
     id: serial("id").primaryKey(),
-    firm_id: integer("firm_id"),
     lead_id: integer("lead_id").notNull(),
     from_status: varchar("from_status", { length: 30 }),
     to_status: varchar("to_status", { length: 30 }).notNull(),
@@ -59,7 +56,6 @@ export const pipelineEventsTable = pgTable(
   },
   (t) => ({
     leadIdx: index("pipeline_events_lead_id_idx").on(t.lead_id),
-    firmIdx: index("pipeline_events_firm_id_idx").on(t.firm_id),
     leadCreatedIdx: index("pipeline_events_lead_created_idx").on(t.lead_id, t.created_at),
     eventKeyIdx: uniqueIndex("pipeline_events_event_key_idx").on(t.event_key),
   }),

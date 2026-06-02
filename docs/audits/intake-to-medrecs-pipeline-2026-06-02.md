@@ -38,7 +38,8 @@ Transitions are whitelisted in `LEGAL_TRANSITIONS`; any edge not in the map is r
 | Stage orchestration (bg verdict, NPI, docs-signed fan-out, med-recs) | `artifacts/api-server/src/lib/pipeline/pipeline.ts` |
 | Adapter seams over live NPI / bg-hub impls (env-selectable) | `artifacts/api-server/src/lib/pipeline/adapters.ts` |
 | Schema: `leads.pipeline_status` + `pipeline_events` table | `lib/db/drizzle/0001_pipeline_events.sql` (replayed by `apply-schema.mjs`) |
-| Schema hardening: `document_envelopes.doc_type`, `pipeline_events.firm_id NOT NULL`, status backfill | `lib/db/drizzle/0002_pipeline_hardening.sql` |
+| Schema hardening: `document_envelopes.doc_type` + status backfill | `lib/db/drizzle/0002_pipeline_hardening.sql` |
+| Drop `pipeline_events.firm_id` (audit trail is lead-scoped, owner decision) | `lib/db/drizzle/0003_pipeline_drop_firm.sql` |
 | Required-doc classifier + per-type DOCS_SIGNED gate (no DB imports) | `artifacts/api-server/src/lib/pipeline/doc-types.ts` |
 | Inbound webhooks: bgcheck, inbound-fax; e-sign signed hook | `artifacts/api-server/src/routes/webhooks.ts` |
 | Operator/n8n control router (`/api/pipeline/...`) | `artifacts/api-server/src/routes/pipeline.ts` |
@@ -171,18 +172,20 @@ These are real and not worked around silently:
    **Production (Render) picks it up on next deploy/runtime schema apply** — it has not
    been applied to prod from here (prod is owner-deployed via GitHub `main`).
 
-6. **`pipeline_events.firm_id` is `NULLABLE`, mirroring `lead_dispositions` — corrected.** An
-   earlier hardening pass made this column `NOT NULL` and added a `firm_unresolved` write-time
-   gate, but that **diverged from the authoritative spec (T001)**, which requires the audit
-   table to mirror `lead_dispositions` nullability so a legacy or system-level (null-firm)
-   lead can still record its pipeline audit trail rather than being silently blocked from the
-   pipeline entirely. `0002_pipeline_hardening.sql` was reverted to no longer DELETE null-firm
-   rows or `SET NOT NULL`, and `0003_pipeline_firm_nullable.sql` (idempotent `DROP NOT NULL`)
-   restores nullability on already-provisioned DBs; both were applied to dev (`is_nullable=YES`
-   verified). The `firm_unresolved` outcome and its early-return gate were removed from
-   `transitionLead` / the `TransitionOutcome` union. Per-tenant scoping is still enforced on
-   the **read** side in `routes/pipeline.ts` `loadLeadScoped`; the column carries the firm when
-   one is resolvable and is null only for genuinely firm-less leads, exactly like dispositions.
+6. **`pipeline_events` carries no `firm_id` — the audit trail is lead-scoped (owner decision).**
+   An earlier hardening pass made a `firm_id` column `NOT NULL` (with a `firm_unresolved`
+   write-time gate), which silently blocked firm-less public-intake leads from the pipeline; a
+   follow-up reverted it to nullable. Rather than keep oscillating between non-null and nullable
+   tenancy semantics for a column that bought **no** access control the lead-level scoping does
+   not already provide, the owner directed removing `firm_id` from `pipeline_events` entirely.
+   The column and its index are dropped from the schema, the `0001` create migration, and the
+   dev DB; `0003_pipeline_drop_firm.sql` (idempotent `DROP INDEX … IF EXISTS` +
+   `ALTER TABLE … DROP COLUMN IF EXISTS`) sweeps already-provisioned DBs. The `firm_unresolved`
+   outcome and its early-return gate were removed from `transitionLead` / the `TransitionOutcome`
+   union. Per-tenant scoping remains enforced on the **read** side in `routes/pipeline.ts`
+   `loadLeadScoped` (access is gated on the lead), and the inbound-fax correlation still scopes
+   candidate `AWAITING_MED_RECS` leads to the DID-resolved firm via `leads.firm_id` — that
+   PHI-safety guard is independent of the dropped audit column.
 
 7. **Webhook retry-safety (bgcheck + inbound-fax).** Both endpoints claim the idempotency
    ledger *before* applying (the claim dedups the non-idempotent **emails** the bg-check
@@ -206,7 +209,7 @@ These are real and not worked around silently:
 The deterministic pipeline, its audit trail, idempotency guarantees, inbound webhooks,
 control router, worker handler, and n8n orchestration are implemented and pass all
 type, RBAC, drift, and behavioral tests available in this environment (typecheck clean;
-orchestration 19/19; state-machine 12/12; rbac-test 241/241; db-drift 60 tables in sync).
+orchestration 20/20; state-machine 12/12; rbac-test 241/241; db-drift 60 tables in sync).
 Earlier rounds closed the per-required-type `DOCS_SIGNED` gate (`document_envelopes.doc_type`),
 firm-scoped inbound-fax correlation via the receiving DID plus a genuine two-destination
 retainer distribution that parks instead of faking, the NPI-verified leg triggering the
@@ -215,10 +218,12 @@ HIPAA fax actually being dispatched (`hipaaFaxDispatched`), and idempotent inbou
 attach with an honest no-media gap. This final round closed three validation-review findings:
 (F1) the n8n workflow is now triggered by a real outbound CRM event `pipeline.intake_sent`
 (emitted fire-and-forget after the `→ INTAKE_SENT` commit) instead of an event that never
-matched the guard; (F2) `pipeline_events.firm_id` was reverted to **nullable** to mirror
-`lead_dispositions` per the authoritative spec, and the spec-diverging `firm_unresolved`
-write-time gate was removed so legacy/system-level leads keep an audit trail; (F3) the
-firm-less state-machine test now flows end-to-end. A `withStoredProviderFallback` seam makes
+matched the guard; (F2) `pipeline_events.firm_id` was **removed entirely** (owner decision) — the audit trail
+is lead-scoped, ending the non-null/nullable oscillation, and the spec-diverging
+`firm_unresolved` write-time gate was removed so every lead keeps an audit trail; (F3) the
+firm-less state-machine test now flows end-to-end. A later validation pass also fixed the
+med-recs attach-before-transition ordering so the medical-records document is written **only**
+after a legal `AWAITING_MED_RECS → MED_RECS_RECEIVED` transition (regression-tested). A `withStoredProviderFallback` seam makes
 the `lead_id`-only n8n path genuinely functional by seeding NPI verification from the lead's
 stored provider fields. The honest remaining gap is the absence of live third-party vendor
 credentials for a true end-to-end run; document classification is heuristic on the template

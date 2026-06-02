@@ -72,7 +72,7 @@ async function getLeadContact(leadId: number): Promise<{ name: string; email: st
  */
 export async function startLeadPipeline(
   leadId: number,
-  opts: { source?: string; createdByUserId?: number | null; firmId?: number | null } = {},
+  opts: { source?: string; createdByUserId?: number | null } = {},
 ): Promise<void> {
   const source = opts.source ?? "intake";
   const created = await transitionLead({

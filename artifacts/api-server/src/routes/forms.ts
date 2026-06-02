@@ -1024,10 +1024,9 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
     // here must not fail the claimant's submission.
     {
       const leadIdForPipeline = lead.id;
-      const firmIdForPipeline = (lead as { firm_id?: number | null }).firm_id ?? null;
       import("../lib/pipeline/pipeline.js")
         .then(({ startLeadPipeline }) =>
-          startLeadPipeline(leadIdForPipeline, { source: "web_form_intake", firmId: firmIdForPipeline }),
+          startLeadPipeline(leadIdForPipeline, { source: "web_form_intake" }),
         )
         .catch((err) =>
           logger.error({ err, leadId: leadIdForPipeline }, "pipeline: startLeadPipeline failed after intake"),

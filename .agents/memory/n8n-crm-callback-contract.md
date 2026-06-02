@@ -16,9 +16,9 @@ normalize in the handler (`parsed.data.x ?? undefined`). Even better, keep the n
 body minimal — send only the fields that carry real data and let the CRM source the
 rest from stored records (we trimmed `/intake-completed` to send only `key_suffix`).
 
-**Why:** this exact mismatch silently broke the Task #168 intake→NPI orchestration
-step (n8n sent `"npi": null`, route was `.optional()` only) and was only caught in
-code review, not by typecheck or the unit tests.
+**Why:** this exact mismatch silently broke the intake→NPI orchestration step (n8n sent
+`"npi": null`, route was `.optional()` only) and was only caught in code review, not by
+typecheck or the unit tests.
 
 ## Rule 2 — to wake n8n at a specific pipeline STAGE, emit a dedicated post-commit outbound event
 

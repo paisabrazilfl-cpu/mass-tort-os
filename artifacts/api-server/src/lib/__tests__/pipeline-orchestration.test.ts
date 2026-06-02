@@ -25,11 +25,11 @@ import {
   classifyEnvelopeDocType,
 } from "../pipeline/doc-types.js";
 
-// firm_id on pipeline_events is NULLABLE (mirrors lead_dispositions): the public
-// intake path is firm-less and must flow. These orchestration fixtures still
-// attach a firm_id so we also exercise the firm-recorded path; the separate
-// pipeline-state-machine suite covers the firm-less case. One throwaway firm is
-// created for the whole suite and cleaned up in `after`.
+// pipeline_events is LEAD-scoped (no firm_id column, by owner decision). These
+// fixtures still create a firm and stamp it on the LEAD so the orchestration
+// runs against realistic firm-owned leads; the firm has no bearing on the audit
+// trail. One throwaway firm is created for the whole suite and cleaned up in
+// `after`.
 let firmId: number;
 async function ensureFirm(): Promise<number> {
   if (firmId) return firmId;
@@ -308,6 +308,40 @@ describe("pipeline orchestration (webhook-level)", () => {
       .from(documentsTable)
       .where(and(eq(documentsTable.lead_id, leadId), eq(documentsTable.document_type, "medical_records")));
     assert.equal(docsAfter.length, 1, "replay did not duplicate the attachment");
+  });
+
+  test("inbound med-recs for a lead NOT at AWAITING_MED_RECS writes no document and does not complete", async () => {
+    // Regression guard: the document write is a real side effect that must only
+    // happen AFTER a legal AWAITING_MED_RECS -> MED_RECS_RECEIVED transition.
+    // Seed the lead at BG_CHECK_PENDING (a wrong stage) and fire an inbound fax;
+    // it must attach nothing, must not advance to COMPLETE, and must leave only
+    // a non-applied (illegal) event.
+    const leadId = await makeLead("Wrong Stage Claimant");
+    leadIds.push(leadId);
+    const { transitionLead } = await import("../pipeline/state-machine.js");
+    await transitionLead({ leadId, to: PipelineStatus.NEW as never, trigger: "t_new", eventKey: `t_new-${leadId}`, source: "test" });
+    await transitionLead({ leadId, to: PipelineStatus.BG_CHECK_PENDING as never, trigger: "t_bgp", eventKey: `t_bgp-${leadId}`, source: "test" });
+    assert.equal(await statusOf(leadId), PipelineStatus.BG_CHECK_PENDING);
+
+    const out = await applyMedRecordsReceived(leadId, {
+      keySuffix: "fax-wrongstage-1",
+      source: "test",
+      attachment: { fileUrl: "https://fax.example/med-recs/wrong.pdf", externalFaxId: "wrong" },
+    });
+    assert.equal(out.attached, false, "must not attach to a lead at the wrong stage");
+
+    // Status unchanged, never reached MED_RECS_RECEIVED or COMPLETE.
+    assert.equal(await statusOf(leadId), PipelineStatus.BG_CHECK_PENDING, "status must not move");
+    const trail = await appliedTrail(leadId);
+    assert.ok(!trail.includes(PipelineStatus.MED_RECS_RECEIVED), "no applied MED_RECS_RECEIVED");
+    assert.ok(!trail.includes(PipelineStatus.COMPLETE), "no applied COMPLETE");
+
+    // No medical-records document was written.
+    const docs = await db
+      .select()
+      .from(documentsTable)
+      .where(and(eq(documentsTable.lead_id, leadId), eq(documentsTable.document_type, "medical_records")));
+    assert.equal(docs.length, 0, "no medical_records document for an illegal receipt");
   });
 
   test("inbound med-recs with no media URL records receipt as an honest gap (no fabricated file)", async () => {
