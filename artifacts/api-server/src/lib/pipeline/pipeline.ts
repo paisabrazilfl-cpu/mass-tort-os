@@ -640,30 +640,48 @@ export async function applyMedRecordsReceived(
   const source = opts.source ?? "inbound_fax";
   const transitions: TransitionResult[] = [];
 
-  // Attach the received PDF to the lead's document store BEFORE advancing the
-  // state. The fax document IS the medical records, so it must be on file for
-  // MED_RECS_RECEIVED to be honest. Idempotent: a replayed inbound fax with the
-  // same external id (or same media URL) does not create a duplicate row.
-  const attached = await attachInboundMedRecords(leadId, opts.attachment ?? null);
-  transitions.push(
-    await transitionLead({
-      leadId,
-      to: PipelineStatus.MED_RECS_RECEIVED,
-      trigger: "med_recs_received",
-      eventKey: eventKey("med_recs_received", leadId, opts.keySuffix),
-      source,
-      payload: opts.payload ?? null,
-    }),
-  );
-  transitions.push(
-    await transitionLead({
-      leadId,
-      to: PipelineStatus.COMPLETE,
-      trigger: "pipeline_complete",
-      eventKey: eventKey("complete", leadId, opts.keySuffix),
-      source,
-    }),
-  );
+  // Advance the state machine FIRST, then attach the PDF — never the reverse.
+  // The document write is a real side effect (a medical-records row + audit), so
+  // it must only happen once the lead has LEGALLY reached MED_RECS_RECEIVED from
+  // AWAITING_MED_RECS. Attaching before validation would let an illegal/out-of-
+  // order or wrong-stage inbound fax (or a replay with a brand-new suffix) drop a
+  // medical-records document onto a lead that never legitimately reached this
+  // stage, breaking the deterministic-state-machine guarantee.
+  const received = await transitionLead({
+    leadId,
+    to: PipelineStatus.MED_RECS_RECEIVED,
+    trigger: "med_recs_received",
+    eventKey: eventKey("med_recs_received", leadId, opts.keySuffix),
+    source,
+    payload: opts.payload ?? null,
+  });
+  transitions.push(received);
+
+  // Only persist the medical-records document on a legitimate first receipt.
+  //   - applied:   we just moved AWAITING_MED_RECS -> MED_RECS_RECEIVED → attach.
+  //   - duplicate: this exact fax was already received; the first legal pass
+  //                attached it → treat as attached, do not duplicate.
+  //   - illegal / lead_not_found: wrong stage or unknown lead → write NOTHING.
+  let attached = false;
+  if (received.applied) {
+    attached = await attachInboundMedRecords(leadId, opts.attachment ?? null);
+  } else if (received.outcome === "duplicate") {
+    attached = true;
+  }
+
+  // Advance to COMPLETE only when the lead is legitimately at MED_RECS_RECEIVED
+  // (just applied, or an idempotent replay). An illegal receipt never completes.
+  if (received.applied || received.outcome === "duplicate") {
+    transitions.push(
+      await transitionLead({
+        leadId,
+        to: PipelineStatus.COMPLETE,
+        trigger: "pipeline_complete",
+        eventKey: eventKey("complete", leadId, opts.keySuffix),
+        source,
+      }),
+    );
+  }
   return { transitions, attached };
 }
 
