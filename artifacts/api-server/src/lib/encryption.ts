@@ -114,12 +114,13 @@ export function encrypt(
  * caller is now passing.
  */
 function tryDecryptWithAAD(
-  combined: Buffer,
+  payload: string,
   keyVersion: number,
   aad: Buffer | undefined,
 ): string | null {
   try {
     const key = getKey(keyVersion);
+    const combined = Buffer.from(payload, ENCODING);
     const iv = combined.subarray(0, IV_LENGTH);
     const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
     const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
@@ -145,7 +146,6 @@ export function decrypt(
 ): string {
   if (!ciphertext) return ciphertext;
   if (!ciphertext.startsWith("enc:")) return ciphertext;
-
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
@@ -158,8 +158,6 @@ export function decrypt(
   } else {
     payload = ciphertext.slice(4);
   }
-
-  const combined = Buffer.from(payload, ENCODING);
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
   // fails, fall back through other AAD variants — historical inconsistencies
@@ -175,7 +173,7 @@ export function decrypt(
   candidates.push(undefined); // fallback: no AAD
 
   for (const aad of candidates) {
-    const result = tryDecryptWithAAD(combined, keyVersion, aad);
+    const result = tryDecryptWithAAD(payload, keyVersion, aad);
     if (result !== null) return result;
   }
 
@@ -226,35 +224,23 @@ export function decryptLeadFields(
   entityId?: string,
 ): Record<string, any> {
   if (!data) return data;
-  let result: Record<string, any> | undefined;
-  for (let i = 0; i < ENCRYPTED_FIELDS.length; i++) {
-    const field = ENCRYPTED_FIELDS[i];
-    const val = data[field];
+  const result = { ...data };
+  for (const field of ENCRYPTED_FIELDS) {
     if (
-      typeof val === "string" &&
-      val.length > 4 &&
-      val[0] === "e" &&
-      val[1] === "n" &&
-      val[2] === "c" &&
-      val[3] === ":"
+      result[field] !== undefined &&
+      result[field] !== null &&
+      typeof result[field] === "string"
     ) {
-      if (!result) result = { ...data };
-      result[field] = decrypt(val, field, entityId);
+      result[field] = decrypt(result[field], field, entityId);
     }
   }
-  return result ?? data;
+  return result;
 }
 
 export function decryptLeadArray(
   leads: Record<string, any>[],
 ): Record<string, any>[] {
-  const count = leads.length;
-  const result = new Array(count);
-  for (let i = 0; i < count; i++) {
-    const l = leads[i];
-    result[i] = decryptLeadFields(l, String(l.id));
-  }
-  return result;
+  return leads.map((l) => decryptLeadFields(l, String(l.id)));
 }
 
 /**
