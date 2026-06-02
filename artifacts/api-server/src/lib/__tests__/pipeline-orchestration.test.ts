@@ -344,6 +344,70 @@ describe("pipeline orchestration (webhook-level)", () => {
     assert.equal(docs.length, 0, "no medical_records document for an illegal receipt");
   });
 
+  test("med-recs retry repairs a lost attachment: duplicate MED_RECS_RECEIVED still attaches before COMPLETE", async () => {
+    // Reproduces the retry-safety hazard: a prior delivery advanced the lead to
+    // MED_RECS_RECEIVED (committed) but then THREW while attaching the PDF, so the
+    // webhook returned 503 and the provider retried. We simulate that first
+    // delivery by walking the lead to AWAITING_MED_RECS and then committing the
+    // MED_RECS_RECEIVED transition DIRECTLY with the exact event_key that
+    // applyMedRecordsReceived will compute — WITHOUT writing any document. The
+    // retry must land as a `duplicate` and STILL attach the records before COMPLETE.
+    const leadId = await makeLead("Retry Repair Claimant");
+    leadIds.push(leadId);
+    const { transitionLead } = await import("../pipeline/state-machine.js");
+    const chain: Array<[string, string]> = [
+      [PipelineStatus.NEW, "t_new"],
+      [PipelineStatus.BG_CHECK_PENDING, "t_bgp"],
+      [PipelineStatus.BG_CHECK_CLEAR, "t_bgc"],
+      [PipelineStatus.INTAKE_SENT, "t_is"],
+      [PipelineStatus.INTAKE_COMPLETED, "t_ic"],
+      [PipelineStatus.NPI_PENDING, "t_np"],
+      [PipelineStatus.NPI_VERIFIED, "t_nv"],
+      [PipelineStatus.DOCS_SENT, "t_ds"],
+      [PipelineStatus.DOCS_SIGNED, "t_dsi"],
+      [PipelineStatus.HIPAA_FAXED, "t_hf"],
+      [PipelineStatus.AWAITING_MED_RECS, "t_amr"],
+    ];
+    for (const [to, trig] of chain) {
+      await transitionLead({ leadId, to: to as never, trigger: trig, eventKey: `${trig}-${leadId}`, source: "test" });
+    }
+
+    // Simulate "first delivery: transition committed, attachment threw" — advance
+    // MED_RECS_RECEIVED with the SAME event_key applyMedRecordsReceived uses
+    // (format `med_recs_received:<leadId>:<suffix>`) but attach NOTHING.
+    const keySuffix = "fax-retry-1";
+    await transitionLead({
+      leadId,
+      to: PipelineStatus.MED_RECS_RECEIVED as never,
+      trigger: "med_recs_received",
+      eventKey: `med_recs_received:${leadId}:${keySuffix}`,
+      source: "test",
+    });
+    assert.equal(await statusOf(leadId), PipelineStatus.MED_RECS_RECEIVED);
+    const before = await db
+      .select()
+      .from(documentsTable)
+      .where(and(eq(documentsTable.lead_id, leadId), eq(documentsTable.document_type, "medical_records")));
+    assert.equal(before.length, 0, "precondition: attachment was lost on the first delivery");
+
+    // The retry: same suffix → MED_RECS_RECEIVED is a `duplicate`, but the records
+    // MUST still get attached, and only then may the lead complete.
+    const out = await applyMedRecordsReceived(leadId, {
+      keySuffix,
+      source: "test",
+      attachment: { fileUrl: "https://fax.example/med-recs/retry.pdf", externalFaxId: "retry" },
+    });
+    assert.equal(out.attached, true, "retry re-attached the records");
+    assert.equal(await statusOf(leadId), PipelineStatus.COMPLETE);
+
+    const after = await db
+      .select()
+      .from(documentsTable)
+      .where(and(eq(documentsTable.lead_id, leadId), eq(documentsTable.document_type, "medical_records")));
+    assert.equal(after.length, 1, "exactly one medical_records document after the repair");
+    assert.equal(after[0]!.file_url, "https://fax.example/med-recs/retry.pdf");
+  });
+
   test("inbound med-recs with no media URL records receipt as an honest gap (no fabricated file)", async () => {
     const leadId = await makeLead("No Media Claimant");
     leadIds.push(leadId);

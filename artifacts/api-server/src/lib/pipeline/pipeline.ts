@@ -657,21 +657,28 @@ export async function applyMedRecordsReceived(
   });
   transitions.push(received);
 
-  // Only persist the medical-records document on a legitimate first receipt.
+  // Persist the medical-records document whenever the lead is legitimately at
+  // MED_RECS_RECEIVED:
   //   - applied:   we just moved AWAITING_MED_RECS -> MED_RECS_RECEIVED → attach.
-  //   - duplicate: this exact fax was already received; the first legal pass
-  //                attached it → treat as attached, do not duplicate.
+  //   - duplicate: this exact fax event was already seen. We MUST still call the
+  //                (idempotent) attach — NOT blindly assume it succeeded. This is
+  //                the retry-safety contract: if a prior delivery advanced the
+  //                transition but then THREW during attachment (the webhook then
+  //                returns 503 and the provider retries), the retry lands here as
+  //                a `duplicate`. Re-running attach repairs the missing document;
+  //                its internal dedup guarantees it never double-attaches.
   //   - illegal / lead_not_found: wrong stage or unknown lead → write NOTHING.
   let attached = false;
-  if (received.applied) {
-    attached = await attachInboundMedRecords(leadId, opts.attachment ?? null);
-  } else if (received.outcome === "duplicate") {
-    attached = true;
-  }
-
-  // Advance to COMPLETE only when the lead is legitimately at MED_RECS_RECEIVED
-  // (just applied, or an idempotent replay). An illegal receipt never completes.
   if (received.applied || received.outcome === "duplicate") {
+    // attachInboundMedRecords either finds the existing receipt or inserts one,
+    // returning normally; it only THROWS on a genuine persistence failure. So if
+    // this returns, a medical_records receipt row provably exists on the lead.
+    attached = await attachInboundMedRecords(leadId, opts.attachment ?? null);
+
+    // Advance to COMPLETE only AFTER the attachment is confirmed on file (the
+    // call above returned without throwing). If it threw, this function throws
+    // too, COMPLETE never runs, and the webhook returns 503 so the idempotent
+    // retry repairs the attachment before the lead can complete.
     transitions.push(
       await transitionLead({
         leadId,
@@ -715,8 +722,10 @@ async function attachInboundMedRecords(
       .select({ id: documentsTable.id })
       .from(documentsTable)
       .where(and(eq(documentsTable.lead_id, leadId), eq(documentsTable.document_type, "medical_records")));
-    const already = existing.length > 0 && (externalFaxId != null || fileUrl != null)
-      ? await db
+    let already = false;
+    if (existing.length > 0) {
+      if (externalFaxId != null || fileUrl != null) {
+        already = await db
           .select({ id: documentsTable.id })
           .from(documentsTable)
           .where(
@@ -728,8 +737,15 @@ async function attachInboundMedRecords(
                 : eq(documentsTable.file_url, fileUrl as string),
             ),
           )
-          .then((rows) => rows.length > 0)
-      : false;
+          .then((rows) => rows.length > 0);
+      } else {
+        // No identifying signal on this receipt (no fax id, no media URL) yet a
+        // medical_records row already exists for the lead. We cannot key a dedup,
+        // so treat the existing receipt as already on file rather than inserting a
+        // blind duplicate — this keeps the retry path idempotent in the no-id case.
+        already = true;
+      }
+    }
     if (already) {
       return true;
     }

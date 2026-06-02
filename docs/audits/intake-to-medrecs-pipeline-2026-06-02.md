@@ -209,7 +209,7 @@ These are real and not worked around silently:
 The deterministic pipeline, its audit trail, idempotency guarantees, inbound webhooks,
 control router, worker handler, and n8n orchestration are implemented and pass all
 type, RBAC, drift, and behavioral tests available in this environment (typecheck clean;
-orchestration 20/20; state-machine 12/12; rbac-test 241/241; db-drift 60 tables in sync).
+orchestration 21/21; state-machine 12/12; rbac-test 241/241; db-drift 60 tables in sync).
 Earlier rounds closed the per-required-type `DOCS_SIGNED` gate (`document_envelopes.doc_type`),
 firm-scoped inbound-fax correlation via the receiving DID plus a genuine two-destination
 retainer distribution that parks instead of faking, the NPI-verified leg triggering the
@@ -223,7 +223,11 @@ is lead-scoped, ending the non-null/nullable oscillation, and the spec-diverging
 `firm_unresolved` write-time gate was removed so every lead keeps an audit trail; (F3) the
 firm-less state-machine test now flows end-to-end. A later validation pass also fixed the
 med-recs attach-before-transition ordering so the medical-records document is written **only**
-after a legal `AWAITING_MED_RECS → MED_RECS_RECEIVED` transition (regression-tested). A `withStoredProviderFallback` seam makes
+after a legal `AWAITING_MED_RECS → MED_RECS_RECEIVED` transition, AND made the attachment
+retry-safe: a `duplicate` MED_RECS_RECEIVED replay (which is exactly what a 503-driven provider
+retry produces after an attach that threw post-transition) re-runs the idempotent attach so the
+records are repaired before the lead can reach `COMPLETE` — a lead can never complete without a
+medical-records receipt on file (both regression-tested). A `withStoredProviderFallback` seam makes
 the `lead_id`-only n8n path genuinely functional by seeding NPI verification from the lead's
 stored provider fields. The honest remaining gap is the absence of live third-party vendor
 credentials for a true end-to-end run; document classification is heuristic on the template
