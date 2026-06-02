@@ -661,6 +661,27 @@ router.get("/:id/fax-results", requirePermission(Permission.LEAD_VIEW_OWN, Permi
   res.json(rows);
 });
 
+// Outbound email delivery history for a lead. Each row is one send,
+// advanced from queued → sent by the provider router and then to
+// delivered/bounced/dropped/spamreport by the provider's Event Webhook,
+// so operators can see whether an intake/document email actually landed.
+router.get("/:id/emails", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW_ANY), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ status: "error", code: "validation_failed", message: "Invalid lead id" });
+    return;
+  }
+  if (!(await ensureLeadAccess(req, res, id))) return;
+  const { emailMessagesTable } = await import("@workspace/db");
+  const { desc } = await import("drizzle-orm");
+  const rows = await db
+    .select()
+    .from(emailMessagesTable)
+    .where(eq(emailMessagesTable.lead_id, id))
+    .orderBy(desc(emailMessagesTable.created_at));
+  res.json(rows);
+});
+
 router.patch("/:id", requirePermission(Permission.LEAD_UPDATE), auditAction("update_lead"), async (req, res) => {
   const paramsParsed = UpdateLeadParams.safeParse({ id: Number(req.params.id) });
   if (!paramsParsed.success) {

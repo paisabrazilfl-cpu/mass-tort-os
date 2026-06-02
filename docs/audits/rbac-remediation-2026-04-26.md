@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **325 checked / 48 public / 277 protected / 0 unprotected.**
+Boot-time count: **326 checked / 48 public / 278 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -819,6 +819,7 @@ Boot-time count: **325 checked / 48 public / 277 protected / 0 unprotected.**
 | lead-sources | PUT | `/api/lead-sources/:id` | ✓ | ✓ |  |  |  | — | `lead_sources:manage` | ✓ |
 | lead-sources | GET | `/api/lead-sources/` | ✓ | ✓ |  |  |  | — | `lead_sources:view` | ✓ |
 | lead-sources | POST | `/api/lead-sources/` | ✓ | ✓ |  |  |  | — | `lead_sources:manage` | ✓ |
+| leads | GET | `/api/leads/:id/emails` | ✓ | ✓ |  |  |  | — | `lead:view:own`, `lead:view:any` | ✓ |
 | leads | GET | `/api/leads/:id/envelopes` | ✓ | ✓ |  |  |  | — | `lead:view:own`, `lead:view:any` | ✓ |
 | leads | GET | `/api/leads/:id/fax-results` | ✓ | ✓ |  |  |  | — | `lead:view:own`, `lead:view:any` | ✓ |
 | leads | POST | `/api/leads/:id/intelligence` | ✓ | ✓ |  |  |  | — | `lead:qualify` | ✓ |

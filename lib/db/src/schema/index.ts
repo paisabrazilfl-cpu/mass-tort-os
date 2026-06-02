@@ -33,6 +33,7 @@ export * from "./sms_messages";
 export * from "./admin_dark_room_links";
 export * from "./automations";
 export * from "./email_events";
+export * from "./email_messages";
 export * from "./fax_events";
 export * from "./fasten_connections";
 export * from "./api_keys";

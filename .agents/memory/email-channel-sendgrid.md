@@ -1,32 +1,42 @@
 ---
-name: Email channel (SendGrid) reality
-description: How outbound email actually works/delivers in MTOS, and the deliverability ceiling vs SMS 10DLC.
+name: Email channel (SendGrid) tracking & quirks
+description: Durable lessons for outbound email tracking, SendGrid delivery realities, and the schema-reproducibility rule when adding a table.
 ---
 
-# Email channel (SendGrid)
+# Email channel — durable lessons
 
-Email is the channel that does NOT hit a carrier-vetting wall like SMS 10DLC. It is the
-reliable fallback when SMS `delivery_failed`/40010 (unregistered 10DLC) blocks texts.
+## All lead-facing outbound email must go through the single tracked send path
+Outbound email is persisted (mirrors the SMS message model) so bounces/deliveries
+are visible on the lead. Any NEW outbound email path that calls a provider adapter
+directly re-introduces the old fire-and-forget gap (a 202 was logged, a bounce was
+invisible). **Why:** delivery state is only knowable via the webhook, which can only
+update a row that the send path created.
 
-**State (verified):** SendGrid integration (provider `sendgrid`, category `email`) is the
-configured email provider, routed via `workflow_settings.email_provider_integration_id` →
-provider-router. The stored sender `from_email` is a SendGrid **verified single-sender**
-(`/v3/verified_senders` → verified=true) and the API key has mail.send scope
-(`/v3/scopes` → 200). Outbound email genuinely DELIVERS to a real inbox — confirmed via the
-Email Activity feed showing `status=delivered` (the intake confirmation "We received your …
-Claim" email delivers end-to-end).
+## Only mutate delivery state on a verified webhook signature
+The webhook records every event for audit, but it must advance status ONLY when the
+provider signature is `verified` (mirror SMS) — an unsigned/unverified event must not
+be allowed to falsify delivery status.
 
-**Accept ≠ deliver (same lesson as SMS):** the SendGrid adapter returns `ok` on the **202
-accept** (with `x-message-id`), not on actual delivery. Unlike SMS, outbound email is NOT
-persisted to a table (just logged via `logger.info "Workflow email sent"`), so there's no
-false `status=sent` DB row — but a 202 still isn't proof of inbox arrival. Ground-truth
-delivery comes from `GET /v3/messages?query=to_email="…"` (Email Activity API; can lag a few
-minutes for brand-new sends, and the endpoint can hang — always use an AbortController).
+## SendGrid correlation + delivery realities
+- SendGrid's Event-Webhook `sg_message_id` is `<X-Message-Id>.<suffix>`; correlate on
+  exact match OR the prefix before the first ".".
+- Email genuinely DELIVERS (verified sender, valid key) unlike SMS 10DLC. A 202 = accepted,
+  not delivered (confirm via Activity API). A `@gmail.com` from-address is a DMARC spam
+  risk — authenticate the mtosvelocity.com domain for real deliverability.
 
-**Deliverability ceiling (the real gap):** the configured `from_email` is a `@gmail.com`
-address with NO domain authentication (`/v3/whitelabel/domains` → empty). Sending FROM
-`@gmail.com` through SendGrid fails DMARC alignment, so mail to non-owner recipients risks
-spam-foldering or rejection by strict receivers. The robust fix is to authenticate the
-`mtosvelocity.com` domain in SendGrid (DNS CNAME records, owner-only) and send from e.g.
-`noreply@mtosvelocity.com`. **Why:** SPF/DKIM must align with the From domain; a verified
-single-sender lets you SEND but does not give DMARC alignment for an external from-domain.
+## Adding a table: dev DDL alone is NOT reproducible — commit the migration SQL
+`apply-schema.mjs` bootstraps a FRESH DB by replaying every committed
+`lib/db/drizzle/*.sql` file (split on `--> statement-breakpoint`); it does NOT apply
+additive DDL to already-provisioned DBs. So applying a `CREATE TABLE` only to the dev
+DB leaves fresh deploys missing the table. **Always commit the DDL as a numbered
+`lib/db/drizzle/NNNN_*.sql` file** (it concatenates after `0000` in lexical order).
+**Why:** code review blocks "schema not reproducible" — the table must exist in
+committed artifacts, not just in a live DB.
+
+## drizzle-kit generate/push are TTY-bound here and the snapshot is stale
+`push` and `generate` prompt interactively ("Is X created or renamed from another
+table?") — arrow-key selection that can't be piped. The committed drizzle snapshot is
+also stale vs the TS schema (e.g. `favorites`, the DB-only orphans `conversations`/
+`messages`), so `generate` surfaces unrelated diffs and rename prompts. Hand-authoring
+the numbered `.sql` file (matching the schema, drizzle style) is the reliable path;
+verify it by replaying it into a dropped dev table and running db-drift.

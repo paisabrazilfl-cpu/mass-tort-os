@@ -722,36 +722,33 @@ async function runWebFormPipeline(
             },
           );
         } else {
-          const globalSettings = await db
-            .select({ fromAddress: workflowSettingsTable.default_email_from_address, fromName: workflowSettingsTable.default_email_from_name })
-            .from(workflowSettingsTable)
-            .where(eq(workflowSettingsTable.scope, "global"))
-            .limit(1)
-            .then((r) => r[0] ?? null);
-          const fromEmail = resolved.credentials.from_email
-            || globalSettings?.fromAddress
-            || "noreply@example.com";
-          const fromName = resolved.credentials.from_name
-            || globalSettings?.fromName
-            || "Mass Tort OS";
           const html = renderTemplate(cfg.confirmation_body_html, body);
           const subject = renderTemplate(cfg.confirmation_subject, body);
-          const result = await adapter.send(resolved.credentials, {
+          // Route through the shared sender so the confirmation email is
+          // persisted to email_messages (queued → sent/failed) and later
+          // advanced to delivered/bounced by the provider Event Webhook —
+          // making it visible on the lead's Emails timeline. We pass the
+          // already-resolved integration id so the helper uses the same
+          // provider this branch validated; it resolves the from-identity
+          // internally (credential → workflow_settings → fallback).
+          const { sendEmailViaRouter } = await import("../lib/email/send");
+          const result = await sendEmailViaRouter({
             to: emailValue,
             toName: [body.first_name, body.last_name].filter(Boolean).join(" ") || undefined,
-            fromEmail,
-            fromName,
             subject,
             html,
+            leadId: leadId ?? null,
+            integrationId: resolved.integration_id,
           });
           emailOutcome = result.ok ? "sent" : "failed";
           step6.status = result.ok ? "passed" : "skipped";
-          if (!result.ok) step6.errors = [result.code];
+          if (!result.ok) step6.errors = [result.error ?? "send_failed"];
           void auditLog("web_form_confirmation_email", String(leadId ?? tortId), emailOutcome, {
             tort_id: tortId,
             provider: resolved.provider,
+            email_message_id: result.emailMessageId,
             external_message_id: result.ok ? result.externalMessageId : undefined,
-            error: result.ok ? undefined : result.message,
+            error: result.ok ? undefined : result.error,
           });
         }
       }

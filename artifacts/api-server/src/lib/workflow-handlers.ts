@@ -16,7 +16,6 @@ import { auditLog } from "./audit";
 import { resolveProvider, isResolved } from "./provider-router";
 import { getEsignAdapter } from "./esign";
 import { getFaxAdapter } from "./fax";
-import { getEmailAdapter } from "./email/sendgrid";
 import { downloadTemplate } from "./template-storage";
 import { decryptLeadFields } from "./encryption";
 import { FAX_SOURCE_FILE_TEMPLATE } from "./fax-results-matcher";
@@ -756,62 +755,40 @@ export async function handleFaxMedRecordsRequest(payload: FaxMedRecordsPayload):
 export async function handleSendWorkflowEmail(payload: SendWorkflowEmailPayload): Promise<void> {
   const { to, to_name, subject, html, text, explicit_integration_id, lead_id } = payload;
 
-  const buyerId = lead_id
-    ? (await db.select({ b: leadsTable.buyer_id }).from(leadsTable).where(eq(leadsTable.id, lead_id)))[0]?.b ?? null
-    : null;
+  // Route through the shared email sender so the send is persisted to
+  // email_messages (queued → sent/failed) and later advanced to
+  // delivered/bounced by the provider's Event Webhook — mirroring the SMS
+  // path. The helper resolves the provider, from-identity and per-buyer
+  // routing from the lead internally.
+  const { sendEmailViaRouter } = await import("./email/send");
 
-  const resolved = await resolveProvider("email", {
-    buyerId,
-    explicitIntegrationId: explicit_integration_id ?? null,
+  const outcome = await sendEmailViaRouter({
+    to,
+    toName: to_name,
+    subject,
+    html,
+    text,
+    leadId: lead_id ?? null,
+    integrationId: explicit_integration_id ?? null,
   });
 
-  if (!isResolved(resolved)) {
-    throw new Error(`No email provider configured (${resolved.reason}). Pick one on the Workflow Settings page.`);
-  }
-
-  const adapter = getEmailAdapter(resolved.provider);
-  if (!adapter) {
-    throw new Error(`No email adapter wired for provider "${resolved.provider}".`);
-  }
-
-  const globalSettings = await db
-    .select({ fromAddress: workflowSettingsTable.default_email_from_address, fromName: workflowSettingsTable.default_email_from_name })
-    .from(workflowSettingsTable)
-    .where(eq(workflowSettingsTable.scope, "global"))
-    .limit(1)
-    .then((r) => r[0] ?? null);
-
-  const fromEmail = resolved.credentials.from_email
-    || globalSettings?.fromAddress
-    || "noreply@example.com";
-  const fromName = resolved.credentials.from_name
-    || globalSettings?.fromName
-    || "MTOS";
-
-  let outcome;
-  try {
-    outcome = await adapter.send(resolved.credentials, {
-      to,
-      toName: to_name,
-      fromEmail,
-      fromName,
-      subject,
-      html,
-      text,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error({ err, to, subject, provider: resolved.provider }, "Email adapter threw");
-    throw new Error(`Email adapter ${resolved.provider} threw: ${msg}`);
-  }
-
   if (!outcome.ok) {
-    if (outcome.retryable) throw new Error(`Email provider transient error: ${outcome.message}`);
-    logger.error({ to, code: outcome.code, message: outcome.message }, "Email send failed (non-retryable)");
+    // No provider/adapter configured — surface as a job error so the
+    // operator is prompted to fix Workflow Settings.
+    if (outcome.reason) {
+      throw new Error(`No email provider configured (${outcome.reason}). Pick one on the Workflow Settings page.`);
+    }
+    // Transient provider error — throw so the job queue retries.
+    if (outcome.retryable) throw new Error(`Email provider transient error: ${outcome.error}`);
+    // Permanent rejection — already persisted as failed; do not retry.
+    logger.error({ to, message: outcome.error }, "Email send failed (non-retryable)");
     return;
   }
 
-  logger.info({ to, subject, provider: resolved.provider, external_id: outcome.externalMessageId }, "Workflow email sent");
+  logger.info(
+    { to, subject, provider: outcome.provider, external_id: outcome.externalMessageId, email_message_id: outcome.emailMessageId },
+    "Workflow email sent",
+  );
 }
 
 // =============================================================================

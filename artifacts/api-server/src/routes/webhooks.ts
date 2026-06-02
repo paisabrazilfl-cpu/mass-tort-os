@@ -23,9 +23,10 @@ import {
   smsMessagesTable,
   leadDispositionsTable,
   emailEventsTable,
+  emailMessagesTable,
   faxEventsTable,
 } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, or } from "drizzle-orm";
 import crypto from "crypto";
 import { logger } from "../lib/logger";
 import { auditLog } from "../lib/audit";
@@ -912,6 +913,32 @@ const VOICE_EVENT_PROVIDERS = new Set(["retell_ai", "bland_ai", "elevenlabs", "s
 
 type AnyJson = Record<string, unknown>;
 
+/**
+ * Map a provider Event-Webhook event type onto the canonical
+ * email_messages.status + the timestamp column to stamp. Covers SendGrid
+ * (delivered/bounce/dropped/spamreport/deferred/processed) and the
+ * common variants used by Postmark/Mailgun/Resend so the same receiver
+ * advances every provider's outbound row. Returns null for events that
+ * should not change delivery state (open/click/unsubscribe/…).
+ */
+function normalizeEmailMessageStatus(
+  rawType: string | undefined,
+): { status: string; tsField?: "delivered_at" | "bounced_at" | "failed_at" | "sent_at" } | null {
+  const s = rawType?.toLowerCase();
+  if (!s) return null;
+  if (["delivered", "delivery"].includes(s)) return { status: "delivered", tsField: "delivered_at" };
+  if (["bounce", "bounced", "blocked", "hardbounce", "softbounce"].includes(s)) {
+    return { status: "bounced", tsField: "bounced_at" };
+  }
+  if (["dropped"].includes(s)) return { status: "dropped", tsField: "failed_at" };
+  if (["spamreport", "spamcomplaint", "complaint"].includes(s)) {
+    return { status: "spamreport", tsField: "failed_at" };
+  }
+  if (["deferred"].includes(s)) return { status: "deferred" };
+  if (["processed", "sent"].includes(s)) return { status: "sent", tsField: "sent_at" };
+  return null;
+}
+
 function looksJsonObject(v: unknown): v is AnyJson {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
@@ -988,11 +1015,39 @@ router.post("/email/:provider", async (req, res) => {
     const externalId = pickFirstString(evt, ["MessageID", "messageId", "message_id", "id", "sg_message_id"]);
     const eventType = pickFirstString(evt, ["RecordType", "event", "type", "EventType"]) ?? "unknown";
     const recipient = pickFirstString(evt, ["Recipient", "recipient", "email", "To"]);
+
+    // Correlate to the outbound email_messages row we logged at send time
+    // so (a) the lead detail view shows delivered/bounced and (b) the
+    // event row is back-linked to the firm/lead it belongs to. SendGrid's
+    // event `sg_message_id` is `<X-Message-Id>.<suffix>`, so match the
+    // exact id OR the prefix before the first ".".
+    let outboundFirmId: number | null = null;
+    let outboundLeadId: number | null = null;
+    let outboundRow: { id: number; firm_id: number | null; lead_id: number | null } | null = null;
+    if (externalId) {
+      const prefix = externalId.split(".")[0]!;
+      const [match] = await db
+        .select({ id: emailMessagesTable.id, firm_id: emailMessagesTable.firm_id, lead_id: emailMessagesTable.lead_id })
+        .from(emailMessagesTable)
+        .where(
+          or(
+            eq(emailMessagesTable.external_message_id, externalId),
+            eq(emailMessagesTable.external_message_id, prefix),
+          ),
+        )
+        .limit(1);
+      if (match) {
+        outboundRow = match;
+        outboundFirmId = match.firm_id ?? null;
+        outboundLeadId = match.lead_id ?? null;
+      }
+    }
+
     try {
       await db.insert(emailEventsTable).values({
         integration_id: integrationId,
-        firm_id: null,   // email correlation requires an outbound email_messages table; not yet shipped
-        lead_id: null,
+        firm_id: outboundFirmId,
+        lead_id: outboundLeadId,
         provider,
         external_message_id: externalId,
         event_type: eventType.slice(0, 64),
@@ -1002,6 +1057,24 @@ router.post("/email/:provider", async (req, res) => {
       });
     } catch (err) {
       logger.warn({ err, provider }, "email_events insert failed");
+    }
+
+    // SECURITY: only mutate the outbound delivery state when the
+    // provider's signature actually verified. "unverified" means we lack
+    // the signing key (SendGrid client_secret) or the header is missing;
+    // either way, persisting would let an unauthenticated caller falsify
+    // delivery status. The event row above is still recorded for audit.
+    if (outboundRow && signatureStatus === "verified") {
+      const mapped = normalizeEmailMessageStatus(eventType);
+      if (mapped) {
+        try {
+          const set: Record<string, unknown> = { status: mapped.status, updated_at: new Date() };
+          if (mapped.tsField) set[mapped.tsField] = new Date();
+          await db.update(emailMessagesTable).set(set).where(eq(emailMessagesTable.id, outboundRow.id));
+        } catch (err) {
+          logger.warn({ err, provider, externalId }, "email_messages status update failed");
+        }
+      }
     }
   }
   res.json({ ok: true, received: events.length, signature_status: signatureStatus });
