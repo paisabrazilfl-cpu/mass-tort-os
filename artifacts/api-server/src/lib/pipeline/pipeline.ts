@@ -249,6 +249,59 @@ export async function completeIntake(
 }
 
 /**
+ * Fill the NPI verification input from the lead's STORED provider fields when
+ * the caller did not supply identifiers of its own.
+ *
+ * The n8n orchestrator subscribes to `pipeline.intake_sent`, whose payload
+ * carries only `lead_id` — it has no provider data to forward. Without this
+ * fallback the orchestrator-driven path would always reach live NPPES with an
+ * empty query and honestly return HOLD, making the automated pipeline a no-op.
+ * The columns read here (physician_first_name/last_name, hospital_name,
+ * physician_taxonomy, state) are PLAINTEXT — none are in the encrypted-field set
+ * — so this is a plain read, not an ePHI decrypt. An explicit npi or any
+ * explicit expected.* from the caller always wins; we only fill blanks.
+ */
+export async function withStoredProviderFallback(
+  leadId: number,
+  input: VerifyProviderInput,
+): Promise<VerifyProviderInput> {
+  const e = input.expected ?? {};
+  const callerHasSignal =
+    !!input.npi?.trim() || !!(e.name || e.organization || e.specialty || e.city || e.state);
+  if (callerHasSignal) return input;
+
+  const [lead] = await db
+    .select({
+      physician_first_name: leadsTable.physician_first_name,
+      physician_last_name: leadsTable.physician_last_name,
+      hospital_name: leadsTable.hospital_name,
+      physician_taxonomy: leadsTable.physician_taxonomy,
+      state: leadsTable.state,
+    })
+    .from(leadsTable)
+    .where(eq(leadsTable.id, leadId))
+    .limit(1);
+  if (!lead) return input;
+
+  const name =
+    [lead.physician_first_name, lead.physician_last_name]
+      .filter((p): p is string => !!p?.trim())
+      .join(" ")
+      .trim() || undefined;
+
+  return {
+    npi: input.npi,
+    expected: {
+      name: e.name ?? name,
+      organization: e.organization ?? (lead.hospital_name ?? undefined),
+      specialty: e.specialty ?? (lead.physician_taxonomy ?? undefined),
+      city: e.city,
+      state: e.state ?? (lead.state ?? undefined),
+    },
+  };
+}
+
+/**
  * INTAKE_COMPLETED → NPI_PENDING, run live NPPES, then NPI_VERIFIED | NPI_HOLD.
  * On VERIFIED, persists the provider fax onto the lead for the later HIPAA fax.
  */
@@ -268,7 +321,8 @@ export async function runNpiForLead(
   });
   transitions.push(pending);
 
-  const outcome = await getNpiAdapter().verify(npiInput);
+  const verifyInput = await withStoredProviderFallback(leadId, npiInput);
+  const outcome = await getNpiAdapter().verify(verifyInput);
   const to: PipelineStatusValue =
     outcome.verdict === "VERIFIED" ? PipelineStatus.NPI_VERIFIED : PipelineStatus.NPI_HOLD;
 
@@ -296,8 +350,8 @@ export async function runNpiForLead(
 
   // Spec step 6: once NPI is verified, send the three required e-sign documents
   // (HIPAA + Retainer + Affidavit). Gated on the NPI_VERIFIED transition having
-  // ACTUALLY applied — a duplicate replay, an illegal edge, or a firm_unresolved
-  // park must not trigger a fresh document send. Non-blocking: a dispatch problem
+  // ACTUALLY applied — a duplicate replay or an illegal edge must not trigger a
+  // fresh document send. Non-blocking: a dispatch problem
   // must not fail the NPI verdict; the lead parks at NPI_VERIFIED for re-dispatch.
   if (outcome.verdict === "VERIFIED" && verifiedTransition.applied) {
     try {

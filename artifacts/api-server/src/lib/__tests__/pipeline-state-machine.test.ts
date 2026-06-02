@@ -17,6 +17,7 @@ import {
   isLegalTransition,
   transitionLead,
 } from "../pipeline/state-machine.js";
+import { withStoredProviderFallback } from "../pipeline/pipeline.js";
 
 describe("pipeline graph (pure, no DB)", () => {
   test("START only leads to NEW", () => {
@@ -184,5 +185,50 @@ describe("transitionLead (DB)", () => {
     });
     assert.equal(r.outcome, "lead_not_found");
     assert.equal(r.applied, false);
+  });
+});
+
+// withStoredProviderFallback makes the n8n-orchestrated path (pipeline.intake_sent
+// carries only lead_id) genuinely functional: when the caller passes no provider
+// identifiers, NPI verification is seeded from the lead's STORED provider fields
+// instead of hitting NPPES with an empty query (which would always HOLD).
+describe("withStoredProviderFallback (DB)", () => {
+  let leadId: number;
+
+  before(async () => {
+    const [lead] = await db
+      .insert(leadsTable)
+      .values({
+        name: "Provider Fallback Claimant",
+        tort_type: "test_tort",
+        physician_first_name: "Gregory",
+        physician_last_name: "House",
+        hospital_name: "Princeton-Plainsboro",
+        physician_taxonomy: "Internal Medicine",
+        state: "NJ",
+      })
+      .returning({ id: leadsTable.id });
+    leadId = lead!.id;
+  });
+
+  after(async () => {
+    if (leadId) await db.delete(leadsTable).where(eq(leadsTable.id, leadId));
+  });
+
+  test("fills expected provider from stored lead fields when caller passes none", async () => {
+    const out = await withStoredProviderFallback(leadId, { expected: {} });
+    assert.equal(out.expected.name, "Gregory House");
+    assert.equal(out.expected.organization, "Princeton-Plainsboro");
+    assert.equal(out.expected.specialty, "Internal Medicine");
+    assert.equal(out.expected.state, "NJ");
+  });
+
+  test("passes the caller's input through untouched when it already has signal", async () => {
+    const explicit = { npi: "1234567890", expected: { name: "Dr. Explicit" } };
+    const out = await withStoredProviderFallback(leadId, explicit);
+    assert.equal(out.npi, "1234567890");
+    assert.equal(out.expected.name, "Dr. Explicit");
+    // Must NOT overwrite an explicitly-provided field with the stored one.
+    assert.equal(out.expected.organization, undefined);
   });
 });

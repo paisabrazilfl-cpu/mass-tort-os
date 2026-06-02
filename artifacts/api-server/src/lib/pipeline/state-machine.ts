@@ -22,6 +22,7 @@ import { db, leadsTable, pipelineEventsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../logger";
 import { auditLog } from "../audit";
+import { dispatchEvent } from "../event-dispatcher";
 
 export const PipelineStatus = {
   NEW: "NEW",
@@ -97,8 +98,7 @@ export type TransitionOutcome =
   | "applied"
   | "illegal"
   | "duplicate"
-  | "lead_not_found"
-  | "firm_unresolved";
+  | "lead_not_found";
 
 export interface TransitionRequest {
   leadId: number;
@@ -143,7 +143,7 @@ export async function transitionLead(req: TransitionRequest): Promise<Transition
     createdByUserId = null,
   } = req;
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     // 1. Lock the lead row so concurrent transitions serialize.
     const [lead] = await tx
       .select({ id: leadsTable.id, firm_id: leadsTable.firm_id, pipeline_status: leadsTable.pipeline_status })
@@ -166,24 +166,13 @@ export async function transitionLead(req: TransitionRequest): Promise<Transition
     const from = lead.pipeline_status ?? null;
     const firmId = lead.firm_id ?? null;
 
-    // 1b. Tenancy gate (Task #168): pipeline_events.firm_id is NON-NULL and
-    // every transition is firm-scoped. A lead with no firm_id cannot be
-    // advanced — writing a tenancy-less audit row would break firm isolation.
-    // Refuse honestly (no event row, no status change) so the lead parks and
-    // an operator can attach it to a firm. This is checked BEFORE idempotency
-    // and the illegal/legal inserts so a null firm_id never reaches the table.
-    if (firmId == null) {
-      logger.warn({ leadId, to, trigger }, "pipeline: transition refused — lead has no firm_id");
-      await auditLog("lead", String(leadId), "pipeline_firm_unresolved", { to, trigger });
-      return {
-        outcome: "firm_unresolved" as const,
-        applied: false,
-        from,
-        to,
-        currentStatus: from,
-        reason: "firm_unresolved",
-      };
-    }
+    // 1b. firm_id is recorded when known but NOT required (Task #168 spec T001,
+    // mirroring lead_dispositions). The primary intake path is the PUBLIC web
+    // form, whose torts are global — a lead legitimately has no firm at intake
+    // time; the firm is attached when an operator claims/assigns it. Gating on
+    // firm_id here would deadlock every public-intake lead before BG_CHECK.
+    // Per-tenant filtering still works (NULLs are unscoped) and access control
+    // is enforced on the READ side (routes/pipeline.ts loadLeadScoped).
 
     // 2. Idempotency: a prior event with this key already settled this step.
     if (eventKey) {
@@ -311,6 +300,32 @@ export async function transitionLead(req: TransitionRequest): Promise<Transition
     }
     throw err;
   });
+
+  // Fire-and-forget outbound event whenever a lead actually ENTERS INTAKE_SENT.
+  // The n8n orchestrator subscribes to `pipeline.intake_sent` (NOT lead.created)
+  // so the intake→NPI step runs at the right moment. Subscribing to lead.created
+  // would fire while the lead is still NEW/BG_CHECK_PENDING and the orchestrator
+  // would always skip (status != INTAKE_SENT). Post-commit + non-blocking: a
+  // dispatch failure must never roll back or fail the committed transition.
+  if (result.applied && result.to === PipelineStatus.INTAKE_SENT) {
+    // dispatchEvent is synchronous fire-and-forget — it schedules delivery on
+    // setImmediate and swallows its own errors — so this can never throw or
+    // delay the committed transition.
+    dispatchEvent(
+      {
+        event: "pipeline.intake_sent",
+        payload: {
+          lead_id: leadId,
+          from_status: result.from ?? null,
+          to_status: result.to,
+          trigger,
+        },
+      },
+      { source: "pipeline" },
+    );
+  }
+
+  return result;
 }
 
 class PipelineDuplicateError extends Error {

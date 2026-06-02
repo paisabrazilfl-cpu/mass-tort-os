@@ -1564,7 +1564,7 @@ router.post("/bgcheck", async (req, res) => {
       payload: { event_id: eventId, result: r },
     });
     // Honest response: report whether the verdict actually advanced the lead.
-    // A non-applied outcome (illegal edge, firm_unresolved, duplicate) is a
+    // A non-applied outcome (illegal edge, duplicate) is a
     // deterministic park — we ack 200 (so the vendor does not HTTP-retry a
     // decision that will never change) but tell the caller it did NOT advance,
     // with the reason(s), so n8n/operators route it instead of assuming success.
@@ -1725,7 +1725,7 @@ router.post("/inbound-fax/:provider", async (req, res) => {
       attachment: { fileUrl: mediaUrl ?? null, externalFaxId: externalId ?? null },
     });
     // Honest response: only claim COMPLETE when the transition actually applied.
-    // An illegal edge (lead not in AWAITING_MED_RECS), firm_unresolved, or a
+    // An illegal edge (lead not in AWAITING_MED_RECS) or a
     // duplicate parks deterministically — ack 200 (no vendor HTTP retry) but
     // report applied:false + reason so the caller does not assume completion.
     const applied = out.transitions.some((t) => t.applied);

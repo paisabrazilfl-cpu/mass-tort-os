@@ -83,8 +83,13 @@ router.get(
   },
 );
 
+// `npi`/`expected` are `.nullish()` (accept null AND undefined): the n8n
+// orchestrator forwards only `lead_id` and renders absent provider fields as
+// JSON `null`, and the CRM sources the real identifiers from the lead's stored
+// fields via `withStoredProviderFallback`. null is normalized to undefined below
+// so a `{ "npi": null }` body is a valid "no signal" call, not a 400.
 const intakeCompletedSchema = z.object({
-  npi: z.string().trim().min(1).optional(),
+  npi: z.string().trim().min(1).nullish(),
   expected: z
     .object({
       name: z.string().optional(),
@@ -93,7 +98,7 @@ const intakeCompletedSchema = z.object({
       state: z.string().optional(),
       specialty: z.string().optional(),
     })
-    .optional(),
+    .nullish(),
   key_suffix: z.string().optional(),
 });
 
@@ -111,7 +116,7 @@ router.post(
     }
     const out = await completeIntake(
       lead.id,
-      { npi: parsed.data.npi, expected: parsed.data.expected ?? {} },
+      { npi: parsed.data.npi ?? undefined, expected: parsed.data.expected ?? {} },
       { keySuffix: parsed.data.key_suffix, source: "callback:intake_completed" },
     );
     res.json({ ok: true, npi_verdict: out.npiVerdict ?? null });

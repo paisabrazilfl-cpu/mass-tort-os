@@ -73,7 +73,7 @@ All run on 2026-06-02 against the workspace (dev) database.
 | Check | Command | Result |
 | --- | --- | --- |
 | Type safety | `pnpm --filter @workspace/api-server run typecheck` | **clean** (tsc -b libs + noEmit) |
-| State-machine tests | `node --test pipeline-state-machine.test.ts` | **10/10 pass** (pure graph + DB tx/idempotency/illegal/unknown-lead) |
+| State-machine tests | `node --test pipeline-state-machine.test.ts` | **12/12 pass** (pure graph + DB tx/idempotency/illegal/unknown-lead + stored-provider fallback fill & explicit-input passthrough) |
 | Orchestration tests | `node --test pipeline-orchestration.test.ts` | **19/19 pass** (CLEAR trail, idempotent replay, FAILED→REJECTED trail, REVIEW parks, inbound-fax→COMPLETE + replay, per-type DOCS_SIGNED gate, classifier, HIPAA-faxed fan-out ordering, no-fax park, inbound-fax PDF attach idempotency, no-media honest gap) |
 | RBAC route gates | `rbac-test` workflow | **finished green** — 241/241 pass (boot-time route validator + perm-gate suites) |
 | Schema drift | `db-drift` workflow | **OK** — 60 tables in sync (only pre-existing orphans `conversations`, `messages`, unrelated to this work) |
@@ -87,6 +87,7 @@ All run on 2026-06-02 against the workspace (dev) database.
 - **HIPAA fan-out ordering:** with a HIPAA fax already dispatched, a final-signature `DOCS_SIGNED` advances through `HIPAA_FAXED → AWAITING_MED_RECS`; with **no** fax on record the lead parks at `DOCS_SIGNED` (no fabricated HIPAA hop).
 - **Inbound-fax PDF attach:** a received med-records fax with a media URL inserts exactly one `documents` row (`document_type='medical_records'`); a redelivery of the same fax (matched by `externalFaxId`/`file_url`) attaches nothing further.
 - **No-media honest gap:** an inbound fax with no media URL still advances state but writes the `documents` row with `file_url=null` and an audit gap note — the missing PDF is disclosed, not fabricated.
+- **Stored-provider fallback:** when NPI verification is invoked with no provider identifiers (the n8n path carries only `lead_id`), `withStoredProviderFallback` seeds `expected` from the lead's stored plaintext provider fields (`physician_first/last_name`, `hospital_name`, `physician_taxonomy`, `state`); an explicit `npi` or any explicit `expected.*` from the caller wins and is passed through untouched.
 
 ---
 
@@ -94,11 +95,19 @@ All run on 2026-06-02 against the workspace (dev) database.
 
 `artifacts/n8n/workflows/05-intake-to-medrecs.json` sequences the stages by calling the
 CRM control endpoints (it orchestrates; the CRM remains the deterministic executor):
-`lead.created` webhook → extract fields → `GET /api/pipeline/leads/:id/status` →
-guard "only advance from INTAKE_SENT" → `POST …/intake-completed` (runs live NPI) →
-branch on NPI verified vs hold. Authenticated with an MTOS API key scoped to
-`automations:view,execute`. The bgcheck and inbound-fax legs are driven by the
-idempotent webhooks rather than n8n polling.
+**`pipeline.intake_sent` webhook** → extract `lead_id` from the event envelope payload →
+`GET /api/pipeline/leads/:id/status` → guard "only advance from INTAKE_SENT" →
+`POST …/intake-completed` (body carries only `key_suffix`; runs live NPI, seeded from stored
+provider fields via `withStoredProviderFallback` since no provider data travels through n8n) →
+branch on NPI verified vs hold. The `intake-completed` schema accepts `npi`/`expected` as
+`nullish` and normalizes null→undefined, so a provider-less callback is a valid "no signal"
+call rather than a 400. The CRM emits `pipeline.intake_sent`
+as a fire-and-forget event from `transitionLead` immediately after the transaction commits
+the `→ INTAKE_SENT` transition, so n8n is woken at the correct moment (subscribing to
+`lead.created` would fire while the lead is still NEW/BG_CHECK_PENDING and the guard would
+always skip). Authenticated with an MTOS API key scoped to `automations:view,execute`.
+The bgcheck and inbound-fax legs are driven by the idempotent webhooks rather than n8n
+polling.
 
 ---
 
@@ -162,15 +171,18 @@ These are real and not worked around silently:
    **Production (Render) picks it up on next deploy/runtime schema apply** — it has not
    been applied to prod from here (prod is owner-deployed via GitHub `main`).
 
-6. **`pipeline_events.firm_id` is now `NOT NULL`; null-firm leads cannot enter the pipeline
-   — hardened.** The earlier nullable column was a tenancy gap: an event with no firm is not
-   auditable per-tenant. `0002_pipeline_hardening.sql` deletes any existing null-firm
-   `pipeline_events` rows (there were 0 in dev) and sets the column `NOT NULL`. The state
-   machine enforces the invariant at the *write* boundary: `transitionLead` early-returns a
-   new `firm_unresolved` outcome (audit-logged, **no** event row, no status change) when
-   `lead.firm_id == null`, placed before the idempotency/illegal/legal inserts. A legacy
-   null-firm lead therefore parks honestly instead of writing an untenable event. Read-side
-   scoping in `routes/pipeline.ts` `loadLeadScoped` is unchanged.
+6. **`pipeline_events.firm_id` is `NULLABLE`, mirroring `lead_dispositions` — corrected.** An
+   earlier hardening pass made this column `NOT NULL` and added a `firm_unresolved` write-time
+   gate, but that **diverged from the authoritative spec (T001)**, which requires the audit
+   table to mirror `lead_dispositions` nullability so a legacy or system-level (null-firm)
+   lead can still record its pipeline audit trail rather than being silently blocked from the
+   pipeline entirely. `0002_pipeline_hardening.sql` was reverted to no longer DELETE null-firm
+   rows or `SET NOT NULL`, and `0003_pipeline_firm_nullable.sql` (idempotent `DROP NOT NULL`)
+   restores nullability on already-provisioned DBs; both were applied to dev (`is_nullable=YES`
+   verified). The `firm_unresolved` outcome and its early-return gate were removed from
+   `transitionLead` / the `TransitionOutcome` union. Per-tenant scoping is still enforced on
+   the **read** side in `routes/pipeline.ts` `loadLeadScoped`; the column carries the firm when
+   one is resolvable and is null only for genuinely firm-less leads, exactly like dispositions.
 
 7. **Webhook retry-safety (bgcheck + inbound-fax).** Both endpoints claim the idempotency
    ledger *before* applying (the claim dedups the non-idempotent **emails** the bg-check
@@ -194,17 +206,20 @@ These are real and not worked around silently:
 The deterministic pipeline, its audit trail, idempotency guarantees, inbound webhooks,
 control router, worker handler, and n8n orchestration are implemented and pass all
 type, RBAC, drift, and behavioral tests available in this environment (typecheck clean;
-orchestration 19/19; state-machine 10/10; rbac-test 241/241; db-drift 60 tables in sync).
-The hardening pass closed six review findings: (1) a real per-required-type `DOCS_SIGNED`
-gate backed by `document_envelopes.doc_type`; (2) firm-scoped inbound-fax correlation via
-the receiving DID plus a genuine two-destination retainer distribution that parks instead
-of faking; (3) `pipeline_events.firm_id NOT NULL` with a `firm_unresolved` write-boundary
-guard; (4) the NPI-verified leg now triggers the three-document send; (5) the
-`DOCS_SIGNED → HIPAA_FAXED → AWAITING_MED_RECS` fan-out is gated on a HIPAA fax actually
-having been dispatched (`hipaaFaxDispatched` checks the audit log) so the lead parks at
-`DOCS_SIGNED` rather than fabricating a HIPAA hop; and (6) the inbound med-records fax now
-attaches the received PDF as a `documents` row idempotently, recording an honest gap
-(`file_url=null` + audit note) when the provider supplies no media URL. The honest
-remaining gap is the absence of live third-party vendor credentials for a true end-to-end
-run; document classification is heuristic on the template signal and fails safe (parks)
-rather than open. All enumerated above.
+orchestration 19/19; state-machine 12/12; rbac-test 241/241; db-drift 60 tables in sync).
+Earlier rounds closed the per-required-type `DOCS_SIGNED` gate (`document_envelopes.doc_type`),
+firm-scoped inbound-fax correlation via the receiving DID plus a genuine two-destination
+retainer distribution that parks instead of faking, the NPI-verified leg triggering the
+three-document send, the `DOCS_SIGNED → HIPAA_FAXED → AWAITING_MED_RECS` fan-out gated on a
+HIPAA fax actually being dispatched (`hipaaFaxDispatched`), and idempotent inbound-fax PDF
+attach with an honest no-media gap. This final round closed three validation-review findings:
+(F1) the n8n workflow is now triggered by a real outbound CRM event `pipeline.intake_sent`
+(emitted fire-and-forget after the `→ INTAKE_SENT` commit) instead of an event that never
+matched the guard; (F2) `pipeline_events.firm_id` was reverted to **nullable** to mirror
+`lead_dispositions` per the authoritative spec, and the spec-diverging `firm_unresolved`
+write-time gate was removed so legacy/system-level leads keep an audit trail; (F3) the
+firm-less state-machine test now flows end-to-end. A `withStoredProviderFallback` seam makes
+the `lead_id`-only n8n path genuinely functional by seeding NPI verification from the lead's
+stored provider fields. The honest remaining gap is the absence of live third-party vendor
+credentials for a true end-to-end run; document classification is heuristic on the template
+signal and fails safe (parks) rather than open.

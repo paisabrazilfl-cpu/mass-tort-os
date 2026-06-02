@@ -25,9 +25,11 @@ import {
   classifyEnvelopeDocType,
 } from "../pipeline/doc-types.js";
 
-// Every pipeline transition now requires a resolvable firm (firm_unresolved is
-// a hard early-return otherwise), so synthetic leads MUST carry a firm_id. We
-// create one throwaway firm for the whole suite and clean it up in `after`.
+// firm_id on pipeline_events is NULLABLE (mirrors lead_dispositions): the public
+// intake path is firm-less and must flow. These orchestration fixtures still
+// attach a firm_id so we also exercise the firm-recorded path; the separate
+// pipeline-state-machine suite covers the firm-less case. One throwaway firm is
+// created for the whole suite and cleaned up in `after`.
 let firmId: number;
 async function ensureFirm(): Promise<number> {
   if (firmId) return firmId;

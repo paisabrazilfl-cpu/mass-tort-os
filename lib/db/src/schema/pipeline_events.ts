@@ -22,11 +22,14 @@ import { z } from "zod/v4";
  * holds the current state; this table is the full ordered history that powers
  * the pipeline timeline and lets an operator see WHY a lead is where it is.
  *
- * firm_id is NON-NULL (Task #168 tenancy hardening): every pipeline transition
- * is firm-scoped, and the state machine refuses (firm_unresolved) to advance a
- * lead that has no firm_id rather than write a tenancy-less audit row. This
- * guarantees every pipeline_events row can be filtered by firm and a lead can
- * never be advanced outside a firm boundary.
+ * firm_id is NULLABLE, mirroring lead_dispositions (Task #168 spec T001). The
+ * primary intake path is the PUBLIC web form, whose torts are global (not
+ * firm-owned), so a lead legitimately has no firm at intake time — the firm is
+ * attached later when an operator claims/assigns it. Forcing NON-NULL here would
+ * deadlock every public-intake lead before it could even enter BG_CHECK. We
+ * therefore record firm_id when it is known and leave it null until then;
+ * per-tenant filtering still works (NULLs are simply unscoped), and access
+ * control is enforced on the READ side (routes/pipeline.ts loadLeadScoped).
  *
  * event_key is the provider-supplied event id (or a deterministic synthetic
  * key) used for idempotency. The unique index means a webhook redelivery with
@@ -38,7 +41,7 @@ export const pipelineEventsTable = pgTable(
   "pipeline_events",
   {
     id: serial("id").primaryKey(),
-    firm_id: integer("firm_id").notNull(),
+    firm_id: integer("firm_id"),
     lead_id: integer("lead_id").notNull(),
     from_status: varchar("from_status", { length: 30 }),
     to_status: varchar("to_status", { length: 30 }).notNull(),

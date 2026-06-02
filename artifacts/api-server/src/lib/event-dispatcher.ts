@@ -34,7 +34,8 @@ export type CrmEventName =
   | "lead.created"
   | "lead.updated"
   | "ocr.completed"
-  | "case.stage_changed";
+  | "case.stage_changed"
+  | "pipeline.intake_sent";
 
 export interface CrmEvent<P = Record<string, unknown>> {
   event: CrmEventName;
@@ -339,6 +340,16 @@ export const EVENT_CATALOG = [
       old_status: "string|null",
       new_status: "string",
       changed_by: "user|worker",
+    },
+  },
+  {
+    event: "pipeline.intake_sent",
+    description: "A lead ENTERED the INTAKE_SENT pipeline stage (bg-check cleared, intake packet sent). This is the correct trigger for the Intake-to-Med-Recs orchestrator (Task #168) — it fires at the moment the intake→NPI step should run, unlike lead.created which fires while the lead is still in bg-check.",
+    payload_shape: {
+      lead_id: "number",
+      from_status: "string|null",
+      to_status: "string (always 'INTAKE_SENT')",
+      trigger: "string — the transition trigger that produced this stage",
     },
   },
 ] as const;
