@@ -144,30 +144,17 @@ export function decrypt(
   entityId?: string,
 ): string {
   if (!ciphertext) return ciphertext;
-  if (
-    ciphertext.length < 4 ||
-    ciphertext[0] !== "e" ||
-    ciphertext[1] !== "n" ||
-    ciphertext[2] !== "c" ||
-    ciphertext[3] !== ":"
-  ) {
-    return ciphertext;
-  }
+  if (!ciphertext.startsWith("enc:")) return ciphertext;
 
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v", 0)) {
-    const vEnd = ciphertext.indexOf(":", 5);
-    if (vEnd === -1) return ciphertext;
-    keyVersion = parseInt(ciphertext.slice(5, vEnd), 10) || 1;
-
-    const aadEnd = ciphertext.indexOf(":", vEnd + 1);
-    if (aadEnd === -1) return ciphertext;
-    hasAADFlag = parseInt(ciphertext.slice(vEnd + 1, aadEnd), 10) || 0;
-
-    payload = ciphertext.slice(aadEnd + 1);
+  if (ciphertext.startsWith("enc:v")) {
+    const parts = ciphertext.split(":");
+    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
+    hasAADFlag = parseInt(parts[2], 10) || 0;
+    payload = parts.slice(3).join(":");
   } else {
     payload = ciphertext.slice(4);
   }
