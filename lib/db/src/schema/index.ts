@@ -29,6 +29,7 @@ export * from "./firms";
 export * from "./firm_invites";
 export * from "./call_logs";
 export * from "./lead_dispositions";
+export * from "./pipeline_events";
 export * from "./sms_messages";
 export * from "./admin_dark_room_links";
 export * from "./automations";

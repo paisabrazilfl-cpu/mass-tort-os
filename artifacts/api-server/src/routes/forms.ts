@@ -1019,6 +1019,21 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
       computeAndPersistLeadScore(lead.id).catch(() => {});
     }
 
+    // Intake-to-Med-Recs pipeline: bring the lead in (NEW → BG_CHECK_PENDING)
+    // and enqueue the background check. Idempotent and non-blocking — a failure
+    // here must not fail the claimant's submission.
+    {
+      const leadIdForPipeline = lead.id;
+      const firmIdForPipeline = (lead as { firm_id?: number | null }).firm_id ?? null;
+      import("../lib/pipeline/pipeline.js")
+        .then(({ startLeadPipeline }) =>
+          startLeadPipeline(leadIdForPipeline, { source: "web_form_intake", firmId: firmIdForPipeline }),
+        )
+        .catch((err) =>
+          logger.error({ err, leadId: leadIdForPipeline }, "pipeline: startLeadPipeline failed after intake"),
+        );
+    }
+
     if (status === "review_required") {
       try {
         const { reviewQueueTable } = await import("@workspace/db");

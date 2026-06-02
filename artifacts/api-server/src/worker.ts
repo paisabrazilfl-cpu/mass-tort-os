@@ -356,6 +356,13 @@ async function processJob(job: {
     await handleSendWorkflowEmail(payload as unknown as Parameters<typeof handleSendWorkflowEmail>[0]);
   } else if (job.job_type === "send_workflow_sms") {
     await handleSendWorkflowSms(payload as unknown as Parameters<typeof handleSendWorkflowSms>[0]);
+  } else if (job.job_type === "run_bg_check") {
+    const { lead_id, source } = payload as { lead_id: number; source?: string };
+    const { runBackgroundCheckForLead } = await import("./lib/pipeline/pipeline.js");
+    await runBackgroundCheckForLead(lead_id, {
+      keySuffix: `job${job.id}`,
+      source: source ?? "worker:run_bg_check",
+    });
   } else if (job.job_type === "fasten_records_sync") {
     await handleFastenRecordsSync(payload as unknown as Parameters<typeof handleFastenRecordsSync>[0]);
   } else if (job.job_type === "competitive_intel_watchlist_sync") {

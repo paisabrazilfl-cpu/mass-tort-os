@@ -27,6 +27,12 @@ export const leadsTable = pgTable("leads", {
   was_at_location: boolean("was_at_location").notNull().default(false),
   location_name: varchar("location_name", { length: 255 }),
   status: varchar("status", { length: 20 }).notNull().default("new"),
+  // Deterministic Intake-to-Med-Recs pipeline state (see lib/pipeline/state-machine.ts).
+  // Distinct from the coarse `status` column: `status` is the legacy
+  // qualification verdict (new|qualified|signed|rejected|review_required) while
+  // `pipeline_status` tracks the fine-grained processing stage a lead is in.
+  // Nullable: legacy leads predate the pipeline; they are treated as unstarted.
+  pipeline_status: varchar("pipeline_status", { length: 30 }),
   rejection_reason: text("rejection_reason"),
   notes: text("notes"),
   ad_spend: decimal("ad_spend", { precision: 10, scale: 2 }),
