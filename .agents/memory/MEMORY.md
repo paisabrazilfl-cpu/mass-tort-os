@@ -34,3 +34,4 @@
 - [Twilio toll-free verification](twilio-tollfree-verification.md) — clears 30032; UseCaseCategories are fixed enums, "Invalid use case summary" masks missing BusinessType+EIN, name must match EIN, IN_REVIEW locks edits (use stable Render OptInImageUrls).
 - [Telnyx SMS wiring](telnyx-sms-wiring.md) — go-live = encrypted vault row + flip workflow_settings global FK; profile create needs whitelisted_destinations:["US"], attach number via /phone_numbers/{id}/messaging, from must be on the profile.
 - [n8n intake-pipeline workflows](n8n-intake-pipeline-workflows.md) — rebuilt intake templates as real n8n (orchestrate→CRM-execute); only 4 outbound events exist, bridge can't create creds, e-sign=qualify/fax=auto-on-signed.
+- [Email channel (SendGrid)](email-channel-sendgrid.md) — email DELIVERS (verified sender, key valid) unlike SMS 10DLC; 202=accept not deliver (use Activity API); @gmail.com from = DMARC spam risk, authenticate mtosvelocity.com domain.
