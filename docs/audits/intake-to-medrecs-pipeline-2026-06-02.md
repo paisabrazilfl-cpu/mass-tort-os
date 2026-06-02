@@ -38,6 +38,8 @@ Transitions are whitelisted in `LEGAL_TRANSITIONS`; any edge not in the map is r
 | Stage orchestration (bg verdict, NPI, docs-signed fan-out, med-recs) | `artifacts/api-server/src/lib/pipeline/pipeline.ts` |
 | Adapter seams over live NPI / bg-hub impls (env-selectable) | `artifacts/api-server/src/lib/pipeline/adapters.ts` |
 | Schema: `leads.pipeline_status` + `pipeline_events` table | `lib/db/drizzle/0001_pipeline_events.sql` (replayed by `apply-schema.mjs`) |
+| Schema hardening: `document_envelopes.doc_type`, `pipeline_events.firm_id NOT NULL`, status backfill | `lib/db/drizzle/0002_pipeline_hardening.sql` |
+| Required-doc classifier + per-type DOCS_SIGNED gate (no DB imports) | `artifacts/api-server/src/lib/pipeline/doc-types.ts` |
 | Inbound webhooks: bgcheck, inbound-fax; e-sign signed hook | `artifacts/api-server/src/routes/webhooks.ts` |
 | Operator/n8n control router (`/api/pipeline/...`) | `artifacts/api-server/src/routes/pipeline.ts` |
 | Worker job handler `run_bg_check` | `artifacts/api-server/src/worker.ts` |
@@ -72,11 +74,9 @@ All run on 2026-06-02 against the workspace (dev) database.
 | --- | --- | --- |
 | Type safety | `pnpm --filter @workspace/api-server run typecheck` | **clean** (tsc -b libs + noEmit) |
 | State-machine tests | `node --test pipeline-state-machine.test.ts` | **10/10 pass** (pure graph + DB tx/idempotency/illegal/unknown-lead) |
-| Orchestration tests | `node --test pipeline-orchestration.test.ts` | **5/5 pass** (CLEAR trail, idempotent replay, FAILED→REJECTED trail, REVIEW parks, inbound-fax→COMPLETE + replay) |
-| RBAC route gates | `rbac-test` workflow | **finished green** (boot-time route validator + perm-gate suites) |
-| Route protection matrix | `bash scripts/check-rbac-route-matrix.sh` | **OK** — 333 rows; headline `332 checked / 50 public / 282 protected / 0 unprotected` |
-| Schema drift | `db-drift` workflow | **OK** — 58 tables in sync (only pre-existing orphans `conversations`, `messages`, unrelated to this work) |
-| Worker handler | worker workflow restart | `run_bg_check` now processed (was "Unknown job type" on the stale build before restart) |
+| Orchestration tests | `node --test pipeline-orchestration.test.ts` | **15/15 pass** (CLEAR trail, idempotent replay, FAILED→REJECTED trail, REVIEW parks, inbound-fax→COMPLETE + replay, per-type DOCS_SIGNED gate, classifier) |
+| RBAC route gates | `rbac-test` workflow | **finished green** — 241/241 pass (boot-time route validator + perm-gate suites) |
+| Schema drift | `db-drift` workflow | **OK** — 60 tables in sync (only pre-existing orphans `conversations`, `messages`, unrelated to this work) |
 
 ### Test trails proven (orchestration test assertions)
 - **Happy path (CLEAR):** applied trail = `[NEW, BG_CHECK_PENDING, BG_CHECK_CLEAR, INTAKE_SENT]`, final status `INTAKE_SENT`.
@@ -110,29 +110,43 @@ These are real and not worked around silently:
    credentials do not exist in dev. The in-repo background-check **hub** path (worker
    `run_bg_check`) is exercisable and was verified to be picked up by the worker.
 
-2. **`DOCS_SIGNED` is gated on the lead's ENTIRE active signing packet, not the first
-   signature.** The e-sign hook (`applyEnvelopeEvent` signed-block) now re-reads every
-   envelope for the lead and only calls `applyDocumentsSigned` when `allDocumentsSigned(...)`
-   is true. The gate's deterministic rule is **"at least one envelope is `signed` and no
-   envelope is still in flight."** Dead/replaced envelopes
-   (`declined/voided/expired/cancelled/error/failed`) are **ignored**, so a voided draft
-   followed by a signed replacement still advances and a stale failed envelope cannot
-   deadlock the lead forever. Only an in-flight envelope (created/sent/delivered/viewed)
-   holds the lead before `DOCS_SIGNED`. The transition is keyed per-lead
-   (`keySuffix=lead<id>`) so the last-signed redelivery is a safe no-op. **Honest
-   limitation:** the `document_envelopes` schema has no per-document "required type" flag,
-   so "all required" is implemented as "nothing in flight" rather than a specific named set
-   (retainer + HIPAA + authorization). Requiring an explicit named set needs a
-   `doc_type`/required-set model — tracked as a follow-up.
+2. **`DOCS_SIGNED` is gated on the THREE required document types, each tracked
+   independently — RESOLVED.** Previously "all signed" meant "nothing in flight" because the
+   schema had no per-document required-type flag. `0002_pipeline_hardening.sql` adds
+   `document_envelopes.doc_type`; the worker tags each envelope at creation via
+   `classifyEnvelopeDocType(template)` (`lib/pipeline/doc-types.ts`, deterministic match on
+   `template_type`/name → `hipaa` | `retainer` | `affidavit` | null). The e-sign signed hook
+   now calls `allRequiredDocumentsSigned(envelopes)`, which requires **every** required type
+   to have at least one live envelope AND all of that type's live envelopes signed. Dead /
+   replaced envelopes (`declined/voided/expired/cancelled/error/failed`) are still ignored,
+   so a voided draft followed by a signed replacement of the same type advances and a stale
+   failed envelope cannot deadlock the lead. An untagged (null doc_type) signed envelope can
+   never satisfy the gate. The transition is keyed per-lead (`keySuffix=lead<id>`) so the
+   last-signed redelivery is a safe no-op. The lower-level `allDocumentsSigned(statuses[])`
+   primitive is retained for status-only callers. **Honest residual:** classification is
+   heuristic on the template signal — a template that is genuinely one of the three but named
+   nothing like it would classify null and hold the lead (fail-safe, not fail-open); the fix
+   is to set the template's `template_type` explicitly.
 
-3. **Inbound-fax correlation depends on a cover-sheet / sender mapping.** Correlation is:
-   explicit `lead:<id>` reference first, else an **unambiguous** sender-fax match against
-   `AWAITING_MED_RECS` leads' `hospital_fax`. An uncorrelated or ambiguous fax is
-   acked (HTTP 200) and logged rather than guessed — deliberately, to avoid attaching PHI
-   to the wrong claimant. Reliable correlation in production needs a cover-sheet token or
-   a dedicated inbound DID per matter. **Security:** the endpoint is fail-closed and
-   requires `INBOUND_FAX_WEBHOOK_SECRET` to be set in dev AND the Render web/worker env —
-   without it the route returns 503 and never advances a lead.
+3. **Inbound-fax correlation is FIRM-SCOPED via the receiving DID — hardened.** Correlation
+   order: explicit `lead:<id>` reference first, else a sender-fax match. The sender match no
+   longer scans every firm's leads: it resolves the **receiving DID** (`to`/`destination`/
+   `DID`/… from the payload) to a firm via `findMappingForDialedNumber`, and only matches
+   `AWAITING_MED_RECS` leads **within that firm** (`leads.firm_id = resolvedFirmId`). If the
+   DID is missing or unmapped, the fuzzy match is **refused** (the lead parks) rather than
+   risk attaching PHI to another firm's claimant. An uncorrelated or ambiguous-within-firm
+   fax is acked (HTTP 200) and logged, never guessed. **Security:** the endpoint is
+   fail-closed and requires `INBOUND_FAX_WEBHOOK_SECRET` in dev AND the Render web/worker env
+   — without it the route returns 503 and never advances a lead.
+
+   **Retainer distribution is a real two-destination side effect — hardened.** The
+   `RETAINER_DISTRIBUTED` fan-out leg no longer records unconditionally. `distributeRetainer`
+   requires a **signed** retainer envelope (`doc_type='retainer'`, `status='signed'`, with a
+   real `signed_pdf_path`) AND an attorney of record (`lead.assigned_to`), then writes to
+   BOTH destinations: an audit handoff to the attorney and an idempotent `documents` row
+   (`document_type='retainer_agreement'`). If either prerequisite is missing or a write
+   fails, it returns `distributed:false` and the lead **parks** at the fan-out — no fake
+   transition is recorded. `AWAITING_MED_RECS` remains reachable via the HIPAA-faxed leg.
 
 4. **Full 21-file `rbac-test` suite could not be run in a single bash invocation** (the
    sandbox killed the combined process on resource limits). It was instead verified via
@@ -145,13 +159,15 @@ These are real and not worked around silently:
    **Production (Render) picks it up on next deploy/runtime schema apply** — it has not
    been applied to prod from here (prod is owner-deployed via GitHub `main`).
 
-6. **`pipeline_events.firm_id` is intentionally nullable.** It mirrors `lead_dispositions`
-   (also nullable) and the fact that `leads.firm_id` is itself nullable — unscoped/legacy
-   leads exist and a `NOT NULL` constraint would make the pipeline unable to record events
-   for them, silently breaking the audit trail it exists to provide. Tenancy is enforced at
-   the *read* boundary instead: `routes/pipeline.ts` `loadLeadScoped` denies null-firm leads
-   to non-bypass users, so a nullable column never becomes a cross-tenant read. This is the
-   "documented narrow legacy exception" the review allowed.
+6. **`pipeline_events.firm_id` is now `NOT NULL`; null-firm leads cannot enter the pipeline
+   — hardened.** The earlier nullable column was a tenancy gap: an event with no firm is not
+   auditable per-tenant. `0002_pipeline_hardening.sql` deletes any existing null-firm
+   `pipeline_events` rows (there were 0 in dev) and sets the column `NOT NULL`. The state
+   machine enforces the invariant at the *write* boundary: `transitionLead` early-returns a
+   new `firm_unresolved` outcome (audit-logged, **no** event row, no status change) when
+   `lead.firm_id == null`, placed before the idempotency/illegal/legal inserts. A legacy
+   null-firm lead therefore parks honestly instead of writing an untenable event. Read-side
+   scoping in `routes/pipeline.ts` `loadLeadScoped` is unchanged.
 
 7. **Webhook retry-safety (bgcheck + inbound-fax).** Both endpoints claim the idempotency
    ledger *before* applying (the claim dedups the non-idempotent **emails** the bg-check
@@ -174,9 +190,13 @@ These are real and not worked around silently:
 
 The deterministic pipeline, its audit trail, idempotency guarantees, inbound webhooks,
 control router, worker handler, and n8n orchestration are implemented and pass all
-type, RBAC, drift, and behavioral tests available in this environment. The
-all-documents-signed `DOCS_SIGNED` gate and webhook retry-safety (release-claim + 503 on
-transient apply failure) are in place. The honest remaining gaps are the absence of live
-vendor credentials for a true end-to-end run, the lack of a per-document *required-type*
-model (so "all signed" means "no outstanding envelope" rather than a named set), and
-production-correlation hardening for inbound fax — all enumerated above for follow-up.
+type, RBAC, drift, and behavioral tests available in this environment (typecheck clean;
+orchestration 15/15; state-machine 10/10; rbac-test 241/241; db-drift 60 tables in sync).
+The hardening pass closed four review findings: (1) a real per-required-type `DOCS_SIGNED`
+gate backed by `document_envelopes.doc_type`; (2) firm-scoped inbound-fax correlation via
+the receiving DID plus a genuine two-destination retainer distribution that parks instead
+of faking; (3) `pipeline_events.firm_id NOT NULL` with a `firm_unresolved` write-boundary
+guard; and (4) the NPI-verified leg now triggers the three-document send. The honest
+remaining gap is the absence of live third-party vendor credentials for a true end-to-end
+run; document classification is heuristic on the template signal and fails safe (parks)
+rather than open. All enumerated above.

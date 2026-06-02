@@ -93,7 +93,12 @@ export function isLegalTransition(from: string | null | undefined, to: string): 
   return (allowed as readonly string[]).includes(to);
 }
 
-export type TransitionOutcome = "applied" | "illegal" | "duplicate" | "lead_not_found";
+export type TransitionOutcome =
+  | "applied"
+  | "illegal"
+  | "duplicate"
+  | "lead_not_found"
+  | "firm_unresolved";
 
 export interface TransitionRequest {
   leadId: number;
@@ -160,6 +165,25 @@ export async function transitionLead(req: TransitionRequest): Promise<Transition
 
     const from = lead.pipeline_status ?? null;
     const firmId = lead.firm_id ?? null;
+
+    // 1b. Tenancy gate (Task #168): pipeline_events.firm_id is NON-NULL and
+    // every transition is firm-scoped. A lead with no firm_id cannot be
+    // advanced — writing a tenancy-less audit row would break firm isolation.
+    // Refuse honestly (no event row, no status change) so the lead parks and
+    // an operator can attach it to a firm. This is checked BEFORE idempotency
+    // and the illegal/legal inserts so a null firm_id never reaches the table.
+    if (firmId == null) {
+      logger.warn({ leadId, to, trigger }, "pipeline: transition refused — lead has no firm_id");
+      await auditLog("lead", String(leadId), "pipeline_firm_unresolved", { to, trigger });
+      return {
+        outcome: "firm_unresolved" as const,
+        applied: false,
+        from,
+        to,
+        currentStatus: from,
+        reason: "firm_unresolved",
+      };
+    }
 
     // 2. Idempotency: a prior event with this key already settled this step.
     if (eventKey) {

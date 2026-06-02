@@ -23,6 +23,12 @@ export const documentEnvelopesTable = pgTable("document_envelopes", {
   provider: varchar("provider", { length: 50 }).notNull(),
   provider_integration_id: integer("provider_integration_id"),
   external_envelope_id: varchar("external_envelope_id", { length: 255 }),
+  // Intake-to-Med-Recs pipeline (Task #168): which of the three required
+  // pipeline documents this envelope represents — "hipaa" | "retainer" |
+  // "affidavit" — or null for any non-pipeline envelope. The DOCS_SIGNED gate
+  // tracks each required type independently, so this is how a lead's signing
+  // packet is recognised as fully executed.
+  doc_type: varchar("doc_type", { length: 40 }),
   signer_name: varchar("signer_name", { length: 255 }),
   signer_email: varchar("signer_email", { length: 255 }),
   status: varchar("status", { length: 30 }).notNull().default("created"),

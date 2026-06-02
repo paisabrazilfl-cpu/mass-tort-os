@@ -19,6 +19,7 @@ import { getFaxAdapter } from "./fax";
 import { downloadTemplate } from "./template-storage";
 import { decryptLeadFields } from "./encryption";
 import { FAX_SOURCE_FILE_TEMPLATE } from "./fax-results-matcher";
+import { classifyEnvelopeDocType } from "./pipeline/doc-types";
 
 // pdf-lib is heavy (~830 KB with transitives) and only needed when
 // buildTemplatePdf or buildMedRecordsCoverLetter actually run a job that
@@ -257,6 +258,10 @@ export async function handleSendEsignPacket(payload: SendEsignPacketPayload): Pr
       .values({
         lead_id,
         template_id,
+        // Tag which of the three required pipeline documents this is (or null
+        // for a non-pipeline template) so the DOCS_SIGNED gate can track each
+        // required type independently. Derived deterministically from template.
+        doc_type: classifyEnvelopeDocType(tpl),
         provider: "pending",
         status: "queued",
         signer_name: signer.name,

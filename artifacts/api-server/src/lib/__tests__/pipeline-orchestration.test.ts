@@ -10,7 +10,7 @@
 
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import { db, leadsTable, pipelineEventsTable } from "@workspace/db";
+import { db, leadsTable, pipelineEventsTable, firmsTable } from "@workspace/db";
 import { eq, asc } from "drizzle-orm";
 import { PipelineStatus } from "../pipeline/state-machine.js";
 import {
@@ -19,11 +19,31 @@ import {
   applyMedRecordsReceived,
   allDocumentsSigned,
 } from "../pipeline/pipeline.js";
+import {
+  allRequiredDocumentsSigned,
+  classifyEnvelopeDocType,
+} from "../pipeline/doc-types.js";
+
+// Every pipeline transition now requires a resolvable firm (firm_unresolved is
+// a hard early-return otherwise), so synthetic leads MUST carry a firm_id. We
+// create one throwaway firm for the whole suite and clean it up in `after`.
+let firmId: number;
+async function ensureFirm(): Promise<number> {
+  if (firmId) return firmId;
+  const slug = `test-pipeline-firm-${Date.now()}`;
+  const [firm] = await db
+    .insert(firmsTable)
+    .values({ name: "Pipeline Test Firm", slug })
+    .returning({ id: firmsTable.id });
+  firmId = firm!.id;
+  return firmId;
+}
 
 async function makeLead(name: string): Promise<number> {
+  const fid = await ensureFirm();
   const [lead] = await db
     .insert(leadsTable)
-    .values({ name, tort_type: "test_tort" })
+    .values({ name, tort_type: "test_tort", firm_id: fid })
     .returning({ id: leadsTable.id });
   return lead!.id;
 }
@@ -52,6 +72,9 @@ describe("pipeline orchestration (webhook-level)", () => {
     for (const id of leadIds) {
       await db.delete(pipelineEventsTable).where(eq(pipelineEventsTable.lead_id, id));
       await db.delete(leadsTable).where(eq(leadsTable.id, id));
+    }
+    if (firmId) {
+      await db.delete(firmsTable).where(eq(firmsTable.id, firmId));
     }
   });
 
@@ -196,5 +219,91 @@ describe("DOCS_SIGNED all-documents-signed gate", () => {
     assert.equal(allDocumentsSigned(["declined", "expired"]), false);
     // A live in-flight envelope still blocks even alongside a signed one.
     assert.equal(allDocumentsSigned(["voided", "signed", "sent"]), false);
+  });
+});
+
+describe("DOCS_SIGNED per-required-type gate (allRequiredDocumentsSigned)", () => {
+  const env = (doc_type: string | null, status: string) => ({ doc_type, status });
+
+  test("requires ALL THREE required doc types to each be live-and-signed", () => {
+    // Only HIPAA signed → still gated (retainer + affidavit missing).
+    assert.equal(allRequiredDocumentsSigned([env("hipaa", "signed")]), false);
+    // HIPAA + retainer signed, affidavit missing → gated.
+    assert.equal(
+      allRequiredDocumentsSigned([env("hipaa", "signed"), env("retainer", "signed")]),
+      false,
+    );
+    // All three signed → advance.
+    assert.equal(
+      allRequiredDocumentsSigned([
+        env("hipaa", "signed"),
+        env("retainer", "signed"),
+        env("affidavit", "signed"),
+      ]),
+      true,
+    );
+  });
+
+  test("a required type present but still in-flight blocks the advance", () => {
+    assert.equal(
+      allRequiredDocumentsSigned([
+        env("hipaa", "signed"),
+        env("retainer", "signed"),
+        env("affidavit", "sent"),
+      ]),
+      false,
+    );
+  });
+
+  test("a dead envelope replaced by a signed one of the same type still advances", () => {
+    assert.equal(
+      allRequiredDocumentsSigned([
+        env("hipaa", "voided"),
+        env("hipaa", "signed"),
+        env("retainer", "signed"),
+        env("affidavit", "signed"),
+      ]),
+      true,
+    );
+  });
+
+  test("a required type with only dead envelopes (none signed) blocks", () => {
+    assert.equal(
+      allRequiredDocumentsSigned([
+        env("hipaa", "voided"),
+        env("retainer", "signed"),
+        env("affidavit", "signed"),
+      ]),
+      false,
+    );
+  });
+
+  test("untagged (null doc_type) envelopes do not satisfy any required type", () => {
+    assert.equal(
+      allRequiredDocumentsSigned([
+        env(null, "signed"),
+        env(null, "signed"),
+        env(null, "signed"),
+      ]),
+      false,
+    );
+  });
+});
+
+describe("classifyEnvelopeDocType", () => {
+  const tpl = (over: Record<string, unknown>) => ({
+    name: "",
+    document_type: null,
+    ...over,
+  });
+
+  test("classifies HIPAA / retainer / affidavit from template signal", () => {
+    assert.equal(classifyEnvelopeDocType(tpl({ name: "HIPAA Authorization" })), "hipaa");
+    assert.equal(classifyEnvelopeDocType(tpl({ name: "Retainer Agreement" })), "retainer");
+    assert.equal(classifyEnvelopeDocType(tpl({ name: "Affidavit of Claimant" })), "affidavit");
+  });
+
+  test("returns null for a template that is none of the three required docs", () => {
+    assert.equal(classifyEnvelopeDocType(tpl({ name: "Welcome Letter" })), null);
   });
 });

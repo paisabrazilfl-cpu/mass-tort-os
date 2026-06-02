@@ -26,7 +26,7 @@ import {
   emailMessagesTable,
   faxEventsTable,
 } from "@workspace/db";
-import { eq, sql, or } from "drizzle-orm";
+import { eq, sql, or, and } from "drizzle-orm";
 import crypto from "crypto";
 import { logger } from "../lib/logger";
 import { auditLog } from "../lib/audit";
@@ -125,11 +125,12 @@ async function applyEnvelopeEvent(provider: string, evt: NormalizedEvent): Promi
     if (env.lead_id) {
       try {
         const leadEnvelopes = await db
-          .select({ status: documentEnvelopesTable.status })
+          .select({ doc_type: documentEnvelopesTable.doc_type, status: documentEnvelopesTable.status })
           .from(documentEnvelopesTable)
           .where(eq(documentEnvelopesTable.lead_id, env.lead_id));
-        const { applyDocumentsSigned, allDocumentsSigned } = await import("../lib/pipeline/pipeline.js");
-        if (allDocumentsSigned(leadEnvelopes.map((e) => e.status))) {
+        const { applyDocumentsSigned } = await import("../lib/pipeline/pipeline.js");
+        const { allRequiredDocumentsSigned } = await import("../lib/pipeline/doc-types.js");
+        if (allRequiredDocumentsSigned(leadEnvelopes)) {
           await applyDocumentsSigned(env.lead_id, {
             keySuffix: `lead${env.lead_id}`,
             envelopeId: env.id,
@@ -1562,7 +1563,16 @@ router.post("/bgcheck", async (req, res) => {
       source: "webhook:bgcheck",
       payload: { event_id: eventId, result: r },
     });
-    res.status(200).json({ ok: true, verdict: out.verdict });
+    // Honest response: report whether the verdict actually advanced the lead.
+    // A non-applied outcome (illegal edge, firm_unresolved, duplicate) is a
+    // deterministic park — we ack 200 (so the vendor does not HTTP-retry a
+    // decision that will never change) but tell the caller it did NOT advance,
+    // with the reason(s), so n8n/operators route it instead of assuming success.
+    const applied = out.transitions.some((t) => t.applied);
+    const reasons = [...new Set(out.transitions.filter((t) => !t.applied).map((t) => t.reason).filter(Boolean))];
+    res.status(200).json(applied
+      ? { ok: true, verdict: out.verdict, applied: true }
+      : { ok: true, verdict: out.verdict, applied: false, parked: true, reasons });
   } catch (err) {
     // The apply failed AFTER we claimed the idempotency ledger. Release the
     // claim and return 5xx so the provider retries — the transitions are
@@ -1624,6 +1634,14 @@ router.post("/inbound-fax/:provider", async (req, res) => {
     pickFirstString(evt, ["from", "sender", "from_number", "CallerID", "remote_id"]) ??
     pickFirstString((evt as { data?: AnyJson }).data, ["from", "sender"]);
   const leadRef = pickFirstString(evt, ["lead_ref", "reference", "matter_ref"]);
+  // The number that RECEIVED the fax (our DID) is the authoritative tenancy
+  // signal — it tells us which firm the inbound belongs to. Without it the
+  // sender-fax fuzzy match would scan every firm's leads and could attach a
+  // medical record to the wrong firm's claimant, so a firm-unresolved fuzzy
+  // match is parked rather than guessed.
+  const receivedDid =
+    pickFirstString(evt, ["to", "to_number", "toNumber", "DID", "did", "destination", "called", "ToNumber"]) ??
+    pickFirstString((evt as { data?: AnyJson }).data, ["to", "to_number", "destination"]);
 
   // Idempotency first — drop retries before any correlation work.
   const first = await markWebhookProcessed({
@@ -1643,20 +1661,38 @@ router.post("/inbound-fax/:provider", async (req, res) => {
     if (m) leadId = Number(m[1]);
   }
 
-  // 2. Sender-fax match against AWAITING_MED_RECS leads (unambiguous only).
+  // 2. Sender-fax match against AWAITING_MED_RECS leads — FIRM-SCOPED. We only
+  //    attempt the fuzzy sender match once the receiving DID resolves to a firm,
+  //    then restrict candidates to that firm's leads. If the DID is missing or
+  //    unmapped, we do NOT fall back to a cross-firm scan; the lead parks.
   if (!leadId && senderFaxRaw) {
     const digits = senderFaxRaw.replace(/\D/g, "").slice(-10);
     if (digits.length === 10) {
-      const candidates = await db
-        .select({ id: leadsTable.id, fax: leadsTable.hospital_fax })
-        .from(leadsTable)
-        .where(eq(leadsTable.pipeline_status, "AWAITING_MED_RECS"));
-      const matches = candidates.filter(
-        (c) => (c.fax || "").replace(/\D/g, "").slice(-10) === digits,
-      );
-      if (matches.length === 1) leadId = matches[0]!.id;
-      else if (matches.length > 1) {
-        logger.warn({ provider, digits, count: matches.length }, "inbound-fax: ambiguous sender match — parking");
+      const { findMappingForDialedNumber } = await import("../lib/voice/inbound-routing.js");
+      const mapping = receivedDid ? await findMappingForDialedNumber(receivedDid) : null;
+      const firmId = mapping?.firmId ?? null;
+      if (firmId == null) {
+        logger.warn(
+          { provider, hasDid: Boolean(receivedDid) },
+          "inbound-fax: receiving DID did not resolve to a firm — refusing cross-firm sender match, parking",
+        );
+      } else {
+        const candidates = await db
+          .select({ id: leadsTable.id, fax: leadsTable.hospital_fax })
+          .from(leadsTable)
+          .where(
+            and(
+              eq(leadsTable.pipeline_status, "AWAITING_MED_RECS"),
+              eq(leadsTable.firm_id, firmId),
+            ),
+          );
+        const matches = candidates.filter(
+          (c) => (c.fax || "").replace(/\D/g, "").slice(-10) === digits,
+        );
+        if (matches.length === 1) leadId = matches[0]!.id;
+        else if (matches.length > 1) {
+          logger.warn({ provider, firmId, count: matches.length }, "inbound-fax: ambiguous sender match within firm — parking");
+        }
       }
     }
   }
@@ -1669,12 +1705,20 @@ router.post("/inbound-fax/:provider", async (req, res) => {
 
   try {
     const { applyMedRecordsReceived } = await import("../lib/pipeline/pipeline.js");
-    await applyMedRecordsReceived(leadId, {
+    const out = await applyMedRecordsReceived(leadId, {
       keySuffix: externalId || `nofaxid-${Date.now()}`,
       source: `webhook:inbound_fax_${provider}`,
       payload: { provider, external_fax_id: externalId, sender: senderFaxRaw },
     });
-    res.status(200).json({ ok: true });
+    // Honest response: only claim COMPLETE when the transition actually applied.
+    // An illegal edge (lead not in AWAITING_MED_RECS), firm_unresolved, or a
+    // duplicate parks deterministically — ack 200 (no vendor HTTP retry) but
+    // report applied:false + reason so the caller does not assume completion.
+    const applied = out.transitions.some((t) => t.applied);
+    const reasons = [...new Set(out.transitions.filter((t) => !t.applied).map((t) => t.reason).filter(Boolean))];
+    res.status(200).json(applied
+      ? { ok: true, applied: true }
+      : { ok: true, applied: false, parked: true, reasons });
   } catch (err) {
     // Release the idempotency claim and ask the provider to retry rather than
     // silently acking 200 and dropping a correlated medical-records delivery.

@@ -11,8 +11,13 @@
  * `event_key` derived from the lead id + stage, so a replayed webhook or a
  * re-enqueued job advances the lead at most once.
  */
-import { db, leadsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import {
+  db,
+  leadsTable,
+  documentEnvelopesTable,
+  documentsTable,
+} from "@workspace/db";
+import { eq, and } from "drizzle-orm";
 import { logger } from "../logger";
 import { auditLog } from "../audit";
 import { enqueueJob } from "../queue.js";
@@ -30,41 +35,16 @@ import {
   getNpiAdapter,
   type BgVerdict,
 } from "./adapters.js";
+import { allDocumentsSigned } from "./doc-types.js";
 import type { VerifyProviderInput } from "../npi-verify.js";
+
+// Re-exported so existing importers (webhooks, tests) keep the same surface.
+// The real DOCS_SIGNED gate is `allRequiredDocumentsSigned` in ./doc-types.js,
+// which tracks each of the three required document types independently.
+export { allDocumentsSigned } from "./doc-types.js";
 
 function eventKey(stage: string, leadId: number, suffix?: string): string {
   return suffix ? `${stage}:${leadId}:${suffix}` : `${stage}:${leadId}`;
-}
-
-/**
- * Deterministic "all required documents signed" gate for the DOCS_SIGNED stage.
- *
- * Given the statuses of EVERY envelope ever created for a lead, the lead's
- * active signing packet is considered fully executed when at least one envelope
- * is `signed` AND no envelope is still in flight. Envelopes that reached a
- * terminal-WITHOUT-signature state (declined/voided/expired/cancelled/error) are
- * **ignored**: they are dead/replaced envelopes and must not deadlock the lead
- * forever — a voided draft followed by a signed replacement should still
- * advance. Only an envelope still in flight (created/sent/delivered/viewed/etc.)
- * blocks the advance, so the pipeline never reaches DOCS_SIGNED while a document
- * is genuinely outstanding. The schema has no per-document "required" flag, so
- * the honest deterministic reading is "at least one signed, nothing in flight".
- */
-const DEAD_ENVELOPE_STATUSES: ReadonlySet<string> = new Set([
-  "declined",
-  "voided",
-  "expired",
-  "cancelled",
-  "canceled",
-  "error",
-  "failed",
-]);
-
-export function allDocumentsSigned(envelopeStatuses: readonly string[]): boolean {
-  // Drop dead/replaced envelopes — they no longer represent outstanding work.
-  const live = envelopeStatuses.filter((s) => !DEAD_ENVELOPE_STATUSES.has(s));
-  if (live.length === 0) return false; // nothing actually signed
-  return live.every((s) => s === "signed");
 }
 
 async function getLeadContact(leadId: number): Promise<{ name: string; email: string | null } | null> {
@@ -303,22 +283,163 @@ export async function runNpiForLead(
     }
   }
 
-  transitions.push(
-    await transitionLead({
-      leadId,
-      to,
-      trigger: outcome.verdict === "VERIFIED" ? "npi_verified" : "npi_hold",
-      eventKey: eventKey(outcome.verdict === "VERIFIED" ? "npi_verified" : "npi_hold", leadId, opts.keySuffix),
-      source,
-      payload: { status: outcome.status, provider_npi: outcome.providerNpi },
-    }),
-  );
+  const verifiedTransition = await transitionLead({
+    leadId,
+    to,
+    trigger: outcome.verdict === "VERIFIED" ? "npi_verified" : "npi_hold",
+    eventKey: eventKey(outcome.verdict === "VERIFIED" ? "npi_verified" : "npi_hold", leadId, opts.keySuffix),
+    source,
+    payload: { status: outcome.status, provider_npi: outcome.providerNpi },
+  });
+  transitions.push(verifiedTransition);
+
+  // Spec step 6: once NPI is verified, send the three required e-sign documents
+  // (HIPAA + Retainer + Affidavit). Gated on the NPI_VERIFIED transition having
+  // ACTUALLY applied — a duplicate replay, an illegal edge, or a firm_unresolved
+  // park must not trigger a fresh document send. Non-blocking: a dispatch problem
+  // must not fail the NPI verdict; the lead parks at NPI_VERIFIED for re-dispatch.
+  if (outcome.verdict === "VERIFIED" && verifiedTransition.applied) {
+    try {
+      await sendPipelineDocuments(leadId);
+    } catch (err) {
+      logger.warn({ err, leadId }, "pipeline: sendPipelineDocuments failed (non-blocking)");
+    }
+  }
   return { verdict: outcome.verdict, transitions };
 }
 
 // ===========================================================================
 // STAGE: documents signed → fan-out → awaiting med recs
 // ===========================================================================
+
+/**
+ * Spec step 6 send: dispatch the three required e-sign documents for a lead
+ * whose NPI is verified. The actual envelope creation + provider dispatch is
+ * owned by the existing approval-packet path (`enqueueLeadApprovalPackets` →
+ * `send_esign_packet` worker), which now tags each envelope with its `doc_type`
+ * so the DOCS_SIGNED gate can track HIPAA/Retainer/Affidavit independently.
+ *
+ * This is deliberately a thin wrapper: it records the DOCS_SENT pipeline stage
+ * (idempotent) and then delegates to the live dispatcher. If no matching active
+ * templates exist, the dispatcher logs an honest "no_active_templates" skip and
+ * the lead waits — we never pretend documents were sent.
+ */
+export async function sendPipelineDocuments(
+  leadId: number,
+  opts: { keySuffix?: string; source?: string } = {},
+): Promise<{ transition: TransitionResult | null; dispatched: boolean }> {
+  const source = opts.source ?? "pipeline";
+  // Dispatch FIRST, then record DOCS_SENT only if documents were actually sent.
+  // enqueueLeadApprovalPackets never throws; it returns a structured summary.
+  // Lazy import to avoid a module cycle (workflow-engine → pipeline).
+  const { enqueueLeadApprovalPackets } = await import("../workflow-engine.js");
+  const dispatch = await enqueueLeadApprovalPackets(leadId);
+  // "Documents were sent" is true when we enqueued at least one packet, OR an
+  // idempotent replay found they were already dispatched (genuinely sent before).
+  // If nothing was enqueued and nothing pre-existed (no active templates, no
+  // signer email, all disabled), we did NOT send anything — do not fake DOCS_SENT;
+  // the lead parks at NPI_VERIFIED so an operator/automation can fix and retry.
+  const alreadySent = dispatch.skipped.some((s) => s.reason === "already_dispatched");
+  const dispatched = dispatch.enqueued.length > 0 || alreadySent;
+  if (!dispatched) {
+    logger.info(
+      { leadId, skipped: dispatch.skipped.map((s) => s.reason) },
+      "pipeline: no documents dispatched — holding DOCS_SENT (honest blocker)",
+    );
+    return { transition: null, dispatched: false };
+  }
+  const transition = await transitionLead({
+    leadId,
+    to: PipelineStatus.DOCS_SENT,
+    trigger: "docs_sent",
+    eventKey: eventKey("docs_sent", leadId, opts.keySuffix),
+    source,
+  });
+  return { transition, dispatched: true };
+}
+
+/**
+ * Distribute a SIGNED retainer to its two required destinations:
+ *   A) the attorney of record (lead.assigned_to) — recorded as a handoff, and
+ *   B) the CRM document store (a `documents` row, document_type=retainer_agreement).
+ *
+ * Returns { distributed:false, reason } when the prerequisites are not met (no
+ * signed retainer envelope/PDF, or no attorney assigned) so the caller can park
+ * the lead instead of recording a fake RETAINER_DISTRIBUTED. Idempotent: a
+ * second call when the documents row already exists is a no-op success.
+ */
+async function distributeRetainer(
+  leadId: number,
+  opts: { source: string },
+): Promise<{ distributed: boolean; reason?: string; destinations: string[] }> {
+  // 1. Find a SIGNED retainer envelope with an actual signed artifact.
+  const retainers = await db
+    .select()
+    .from(documentEnvelopesTable)
+    .where(
+      and(
+        eq(documentEnvelopesTable.lead_id, leadId),
+        eq(documentEnvelopesTable.doc_type, "retainer"),
+        eq(documentEnvelopesTable.status, "signed"),
+      ),
+    );
+  const signed = retainers.find((e) => Boolean(e.signed_pdf_path));
+  if (!signed) {
+    return { distributed: false, reason: "no_signed_retainer_pdf", destinations: [] };
+  }
+
+  // 2. Destination A — attorney of record. Without one, we cannot hand off.
+  const [lead] = await db
+    .select({ id: leadsTable.id, assigned_to: leadsTable.assigned_to })
+    .from(leadsTable)
+    .where(eq(leadsTable.id, leadId));
+  const attorneyId = lead?.assigned_to ?? null;
+  if (attorneyId == null) {
+    return { distributed: false, reason: "no_attorney_of_record", destinations: [] };
+  }
+
+  const destinations: string[] = [];
+  try {
+    // Destination A: record the signed-retainer handoff to the attorney.
+    await auditLog("lead", String(leadId), "retainer_distributed_to_attorney", {
+      attorney_user_id: attorneyId,
+      envelope_id: signed.id,
+      signed_pdf_path: signed.signed_pdf_path,
+    });
+    destinations.push(`attorney:${attorneyId}`);
+
+    // Destination B: CRM document store. Idempotent — skip if already stored.
+    const existing = await db
+      .select({ id: documentsTable.id })
+      .from(documentsTable)
+      .where(
+        and(
+          eq(documentsTable.lead_id, leadId),
+          eq(documentsTable.document_type, "retainer_agreement"),
+        ),
+      );
+    if (existing.length === 0) {
+      await db.insert(documentsTable).values({
+        lead_id: leadId,
+        document_type: "retainer_agreement",
+        file_name: `retainer-lead-${leadId}.pdf`,
+        file_url: signed.signed_pdf_path,
+        signed: true,
+        signed_at: signed.signed_at ?? new Date(),
+        notes: `Distributed from signed e-sign envelope #${signed.id}`,
+      });
+    }
+    destinations.push("crm_document_store");
+  } catch (err) {
+    // A real failure mid-distribution: do NOT claim success. The lead parks and
+    // a retry (idempotent) can complete distribution.
+    logger.error({ err, leadId }, "pipeline: retainer distribution failed");
+    return { distributed: false, reason: "distribution_error", destinations };
+  }
+
+  void opts; // source reserved for future per-destination provenance
+  return { distributed: true, destinations };
+}
 
 /**
  * All retainer/HIPAA documents for the lead are signed. Advances
@@ -371,15 +492,30 @@ export async function applyDocumentsSigned(
       }),
     );
   }
-  transitions.push(
-    await transitionLead({
-      leadId,
-      to: PipelineStatus.RETAINER_DISTRIBUTED,
-      trigger: "retainer_distributed",
-      eventKey: eventKey("retainer_distributed", leadId, opts.keySuffix),
-      source,
-    }),
-  );
+  // RETAINER_DISTRIBUTED is a REAL side effect, not a bookkeeping hop: the
+  // signed retainer must reach BOTH destinations — the attorney of record and
+  // the CRM document store — before we record it. If distribution can't happen
+  // (no signed retainer PDF yet, or no attorney assigned), we DO NOT fake the
+  // transition; the lead simply parks at the fan-out and an operator/automation
+  // can retry. This keeps the audit trail honest.
+  const dist = await distributeRetainer(leadId, { source });
+  if (dist.distributed) {
+    transitions.push(
+      await transitionLead({
+        leadId,
+        to: PipelineStatus.RETAINER_DISTRIBUTED,
+        trigger: "retainer_distributed",
+        eventKey: eventKey("retainer_distributed", leadId, opts.keySuffix),
+        source,
+        payload: { destinations: dist.destinations },
+      }),
+    );
+  } else {
+    logger.info(
+      { leadId, reason: dist.reason },
+      "pipeline: retainer not distributed — holding RETAINER_DISTRIBUTED (honest blocker)",
+    );
+  }
   // Advance to AWAITING_MED_RECS only once the HIPAA fax has gone out (that is
   // the gate for medical records). If it has not, the lead waits at the
   // fan-out until the fax dispatches.
