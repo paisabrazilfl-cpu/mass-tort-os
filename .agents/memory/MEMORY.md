@@ -31,4 +31,5 @@
 - [E-sign embedded signing via SMS](esign-embedded-signing-sms.md) — claimant signs via /sign/<token> (mints fresh provider URL on demand); include link whenever createSignerUrl exists, NOT only when send() returned a URL.
 - [markPublic router dual-allowlist](esign-embedded-signing-sms.md) — adding a markPublic router fails rbac-test TWICE: register it in BOTH the `expected` Set AND the ROUTER_PREFIX/ALLOWED_PUBLIC_PREFIXES block in rbac-route-matrix.test.ts.
 - [Lead phone columns](lead-phone-columns.md) — leads have TWO encrypted phone cols (phone=web-form, phone_primary=operator intake); contact logic must read phone || phone_primary.
+- [Twilio toll-free verification](twilio-tollfree-verification.md) — clears 30032; UseCaseCategories are fixed enums, "Invalid use case summary" masks missing BusinessType+EIN, name must match EIN, IN_REVIEW locks edits (use stable Render OptInImageUrls).
 - [n8n intake-pipeline workflows](n8n-intake-pipeline-workflows.md) — rebuilt intake templates as real n8n (orchestrate→CRM-execute); only 4 outbound events exist, bridge can't create creds, e-sign=qualify/fax=auto-on-signed.
