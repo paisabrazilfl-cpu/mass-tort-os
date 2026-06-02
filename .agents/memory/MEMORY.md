@@ -32,4 +32,5 @@
 - [markPublic router dual-allowlist](esign-embedded-signing-sms.md) — adding a markPublic router fails rbac-test TWICE: register it in BOTH the `expected` Set AND the ROUTER_PREFIX/ALLOWED_PUBLIC_PREFIXES block in rbac-route-matrix.test.ts.
 - [Lead phone columns](lead-phone-columns.md) — leads have TWO encrypted phone cols (phone=web-form, phone_primary=operator intake); contact logic must read phone || phone_primary.
 - [Twilio toll-free verification](twilio-tollfree-verification.md) — clears 30032; UseCaseCategories are fixed enums, "Invalid use case summary" masks missing BusinessType+EIN, name must match EIN, IN_REVIEW locks edits (use stable Render OptInImageUrls).
+- [Telnyx SMS wiring](telnyx-sms-wiring.md) — go-live = encrypted vault row + flip workflow_settings global FK; profile create needs whitelisted_destinations:["US"], attach number via /phone_numbers/{id}/messaging, from must be on the profile.
 - [n8n intake-pipeline workflows](n8n-intake-pipeline-workflows.md) — rebuilt intake templates as real n8n (orchestrate→CRM-execute); only 4 outbound events exist, bridge can't create creds, e-sign=qualify/fax=auto-on-signed.
