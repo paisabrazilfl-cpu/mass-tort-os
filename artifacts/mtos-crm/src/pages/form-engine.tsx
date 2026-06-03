@@ -754,6 +754,16 @@ export default function FormEngine() {
                       )}
                     </div>
                     
+                    {/* ── Sources actually checked ── */}
+                    <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-t bg-muted/20 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">Sources checked:</span>
+                      <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> Federal Courts (CourtListener / RECAP)</span>
+                      <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> OFAC Sanctions (US Treasury SDN)</span>
+                      {bgCheckResult.pacer?.ok && (
+                        <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> PACER</span>
+                      )}
+                    </div>
+
                     {bgCheckResult.records && bgCheckResult.records.length > 0 && (
                       <Table>
                         <TableHeader>
@@ -779,8 +789,13 @@ export default function FormEngine() {
                       </Table>
                     )}
 
-                    {/* ── PACER Federal Courts section ── */}
-                    <PacerResultSection pacer={bgCheckResult.pacer} />
+                    {/* ── PACER: only show when it actually ran (configured + results) ── */}
+                    {bgCheckResult.pacer && bgCheckResult.pacer.ok !== false && (
+                      <PacerResultSection pacer={bgCheckResult.pacer} />
+                    )}
+                    {bgCheckResult.pacer?.ok === false && bgCheckResult.pacer.reason !== "NOT_CONFIGURED" && (
+                      <PacerResultSection pacer={bgCheckResult.pacer} />
+                    )}
                   </div>
                 )}
               </CardContent>
