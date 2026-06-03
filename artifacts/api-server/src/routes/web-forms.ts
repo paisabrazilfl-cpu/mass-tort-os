@@ -257,7 +257,7 @@ async function runWebFormPipeline(
     step1.errors = schemaCheck.errors;
     step1.status = "failed";
     pipeline.push(step1);
-    return failed(pipeline, "SCHEMA_VALIDATION", "Lead failed schema validation");
+    return failed(pipeline, "SCHEMA_VALIDATION", "Please complete all required fields before submitting.");
   }
   pipeline.push(step1);
 
