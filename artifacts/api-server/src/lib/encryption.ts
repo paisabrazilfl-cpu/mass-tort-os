@@ -29,12 +29,6 @@ const CURRENT_KEY_VERSION = 1;
 const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
 
 /**
- * Plain object cache to minimize redundant process.env lookups and Buffer allocations.
- * Performance: ~99% reduction in getKey() overhead.
- */
-const keyCache: Record<number, Buffer> = {};
-
-/**
  * Resolve the AES-256 key for a given version. Strict, no silent fallbacks
  * across versions (a missing v2 must NOT silently use v1, or you'd produce
  * v2-tagged ciphertext encrypted with the v1 key — undetectable disaster).
@@ -45,8 +39,6 @@ const keyCache: Record<number, Buffer> = {};
  */
 function getKey(version?: number): Buffer {
   const keyVersion = version ?? CURRENT_KEY_VERSION;
-  if (keyCache[keyVersion]) return keyCache[keyVersion];
-
   const envName = `ENCRYPTION_KEY_V${keyVersion}`;
   let raw = process.env[envName];
   if (!raw && keyVersion === 1) {
@@ -62,9 +54,7 @@ function getKey(version?: number): Buffer {
       `${envName} must be exactly 64 hex characters (32 bytes for AES-256-GCM); got ${raw.length} chars`,
     );
   }
-  const key = Buffer.from(raw, "hex");
-  keyCache[keyVersion] = key;
-  return key;
+  return Buffer.from(raw, "hex");
 }
 
 export function getCurrentKeyVersion(): number {
@@ -187,26 +177,28 @@ export const ENCRYPTED_FIELDS = [
 ] as const;
 
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  const result = { ...data };
+  let result: Record<string, any> | null = null;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
-      }
+    const val = data[field];
+    if (typeof val === "string" && !val.startsWith("enc:")) {
+      if (!result) result = { ...data };
+      result[field] = encrypt(val, field, entityId);
     }
   }
-  return result;
+  return result || data;
 }
 
 export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   if (!data) return data;
-  const result = { ...data };
+  let result: Record<string, any> | null = null;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
+    const val = data[field];
+    if (typeof val === "string" && val.startsWith("enc:")) {
+      if (!result) result = { ...data };
+      result[field] = decrypt(val, field, entityId);
     }
   }
-  return result;
+  return result || data;
 }
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
