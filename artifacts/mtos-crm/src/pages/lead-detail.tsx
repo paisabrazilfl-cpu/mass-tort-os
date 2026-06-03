@@ -216,6 +216,28 @@ export default function LeadDetail() {
     }
   }, [leadId]);
 
+  const openDoc = async (id: number, download = false) => {
+    try {
+      const res = await apiFetchRaw(`/api/documents/${id}/view${download ? "?download=1" : ""}`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      if (download) {
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = "";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 15_000);
+      } else {
+        window.open(blobUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch {
+      toast({ title: "Could not load document", description: "Try again or contact support.", variant: "destructive" });
+    }
+  };
+
   useEffect(() => {
     if (lead && !autoTriggered.current) {
       autoTriggered.current = true;
@@ -831,6 +853,24 @@ export default function LeadDetail() {
                         ) : (
                           <Badge variant="outline">Pending Execution</Badge>
                         )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => openDoc(doc.id, false)}
+                          title="View document"
+                        >
+                          <ExternalLink className="h-3 w-3 mr-1" />View
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => openDoc(doc.id, true)}
+                          title="Download document"
+                        >
+                          <Download className="h-3 w-3" />
+                        </Button>
                       </div>
                     </div>
                   ))}
