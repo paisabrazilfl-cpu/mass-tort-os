@@ -429,9 +429,13 @@ async function runWebFormPipeline(
       if (stateCode) setExpr.state = sql`COALESCE(${leadsTable.state}, ${stateCode})`;
       if (briefStory) setExpr.notes = sql`COALESCE(${leadsTable.notes}, ${briefStory})`;
       if (hospitalFaxE164) setExpr.hospital_fax = sql`COALESCE(${leadsTable.hospital_fax}, ${hospitalFaxE164})`;
-      // TrustedForm certificate URL: fill-empty so the earliest cert is kept.
+      // TrustedForm fields: fill-empty so the earliest cert / ping URL / token are kept.
       const tfCertUrl = typeof body.trustedform_cert_url === "string" ? body.trustedform_cert_url : null;
       if (tfCertUrl) setExpr.trustedform_cert_url = sql`COALESCE(${leadsTable.trustedform_cert_url}, ${tfCertUrl})`;
+      const tfPingUrl = typeof body.trustedform_ping_url === "string" ? body.trustedform_ping_url : null;
+      if (tfPingUrl) setExpr.trustedform_ping_url = sql`COALESCE(${leadsTable.trustedform_ping_url}, ${tfPingUrl})`;
+      const tfCertToken = typeof body.trustedform_cert_token === "string" ? body.trustedform_cert_token : null;
+      if (tfCertToken) setExpr.trustedform_cert_token = sql`COALESCE(${leadsTable.trustedform_cert_token}, ${tfCertToken})`;
       // tcpa_consent is the one field that should ratchet UP — once
       // consented, stay consented. Never demote to false.
       if (tcpaConsented) setExpr.tcpa_consent = sql`${leadsTable.tcpa_consent} OR true`;
@@ -469,10 +473,15 @@ async function runWebFormPipeline(
           notes: briefStory,
           hospital_fax: hospitalFaxE164,
           tcpa_consent: tcpaConsented,
-          // TrustedForm certificate URL — sent by the embed's hidden field at
-          // submit time and forwarded in the JSON payload. Null when TrustedForm
-          // could not load (ad blocker, no-JS) — we record it best-effort.
+          // TrustedForm fields — sent by the embed's hidden fields at submit time
+          // and forwarded in the JSON payload. Null when TrustedForm could not
+          // load (ad blocker, no-JS) — recorded best-effort, never blocking.
           trustedform_cert_url: typeof body.trustedform_cert_url === "string" ? body.trustedform_cert_url : null,
+          trustedform_ping_url: typeof body.trustedform_ping_url === "string" ? body.trustedform_ping_url : null,
+          trustedform_cert_token: typeof body.trustedform_cert_token === "string" ? body.trustedform_cert_token : null,
+          trustedform_ip: null,
+          trustedform_user_agent: null,
+          trustedform_timestamp: new Date(),
           // Task #15: canonical dedup hash over plaintext (tort|email|phone10).
           // Returns null if any component is missing — column stays NULL and
           // the dedup helper falls back to the email/phone scan paths.
@@ -1137,6 +1146,12 @@ function init(){
   var tfInput=document.createElement("input");
   tfInput.type="hidden";tfInput.name="xxTrustedFormCertUrl";tfInput.id="xxTrustedFormCertUrl_0";tfInput.value="";
   form.appendChild(tfInput);
+  var tfPingInput=document.createElement("input");
+  tfPingInput.type="hidden";tfPingInput.name="xxTrustedFormPingUrl";tfPingInput.id="xxTrustedFormPingUrl_0";tfPingInput.value="";
+  form.appendChild(tfPingInput);
+  var tfTokInput=document.createElement("input");
+  tfTokInput.type="hidden";tfTokInput.name="xxTrustedFormCertToken";tfTokInput.id="xxTrustedFormCertToken_0";tfTokInput.value="";
+  form.appendChild(tfTokInput);
   form.addEventListener("submit",function(ev){
     ev.preventDefault();
     msg.innerHTML="";
@@ -1160,6 +1175,10 @@ function init(){
     if(window.__MTOS_GOOGLE_ID_TOKEN__)payload.google_id_token=window.__MTOS_GOOGLE_ID_TOKEN__;
     var tfCert=document.getElementById("xxTrustedFormCertUrl_0");
     if(tfCert&&tfCert.value)payload.trustedform_cert_url=tfCert.value;
+    var tfPing=document.getElementById("xxTrustedFormPingUrl_0");
+    if(tfPing&&tfPing.value)payload.trustedform_ping_url=tfPing.value;
+    var tfTok=document.getElementById("xxTrustedFormCertToken_0");
+    if(tfTok&&tfTok.value)payload.trustedform_cert_token=tfTok.value;
     fetch(DATA.api+"/"+DATA.tortId+"/submit"+(DATA.vt?"?v="+encodeURIComponent(DATA.vt):""),{
       method:"POST",
       headers:{"Content-Type":"application/json"},
@@ -1190,10 +1209,11 @@ function init(){
   root.appendChild(cont);
 }
 // TrustedForm Certify Web SDK — injected once per page regardless of how many
-// MTOS embeds are present. Adds a hidden xxTrustedFormCertUrl field (above) that
-// TrustedForm populates with the certificate URL; we forward it on submit.
-// use_tagged_consent=true enables ActiveProspect's consent-tagging feature.
-(function(){if(document.getElementById("mtos-tf-loader"))return;var tf=document.createElement("script");tf.id="mtos-tf-loader";tf.type="text/javascript";tf.async=true;tf.src="https://api.trustedform.com/trustedform.js?field=xxTrustedFormCertUrl&use_tagged_consent=true&l="+(new Date().getTime())+Math.random();var s=document.getElementsByTagName("script")[0];if(s&&s.parentNode)s.parentNode.insertBefore(tf,s);else(document.head||document.body||document.documentElement).appendChild(tf);})();
+// MTOS embeds are present. Populates the three hidden fields above (cert URL,
+// ping URL, cert token) which we forward on submit.
+// use_tagged_consent=true  — ActiveProspect consent-tagging feature.
+// ping_field=xxTrustedFormPingUrl — enables server-side ping verification.
+(function(){if(document.getElementById("mtos-tf-loader"))return;var tf=document.createElement("script");tf.id="mtos-tf-loader";tf.type="text/javascript";tf.async=true;tf.src="https://api.trustedform.com/trustedform.js?field=xxTrustedFormCertUrl&ping_field=xxTrustedFormPingUrl&use_tagged_consent=true&l="+(new Date().getTime())+Math.random();var s=document.getElementsByTagName("script")[0];if(s&&s.parentNode)s.parentNode.insertBefore(tf,s);else(document.head||document.body||document.documentElement).appendChild(tf);var ns=document.createElement("noscript");ns.innerHTML='<img src="https://api.trustedform.com/ns.gif" alt="" style="display:none" />';(document.head||document.body||document.documentElement).appendChild(ns);})();
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",init);else init();
 })();`;
 }
