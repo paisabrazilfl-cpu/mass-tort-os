@@ -47,11 +47,21 @@ After the records propagate, Render auto-verifies the domains and issues TLS cer
 
 Security: rotate the `RENDER_API_KEY` after go-live, since it was used during domain setup.
 
-# Git Push / Branch Convention
+# Git Push / Branch Convention ⚠️ HARD RULE — NO EXCEPTIONS
 
-Every push to GitHub goes to a **new dedicated branch** — never a force-push, reset, or rebase over `main`. Branch names are **methodical notes, never random**: always `YYYY-MM-DD` followed by a short description of what changed (e.g. `2026-05-31-automations-abby-planner-crm-read`). Each pushed branch must represent the **full latest version of the CRM merged with zero loss of functionality** — it contains every prior feature plus the new work; never drop existing work when creating it.
+**Every single push to GitHub MUST follow these rules exactly. No deviation. No shortcuts.**
 
-Operational note: the **main agent is platform-blocked from all git write operations** (even creating a local branch fails). Every push must therefore be executed by a **task agent** in its isolated environment — propose/run a project task to perform it, never expect the main agent to push.
+1. **Always a new dedicated branch** — never push directly to `main`, never force-push, never reset or rebase over `main`.
+
+2. **Branch name = methodical note, always `YYYY-MM-DD-what-changed`** — the date first, then a short slug describing what changed (e.g. `2026-06-03-bg-check-ui-fix`, `2026-05-31-automations-abby-planner-crm-read`). Never a bare date, never a random name, never an auto-generated string.
+
+3. **The branch must be the full latest version of the CRM with zero loss of functionality** — merge latest main into the branch before pushing so it contains every prior feature plus the new work. No feature may be dropped or regressed.
+
+4. **Use the GitHub Merges API when a local git fetch is blocked** — push the feature branch first (main agent CAN push new branches), then call `POST /repos/{owner}/{repo}/merges` to merge it into `main` server-side. Never force-push to resolve divergence.
+
+5. **After the GitHub push, trigger Render deploys** — both `mtos-api` (srv-d8ea7h3bc2fs73ccsjvg) and `mtos-worker` (srv-d8ea7hh9rddc73eltfvg) via `POST /api/render.com/v1/services/{id}/deploys`.
+
+Reinforced by owner on 2026-06-03. This rule was set initially on 2026-05-31 and is a standing permanent instruction.
 
 # System Architecture
 
