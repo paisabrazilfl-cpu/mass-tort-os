@@ -261,29 +261,6 @@ async function runWebFormPipeline(
   }
   pipeline.push(step1);
 
-  // STEP 1b: Contact preference — a required, mutually-exclusive choice the
-  // visitor makes right before submitting. Exactly one of "agent" (a human
-  // reaches out) or "text_email" (self-serve via SMS + email). The embed
-  // enforces this client-side, but the server is the source of truth, so we
-  // re-validate and reject anything that isn't one of the two known values.
-  const prefStep: PipelineStep = { name: "CONTACT_PREFERENCE", status: "passed", errors: [] };
-  const contactPreferenceRaw = String(body.contact_preference ?? "").trim();
-  const contactPreference =
-    contactPreferenceRaw === "agent" || contactPreferenceRaw === "text_email"
-      ? contactPreferenceRaw
-      : null;
-  if (!contactPreference) {
-    prefStep.errors = ["MISSING_OR_INVALID_CONTACT_PREFERENCE"];
-    prefStep.status = "failed";
-    pipeline.push(prefStep);
-    return failed(
-      pipeline,
-      "CONTACT_PREFERENCE",
-      "Please choose how you'd like us to proceed before submitting.",
-    );
-  }
-  pipeline.push(prefStep);
-
   // STEP 2: Eligibility rules (server-enforced if-then logic).
   const step2: PipelineStep = { name: "ELIGIBILITY_RULES", status: "passed", errors: [] };
   const blockedMessages: string[] = [];
@@ -455,10 +432,6 @@ async function runWebFormPipeline(
       // tcpa_consent is the one field that should ratchet UP — once
       // consented, stay consented. Never demote to false.
       if (tcpaConsented) setExpr.tcpa_consent = sql`${leadsTable.tcpa_consent} OR true`;
-      // Fill-empty, consistent with the other identifying fields above: only
-      // record the choice if the existing lead hasn't already captured one.
-      if (contactPreference)
-        setExpr.contact_preference = sql`COALESCE(${leadsTable.contact_preference}, ${contactPreference})`;
       await db
         .update(leadsTable)
         .set(setExpr as Partial<typeof leadsTable.$inferInsert>)
@@ -493,7 +466,6 @@ async function runWebFormPipeline(
           notes: briefStory,
           hospital_fax: hospitalFaxE164,
           tcpa_consent: tcpaConsented,
-          contact_preference: contactPreference,
           // Task #15: canonical dedup hash over plaintext (tort|email|phone10).
           // Returns null if any component is missing — column stays NULL and
           // the dedup helper falls back to the email/phone scan paths.
@@ -619,7 +591,6 @@ async function runWebFormPipeline(
           state: stateCode,
           tort_type: config.label,
           hospital_fax: hospitalFaxE164,
-          contact_preference: contactPreference,
         },
       },
       // Web-form submissions are tenant-less at intake (the lead has no
@@ -633,38 +604,6 @@ async function runWebFormPipeline(
       source: `web_form_${tortId}`,
     });
 
-    // Fire the choice-specific automation trigger. "agent" and "text_email"
-    // each get their own event so an operator can later attach a different
-    // workflow to each path. These are REAL trigger events that currently
-    // fan out to zero workflows (dispatchTrigger no-ops when nothing matches)
-    // — the actual automations are wired up later. No placeholder side effects.
-    const preferenceTrigger =
-      contactPreference === "agent"
-        ? "trigger.contact_pref_agent"
-        : "trigger.contact_pref_text_email";
-    void dispatchTrigger(preferenceTrigger, {
-      input: {
-        tort_id: tortId,
-        tort_label: config.label,
-        contact_preference: contactPreference,
-        lead: {
-          id: leadId,
-          first_name: firstName,
-          last_name: lastName,
-          email: emailValue || null,
-          state: stateCode,
-          tort_type: config.label,
-        },
-      },
-      firmId: null,
-      source: `web_form_${tortId}`,
-    });
-
-    // Durable, queryable proof of the contact-method choice for compliance.
-    void auditLog("lead", String(leadId), "web_form_contact_preference", {
-      tort_id: tortId,
-      contact_preference: contactPreference,
-    }).catch((err) => logger.warn({ err, leadId }, "contact-preference audit failed"));
   }
 
   // STEP 6: Optional confirmation email.
@@ -1165,7 +1104,7 @@ function ruleFails(rule,val){
 function init(){
   var root=document.getElementById("mtos-web-form")||document.querySelector(".mtos-web-form");
   if(!root){console.warn("MTOS web form: container #mtos-web-form not found");return;}
-  var style=el("style",{text:".mtos-wf{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;width:100%;max-width:640px;margin:0 auto;padding:16px;color:#0f172a;line-height:1.4}.mtos-wf *,.mtos-wf *::before,.mtos-wf *::after{box-sizing:border-box}.mtos-wf h2{margin:0 0 8px 0;font-size:22px;line-height:1.25;word-wrap:break-word}.mtos-wf .wf-sub{color:#475569;margin:0 0 20px 0;font-size:15px}.mtos-wf .wf-section{border:none;padding:0;margin:0 0 24px 0;min-width:0}.mtos-wf legend{font-weight:600;font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:#0f172a;margin-bottom:12px;padding:0;display:block;width:100%}.mtos-wf .wf-row{margin-bottom:14px;min-width:0}.mtos-wf .wf-grid{display:grid;grid-template-columns:1fr;gap:14px;margin-bottom:14px}.mtos-wf .wf-label{display:block;font-size:13px;font-weight:500;margin-bottom:6px;word-wrap:break-word}.mtos-wf .wf-req-star{color:#dc2626}.mtos-wf input[type=text],.mtos-wf input[type=email],.mtos-wf input[type=tel],.mtos-wf input[type=number],.mtos-wf input[type=date],.mtos-wf select,.mtos-wf textarea{display:block;width:100%;max-width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius:8px;font-size:16px;font-family:inherit;background:#fff;color:#0f172a;-webkit-appearance:none;appearance:none;min-height:44px}.mtos-wf select{background-image:url(data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%228%22%20viewBox%3D%220%200%2012%208%22%3E%3Cpath%20fill%3D%22%23475569%22%20d%3D%22M6%208L0%200h12z%22%2F%3E%3C%2Fsvg%3E);background-repeat:no-repeat;background-position:right 14px center;padding-right:36px}.mtos-wf input:focus,.mtos-wf select:focus,.mtos-wf textarea:focus{outline:none;border-color:#0f172a;box-shadow:0 0 0 3px rgba(15,23,42,.12)}.mtos-wf textarea{resize:vertical;min-height:96px;line-height:1.5}.mtos-wf .wf-radio-group{display:flex;flex-direction:column;gap:8px}.mtos-wf .wf-radio-opt{display:flex;align-items:center;gap:10px;font-size:15px;cursor:pointer;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;min-height:44px;background:#fff}.mtos-wf .wf-radio-opt:hover{background:#f8fafc}.mtos-wf .wf-radio-opt input[type=radio]{width:18px;height:18px;margin:0;flex-shrink:0;accent-color:#0f172a}.mtos-wf .wf-checkbox-row{display:flex;align-items:flex-start;gap:10px;padding:4px 0}.mtos-wf .wf-checkbox-row input[type=checkbox]{width:20px;height:20px;margin-top:1px;flex-shrink:0;accent-color:#0f172a}.mtos-wf .wf-cb-label{font-size:14px;color:#334155;line-height:1.45;cursor:pointer;flex:1;min-width:0;word-wrap:break-word}.mtos-wf .wf-helper{font-size:12px;color:#64748b;margin-top:6px;line-height:1.4}.mtos-wf .wf-error{font-size:12px;color:#dc2626;margin-top:4px;min-height:0}.mtos-wf button{background:#0f172a;color:#fff;border:0;padding:14px 20px;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;width:100%;margin-top:8px;min-height:48px;-webkit-appearance:none;appearance:none}.mtos-wf button:hover:not(:disabled){background:#1e293b}.mtos-wf button:disabled{opacity:.5;cursor:not-allowed}.mtos-wf .wf-block{background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:12px 14px;border-radius:8px;font-size:14px;margin-top:14px;line-height:1.45}.mtos-wf .wf-success{background:#f0fdf4;border:1px solid #86efac;color:#166534;padding:16px 18px;border-radius:8px;font-size:15px;line-height:1.5}@media (min-width:480px){.mtos-wf .wf-radio-group{flex-direction:row;flex-wrap:wrap}.mtos-wf .wf-radio-opt{flex:0 1 auto;min-width:120px}}@media (min-width:640px){.mtos-wf{padding:24px}.mtos-wf h2{font-size:26px}.mtos-wf .wf-grid-2{grid-template-columns:1fr 1fr}.mtos-wf button{width:auto;min-width:200px}}@media (max-width:380px){.mtos-wf{padding:12px}.mtos-wf h2{font-size:20px}.mtos-wf .wf-sub{font-size:14px}.mtos-wf legend{font-size:13px}}"});
+  var style=el("style",{text:".mtos-wf{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;width:100%;max-width:640px;margin:0 auto;padding:16px;color:#0f172a;line-height:1.4}.mtos-wf *,.mtos-wf *::before,.mtos-wf *::after{box-sizing:border-box}.mtos-wf h2{margin:0 0 8px 0;font-size:22px;line-height:1.25;word-wrap:break-word}.mtos-wf .wf-sub{color:#475569;margin:0 0 20px 0;font-size:15px}.mtos-wf .wf-section{border:none;padding:0;margin:0 0 24px 0;min-width:0}.mtos-wf legend{font-weight:600;font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:#0f172a;margin-bottom:12px;padding:0;display:block;width:100%}.mtos-wf .wf-row{margin-bottom:14px;min-width:0}.mtos-wf .wf-grid{display:grid;grid-template-columns:1fr;gap:14px;margin-bottom:14px}.mtos-wf .wf-label{display:block;font-size:13px;font-weight:500;margin-bottom:6px;word-wrap:break-word}.mtos-wf .wf-req-star{color:#dc2626}.mtos-wf input[type=text],.mtos-wf input[type=email],.mtos-wf input[type=tel],.mtos-wf input[type=number],.mtos-wf input[type=date],.mtos-wf select,.mtos-wf textarea{display:block;width:100%;max-width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius:8px;font-size:16px;font-family:inherit;background:#fff;color:#0f172a;-webkit-appearance:none;appearance:none;min-height:44px}.mtos-wf select{background-image:url(data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%228%22%20viewBox%3D%220%200%2012%208%22%3E%3Cpath%20fill%3D%22%23475569%22%20d%3D%22M6%208L0%200h12z%22%2F%3E%3C%2Fsvg%3E);background-repeat:no-repeat;background-position:right 14px center;padding-right:36px}.mtos-wf input:focus,.mtos-wf select:focus,.mtos-wf textarea:focus{outline:none;border-color:#0f172a;box-shadow:0 0 0 3px rgba(15,23,42,.12)}.mtos-wf textarea{resize:vertical;min-height:96px;line-height:1.5}.mtos-wf .wf-radio-group{display:flex;flex-direction:column;gap:8px}.mtos-wf .wf-radio-opt{display:flex;align-items:center;gap:10px;font-size:15px;cursor:pointer;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;min-height:44px;background:#fff}.mtos-wf .wf-radio-opt:hover{background:#f8fafc}.mtos-wf .wf-radio-opt input[type=radio]{width:18px;height:18px;margin:0;flex-shrink:0;accent-color:#0f172a}.mtos-wf .wf-checkbox-row{display:flex;align-items:flex-start;gap:10px;padding:4px 0}.mtos-wf .wf-checkbox-row input[type=checkbox]{width:20px;height:20px;margin-top:1px;flex-shrink:0;accent-color:#0f172a}.mtos-wf .wf-cb-label{font-size:14px;color:#334155;line-height:1.45;cursor:pointer;flex:1;min-width:0;word-wrap:break-word}.mtos-wf .wf-helper{font-size:12px;color:#64748b;margin-top:6px;line-height:1.4}.mtos-wf .wf-error{font-size:12px;color:#dc2626;margin-top:4px;min-height:0}.mtos-wf button{background:#0f172a;color:#fff;border:0;padding:14px 20px;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;width:100%;margin-top:8px;min-height:48px;-webkit-appearance:none;appearance:none}.mtos-wf button:hover:not(:disabled){background:#1e293b}.mtos-wf button:disabled{opacity:.5;cursor:not-allowed}.mtos-wf .wf-block{background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:12px 14px;border-radius:8px;font-size:14px;margin-top:14px;line-height:1.45}.mtos-wf .wf-success{background:#f0fdf4;border:1px solid #86efac;color:#166534;padding:16px 18px;border-radius:8px;font-size:15px;line-height:1.5}@media (min-width:480px){.mtos-wf .wf-radio-group{flex-direction:row;flex-wrap:wrap}.mtos-wf .wf-radio-opt{flex:0 1 auto;min-width:120px}}@media (min-width:640px){.mtos-wf{padding:24px}.mtos-wf h2{font-size:26px}.mtos-wf .wf-grid-2{grid-template-columns:1fr 1fr}.mtos-wf button{width:auto;min-width:200px}}@media (max-width:380px){.mtos-wf{padding:12px}.mtos-wf h2{font-size:20px}.mtos-wf .wf-sub{font-size:14px}.mtos-wf legend{font-size:13px}}.mtos-wf .wf-email-notice{display:flex;align-items:flex-start;gap:16px;background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);border:2px solid #2563eb;border-radius:12px;padding:20px 22px;margin-bottom:24px}.mtos-wf .wf-email-notice-icon{font-size:30px;line-height:1;flex-shrink:0;margin-top:2px}.mtos-wf .wf-email-notice-body strong{display:block;font-size:16px;font-weight:700;color:#1e40af;margin-bottom:6px;line-height:1.3}.mtos-wf .wf-email-notice-body p{margin:0;font-size:14px;color:#1e3a8a;line-height:1.6}.mtos-wf .wf-success-wrap{background:#f0fdf4;border:2px solid #16a34a;border-radius:12px;padding:20px 22px}.mtos-wf .wf-success-wrap p{margin:0 0 16px 0;font-size:15px;color:#166534;font-weight:600;line-height:1.5}.mtos-wf .wf-email-check{display:flex;align-items:flex-start;gap:14px;background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);border:2px solid #2563eb;border-radius:10px;padding:16px 18px;margin-top:4px}.mtos-wf .wf-email-check-icon{font-size:28px;line-height:1;flex-shrink:0;margin-top:2px}.mtos-wf .wf-email-check-body strong{display:block;font-size:15px;font-weight:700;color:#1e40af;margin-bottom:4px}.mtos-wf .wf-email-check-body p{margin:0;font-size:13px;color:#1e3a8a;line-height:1.55}"});
   document.head.appendChild(style);
   var cont=el("div",{"class":"mtos-wf"});
   if(DATA.introHeadline)cont.appendChild(el("h2",{text:DATA.introHeadline}));
@@ -1177,21 +1116,13 @@ function init(){
     var sec=buildSection(s[0],s[1],fs);
     if(sec)form.appendChild(sec);
   });
-  var prefFs=el("fieldset",{"class":"wf-section wf-section-preference"});
-  prefFs.appendChild(el("legend",{text:"How would you like us to proceed?"}));
-  prefFs.appendChild(el("p",{"class":"wf-sub",text:"Choose one option below — you can select only one."}));
-  var prefOpts=[["agent","I wish to be contacted by an Agent"],["text_email","I wish to do all via Text message and Email"]];
-  var prefGroup=el("div",{"class":"wf-radio-group"});
-  prefOpts.forEach(function(o,i){
-    var pid="wf_contact_preference_"+i;
-    var plab=el("label",{"for":pid,"class":"wf-radio-opt"});
-    plab.appendChild(el("input",{type:"radio",name:"contact_preference",id:pid,value:o[0]}));
-    plab.appendChild(el("span",{text:o[1]}));
-    prefGroup.appendChild(plab);
-  });
-  prefFs.appendChild(prefGroup);
-  prefFs.appendChild(el("div",{"class":"wf-error","id":"wfe_contact_preference"}));
-  form.appendChild(prefFs);
+  var emailNotice=el("div",{"class":"wf-email-notice"});
+  emailNotice.appendChild(el("div",{"class":"wf-email-notice-icon",text:"\u2709\ufe0f"}));
+  var noticeBody=el("div",{"class":"wf-email-notice-body"});
+  noticeBody.appendChild(el("strong",{text:"IMPORTANT \u2014 Check Your Email After Submitting"}));
+  noticeBody.appendChild(el("p",{text:"Your case confirmation, next steps, and critical documents will be sent to the email address you provided. Please check your inbox immediately after submitting \u2014 and check your spam or junk folder if you don\u2019t see it within a few minutes."}));
+  emailNotice.appendChild(noticeBody);
+  form.appendChild(emailNotice);
   var msg=el("div",{"class":"wf-msg"});
   var btn=el("button",{type:"submit",text:"Submit"});
   form.appendChild(msg);
@@ -1202,18 +1133,6 @@ function init(){
     btn.disabled=true;btn.textContent="Submitting…";
     var payload={};
     DATA.fields.forEach(function(f){payload[f.key]=readVal(f);});
-    // Required, mutually-exclusive contact preference (server re-validates).
-    var prefVal="";var prefRadios=document.getElementsByName("contact_preference");
-    for(var pj=0;pj<prefRadios.length;pj++){if(prefRadios[pj].checked)prefVal=prefRadios[pj].value;}
-    var prefErrEl=document.getElementById("wfe_contact_preference");
-    if(prefErrEl)prefErrEl.textContent="";
-    if(prefVal!=="agent"&&prefVal!=="text_email"){
-      if(prefErrEl)prefErrEl.textContent="Please choose how you'd like us to proceed.";
-      msg.appendChild(el("div",{"class":"wf-block",text:"Please choose how you'd like us to proceed before submitting."}));
-      btn.disabled=false;btn.textContent="Submit";
-      return;
-    }
-    payload.contact_preference=prefVal;
     // Client-side eligibility hint (server is the source of truth).
     for(var i=0;i<DATA.rules.length;i++){
       var r=DATA.rules[i];
@@ -1237,7 +1156,14 @@ function init(){
       btn.disabled=false;btn.textContent="Submit";
       if(out.status===200&&out.body.status==="success"){
         cont.innerHTML="";
-        cont.appendChild(el("div",{"class":"wf-success",text:out.body.message||"Thank you. A paralegal will reach out shortly."}));
+        var sw=el("div",{"class":"wf-success-wrap"});
+        sw.appendChild(el("p",{text:out.body.message||"\u2705 Your claim review has been submitted successfully. Our team will reach out to you shortly."}));
+        var ec=el("div",{"class":"wf-email-check"});
+        ec.appendChild(el("div",{"class":"wf-email-check-icon",text:"\u2709\ufe0f"}));
+        var ecb=el("div",{"class":"wf-email-check-body"});
+        ecb.appendChild(el("strong",{text:"Check Your Email Now"}));
+        ecb.appendChild(el("p",{text:"Your confirmation and next steps have been sent to the email address you provided. Please check your inbox \u2014 and your spam or junk folder \u2014 right away."}));
+        ec.appendChild(ecb);sw.appendChild(ec);cont.appendChild(sw);
         return;
       }
       var m=out.body.message||"There was a problem. Please check your answers and try again.";
