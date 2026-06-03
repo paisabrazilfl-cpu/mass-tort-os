@@ -429,6 +429,9 @@ async function runWebFormPipeline(
       if (stateCode) setExpr.state = sql`COALESCE(${leadsTable.state}, ${stateCode})`;
       if (briefStory) setExpr.notes = sql`COALESCE(${leadsTable.notes}, ${briefStory})`;
       if (hospitalFaxE164) setExpr.hospital_fax = sql`COALESCE(${leadsTable.hospital_fax}, ${hospitalFaxE164})`;
+      // TrustedForm certificate URL: fill-empty so the earliest cert is kept.
+      const tfCertUrl = typeof body.trustedform_cert_url === "string" ? body.trustedform_cert_url : null;
+      if (tfCertUrl) setExpr.trustedform_cert_url = sql`COALESCE(${leadsTable.trustedform_cert_url}, ${tfCertUrl})`;
       // tcpa_consent is the one field that should ratchet UP — once
       // consented, stay consented. Never demote to false.
       if (tcpaConsented) setExpr.tcpa_consent = sql`${leadsTable.tcpa_consent} OR true`;
@@ -466,6 +469,10 @@ async function runWebFormPipeline(
           notes: briefStory,
           hospital_fax: hospitalFaxE164,
           tcpa_consent: tcpaConsented,
+          // TrustedForm certificate URL — sent by the embed's hidden field at
+          // submit time and forwarded in the JSON payload. Null when TrustedForm
+          // could not load (ad blocker, no-JS) — we record it best-effort.
+          trustedform_cert_url: typeof body.trustedform_cert_url === "string" ? body.trustedform_cert_url : null,
           // Task #15: canonical dedup hash over plaintext (tort|email|phone10).
           // Returns null if any component is missing — column stays NULL and
           // the dedup helper falls back to the email/phone scan paths.
@@ -1127,6 +1134,9 @@ function init(){
   var btn=el("button",{type:"submit",text:"Submit"});
   form.appendChild(msg);
   form.appendChild(btn);
+  var tfInput=document.createElement("input");
+  tfInput.type="hidden";tfInput.name="xxTrustedFormCertUrl";tfInput.id="xxTrustedFormCertUrl_0";tfInput.value="";
+  form.appendChild(tfInput);
   form.addEventListener("submit",function(ev){
     ev.preventDefault();
     msg.innerHTML="";
@@ -1148,6 +1158,8 @@ function init(){
       return;
     }
     if(window.__MTOS_GOOGLE_ID_TOKEN__)payload.google_id_token=window.__MTOS_GOOGLE_ID_TOKEN__;
+    var tfCert=document.getElementById("xxTrustedFormCertUrl_0");
+    if(tfCert&&tfCert.value)payload.trustedform_cert_url=tfCert.value;
     fetch(DATA.api+"/"+DATA.tortId+"/submit"+(DATA.vt?"?v="+encodeURIComponent(DATA.vt):""),{
       method:"POST",
       headers:{"Content-Type":"application/json"},
@@ -1177,6 +1189,11 @@ function init(){
   root.innerHTML="";
   root.appendChild(cont);
 }
+// TrustedForm Certify Web SDK — injected once per page regardless of how many
+// MTOS embeds are present. Adds a hidden xxTrustedFormCertUrl field (above) that
+// TrustedForm populates with the certificate URL; we forward it on submit.
+// use_tagged_consent=true enables ActiveProspect's consent-tagging feature.
+(function(){if(document.getElementById("mtos-tf-loader"))return;var tf=document.createElement("script");tf.id="mtos-tf-loader";tf.type="text/javascript";tf.async=true;tf.src="https://api.trustedform.com/trustedform.js?field=xxTrustedFormCertUrl&use_tagged_consent=true&l="+(new Date().getTime())+Math.random();var s=document.getElementsByTagName("script")[0];if(s&&s.parentNode)s.parentNode.insertBefore(tf,s);else(document.head||document.body||document.documentElement).appendChild(tf);})();
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",init);else init();
 })();`;
 }

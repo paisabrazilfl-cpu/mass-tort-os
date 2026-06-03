@@ -1604,7 +1604,7 @@ function section(title,children,opts){
   tf.type="text/javascript";
   tf.async=true;
   // TrustedForm only serves via HTTPS; force https regardless of host protocol.
-  tf.src="https://api.trustedform.com/trustedform.js?field=xxTrustedFormCertUrl&ping_field=xxTrustedFormPingUrl&l="+(new Date().getTime())+Math.random();
+  tf.src="https://api.trustedform.com/trustedform.js?field=xxTrustedFormCertUrl&ping_field=xxTrustedFormPingUrl&use_tagged_consent=true&l="+(new Date().getTime())+Math.random();
   var first=document.getElementsByTagName("script")[0];
   if(first&&first.parentNode){first.parentNode.insertBefore(tf,first);}
   else{(document.head||document.body||document.documentElement).appendChild(tf);}
