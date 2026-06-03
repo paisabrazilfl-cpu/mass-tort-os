@@ -165,7 +165,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
   },
   {
     type: "logic.loop", label: "Loop (forEach)", category: "logic",
-    description: "Iterate an array. The branch downstream runs once per item.",
+    description: "Passes the full array downstream as `items`. Note: v1 does NOT run once-per-item — downstream receives the whole array. Use a Transform node to iterate over individual elements.",
     icon: "Repeat", color: "bg-amber-500",
     params: [
       { key: "arrayPath", label: "Array path", type: "string", placeholder: "input.leads", required: true },
@@ -174,7 +174,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
   },
   {
     type: "logic.delay", label: "Delay / Wait", category: "logic",
-    description: "Pause the workflow for N seconds.",
+    description: "Pause the workflow inline for up to 30 seconds (hard cap). For longer waits use a scheduled trigger instead.",
     icon: "Hourglass", color: "bg-amber-500",
     params: [
       { key: "seconds", label: "Seconds", type: "number", default: 5, required: true },
@@ -193,7 +193,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
   },
   {
     type: "data.transform", label: "Transform (JS)", category: "data",
-    description: "Run arbitrary JS to reshape data. Return the new payload.",
+    description: "Run JS to reshape data inside an isolated sandbox (no Node globals, 5 s timeout). Return the new payload.",
     icon: "Wand2", color: "bg-sky-600",
     params: [
       { key: "code", label: "Body of `(input, vars) => …`", type: "code", language: "javascript", placeholder: "return { ...input, full_name: input.first + ' ' + input.last };", required: true },
@@ -561,7 +561,7 @@ export const NODE_CATALOG: NodeDefinition[] = [
   // ──────────────── AI Agents (extended) ────────────────
   {
     type: "ai.agent", label: "AI Agent (Autonomous)", category: "ai",
-    description: "Run an autonomous LLM agent with tool access (CRM, search, etc).",
+    description: "Single-turn LLM completion. ⚠️ maxSteps > 1 is not yet implemented — requesting multiple steps routes to the `max_steps` branch for human review.",
     icon: "Bot", color: "bg-fuchsia-600",
     params: [
       { key: "goal", label: "Goal / instructions", type: "text", required: true, placeholder: "Qualify this lead, run a background check, and route to the right paralegal." },

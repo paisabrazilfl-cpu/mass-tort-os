@@ -1019,6 +1019,20 @@ export async function runSubmissionPipeline(req: Request, res: Response): Promis
       computeAndPersistLeadScore(lead.id).catch(() => {});
     }
 
+    // Intake-to-Med-Recs pipeline: bring the lead in (NEW → BG_CHECK_PENDING)
+    // and enqueue the background check. Idempotent and non-blocking — a failure
+    // here must not fail the claimant's submission.
+    {
+      const leadIdForPipeline = lead.id;
+      import("../lib/pipeline/pipeline.js")
+        .then(({ startLeadPipeline }) =>
+          startLeadPipeline(leadIdForPipeline, { source: "web_form_intake" }),
+        )
+        .catch((err) =>
+          logger.error({ err, leadId: leadIdForPipeline }, "pipeline: startLeadPipeline failed after intake"),
+        );
+    }
+
     if (status === "review_required") {
       try {
         const { reviewQueueTable } = await import("@workspace/db");
@@ -1590,7 +1604,7 @@ function section(title,children,opts){
   tf.type="text/javascript";
   tf.async=true;
   // TrustedForm only serves via HTTPS; force https regardless of host protocol.
-  tf.src="https://api.trustedform.com/trustedform.js?field=xxTrustedFormCertUrl&ping_field=xxTrustedFormPingUrl&l="+(new Date().getTime())+Math.random();
+  tf.src="https://api.trustedform.com/trustedform.js?field=xxTrustedFormCertUrl&ping_field=xxTrustedFormPingUrl&use_tagged_consent=true&l="+(new Date().getTime())+Math.random();
   var first=document.getElementsByTagName("script")[0];
   if(first&&first.parentNode){first.parentNode.insertBefore(tf,first);}
   else{(document.head||document.body||document.documentElement).appendChild(tf);}

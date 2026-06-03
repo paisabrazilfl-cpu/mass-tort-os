@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
+import { apiFetchRaw } from "@/lib/api-fetch";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,8 +50,27 @@ export default function Documents() {
     },
   });
 
-  const viewHref = (id: number, download = false) =>
-    `${import.meta.env.BASE_URL}api/documents/${id}/view${download ? "?download=1" : ""}`.replace(/([^:]\/)\/+/g, "$1");
+  const openDoc = async (id: number, fileName: string, download = false) => {
+    try {
+      const res = await apiFetchRaw(`/api/documents/${id}/view${download ? "?download=1" : ""}`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      if (download) {
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 15_000);
+      } else {
+        window.open(blobUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch {
+      toast({ title: "Could not load document", description: "Try again or contact support.", variant: "destructive" });
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -113,26 +133,25 @@ export default function Documents() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <Button variant="ghost" size="sm" asChild data-testid={`button-view-document-${doc.id}`}>
-                        <a
-                          href={viewHref(doc.id)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="View document"
-                        >
-                          <Eye className="h-4 w-4 mr-1" />
-                          View
-                        </a>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        data-testid={`button-view-document-${doc.id}`}
+                        onClick={() => openDoc(doc.id, doc.file_name, false)}
+                        title="View document"
+                      >
+                        <Eye className="h-4 w-4 mr-1" />
+                        View
                       </Button>
-                      <Button variant="ghost" size="sm" asChild data-testid={`button-download-document-${doc.id}`}>
-                        <a
-                          href={viewHref(doc.id, true)}
-                          download={doc.file_name}
-                          title="Download document"
-                        >
-                          <Download className="h-4 w-4 mr-1" />
-                          Download
-                        </a>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        data-testid={`button-download-document-${doc.id}`}
+                        onClick={() => openDoc(doc.id, doc.file_name, true)}
+                        title="Download document"
+                      >
+                        <Download className="h-4 w-4 mr-1" />
+                        Download
                       </Button>
                       {canDelete && (
                         <Button

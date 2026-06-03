@@ -1,0 +1,155 @@
+{
+  "name": "MTOS — Intake-to-Med-Recs pipeline orchestration",
+  "_description": "Deterministic Intake-to-Med-Recs pipeline (Task #168). The CRM owns the state machine (leads.pipeline_status + pipeline_events); this workflow is the ORCHESTRATOR that sequences the stages which need an external nudge, via CRM callbacks under /api/pipeline. Subscribe to event: pipeline.intake_sent — this fires the moment a lead ENTERS the INTAKE_SENT stage (bg-check cleared, intake packet sent), which is exactly when the intake→NPI step must run. Do NOT subscribe to lead.created: at creation the lead is still NEW/BG_CHECK_PENDING, so the INTAKE_SENT gate below would always skip. The pipeline.intake_sent payload carries only lead_id; the CRM's /intake-completed callback sources provider identifiers from the lead's stored fields, so no provider data needs to travel through n8n. Requires an API key with scopes automations:view + automations:execute. bg-check, e-sign-signed and inbound-fax stages are inherently event-driven and arrive at the CRM directly via /api/webhooks/{bgcheck,dropbox-sign,docusign,inbound-fax/:provider} — this workflow reads their result rather than forcing it, and never fabricates a stage that did not actually happen.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mtos-intake-pipeline",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-trigger",
+      "name": "MTOS pipeline.intake_sent webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// The pipeline.intake_sent event carries only lead_id (envelope: { event,\n// delivery_id, timestamp, payload: { lead_id, from_status, to_status, trigger } }).\n// We deliberately do NOT carry provider data through n8n: the CRM's\n// /intake-completed callback sources provider identifiers from the lead's stored\n// fields, so there is nothing to invent here and no PII flows through the\n// orchestrator. We just forward the lead_id.\nconst payload = $json.payload || $json;\nconst leadId = payload.lead_id ?? payload.lead?.id;\nif (!leadId) {\n  throw new Error('pipeline.intake_sent payload missing lead_id — cannot orchestrate pipeline');\n}\nreturn [{ json: { lead_id: leadId } }];"
+      },
+      "id": "extract",
+      "name": "Extract lead + provider fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.MTOS_API_BASE }}/api/pipeline/leads/{{ $json.lead_id }}/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "status-before",
+      "name": "GET pipeline status (before)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (automations:view,execute)" } },
+      "position": [660, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.pipeline_status }}",
+              "rightValue": "INTAKE_SENT",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "gate-intake-sent",
+      "name": "Only advance from INTAKE_SENT",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 320]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MTOS_API_BASE }}/api/pipeline/leads/{{ $('Extract lead + provider fields').item.json.lead_id }}/intake-completed",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"key_suffix\": \"n8n-{{ $('Extract lead + provider fields').item.json.lead_id }}\"\n}",
+        "options": {}
+      },
+      "id": "intake-completed",
+      "name": "POST intake-completed (runs NPI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "credentials": { "httpHeaderAuth": { "id": "mtos-api-key", "name": "MTOS API Key (automations:view,execute)" } },
+      "position": [1140, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.npi_verdict }}",
+              "rightValue": "VERIFIED",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "branch-npi",
+      "name": "NPI verified?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1380, 240]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true, \"lead_id\": $('Extract lead + provider fields').item.json.lead_id, \"npi_verdict\": \"VERIFIED\", \"next\": \"Awaiting e-sign packet completion. The signed envelope arrives at /api/webhooks/{dropbox-sign,docusign}; the CRM fans out to DOCS_SIGNED → HIPAA_FAXED → AWAITING_MED_RECS automatically. Inbound med-records fax lands at /api/webhooks/inbound-fax/:provider and completes the pipeline. No further orchestration needed here.\" }"
+      },
+      "id": "respond-verified",
+      "name": "Respond — NPI verified, hand off to webhooks",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1620, 160]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true, \"lead_id\": $('Extract lead + provider fields').item.json.lead_id, \"npi_verdict\": \"HOLD\", \"next\": \"NPI could not be verified against live NPPES — lead is parked at NPI_HOLD for human review. NOT auto-advancing (Constitution §8: never fabricate a clean result).\" }"
+      },
+      "id": "respond-hold",
+      "name": "Respond — NPI hold (human review)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1620, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true, \"skipped\": true, \"lead_id\": $('Extract lead + provider fields').item.json.lead_id, \"pipeline_status\": $('GET pipeline status (before)').item.json.pipeline_status, \"note\": \"Lead is not at INTAKE_SENT (likely still in bg-check, rejected, or already past intake). No-op — the CRM state machine owns the gate, this orchestrator never forces an out-of-order transition.\" }"
+      },
+      "id": "respond-skip",
+      "name": "Respond — not at INTAKE_SENT (skip)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1140, 440]
+    }
+  ],
+  "connections": {
+    "MTOS pipeline.intake_sent webhook": { "main": [[{ "node": "Extract lead + provider fields", "type": "main", "index": 0 }]] },
+    "Extract lead + provider fields": { "main": [[{ "node": "GET pipeline status (before)", "type": "main", "index": 0 }]] },
+    "GET pipeline status (before)": { "main": [[{ "node": "Only advance from INTAKE_SENT", "type": "main", "index": 0 }]] },
+    "Only advance from INTAKE_SENT": {
+      "main": [
+        [{ "node": "POST intake-completed (runs NPI)", "type": "main", "index": 0 }],
+        [{ "node": "Respond — not at INTAKE_SENT (skip)", "type": "main", "index": 0 }]
+      ]
+    },
+    "POST intake-completed (runs NPI)": { "main": [[{ "node": "NPI verified?", "type": "main", "index": 0 }]] },
+    "NPI verified?": {
+      "main": [
+        [{ "node": "Respond — NPI verified, hand off to webhooks", "type": "main", "index": 0 }],
+        [{ "node": "Respond — NPI hold (human review)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

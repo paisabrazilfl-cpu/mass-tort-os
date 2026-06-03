@@ -14,7 +14,8 @@ export type JobType =
   | "fasten_records_sync"
   | "competitive_intel_watchlist_sync"
   | "dialer_campaign_run"
-  | "poll_fax_delivery";
+  | "poll_fax_delivery"
+  | "run_bg_check";
 
 export interface JobPayload {
   create_case: { case_id: string; data: Record<string, unknown>; created_by_user_id?: number | null };
@@ -87,6 +88,11 @@ export interface JobPayload {
     provider: string;
     integration_id: number | null;
     poll_count: number;
+  };
+  /** Runs the in-repo background-check hub for a lead and applies the pipeline verdict. */
+  run_bg_check: {
+    lead_id: number;
+    source?: string;
   };
 }
 

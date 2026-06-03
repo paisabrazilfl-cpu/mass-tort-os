@@ -23,9 +23,10 @@ import {
   smsMessagesTable,
   leadDispositionsTable,
   emailEventsTable,
+  emailMessagesTable,
   faxEventsTable,
 } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, or, and } from "drizzle-orm";
 import crypto from "crypto";
 import { logger } from "../lib/logger";
 import { auditLog } from "../lib/audit";
@@ -45,6 +46,7 @@ import { fastenConnectionsTable } from "@workspace/db";
 import { enqueueJob } from "../lib/queue";
 import { dispatchTrigger } from "../lib/automations/dispatch";
 import { getEmailVerifier, getSmsVerifier, type VerifyContext, type SignatureStatus } from "../lib/webhook-verifiers";
+import { markWebhookProcessed, releaseWebhookClaim } from "../lib/webhook-idempotency";
 import { invalidateStripeConfiguredCache } from "../lib/subscription-gate";
 import type Stripe from "stripe";
 
@@ -102,14 +104,48 @@ async function applyEnvelopeEvent(provider: string, evt: NormalizedEvent): Promi
   });
 
   if (evt.status === "signed") {
+    let hipaaFaxed = false;
     try {
       const result = await onEnvelopeSigned(env.id);
+      hipaaFaxed = Boolean(result.enqueued_fax_job_id);
       logger.info(
         { envelope_id: env.id, fax_job_id: result.enqueued_fax_job_id, reason: result.reason },
         "onEnvelopeSigned handled",
       );
     } catch (err) {
       logger.error({ err, envelope_id: env.id }, "onEnvelopeSigned threw — ignoring to keep webhook 200");
+    }
+    // Intake-to-Med-Recs pipeline (T007): advance DOCS_SIGNED + fan-out ONLY
+    // once the lead's ENTIRE signing packet is executed, never on the first
+    // individual signature. We re-read every envelope for the lead (this one is
+    // already persisted as `signed` above) and gate on all-signed. Each pipeline
+    // transition is itself idempotent and keyed per-lead, so a redelivery of the
+    // last signed event is a safe no-op; a lead that never entered the pipeline
+    // just logs illegal no-ops.
+    if (env.lead_id) {
+      try {
+        const leadEnvelopes = await db
+          .select({ doc_type: documentEnvelopesTable.doc_type, status: documentEnvelopesTable.status })
+          .from(documentEnvelopesTable)
+          .where(eq(documentEnvelopesTable.lead_id, env.lead_id));
+        const { applyDocumentsSigned } = await import("../lib/pipeline/pipeline.js");
+        const { allRequiredDocumentsSigned } = await import("../lib/pipeline/doc-types.js");
+        if (allRequiredDocumentsSigned(leadEnvelopes)) {
+          await applyDocumentsSigned(env.lead_id, {
+            keySuffix: `lead${env.lead_id}`,
+            envelopeId: env.id,
+            source: `webhook:${provider}`,
+            hipaaFaxed,
+          });
+        } else {
+          logger.info(
+            { lead_id: env.lead_id, envelope_id: env.id, total: leadEnvelopes.length },
+            "pipeline: envelope signed but lead's document set is not yet fully signed — holding before DOCS_SIGNED",
+          );
+        }
+      } catch (err) {
+        logger.error({ err, envelope_id: env.id }, "pipeline: applyDocumentsSigned gate failed — ignoring to keep webhook 200");
+      }
     }
     // Dispatch internal automation trigger for trigger.document_signed workflows.
     void dispatchTrigger("trigger.document_signed", {
@@ -912,6 +948,32 @@ const VOICE_EVENT_PROVIDERS = new Set(["retell_ai", "bland_ai", "elevenlabs", "s
 
 type AnyJson = Record<string, unknown>;
 
+/**
+ * Map a provider Event-Webhook event type onto the canonical
+ * email_messages.status + the timestamp column to stamp. Covers SendGrid
+ * (delivered/bounce/dropped/spamreport/deferred/processed) and the
+ * common variants used by Postmark/Mailgun/Resend so the same receiver
+ * advances every provider's outbound row. Returns null for events that
+ * should not change delivery state (open/click/unsubscribe/…).
+ */
+function normalizeEmailMessageStatus(
+  rawType: string | undefined,
+): { status: string; tsField?: "delivered_at" | "bounced_at" | "failed_at" | "sent_at" } | null {
+  const s = rawType?.toLowerCase();
+  if (!s) return null;
+  if (["delivered", "delivery"].includes(s)) return { status: "delivered", tsField: "delivered_at" };
+  if (["bounce", "bounced", "blocked", "hardbounce", "softbounce"].includes(s)) {
+    return { status: "bounced", tsField: "bounced_at" };
+  }
+  if (["dropped"].includes(s)) return { status: "dropped", tsField: "failed_at" };
+  if (["spamreport", "spamcomplaint", "complaint"].includes(s)) {
+    return { status: "spamreport", tsField: "failed_at" };
+  }
+  if (["deferred"].includes(s)) return { status: "deferred" };
+  if (["processed", "sent"].includes(s)) return { status: "sent", tsField: "sent_at" };
+  return null;
+}
+
 function looksJsonObject(v: unknown): v is AnyJson {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
@@ -988,11 +1050,39 @@ router.post("/email/:provider", async (req, res) => {
     const externalId = pickFirstString(evt, ["MessageID", "messageId", "message_id", "id", "sg_message_id"]);
     const eventType = pickFirstString(evt, ["RecordType", "event", "type", "EventType"]) ?? "unknown";
     const recipient = pickFirstString(evt, ["Recipient", "recipient", "email", "To"]);
+
+    // Correlate to the outbound email_messages row we logged at send time
+    // so (a) the lead detail view shows delivered/bounced and (b) the
+    // event row is back-linked to the firm/lead it belongs to. SendGrid's
+    // event `sg_message_id` is `<X-Message-Id>.<suffix>`, so match the
+    // exact id OR the prefix before the first ".".
+    let outboundFirmId: number | null = null;
+    let outboundLeadId: number | null = null;
+    let outboundRow: { id: number; firm_id: number | null; lead_id: number | null } | null = null;
+    if (externalId) {
+      const prefix = externalId.split(".")[0]!;
+      const [match] = await db
+        .select({ id: emailMessagesTable.id, firm_id: emailMessagesTable.firm_id, lead_id: emailMessagesTable.lead_id })
+        .from(emailMessagesTable)
+        .where(
+          or(
+            eq(emailMessagesTable.external_message_id, externalId),
+            eq(emailMessagesTable.external_message_id, prefix),
+          ),
+        )
+        .limit(1);
+      if (match) {
+        outboundRow = match;
+        outboundFirmId = match.firm_id ?? null;
+        outboundLeadId = match.lead_id ?? null;
+      }
+    }
+
     try {
       await db.insert(emailEventsTable).values({
         integration_id: integrationId,
-        firm_id: null,   // email correlation requires an outbound email_messages table; not yet shipped
-        lead_id: null,
+        firm_id: outboundFirmId,
+        lead_id: outboundLeadId,
         provider,
         external_message_id: externalId,
         event_type: eventType.slice(0, 64),
@@ -1002,6 +1092,24 @@ router.post("/email/:provider", async (req, res) => {
       });
     } catch (err) {
       logger.warn({ err, provider }, "email_events insert failed");
+    }
+
+    // SECURITY: only mutate the outbound delivery state when the
+    // provider's signature actually verified. "unverified" means we lack
+    // the signing key (SendGrid client_secret) or the header is missing;
+    // either way, persisting would let an unauthenticated caller falsify
+    // delivery status. The event row above is still recorded for audit.
+    if (outboundRow && signatureStatus === "verified") {
+      const mapped = normalizeEmailMessageStatus(eventType);
+      if (mapped) {
+        try {
+          const set: Record<string, unknown> = { status: mapped.status, updated_at: new Date() };
+          if (mapped.tsField) set[mapped.tsField] = new Date();
+          await db.update(emailMessagesTable).set(set).where(eq(emailMessagesTable.id, outboundRow.id));
+        } catch (err) {
+          logger.warn({ err, provider, externalId }, "email_messages status update failed");
+        }
+      }
     }
   }
   res.json({ ok: true, received: events.length, signature_status: signatureStatus });
@@ -1364,6 +1472,274 @@ router.post("/fasten", async (req, res) => {
   } catch (err) {
     logger.error({ err }, "Fasten webhook handler error");
     res.status(200).json({ ok: true, note: "handler_error_logged" });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Background-check vendor callback (Intake-to-Med-Recs pipeline, T005)
+//
+// An external background-check vendor posts its verdict here. HMAC-SHA256 over
+// the raw body, hex, in the `x-bgcheck-signature` header, keyed by the
+// BGCHECK_WEBHOOK_SECRET env secret. We FAIL CLOSED: with no secret configured
+// or a bad signature we refuse to mutate state (no silent trust). Idempotent by
+// the vendor's `event_id`. Maps clear/failed/review onto pipeline transitions.
+//
+// Payload (vendor-agnostic):
+//   { event_id: string, lead_id?: number, reference?: "lead:<id>",
+//     result: "clear" | "failed" | "review" | "pass" | "fail",
+//     ...vendor fields }
+// ────────────────────────────────────────────────────────────────────────────
+router.post("/bgcheck", async (req, res) => {
+  const secret = process.env.BGCHECK_WEBHOOK_SECRET;
+  if (!secret) {
+    logger.warn("bgcheck webhook: BGCHECK_WEBHOOK_SECRET not configured — refusing");
+    res.status(503).json({ ok: false, error: "bgcheck_webhook_not_configured" });
+    return;
+  }
+  const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+  const provided = req.header("x-bgcheck-signature") || "";
+  if (!rawBody || rawBody.length === 0) {
+    logger.warn("bgcheck webhook: rawBody not captured — cannot verify signature");
+    res.status(400).json({ ok: false, error: "missing_body" });
+    return;
+  }
+  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  const a = Buffer.from(expected);
+  const b = Buffer.from(provided);
+  const sigOk = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!sigOk) {
+    logger.warn("bgcheck webhook: signature mismatch — refusing");
+    res.status(401).json({ ok: false, error: "bad_signature" });
+    return;
+  }
+
+  const evt = (req.body || {}) as {
+    event_id?: string;
+    lead_id?: number | string;
+    reference?: string;
+    result?: string;
+  };
+  const eventId = typeof evt.event_id === "string" ? evt.event_id : null;
+  if (!eventId) {
+    res.status(400).json({ ok: false, error: "missing_event_id" });
+    return;
+  }
+
+  // Resolve the lead from an explicit id or a `lead:<id>` reference token.
+  let leadId: number | null = null;
+  if (typeof evt.lead_id === "number") leadId = evt.lead_id;
+  else if (typeof evt.lead_id === "string" && /^\d+$/.test(evt.lead_id)) leadId = Number(evt.lead_id);
+  else if (typeof evt.reference === "string") {
+    const m = evt.reference.match(/^lead:(\d+)$/);
+    if (m) leadId = Number(m[1]);
+  }
+  if (!leadId) {
+    res.status(400).json({ ok: false, error: "unresolved_lead" });
+    return;
+  }
+
+  // Map the vendor result onto a pipeline verdict.
+  const r = String(evt.result || "").toLowerCase();
+  const verdict =
+    r === "clear" || r === "pass" ? ("CLEAR" as const)
+    : r === "failed" || r === "fail" ? ("FAILED" as const)
+    : ("REVIEW" as const);
+
+  // Idempotency: claim (provider, event_id) once. A retry acks 200 + no-op.
+  const first = await markWebhookProcessed({
+    provider: "bgcheck",
+    externalEventId: eventId,
+    eventType: r || "unknown",
+  });
+  if (!first) {
+    res.status(200).json({ ok: true, note: "duplicate_suppressed" });
+    return;
+  }
+
+  try {
+    const { applyBackgroundCheckVerdict } = await import("../lib/pipeline/pipeline.js");
+    const out = await applyBackgroundCheckVerdict(leadId, verdict, {
+      keySuffix: eventId,
+      source: "webhook:bgcheck",
+      payload: { event_id: eventId, result: r },
+    });
+    // Honest response: report whether the verdict actually advanced the lead.
+    // A non-applied outcome (illegal edge, duplicate) is a
+    // deterministic park — we ack 200 (so the vendor does not HTTP-retry a
+    // decision that will never change) but tell the caller it did NOT advance,
+    // with the reason(s), so n8n/operators route it instead of assuming success.
+    const applied = out.transitions.some((t) => t.applied);
+    const reasons = [...new Set(out.transitions.filter((t) => !t.applied).map((t) => t.reason).filter(Boolean))];
+    res.status(200).json(applied
+      ? { ok: true, verdict: out.verdict, applied: true }
+      : { ok: true, verdict: out.verdict, applied: false, parked: true, reasons });
+  } catch (err) {
+    // The apply failed AFTER we claimed the idempotency ledger. Release the
+    // claim and return 5xx so the provider retries — the transitions are
+    // event_key-idempotent, so a successful retry cannot double-apply. Acking
+    // 200 here would silently drop the event and strand the lead.
+    logger.error({ err, leadId, eventId }, "bgcheck webhook: failed to apply verdict — releasing claim for retry");
+    const released = await releaseWebhookClaim({ provider: "bgcheck", externalEventId: eventId });
+    res.status(503).json({ ok: false, error: "apply_failed_retryable", retry_safe: released });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Inbound medical-records fax → pipeline COMPLETE (T008)
+//
+// A records-release vendor / inbound-fax provider posts a received-fax event.
+// Correlation is deterministic, in priority order:
+//   1. explicit `lead_ref: "lead:<id>"` (cover-sheet token) — strongest
+//   2. sender fax number matched against a lead in AWAITING_MED_RECS whose
+//      `hospital_fax` equals the sender (the provider we faxed the HIPAA request
+//      to). Only matched when EXACTLY ONE such lead exists — ambiguity parks.
+// If neither resolves, we ack 200 and log (no transition) — never guess.
+// Idempotent by (provider, external_fax_id).
+// ────────────────────────────────────────────────────────────────────────────
+router.post("/inbound-fax/:provider", async (req, res) => {
+  const provider = String(req.params.provider || "").toLowerCase();
+
+  // Fail-closed signature verification (mirrors /bgcheck). A public endpoint
+  // that mutates pipeline state MUST authenticate the caller, or anyone can
+  // drive a correlated lead to COMPLETE. Shared HMAC secret over the raw body.
+  const secret = process.env.INBOUND_FAX_WEBHOOK_SECRET;
+  if (!secret) {
+    logger.warn({ provider }, "inbound-fax webhook: INBOUND_FAX_WEBHOOK_SECRET not configured — refusing");
+    res.status(503).json({ ok: false, error: "inbound_fax_webhook_not_configured" });
+    return;
+  }
+  const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+  const providedSig =
+    req.header("x-inbound-fax-signature") || req.header("x-fax-signature") || "";
+  if (!rawBody || rawBody.length === 0) {
+    logger.warn({ provider }, "inbound-fax webhook: rawBody not captured — cannot verify signature");
+    res.status(400).json({ ok: false, error: "missing_body" });
+    return;
+  }
+  const expectedSig = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  const aSig = Buffer.from(expectedSig);
+  const bSig = Buffer.from(providedSig);
+  if (!(aSig.length === bSig.length && crypto.timingSafeEqual(aSig, bSig))) {
+    logger.warn({ provider }, "inbound-fax webhook: signature mismatch — refusing");
+    res.status(401).json({ ok: false, error: "bad_signature" });
+    return;
+  }
+
+  const evt: AnyJson = looksJsonObject(req.body) ? req.body : { body: req.body };
+
+  const externalId =
+    pickFirstString(evt, ["faxId", "id", "fax_id", "FaxID"]) ??
+    pickFirstString((evt as { data?: AnyJson }).data, ["id", "fax_id"]);
+  const senderFaxRaw =
+    pickFirstString(evt, ["from", "sender", "from_number", "CallerID", "remote_id"]) ??
+    pickFirstString((evt as { data?: AnyJson }).data, ["from", "sender"]);
+  const leadRef = pickFirstString(evt, ["lead_ref", "reference", "matter_ref"]);
+  // The number that RECEIVED the fax (our DID) is the authoritative tenancy
+  // signal — it tells us which firm the inbound belongs to. Without it the
+  // sender-fax fuzzy match would scan every firm's leads and could attach a
+  // medical record to the wrong firm's claimant, so a firm-unresolved fuzzy
+  // match is parked rather than guessed.
+  const receivedDid =
+    pickFirstString(evt, ["to", "to_number", "toNumber", "DID", "did", "destination", "called", "ToNumber"]) ??
+    pickFirstString((evt as { data?: AnyJson }).data, ["to", "to_number", "destination"]);
+  // The received PDF location. Providers vary widely on the field name, so we
+  // probe the common ones (and the nested `data`/`media` envelopes). When none
+  // is present we still record the receipt but flag the missing media downstream
+  // rather than fabricate a file location.
+  const mediaUrl =
+    pickFirstString(evt, [
+      "media_url", "mediaUrl", "file_url", "fileUrl", "document_url", "documentUrl",
+      "pdf_url", "pdfUrl", "url", "MediaUrl", "MediaUrl0",
+    ]) ??
+    pickFirstString((evt as { data?: AnyJson }).data, [
+      "media_url", "file_url", "document_url", "pdf_url", "url",
+    ]) ??
+    pickFirstString((evt as { media?: AnyJson }).media, ["url", "media_url", "file_url"]);
+
+  // Idempotency first — drop retries before any correlation work.
+  const first = await markWebhookProcessed({
+    provider: `inbound_fax_${provider}`,
+    externalEventId: externalId,
+    eventType: "inbound_med_recs",
+  });
+  if (!first) {
+    res.status(200).json({ ok: true, note: "duplicate_or_no_id" });
+    return;
+  }
+
+  // 1. Explicit cover-sheet token.
+  let leadId: number | null = null;
+  if (leadRef) {
+    const m = leadRef.match(/lead:(\d+)/);
+    if (m) leadId = Number(m[1]);
+  }
+
+  // 2. Sender-fax match against AWAITING_MED_RECS leads — FIRM-SCOPED. We only
+  //    attempt the fuzzy sender match once the receiving DID resolves to a firm,
+  //    then restrict candidates to that firm's leads. If the DID is missing or
+  //    unmapped, we do NOT fall back to a cross-firm scan; the lead parks.
+  if (!leadId && senderFaxRaw) {
+    const digits = senderFaxRaw.replace(/\D/g, "").slice(-10);
+    if (digits.length === 10) {
+      const { findMappingForDialedNumber } = await import("../lib/voice/inbound-routing.js");
+      const mapping = receivedDid ? await findMappingForDialedNumber(receivedDid) : null;
+      const firmId = mapping?.firmId ?? null;
+      if (firmId == null) {
+        logger.warn(
+          { provider, hasDid: Boolean(receivedDid) },
+          "inbound-fax: receiving DID did not resolve to a firm — refusing cross-firm sender match, parking",
+        );
+      } else {
+        const candidates = await db
+          .select({ id: leadsTable.id, fax: leadsTable.hospital_fax })
+          .from(leadsTable)
+          .where(
+            and(
+              eq(leadsTable.pipeline_status, "AWAITING_MED_RECS"),
+              eq(leadsTable.firm_id, firmId),
+            ),
+          );
+        const matches = candidates.filter(
+          (c) => (c.fax || "").replace(/\D/g, "").slice(-10) === digits,
+        );
+        if (matches.length === 1) leadId = matches[0]!.id;
+        else if (matches.length > 1) {
+          logger.warn({ provider, firmId, count: matches.length }, "inbound-fax: ambiguous sender match within firm — parking");
+        }
+      }
+    }
+  }
+
+  if (!leadId) {
+    logger.info({ provider, externalId, hasRef: Boolean(leadRef) }, "inbound-fax: could not correlate to a lead — ack only");
+    res.status(200).json({ ok: true, note: "uncorrelated" });
+    return;
+  }
+
+  try {
+    const { applyMedRecordsReceived } = await import("../lib/pipeline/pipeline.js");
+    const out = await applyMedRecordsReceived(leadId, {
+      keySuffix: externalId || `nofaxid-${Date.now()}`,
+      source: `webhook:inbound_fax_${provider}`,
+      payload: { provider, external_fax_id: externalId, sender: senderFaxRaw, media_url: mediaUrl },
+      attachment: { fileUrl: mediaUrl ?? null, externalFaxId: externalId ?? null },
+    });
+    // Honest response: only claim COMPLETE when the transition actually applied.
+    // An illegal edge (lead not in AWAITING_MED_RECS) or a
+    // duplicate parks deterministically — ack 200 (no vendor HTTP retry) but
+    // report applied:false + reason so the caller does not assume completion.
+    const applied = out.transitions.some((t) => t.applied);
+    const reasons = [...new Set(out.transitions.filter((t) => !t.applied).map((t) => t.reason).filter(Boolean))];
+    res.status(200).json(applied
+      ? { ok: true, applied: true, attached: out.attached, media: Boolean(mediaUrl) }
+      : { ok: true, applied: false, parked: true, attached: out.attached, media: Boolean(mediaUrl), reasons });
+  } catch (err) {
+    // Release the idempotency claim and ask the provider to retry rather than
+    // silently acking 200 and dropping a correlated medical-records delivery.
+    // applyMedRecordsReceived is event_key-idempotent, so a retry is safe.
+    logger.error({ err, leadId, provider }, "inbound-fax: failed to apply med-recs received — releasing claim for retry");
+    const released = await releaseWebhookClaim({ provider: `inbound_fax_${provider}`, externalEventId: externalId });
+    res.status(503).json({ ok: false, error: "apply_failed_retryable", retry_safe: released });
   }
 });
 

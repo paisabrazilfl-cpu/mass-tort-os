@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **325 checked / 48 public / 277 protected / 0 unprotected.**
+Boot-time count: **332 checked / 50 public / 282 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -819,6 +819,7 @@ Boot-time count: **325 checked / 48 public / 277 protected / 0 unprotected.**
 | lead-sources | PUT | `/api/lead-sources/:id` | ✓ | ✓ |  |  |  | — | `lead_sources:manage` | ✓ |
 | lead-sources | GET | `/api/lead-sources/` | ✓ | ✓ |  |  |  | — | `lead_sources:view` | ✓ |
 | lead-sources | POST | `/api/lead-sources/` | ✓ | ✓ |  |  |  | — | `lead_sources:manage` | ✓ |
+| leads | GET | `/api/leads/:id/emails` | ✓ | ✓ |  |  |  | — | `lead:view:own`, `lead:view:any` | ✓ |
 | leads | GET | `/api/leads/:id/envelopes` | ✓ | ✓ |  |  |  | — | `lead:view:own`, `lead:view:any` | ✓ |
 | leads | GET | `/api/leads/:id/fax-results` | ✓ | ✓ |  |  |  | — | `lead:view:own`, `lead:view:any` | ✓ |
 | leads | POST | `/api/leads/:id/intelligence` | ✓ | ✓ |  |  |  | — | `lead:qualify` | ✓ |
@@ -853,6 +854,10 @@ Boot-time count: **325 checked / 48 public / 277 protected / 0 unprotected.**
 | paralegals | GET | `/api/paralegals/:id` | ✓ | ✓ |  |  |  | — | `paralegal:view` | ✓ |
 | paralegals | GET | `/api/paralegals/` | ✓ | ✓ |  |  |  | — | `paralegal:view` | ✓ |
 | paralegals | POST | `/api/paralegals/` | ✓ | ✓ |  |  |  | — | `paralegal:manage` | ✓ |
+| pipeline | POST | `/api/pipeline/leads/:id/docs-signed` | ✓ | ✓ |  |  |  | — | `automations:execute` | ✓ |
+| pipeline | POST | `/api/pipeline/leads/:id/intake-completed` | ✓ | ✓ |  |  |  | — | `automations:execute` | ✓ |
+| pipeline | POST | `/api/pipeline/leads/:id/med-recs-received` | ✓ | ✓ |  |  |  | — | `automations:execute` | ✓ |
+| pipeline | GET | `/api/pipeline/leads/:id/status` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | review-queue | PATCH | `/api/review-queue/:id` | ✓ | ✓ |  |  |  | — | `review_queue:resolve` | ✓ |
 | review-queue | GET | `/api/review-queue/` | ✓ | ✓ |  |  |  | — | `review_queue:view` | ✓ |
 | review-queue | POST | `/api/review-queue/` | ✓ | ✓ |  |  |  | — | `review_queue:resolve` | ✓ |
@@ -890,11 +895,13 @@ Boot-time count: **325 checked / 48 public / 277 protected / 0 unprotected.**
 | web-forms | POST | `/api/web-forms/validate/address` |  |  | ✓ |  |  | — | — | — |
 | web-forms | POST | `/api/web-forms/validate/email` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/_test/envelope-signed` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/bgcheck` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/docusign` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/dropbox-sign` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/email/:provider` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/fasten` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/fax/:provider` |  |  | ✓ |  |  | — | — | — |
+| webhooks | POST | `/api/webhooks/inbound-fax/:provider` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/sms/:provider` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/stripe` |  |  | ✓ |  |  | — | — | — |
 | webhooks | POST | `/api/webhooks/telnyx/sms` |  |  | ✓ |  |  | — | — | — |

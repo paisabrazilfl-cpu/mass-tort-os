@@ -234,6 +234,23 @@ function evalExpression(expr: string, bindings: Record<string, any>): any {
   return vm.runInContext(expr, ctx, { timeout: 1000 });
 }
 
+/** Hard ceiling on every LLM call made from inside the executor. Without this
+ *  a hung provider stalls the entire workflow (and the HTTP request behind it)
+ *  indefinitely. 30 s is generous for even the slowest reasoning models; real
+ *  provider-level timeouts inside callLLM add an extra inner layer. */
+const LLM_TIMEOUT_MS = 30_000;
+async function callLLMWithTimeout(opts: Parameters<typeof callLLM>[0]): Promise<string> {
+  return Promise.race([
+    callLLM(opts),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`LLM call timed out after ${LLM_TIMEOUT_MS / 1000} s (module: ${opts.module})`)),
+        LLM_TIMEOUT_MS,
+      )
+    ),
+  ]);
+}
+
 export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>> = {
   // ───────── Triggers (no-op at runtime; entry points carry input through)
   "trigger.manual": async (s) => s.input,
@@ -273,8 +290,16 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     return { __branch: Array.isArray(arr) && arr.length ? "item" : "done", value: { items: arr ?? [] } };
   },
   "logic.delay": async (s) => {
-    const seconds = Number(s.node.data?.params?.seconds ?? 0);
-    if (seconds > 0) await new Promise((r) => setTimeout(r, Math.min(seconds, 60) * 1000));
+    const requested = Number(s.node.data?.params?.seconds ?? 0);
+    const MAX_INLINE_DELAY_S = 30;
+    const seconds = Math.min(requested, MAX_INLINE_DELAY_S);
+    if (requested > MAX_INLINE_DELAY_S) {
+      logger.warn(
+        { workflowId: s.ctx.workflowId, runId: s.ctx.runId, requested, capped: seconds },
+        "logic.delay: requested delay exceeds 30 s inline cap — clamped. Use a scheduled workflow for longer waits.",
+      );
+    }
+    if (seconds > 0) await new Promise((r) => setTimeout(r, seconds * 1000));
     return s.input;
   },
 
@@ -287,8 +312,19 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   },
   "data.transform": async (s) => {
     const code = String(s.node.data?.params?.code ?? "return input;");
-    const fn = new Function("input", "vars", code);
-    return fn(s.input, s.vars);
+    const timeoutMs = Number(s.node.data?.params?.timeoutMs ?? 5000);
+    if (code.length > 8 * 1024) throw new Error("data.transform: code exceeds 8 KB limit.");
+    // Run in an isolated VM context — same pattern as script.javascript.
+    // No Node globals (process, require, Buffer, etc.) are exposed, only
+    // the `input` and `vars` bindings explicitly placed in the sandbox.
+    const sandbox: any = { input: s.input, vars: s.vars, result: undefined };
+    vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
+    try {
+      vm.runInContext(`result = (function(input, vars){ ${code} })(input, vars);`, sandbox, { timeout: timeoutMs });
+    } catch (err: unknown) {
+      throw new Error(`data.transform: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return sandbox.result;
   },
   "data.regex": async (s) => {
     const text = String(resolvePath({ input: s.input, vars: s.vars }, String(s.node.data?.params?.text ?? "")) ?? "");
@@ -614,7 +650,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const text = String(resolveOrLiteral(s, s.node.data?.params?.text ?? s.input?.text ?? "") || "");
     if (!text) throw new Error("ai.summarize requires text input.");
     const maxTokens = Number(s.node.data?.params?.maxTokens ?? 400);
-    const summary = await callLLM({
+    const summary = await callLLMWithTimeout({
       module: "drafting-ai",
       systemPrompt: "You are a concise legal summarization assistant. Reply in plain prose, no preamble.",
       prompt: `Summarize the following:\n\n${text}`,
@@ -626,7 +662,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const p = s.node.data?.params ?? {};
     const prompt = String(resolveOrLiteral(s, p.prompt ?? s.input?.prompt) ?? "");
     if (!prompt) throw new Error("ai.draft requires a prompt.");
-    const draft = await callLLM({
+    const draft = await callLLMWithTimeout({
       module: "drafting-ai",
       systemPrompt: String(p.systemPrompt ?? "You are a legal drafting assistant. Reply with the requested document content only — no preamble."),
       prompt,
@@ -640,11 +676,16 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     if (!s.node.data?.params?.approved) {
       throw new Error("JavaScript node requires explicit operator approval (set 'approved' to true in node params).");
     }
+    logger.info(
+      { workflowId: s.ctx.workflowId, runId: s.ctx.runId, firmId: s.ctx.firmId, nodeType: "script.javascript" },
+      "[automation] script.javascript executing — operator-approved VM sandbox",
+    );
     const code = String(s.node.data?.params?.code ?? "return input;");
     const timeoutMs = Number(s.node.data?.params?.timeoutMs ?? 5000);
     // Sandbox carries no Node globals — only the bindings we hand it.
+    // codeGeneration disabled so eval/new Function inside the script also fail.
     const sandbox: any = { input: s.input, vars: s.vars, console: { log: () => {} }, result: undefined };
-    vm.createContext(sandbox);
+    vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
     try {
       vm.runInContext(`result = (function(input, vars){ ${code} })(input, vars);`, sandbox, { timeout: timeoutMs });
     } catch (err: unknown) {
@@ -654,14 +695,26 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   },
   "script.python": async (s) => {
     if (!s.node.data?.params?.approved) throw new Error("Python node requires explicit operator approval.");
+    logger.info(
+      { workflowId: s.ctx.workflowId, runId: s.ctx.runId, firmId: s.ctx.firmId, nodeType: "script.python" },
+      "[automation] script.python executing — OS-level process, operator-approved",
+    );
     return runProcess("python3", [], String(s.node.data?.params?.code ?? ""), s, "-c");
   },
   "script.bash": async (s) => {
     if (!s.node.data?.params?.approved) throw new Error("Bash node requires explicit operator approval (set 'approved' to true).");
+    logger.info(
+      { workflowId: s.ctx.workflowId, runId: s.ctx.runId, firmId: s.ctx.firmId, nodeType: "script.bash" },
+      "[automation] script.bash executing — OS-level process, operator-approved",
+    );
     return runProcess("bash", ["-c", String(s.node.data?.params?.command ?? "")], "", s);
   },
   "script.powershell": async (s) => {
     if (!s.node.data?.params?.approved) throw new Error("PowerShell node requires explicit operator approval.");
+    logger.info(
+      { workflowId: s.ctx.workflowId, runId: s.ctx.runId, firmId: s.ctx.firmId, nodeType: "script.powershell" },
+      "[automation] script.powershell executing — OS-level process, operator-approved",
+    );
     return runProcess("pwsh", ["-Command", String(s.node.data?.params?.command ?? "")], "", s);
   },
 
@@ -1284,7 +1337,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
         const v = resolvePath(variables, key);
         return v == null ? "" : String(v);
       });
-      const body = await callLLM({
+      const body = await callLLMWithTimeout({
         module: "drafting-ai",
         systemPrompt: "You are a legal drafting assistant. Output only the rendered document body.",
         prompt: filledPrompt,
@@ -1545,7 +1598,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
       };
     }
     try {
-      const output = await callLLM({
+      const output = await callLLMWithTimeout({
         module: "ai-agent",
         systemPrompt: "You are an autonomous assistant. Reply only with the final answer.",
         prompt: `${goal}\n\nContext:\n${JSON.stringify(s.input ?? {}, null, 2).slice(0, 4000)}`,
@@ -1561,7 +1614,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const text = String(resolveOrLiteral(s, p.text ?? s.input?.text) ?? "");
     const labels = (p.labels ?? []) as string[];
     if (!text || labels.length === 0) throw new Error("ai.classify requires text and a non-empty labels array.");
-    const raw = await callLLM({
+    const raw = await callLLMWithTimeout({
       module: "lead-intelligence",
       systemPrompt: `You are a classifier. Choose exactly ONE label from this list: ${labels.join(", ")}. Respond with the label only.`,
       prompt: text,
@@ -1580,7 +1633,7 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
     const histText = Array.isArray(history)
       ? "\n\nPrior conversation:\n" + history.slice(-10).map((m: any) => `${m?.role ?? "user"}: ${m?.content ?? m}`).join("\n")
       : "";
-    const reply = await callLLM({
+    const reply = await callLLMWithTimeout({
       module: "drafting-ai",
       systemPrompt: String(p.persona ?? "You are a helpful customer-service assistant for a mass tort law firm. Be concise and never give legal advice."),
       prompt: userMsg + histText,
@@ -1776,15 +1829,23 @@ async function stubIntegration(name: string, s: StepContext): Promise<any> {
   return { simulated: true, name, params: s.node.data?.params };
 }
 
+const MAX_SUBPROCESS_OUTPUT_BYTES = 512 * 1024; // 512 KB — prevents a runaway script from blowing up memory or the DB step log
 function runProcess(cmd: string, args: string[], stdin: string, s: StepContext, codeFlag?: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const timeoutMs = Number(s.node.data?.params?.timeoutMs ?? 15000);
     const finalArgs = codeFlag ? [codeFlag, stdin] : args;
     const child = spawn(cmd, finalArgs, { stdio: ["pipe", "pipe", "pipe"] });
-    let out = ""; let err = "";
+    let out = ""; let err = ""; let outBytes = 0;
     const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`${cmd} timed out after ${timeoutMs}ms`)); }, timeoutMs);
-    child.stdout.on("data", (b) => { out += b.toString(); });
-    child.stderr.on("data", (b) => { err += b.toString(); });
+    child.stdout.on("data", (b: Buffer) => {
+      outBytes += b.length;
+      if (outBytes <= MAX_SUBPROCESS_OUTPUT_BYTES) {
+        out += b.toString();
+      } else if (outBytes - b.length <= MAX_SUBPROCESS_OUTPUT_BYTES) {
+        out += "[output truncated — exceeded 512 KB limit]";
+      }
+    });
+    child.stderr.on("data", (b: Buffer) => { err += b.toString().slice(0, 4096); });
     child.on("error", (e) => { clearTimeout(timer); reject(e); });
     child.on("close", (code) => {
       clearTimeout(timer);

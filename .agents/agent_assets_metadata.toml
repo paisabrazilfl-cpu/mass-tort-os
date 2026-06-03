@@ -119,3 +119,15 @@ id = "PCxBhnoonBcphX38X5QBG"
 uri = "file://mtos-latest-2026-05-29.tar.gz"
 type = "unspecified"
 title = "MTOS Source Code — latest (2026-05-29)"
+
+[[outputs]]
+id = "BpZ97ZMgtu7f0DcFGXZuP"
+uri = "file://.local/smoke/crm-lead-detail-3829.jpeg"
+type = "image"
+title = "Playwright screenshot — Lead #3829 detail (Jane Claimant)"
+
+[[outputs]]
+id = "o8BMHGkqRrNcU2hmOsKzT"
+uri = "file://.local/mtos-crm-source.tar.gz"
+type = "unspecified"
+title = "MTOS CRM — full source code (mtos-crm-source.tar.gz)"

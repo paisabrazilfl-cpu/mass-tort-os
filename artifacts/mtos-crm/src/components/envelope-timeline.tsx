@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle2, Clock, Eye, FileSignature, Send, XCircle, AlertTriangle, Inbox, RefreshCw } from "lucide-react";
+import { CheckCircle2, Clock, Eye, FileSignature, Send, XCircle, AlertTriangle, Inbox, RefreshCw, Mail } from "lucide-react";
 import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface EnvelopeEvent { type: string; at: string }
@@ -34,6 +34,42 @@ interface FaxRow {
   error: string | null;
   created_at: string;
   processed_at: string | null;
+}
+interface EmailRow {
+  id: number;
+  to_email: string;
+  to_name: string | null;
+  subject: string | null;
+  provider: string | null;
+  status: string;
+  error: string | null;
+  sent_at: string | null;
+  delivered_at: string | null;
+  bounced_at: string | null;
+  failed_at: string | null;
+  created_at: string;
+}
+
+const EMAIL_STATUS_META: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: React.ComponentType<{ className?: string }> }> = {
+  queued:     { label: "Queued",      variant: "secondary",   icon: Clock },
+  sent:       { label: "Sent",        variant: "default",     icon: Send },
+  delivered:  { label: "Delivered",   variant: "default",     icon: Inbox },
+  deferred:   { label: "Deferred",    variant: "secondary",   icon: Clock },
+  bounced:    { label: "Bounced",     variant: "destructive", icon: XCircle },
+  dropped:    { label: "Dropped",     variant: "destructive", icon: XCircle },
+  spamreport: { label: "Spam Report", variant: "destructive", icon: AlertTriangle },
+  failed:     { label: "Failed",      variant: "destructive", icon: AlertTriangle },
+};
+
+function emailStatusBadge(s: string) {
+  const meta = EMAIL_STATUS_META[s] || { label: s, variant: "outline" as const, icon: Clock };
+  const Icon = meta.icon;
+  return (
+    <Badge variant={meta.variant} className="gap-1">
+      <Icon className="h-3 w-3" />
+      {meta.label}
+    </Badge>
+  );
 }
 
 const STATUS_META: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: React.ComponentType<{ className?: string }> }> = {
@@ -68,6 +104,7 @@ export function EnvelopeTimeline({ leadId }: { leadId: number }) {
   const { toast } = useToast();
   const [envelopes, setEnvelopes] = useState<Envelope[]>([]);
   const [faxes, setFaxes] = useState<FaxRow[]>([]);
+  const [emails, setEmails] = useState<EmailRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [templates, setTemplates] = useState<Record<number, string>>({});
@@ -75,13 +112,15 @@ export function EnvelopeTimeline({ leadId }: { leadId: number }) {
   const load = async () => {
     setRefreshing(true);
     try {
-      const [eRes, fRes, tRes] = await Promise.all([
+      const [eRes, fRes, mRes, tRes] = await Promise.all([
         apiFetchRaw(`/api/leads/${leadId}/envelopes`),
         apiFetchRaw(`/api/leads/${leadId}/fax-results`),
+        apiFetchRaw(`/api/leads/${leadId}/emails`),
         apiFetchRaw(`/api/document-templates`),
       ]);
       if (eRes.ok) setEnvelopes(await eRes.json());
       if (fRes.ok) setFaxes(await fRes.json());
+      if (mRes.ok) setEmails(await mRes.json());
       if (tRes.ok) {
         const tpls = await tRes.json();
         const map: Record<number, string> = {};
@@ -238,6 +277,60 @@ export function EnvelopeTimeline({ leadId }: { leadId: number }) {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Mail className="h-5 w-5" /> Emails</CardTitle>
+          <CardDescription>Outbound emails sent to this claimant, with delivery status from the provider.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {emails.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No emails sent yet. They are logged here automatically when a workflow or intake emails this lead.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {emails.map((m) => {
+                const milestones: Array<{ label: string; at: string | null }> = [
+                  { label: "Sent",      at: m.sent_at },
+                  { label: "Delivered", at: m.delivered_at },
+                ];
+                if (m.bounced_at) milestones.push({ label: "Bounced", at: m.bounced_at });
+                else if (m.failed_at) milestones.push({ label: "Failed", at: m.failed_at });
+                return (
+                  <div key={m.id} className="rounded-md border p-3 space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium truncate">{m.subject || "(no subject)"}</div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          To: {m.to_name ? `${m.to_name} <${m.to_email}>` : m.to_email}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {m.provider || "email"} · {fmt(m.created_at)}
+                        </div>
+                      </div>
+                      {emailStatusBadge(m.status)}
+                    </div>
+                    {m.error && (
+                      <div className="rounded-md bg-destructive/10 border border-destructive/30 p-2 text-xs text-destructive">
+                        <span className="font-medium">Error:</span> {m.error}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      {milestones.map((ms) => (
+                        <div key={ms.label} className={`rounded border p-2 ${ms.at ? "bg-muted/40" : "opacity-50"}`}>
+                          <div className="font-medium">{ms.label}</div>
+                          <div className="text-muted-foreground">{fmt(ms.at) || "—"}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardContent>
