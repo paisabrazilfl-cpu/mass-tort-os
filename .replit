@@ -147,3 +147,8 @@ BITDEER_API_KEY = "uHDWsXw9iLP3HsF4NoaJ"
 AI_PROVIDER = "bitdeer"
 AI_PROVIDER_LEAD_INTELLIGENCE = "bitdeer"
 N8N_MCP_URL = "https://paisabrazil.app.n8n.cloud/mcp-server/http"
+
+[userenv.development]
+BGCHECK_WEBHOOK_SECRET = "aa7353736cfa10c46c139e680311c155a1a5543701b6f077"
+INBOUND_FAX_WEBHOOK_SECRET = "56a533bff1f09a771baab6667f80eb5f58f8c568e1945701"
+BG_CHECK_PROVIDER = "external"
