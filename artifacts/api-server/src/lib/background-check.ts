@@ -1,5 +1,6 @@
 import { logger } from "./logger";
 import { getCourtsForState, getStateLabel, normalizeStateCode } from "./courtlistener-courts";
+import { isTreasurySdnEnabled, matchTreasurySdn } from "./ofac-treasury";
 
 export interface BackgroundCheckResult {
   status: "clean" | "flagged" | "not_found" | "error";
@@ -471,30 +472,57 @@ type OFACOutcome =
   | { status: "error"; note: string };
 
 /**
- * OFAC sanctions check. The original implementation hit
- * `search.ofac-api.com/v3` — a third-party paid service that returns 405
- * without authentication, which the previous code silently treated as
- * "0 matches found." This is now honest about its state:
+ * OFAC sanctions check.
  *
- *   - If `OFAC_API_KEY` is not set, return `unconfigured` so the caller
- *     records "OFAC check skipped" instead of fabricating a clean result.
- *   - If the call fails or returns non-OK, return `error` with detail.
- *   - Only return `ok` when the source actually responded with a payload.
- *
- * The Treasury OFAC SDN list itself is published as an XML/CSV download
- * (https://www.treasury.gov/ofac/downloads/sdn.xml), which would be the
- * proper free path — left as a follow-up because it requires bundling and
- * refreshing a ~50MB dataset.
+ * Priority order:
+ *   1. FREE — US Treasury SDN CSV (lib/ofac-treasury.ts). Active by default
+ *      (`OFAC_USE_TREASURY=1`). Downloads the canonical Specially Designated
+ *      Nationals list directly from treasury.gov — no API key, no vendor, same
+ *      data every paid screening service wraps. Cached in-memory; refreshes
+ *      daily. Disable with `OFAC_USE_TREASURY=0` to use the paid path instead.
+ *   2. PAID — search.ofac-api.com/v3 (legacy). Only reached when Treasury is
+ *      disabled AND `OFAC_API_KEY` is set.
+ *   3. UNCONFIGURED — both disabled/missing → honest "skipped" note so the
+ *      caller never fabricates a clean result.
  */
 async function checkOFACList(person: {
   first_name: string;
   last_name: string;
 }): Promise<OFACOutcome> {
+  // --- Path 1: free Treasury SDN list (default ON) ---
+  if (isTreasurySdnEnabled()) {
+    try {
+      const result = await matchTreasurySdn({
+        first_name: person.first_name,
+        last_name: person.last_name,
+      });
+      if (result.status === "error") {
+        return {
+          status: "error",
+          note: `OFAC Treasury SDN check failed: ${result.note ?? "unknown error"}`,
+        };
+      }
+      const records: BackgroundRecord[] = result.matches.map((m) => ({
+        type: "OFAC_SANCTIONS",
+        description: `OFAC SDN match: ${m.name} (Programs: ${m.programs.join(", ") || "N/A"}) [via ${m.matched_via}]`,
+        severity: "high" as const,
+      }));
+      return { status: "ok", records };
+    } catch (err) {
+      logger.warn({ err }, "OFAC Treasury SDN check threw unexpectedly");
+      return {
+        status: "error",
+        note: `OFAC Treasury SDN unavailable: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  // --- Path 2: paid third-party API (opt-in via OFAC_USE_TREASURY=0 + OFAC_API_KEY) ---
   const apiKey = process.env.OFAC_API_KEY;
   if (!apiKey) {
     return {
       status: "unconfigured",
-      note: "OFAC sanctions check skipped — no provider configured (set OFAC_API_KEY).",
+      note: "OFAC sanctions check skipped — Treasury SDN disabled and no OFAC_API_KEY set.",
     };
   }
 
