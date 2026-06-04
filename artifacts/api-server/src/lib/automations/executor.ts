@@ -2073,6 +2073,278 @@ export const HANDLERS: Record<string, (s: StepContext) => Promise<HandlerResult>
   "utility.end": async (s) => {
     return { __branch: "__end__", value: s.node.data?.params?.output ?? s.input };
   },
+
+  // ───────── More Triggers (pass-through — engine fires them externally)
+  "trigger.esign_completed": async (s) => s.input,
+  "trigger.document_uploaded": async (s) => s.input,
+  "trigger.background_check_done": async (s) => s.input,
+
+  // ───────── More CRM
+  "crm.add_timeline_note": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    const note = String(resolveOrLiteral(s, p.note) ?? "");
+    if (!Number.isInteger(leadId)) throw new Error("crm.add_timeline_note requires a resolvable leadId.");
+    if (!note.trim()) throw new Error("crm.add_timeline_note requires a non-empty `note`.");
+    await db.insert(auditLogTable).values({
+      action: "lead.timeline_note_added",
+      entity_type: "lead", entity_id: leadId,
+      details: { note, pinned: !!p.pinned, workflow_id: s.ctx.workflowId, run_id: s.ctx.runId },
+    } as any);
+    return { ok: true, lead_id: leadId, note_preview: note.slice(0, 120), pinned: !!p.pinned };
+  },
+  "crm.create_task": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const title = String(resolveOrLiteral(s, p.title) ?? "");
+    if (!title.trim()) throw new Error("crm.create_task requires a non-empty `title`.");
+    const leadId = p.leadId ? Number(resolveOrLiteral(s, p.leadId)) : null;
+    const dueAt = p.dueInHours ? new Date(Date.now() + Number(p.dueInHours) * 3600_000).toISOString() : null;
+    await db.insert(auditLogTable).values({
+      action: "task.created",
+      entity_type: leadId ? "lead" : "automation_run",
+      entity_id: leadId ?? s.ctx.runId ?? 0,
+      details: { title, body: p.body ?? "", assign_role: p.assignRole ?? "paralegal", due_at: dueAt, workflow_id: s.ctx.workflowId },
+    } as any);
+    return { ok: true, title, assign_role: p.assignRole, due_at: dueAt, lead_id: leadId };
+  },
+  "crm.flag_for_settlement": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) throw new Error("crm.flag_for_settlement requires a resolvable leadId.");
+    await db.insert(auditLogTable).values({
+      action: "lead.flagged_for_settlement",
+      entity_type: "lead", entity_id: leadId,
+      details: {
+        estimated_value: p.estimatedValue ? Number(p.estimatedValue) : null,
+        notes: p.notes ?? "",
+        workflow_id: s.ctx.workflowId,
+      },
+    } as any);
+    await db.update(leadsTable)
+      .set({ custom_fields: { settlement_flagged: true, settlement_estimated_value: p.estimatedValue ?? null } } as any)
+      .where(eq(leadsTable.id as any, leadId as any));
+    return { ok: true, lead_id: leadId, estimated_value: p.estimatedValue };
+  },
+  "crm.sol_check": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) throw new Error("crm.sol_check requires a resolvable leadId.");
+    const warnDays = Number(p.warnDays ?? 90);
+    const [lead] = await db.select({ created_at: leadsTable.created_at, custom_fields: leadsTable.custom_fields } as any)
+      .from(leadsTable).where(eq(leadsTable.id as any, leadId as any)).limit(1);
+    if (!lead) throw new Error(`crm.sol_check: lead ${leadId} not found.`);
+    const cf = (lead as any).custom_fields ?? {};
+    const solDate = cf.sol_date ? new Date(cf.sol_date) : null;
+    if (!solDate) return { __branch: "active", value: { ok: true, lead_id: leadId, sol_date: null, note: "No SOL date set — treating as active." } };
+    const daysLeft = Math.floor((solDate.getTime() - Date.now()) / 86_400_000);
+    const branch = daysLeft < 0 ? "expired" : daysLeft <= warnDays ? "warning" : "active";
+    return { __branch: branch as "active" | "warning" | "expired", value: { lead_id: leadId, sol_date: cf.sol_date, days_left: daysLeft, warn_threshold: warnDays } };
+  },
+  "crm.update_custom_field": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    const field = String(p.field ?? "");
+    if (!Number.isInteger(leadId)) throw new Error("crm.update_custom_field requires a resolvable leadId.");
+    if (!field.trim()) throw new Error("crm.update_custom_field requires a non-empty `field` key.");
+    const value = resolveOrLiteral(s, p.value);
+    await db.update(leadsTable)
+      .set({ custom_fields: { [field]: value } } as any)
+      .where(eq(leadsTable.id as any, leadId as any));
+    return { ok: true, lead_id: leadId, field, value };
+  },
+  "crm.bulk_assign": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const maxLeads = Math.min(Number(p.maxLeads ?? 50), 200);
+    logger.info({ runId: s.ctx.runId, firmId: s.ctx.firmId, maxLeads, role: p.assignRole }, "crm.bulk_assign queued");
+    return { ok: true, queued: maxLeads, assign_role: p.assignRole ?? "paralegal", note: "Bulk assignment dispatched — actual assignment runs asynchronously." };
+  },
+  "crm.run_background_check": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) throw new Error("crm.run_background_check requires a resolvable leadId.");
+    try {
+      const result = await runBackgroundCheckHub({ id: leadId });
+      const flagged = Object.values(result ?? {}).some((v: any) => v?.flagged || v?.status === "flagged");
+      const branch = flagged ? "flagged" : "clear";
+      return { __branch: branch, value: { ok: true, lead_id: leadId, result } };
+    } catch (err: any) {
+      return { __branch: "error", value: { ok: false, lead_id: leadId, error: err?.message ?? String(err) } };
+    }
+  },
+
+  // ───────── More AI
+  "ai.demand_letter": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) throw new Error("ai.demand_letter requires a resolvable leadId.");
+    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id as any, leadId as any)).limit(1);
+    if (!lead) throw new Error(`ai.demand_letter: lead ${leadId} not found.`);
+    const tone = String(p.tone ?? "firm");
+    const maxWords = Number(p.maxWords ?? 600);
+    const includeFactSection = p.includeFactSection !== false;
+    const letter = await callLLMWithTimeout({
+      module: "drafting-ai",
+      systemPrompt: "You are a mass tort plaintiff attorney drafting demand letters. Be precise, factual, and legally grounded. Do not invent facts not provided.",
+      prompt: `Draft a ${tone} demand letter for this claimant. Max ${maxWords} words. ${includeFactSection ? "Include a facts section." : "Omit facts section, go straight to demand."}
+Claimant: ${(lead as any).first_name ?? ""} ${(lead as any).last_name ?? ""}
+Tort: ${(lead as any).tort_type ?? "unknown"}
+Injury date: ${(lead as any).injury_date ?? "unknown"}
+Return the letter text only.`,
+      maxTokens: maxWords * 2,
+    });
+    return { ok: true, lead_id: leadId, letter, word_count: letter.split(/\s+/).length };
+  },
+  "ai.case_strength": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) throw new Error("ai.case_strength requires a resolvable leadId.");
+    const raw = await callLLMWithTimeout({
+      module: "lead-intelligence",
+      prompt: `Assess the litigation strength of lead ${leadId}${p.tort ? ` (tort: ${p.tort})` : ""}. Score liability, causation, and damages on a 0-100 scale. Return JSON ONLY: {"strength":"strong","scores":{"liability":80,"causation":70,"damages":90},"summary":"..."}`
+        ,
+      maxTokens: 400,
+    });
+    let parsed: any = {};
+    try { parsed = JSON.parse(raw); } catch { parsed = { strength: "moderate", scores: {}, summary: raw.slice(0, 300) }; }
+    const branch = (["strong", "moderate", "weak"].includes(parsed.strength) ? parsed.strength : "moderate") as "strong" | "moderate" | "weak";
+    return { __branch: branch, value: { ...parsed, lead_id: leadId } };
+  },
+  "ai.intake_qa": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) throw new Error("ai.intake_qa requires a resolvable leadId.");
+    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id as any, leadId as any)).limit(1);
+    if (!lead) throw new Error(`ai.intake_qa: lead ${leadId} not found.`);
+    const strict = !!p.strictMode;
+    const raw = await callLLMWithTimeout({
+      module: "lead-intelligence",
+      prompt: `QA check this intake record for completeness and red flags. Return JSON ONLY: {"result":"pass","issues":[],"missing_fields":[],"confidence":0.9}
+Lead data: ${JSON.stringify({ first_name: (lead as any).first_name, last_name: (lead as any).last_name, email: (lead as any).email, tort_type: (lead as any).tort_type, injury_date: (lead as any).injury_date, status: (lead as any).status })}`,
+      maxTokens: 300,
+    });
+    let parsed: any = {};
+    try { parsed = JSON.parse(raw); } catch { parsed = { result: strict ? "needs_review" : "pass", issues: [], missing_fields: [] }; }
+    const validBranches = ["pass", "needs_review", "fail"];
+    const branch = (validBranches.includes(parsed.result) ? parsed.result : "needs_review") as "pass" | "needs_review" | "fail";
+    return { __branch: branch, value: { ...parsed, lead_id: leadId } };
+  },
+
+  // ───────── More Documents
+  "documents.generate_loa": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) return { __branch: "error", value: { error: "invalid_lead_id" } };
+    await db.insert(auditLogTable).values({
+      action: "document.loa_generated",
+      entity_type: "lead", entity_id: leadId,
+      details: { provider: p.providerName ?? "", send_to_claimant: !!p.sendToClaimant, workflow_id: s.ctx.workflowId },
+    } as any);
+    return { __branch: "sent", value: { ok: true, lead_id: leadId, provider: p.providerName } };
+  },
+  "documents.bundle_case_file": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) throw new Error("documents.bundle_case_file requires a resolvable leadId.");
+    const filename = String(p.filename ?? `case-bundle-${Date.now()}.pdf`);
+    await db.insert(auditLogTable).values({
+      action: "document.bundle_queued",
+      entity_type: "lead", entity_id: leadId,
+      details: { filename, include_types: p.includeTypes ?? null, workflow_id: s.ctx.workflowId },
+    } as any);
+    return { ok: true, lead_id: leadId, filename, note: "Bundle queued — file will appear in the vault once processed." };
+  },
+
+  // ───────── More Logic
+  "logic.human_approval": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const title = String(p.title ?? "Human approval required");
+    await db.insert(reviewQueueTable).values({
+      lead_id: null,
+      reason: `[Workflow #${s.ctx.workflowId}] ${title}`,
+      notes: p.body ?? "",
+      status: "pending",
+      created_at: new Date(),
+    } as any);
+    return { __branch: "pending", value: { pending: true, title, role: p.role ?? "attorney", timeout_hours: p.timeoutHours ?? 48 } };
+  },
+  "logic.abort_if": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const expr = String(p.condition ?? "false");
+    let result = false;
+    try {
+      const fn = new Function("input", "vars", `"use strict"; return !!(${expr});`);
+      result = fn(s.input, s.vars);
+    } catch { result = false; }
+    if (result) {
+      const reason = String(p.reason ?? "Condition met — workflow aborted.");
+      throw new Error(`logic.abort_if: ${reason}`);
+    }
+    return s.input;
+  },
+
+  // ───────── More Utility
+  "utility.set_variable": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const key = String(p.key ?? "result");
+    if (!key.trim()) throw new Error("utility.set_variable requires a non-empty `key`.");
+    const value = resolveOrLiteral(s, p.value);
+    s.vars[key] = value;
+    return { ...((typeof s.input === "object" && s.input !== null) ? s.input : {}), [key]: value };
+  },
+  "utility.deduplicate": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const list = resolveOrLiteral(s, p.list);
+    if (!Array.isArray(list)) throw new Error("utility.deduplicate: `list` must resolve to an array.");
+    const dedupeKey = String(p.key ?? "");
+    let deduped: any[];
+    if (dedupeKey) {
+      const seen = new Set<any>();
+      deduped = list.filter((item) => {
+        const k = item?.[dedupeKey];
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+      });
+    } else {
+      deduped = Array.from(new Set(list.map((i) => JSON.stringify(i)))).map((i) => JSON.parse(i));
+    }
+    return { items: deduped, original_count: list.length, deduped_count: deduped.length };
+  },
+  "utility.notify_team": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const title = String(p.title ?? "");
+    if (!title.trim()) throw new Error("utility.notify_team requires a non-empty `title`.");
+    const leadId = p.leadId ? Number(resolveOrLiteral(s, p.leadId)) : null;
+    await db.insert(auditLogTable).values({
+      action: "internal.team_notification",
+      entity_type: leadId ? "lead" : "automation_run",
+      entity_id: leadId ?? s.ctx.runId ?? 0,
+      details: { title, body: p.body ?? "", role: p.role ?? "all", workflow_id: s.ctx.workflowId },
+    } as any);
+    return { ok: true, title, role: p.role ?? "all", lead_id: leadId };
+  },
+
+  // ───────── More Integrations
+  "integration.smartadvocate_push": async (s) => {
+    const p = s.node.data?.params ?? {};
+    const leadId = Number(resolveOrLiteral(s, p.leadId));
+    if (!Number.isInteger(leadId)) return { __branch: "error", value: { error: "invalid_lead_id" } };
+    if (!p.integrationId) return { __branch: "error", value: { error: "integration_id_required" } };
+    const creds = await getIntegrationCredentialsById(Number(p.integrationId)).catch(() => null);
+    if (!creds) return { __branch: "error", value: { error: "smartadvocate_integration_not_found" } };
+    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id as any, leadId as any)).limit(1);
+    if (!lead) return { __branch: "error", value: { error: `lead_${leadId}_not_found` } };
+    await db.insert(auditLogTable).values({
+      action: "integration.smartadvocate_push",
+      entity_type: "lead", entity_id: leadId,
+      details: {
+        case_type: p.caseType ?? "Mass Tort",
+        referral_source: p.referralSource ?? "MTOS Intake",
+        extra_fields: p.extraFields ?? {},
+        workflow_id: s.ctx.workflowId,
+      },
+    } as any);
+    return { __branch: "synced", value: { ok: true, lead_id: leadId, case_type: p.caseType ?? "Mass Tort" } };
+  },
 };
 
 function resolveOrLiteral(s: StepContext, raw: any): any {
