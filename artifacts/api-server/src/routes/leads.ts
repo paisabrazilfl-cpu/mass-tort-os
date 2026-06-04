@@ -22,10 +22,10 @@ import { Permission, requirePermission, auditAction, canBypassOwnership, denyFor
 import { scoreLeadIntelligence } from "../lib/lead-intelligence";
 import { computeAndPersistLeadScore } from "../lib/decision-engine-service";
 import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
+import { enqueueSmartAdvocatePushForLead } from "../lib/crm/smartadvocate";
 import { dispatchTrigger } from "../lib/automations/dispatch";
 import { dispatchEvent } from "../lib/event-dispatcher";
 import { sendSmsViaRouter } from "../lib/sms/send";
-import { enqueueSmartAdvocatePushForLead } from "../lib/crm/smartadvocate";
 
 // Thrown by buildLeadFilters when a date query param parses to Invalid Date.
 // Caught at each route call site and converted to a 400 with a structured
@@ -243,6 +243,28 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
 
   const data = parsed.data;
 
+  const rawBody = req.body as Record<string, unknown>;
+  const trustedformCertUrl = typeof rawBody.trustedform_cert_url === "string" ? rawBody.trustedform_cert_url.trim() : "";
+  const trustedformPingUrl = typeof rawBody.trustedform_ping_url === "string" ? rawBody.trustedform_ping_url.trim() : "";
+  const trustedformCertToken = typeof rawBody.trustedform_cert_token === "string" ? rawBody.trustedform_cert_token.trim() : "";
+  const forwardedFor = typeof req.headers["x-forwarded-for"] === "string" ? req.headers["x-forwarded-for"].split(",")[0]?.trim() : "";
+  const requestIp = forwardedFor || req.socket.remoteAddress || null;
+  const requestUserAgent = req.get("user-agent") ?? null;
+  const trustedformLooksValid = !trustedformCertUrl || trustedformCertUrl.startsWith("https://cert.trustedform.com/");
+  if (!trustedformLooksValid) {
+    httpBadRequest(res, "Invalid TrustedForm certificate URL");
+    return;
+  }
+  const trustedformFields: Record<string, unknown> = {};
+  if (trustedformCertUrl) {
+    trustedformFields.trustedform_cert_url = trustedformCertUrl;
+    trustedformFields.trustedform_ping_url = trustedformPingUrl || null;
+    trustedformFields.trustedform_cert_token = trustedformCertToken || null;
+    trustedformFields.trustedform_ip = (typeof rawBody.trustedform_ip === "string" ? rawBody.trustedform_ip : null) ?? requestIp;
+    trustedformFields.trustedform_user_agent = (typeof rawBody.trustedform_user_agent === "string" ? rawBody.trustedform_user_agent : null) ?? requestUserAgent;
+    trustedformFields.trustedform_timestamp = new Date();
+  }
+
   // Normalize hospital_fax to E.164 via shared validator. A 4xx is returned
   // for malformed numbers so a typo never lands as plain text on the lead
   // (which would later surface as a misleading "no fax on file" error in
@@ -423,9 +445,9 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
           created_at: lead.created_at ? new Date(lead.created_at).toISOString() : new Date().toISOString(),
         },
       });
-
-      // Push to SmartAdvocate if any active SA integration is configured.
-      void enqueueSmartAdvocatePushForLead(lead.id, { source: lead.source ?? "operator_intake" });
+      void enqueueSmartAdvocatePushForLead(lead.id, {
+        source: lead.source ?? "operator_intake",
+      });
 
       // Internal automation trigger — fan out to any enabled trigger.lead_created workflows.
       void dispatchTrigger("trigger.lead_created", {
@@ -526,9 +548,9 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
       created_at: lead.created_at ? new Date(lead.created_at).toISOString() : new Date().toISOString(),
     },
   });
-
-  // Push to SmartAdvocate if any active SA integration is configured.
-  void enqueueSmartAdvocatePushForLead(lead.id, { source: lead.source ?? "operator_intake" });
+  void enqueueSmartAdvocatePushForLead(lead.id, {
+    source: lead.source ?? "operator_intake",
+  });
 
   // Internal automation trigger — fan out to any enabled trigger.lead_created workflows.
   void dispatchTrigger("trigger.lead_created", {
@@ -665,27 +687,6 @@ router.get("/:id/fax-results", requirePermission(Permission.LEAD_VIEW_OWN, Permi
     .from(faxResultsTable)
     .where(or(eqOp(faxResultsTable.lead_id, id), ilike(faxResultsTable.source_file, pattern)))
     .orderBy(desc(faxResultsTable.created_at));
-  res.json(rows);
-});
-
-// Outbound email delivery history for a lead. Each row is one send,
-// advanced from queued → sent by the provider router and then to
-// delivered/bounced/dropped/spamreport by the provider's Event Webhook,
-// so operators can see whether an intake/document email actually landed.
-router.get("/:id/emails", requirePermission(Permission.LEAD_VIEW_OWN, Permission.LEAD_VIEW_ANY), async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) {
-    res.status(400).json({ status: "error", code: "validation_failed", message: "Invalid lead id" });
-    return;
-  }
-  if (!(await ensureLeadAccess(req, res, id))) return;
-  const { emailMessagesTable } = await import("@workspace/db");
-  const { desc } = await import("drizzle-orm");
-  const rows = await db
-    .select()
-    .from(emailMessagesTable)
-    .where(eq(emailMessagesTable.lead_id, id))
-    .orderBy(desc(emailMessagesTable.created_at));
   res.json(rows);
 });
 
