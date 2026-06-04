@@ -10,6 +10,11 @@ export interface IntegrationPreset {
   recommended?: boolean;
   pricing: "free" | "freemium" | "usage" | "subscription" | "enterprise";
   notes?: string;
+  /** "live"          — adapter code exists and consumes vault credentials.
+   *  "live_no_vault" — adapter exists but auth is via SDK/env, not the vault.
+   *  "vault_only"    — preset accepts credentials but no code uses them yet. */
+  wired?: "live" | "live_no_vault" | "vault_only";
+  wiring_note?: string | null;
   /** Non-secret fields that should be pre-populated when the user opens the
    *  connect dialog — e.g. known API base URLs and inbound webhook endpoints.
    *  Secret fields (api_key, client_secret, public_key, account_sid, client_id)
@@ -59,7 +64,7 @@ export const PRESET_INTEGRATIONS: IntegrationPreset[] = [
   // ──────────────────────────── EMAIL ────────────────────────────
   { provider: "sendgrid", name: "SendGrid", type: "email", category: "Email", description: "Twilio-owned email API — high deliverability, marketing + transactional.", docs_url: "https://docs.sendgrid.com", fields: ["api_key", "from_email", "from_name"], score: 9, recommended: true, pricing: "freemium", notes: "Default for transactional + drip campaigns. from_email must match a verified SendGrid Sender Identity." },
   { provider: "postmark", name: "Postmark", type: "email", category: "Email", description: "Best-in-class transactional deliverability, fast support.", docs_url: "https://postmarkapp.com/developer", fields: ["api_key"], score: 9, recommended: true, pricing: "usage", notes: "Use specifically for transactional (signed retainer confirmation, MFA). Inbox rate is unmatched." },
-  { provider: "resend", name: "Resend", type: "email", category: "Email", description: "Modern email API for developers, beautiful React Email components.", docs_url: "https://resend.com/docs", fields: ["api_key"], score: 8, pricing: "freemium", notes: "Best DX; great for templated client emails." },
+  { provider: "resend", name: "Resend", type: "email", category: "Email", description: "Modern email API for developers, beautiful React Email components.", docs_url: "https://resend.com/docs", fields: ["api_key", "from_email", "from_name"], score: 8, recommended: true, pricing: "freemium", wired: "live", notes: "api_key = Resend API key (starts with re_). from_email must be an address on a domain verified in your Resend account (resend.com/domains). from_name is the display name (e.g. MTOS Legal)." },
   { provider: "mailgun", name: "Mailgun", type: "email", category: "Email", description: "Mature transactional email with strong analytics and EU regions.", docs_url: "https://documentation.mailgun.com", fields: ["api_key"], score: 8, pricing: "usage" },
   { provider: "aws_ses", name: "AWS SES", type: "email", category: "Email", description: "Amazon Simple Email Service — cheapest at scale ($0.10 per 1k).", docs_url: "https://docs.aws.amazon.com/ses", fields: ["api_key", "client_secret"], score: 7, pricing: "usage", notes: "Use only if you already live in AWS; manual reputation warmup required." },
   { provider: "brevo", name: "Brevo (Sendinblue)", type: "email", category: "Email", description: "Email + SMS + CRM in one — generous free tier.", docs_url: "https://developers.brevo.com", fields: ["api_key"], score: 6, pricing: "freemium" },
