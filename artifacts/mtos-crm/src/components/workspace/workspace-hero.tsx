@@ -30,7 +30,15 @@ interface WorkspaceHeroProps {
   className?: string;
 }
 
-export function WorkspaceHero({ eyebrow, title, description, badge, actions = [], steps = [], className }: WorkspaceHeroProps) {
+export function WorkspaceHero({
+  eyebrow,
+  title,
+  description,
+  badge,
+  actions = [],
+  steps = [],
+  className,
+}: WorkspaceHeroProps) {
   return (
     <Card className={cn("relative overflow-hidden border-primary/15 bg-[linear-gradient(135deg,hsl(var(--card)/0.98),hsl(var(--accent)/0.55))]", className)}>
       <div className="pointer-events-none absolute inset-0">
@@ -38,6 +46,7 @@ export function WorkspaceHero({ eyebrow, title, description, badge, actions = []
         <div className="absolute right-0 top-0 h-56 w-56 rounded-full bg-[hsl(var(--chart-4)/0.16)] blur-3xl" />
         <div className="absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-[hsl(var(--chart-2)/0.14)] blur-3xl" />
       </div>
+
       <CardHeader className="relative gap-5 md:flex-row md:items-end md:justify-between md:space-y-0">
         <div className="max-w-3xl space-y-4">
           <div className="flex flex-wrap items-center gap-2">
@@ -68,6 +77,7 @@ export function WorkspaceHero({ eyebrow, title, description, badge, actions = []
             </div>
           ) : null}
         </div>
+
         <div className="relative grid w-full max-w-sm gap-3 rounded-[24px] border border-primary/15 bg-background/70 p-4 shadow-[0_10px_30px_-18px_hsl(var(--primary)/0.45)] backdrop-blur-xl">
           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Designed for low-click flow</div>
           <div className="grid grid-cols-3 gap-2 text-center">
@@ -84,9 +94,12 @@ export function WorkspaceHero({ eyebrow, title, description, badge, actions = []
               <div className="text-[11px] text-muted-foreground">Menu hunting</div>
             </div>
           </div>
-          <p className="text-sm leading-6 text-muted-foreground">Operators should feel where to go next the moment the page opens.</p>
+          <p className="text-sm leading-6 text-muted-foreground">
+            Operators should feel where to go next the moment the page opens. This header keeps the path visible.
+          </p>
         </div>
       </CardHeader>
+
       {steps.length > 0 ? (
         <CardContent className="relative">
           <div className="grid gap-3 md:grid-cols-3">
@@ -95,11 +108,13 @@ export function WorkspaceHero({ eyebrow, title, description, badge, actions = []
               const body = (
                 <div className="group h-full rounded-[24px] border border-border/70 bg-background/72 p-4 shadow-[0_12px_30px_-22px_hsl(var(--foreground)/0.25)] backdrop-blur-xl transition-transform duration-200 hover:-translate-y-1">
                   <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary/12 text-primary">{index + 1}</span>
+                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary/12 text-primary">
+                      {index + 1}
+                    </span>
                     Step {index + 1}
                   </div>
                   <div className="mt-4 flex items-start gap-3">
-                    <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,hsl(var(--primary)/0.16),hsl(var(--chart-4)/0.16))] text-primary shadow-[0_8px_20px_-14px_hsl(var(--primary)/0.45)]">
+                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,hsl(var(--primary)/0.16),hsl(var(--chart-4)/0.16))] text-primary shadow-[0_8px_20px_-14px_hsl(var(--primary)/0.45)] shrink-0">
                       <Icon className="h-5 w-5" />
                     </span>
                     <div className="min-w-0">
@@ -107,7 +122,8 @@ export function WorkspaceHero({ eyebrow, title, description, badge, actions = []
                       <p className="mt-1 text-sm leading-6 text-muted-foreground">{step.description}</p>
                       {step.href ? (
                         <div className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary">
-                          {step.ctaLabel ?? "Open"} <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                          {step.ctaLabel ?? "Open"}
+                          <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
                         </div>
                       ) : null}
                     </div>
@@ -115,9 +131,13 @@ export function WorkspaceHero({ eyebrow, title, description, badge, actions = []
                 </div>
               );
               return step.href ? (
-                <Link key={`${step.title}-${index}`} href={step.href} className="block h-full">{body}</Link>
+                <Link key={`${step.title}-${index}`} href={step.href} className="block h-full">
+                  {body}
+                </Link>
               ) : (
-                <div key={`${step.title}-${index}`} className="h-full">{body}</div>
+                <div key={`${step.title}-${index}`} className="h-full">
+                  {body}
+                </div>
               );
             })}
           </div>
