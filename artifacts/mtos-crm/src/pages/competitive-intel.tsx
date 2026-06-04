@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import {
   Eye, AlertTriangle, RefreshCw, Search, Plus, Trash2, ExternalLink,
   Loader2, ImageIcon, Zap, Facebook, Globe,
@@ -502,16 +503,12 @@ export default function CompetitiveIntelPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-6xl">
-      {/* ── Header ── */}
-      <div>
-        <h1 className="text-2xl font-semibold flex items-center gap-2">
-          <Eye className="h-6 w-6 text-violet-500" /> Competitive Intelligence
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-          Track what plaintiff firms are advertising across Google, Meta, and TikTok.
-          Spot new MDLs as they launch before they flood the market.
-        </p>
-      </div>
+      <WorkspaceHero
+        eyebrow="Market Intelligence"
+        title="Competitive Intelligence"
+        description="Track what plaintiff firms are advertising across Google, Meta, and TikTok. Spot new MDLs as they launch before they flood the market."
+        badge="Multi-platform"
+      />
 
       {/* ── Platform status banner ── */}
       {config && (
