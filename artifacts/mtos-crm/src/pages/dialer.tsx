@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import Vapi from "@vapi-ai/web";
+import { getAccessToken } from "@/lib/auth-store";
 import { apiFetch as sharedApiFetch } from "@/lib/api-fetch";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -28,7 +29,6 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
-import { getAccessToken } from "@/lib/auth-store";
 import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 
 const API = (path: string) => `/api/dialer${path}`;
