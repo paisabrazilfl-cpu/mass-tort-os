@@ -239,6 +239,12 @@ const REGISTRY: Record<string, WiringInfo> = {
     note: "Self-hosted fasten-onprem GPL build. Requires api_url pointing at your instance and an admin api_key.",
   },
 
+  // Legal CRM — Becker / RoundUp native intake push.
+  smartadvocate: {
+    status: "live",
+    note: "Pushes RoundUp leads into SmartAdvocate via the documented Simple HTTP POST case-intake endpoint. Uses api_url for the case intake URL, api_key for the Integration Key, optional config.tenant_id / case metadata defaults, field_mapping for exact SmartAdvocate UDF names, and /integrations/:id/sync for bulk RoundUp backfill.",
+  },
+
   // Automation — receive lead.created events
   n8n: {
     status: "live",
@@ -262,12 +268,6 @@ const REGISTRY: Record<string, WiringInfo> = {
   openai: {
     status: "live_no_vault",
     note: "Default LLM. Uses the Replit AI Integrations SDK by default (env auth); a vault api_key is accepted as an override but is optional.",
-  },
-
-  // Legal CRM — Becker / RoundUp native intake push.
-  smartadvocate: {
-    status: "live",
-    note: "Pushes RoundUp leads into SmartAdvocate via the documented Simple HTTP POST case-intake endpoint. Uses api_url for the case intake URL, api_key for the Integration Key, optional config.tenant_id / case metadata defaults, field_mapping for exact SmartAdvocate UDF names, and /integrations/:id/sync for bulk RoundUp backfill.",
   },
 };
 

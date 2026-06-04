@@ -168,7 +168,6 @@ export default function LeadIntake() {
       }
 
       const newLead = await createLead.mutateAsync({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         data: {
           ...values,
           name: `${values.first_name} ${values.last_name}`,
@@ -178,14 +177,15 @@ export default function LeadIntake() {
           notes: values.notes || undefined,
           law_firm: values.law_firm || undefined,
           client_id: values.client_id || undefined,
-          // TrustedForm + TCPA fields — not in generated schema but accepted by the server.
-          tcpa_consent: values.tcpa_consent,
-          trustedform_cert_url: tfCert,
-          trustedform_ping_url: tfPing || undefined,
-          trustedform_cert_token: tfToken || undefined,
-          trustedform_user_agent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
-          trustedform_timestamp: new Date().toISOString(),
-        } as any
+          ...({
+            tcpa_consent: values.tcpa_consent,
+            trustedform_cert_url: tfCert,
+            trustedform_ping_url: tfPing || undefined,
+            trustedform_cert_token: tfToken || undefined,
+            trustedform_user_agent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+            trustedform_timestamp: new Date().toISOString(),
+          } as any),
+        }
       });
 
       if ((newLead as any)?._conflict?.output_state === "REVIEW_REQUIRED") {
