@@ -128,9 +128,8 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
 
   if (ciphertext.startsWith("enc:v")) {
     const parts = ciphertext.split(":");
-    const vPart = parts[1] || "v1";
-    keyVersion = parseInt(vPart.split("v")[1] || "1", 10) || 1;
-    hasAADFlag = parseInt(parts[2] || "0", 10) || 0;
+    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
+    hasAADFlag = parseInt(parts[2], 10) || 0;
     payload = parts.slice(3).join(":");
   } else {
     payload = ciphertext.slice(4);
