@@ -1,9 +1,11 @@
 import { useGetDashboardStats, useGetPipelineBreakdown, useGetRecentActivity, useGetParalegalLeaderboard, getGetDashboardStatsQueryKey, getGetPipelineBreakdownQueryKey, getGetRecentActivityQueryKey, getGetParalegalLeaderboardQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Activity, DollarSign, Users, CheckCircle, Percent, Flame } from "lucide-react";
+import { Activity, DollarSign, Users, CheckCircle, Percent, Flame, AppWindow, HeartPulse, PhoneCall, Workflow, ShieldAlert, FileText } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
 import { format } from "date-fns";
+import { Link } from "wouter";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading } = useGetDashboardStats({
@@ -23,13 +25,40 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Command Center</h1>
-        <div className="flex items-center gap-2">
-          <span className="flex h-2 w-2 rounded-full bg-green-500"></span>
-          <span className="text-sm text-muted-foreground font-mono">SYSTEM ONLINE</span>
-        </div>
-      </div>
+      <WorkspaceHero
+        eyebrow="Start here"
+        badge="Operator-friendly workspace"
+        title="Operations Command Center"
+        description="Run the CRM by workflow instead of hunting through dozens of screens. Start with intake, records, calls, automation, or review, then drill into detail only when needed."
+        actions={[
+          { label: "New Lead", href: "/leads/new", icon: Users },
+          { label: "Intake Forms", href: "/web-forms", icon: AppWindow, variant: "outline" },
+          { label: "Automations", href: "/automations", icon: Workflow, variant: "outline" },
+        ]}
+        steps={[
+          {
+            title: "Capture intake",
+            description: "Open forms, publish an intake flow, or drop a lead in manually.",
+            icon: AppWindow,
+            href: "/form-engine",
+            ctaLabel: "Open intake workspace",
+          },
+          {
+            title: "Work the case",
+            description: "Move from records requests to review queue and document handling.",
+            icon: HeartPulse,
+            href: "/medical-records",
+            ctaLabel: "Open case operations",
+          },
+          {
+            title: "Follow up fast",
+            description: "Launch dialing, voice, and automation without touching the advanced setup first.",
+            icon: PhoneCall,
+            href: "/dialer",
+            ctaLabel: "Open follow-up workspace",
+          },
+        ]}
+      />
 
       <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
         <StatCard
@@ -68,6 +97,31 @@ export default function Dashboard() {
           icon={Percent}
           loading={statsLoading}
         />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {[
+          { title: "Public intake", body: "Publish or embed forms by tort and copy the exact snippet your marketing team needs.", href: "/web-forms", icon: AppWindow },
+          { title: "Medical records", body: "Track requests, delivery health, and fulfillment without digging through back-office tools.", href: "/medical-records", icon: HeartPulse },
+          { title: "Review queue", body: "See the files that need a human decision before they move forward.", href: "/review-queue", icon: ShieldAlert },
+          { title: "Document work", body: "Open templates, AI drafting, and record review from a single lane.", href: "/documents", icon: FileText },
+        ].map((item) => (
+          <Link key={item.title} href={item.href} className="block">
+            <Card className="h-full border-primary/10 transition hover:border-primary/40 hover:shadow-sm">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <item.icon className="h-4 w-4" />
+                  </span>
+                  {item.title}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">{item.body}</p>
+              </CardContent>
+            </Card>
+          </Link>
+        ))}
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">

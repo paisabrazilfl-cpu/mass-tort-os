@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/sheet";
 import { apiFetch, ApiError } from "@/lib/api-fetch";
 import { useToast } from "@/hooks/use-toast";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 
 interface MrrRow {
   id: number;
@@ -330,6 +331,39 @@ export default function MedicalRecordsPage() {
           Refresh
         </Button>
       </div>
+
+      <WorkspaceHero
+        eyebrow="Medical records workspace"
+        badge="Operator-friendly flow"
+        title="Work records by process, not by guesswork"
+        description="The common path is simple: verify the provider, send the request, and watch for fulfillment or exceptions. Everything below supports that path without forcing staff through hidden system detail first."
+        actions={[
+          { label: "Provider lookup", href: "/npi-lookup", icon: Stethoscope },
+          { label: "OCR inbox", href: "/ocr-inbox", icon: Inbox, variant: "outline" },
+          { label: "Document review", href: "/doc-review", icon: Eye, variant: "outline" },
+        ]}
+        steps={[
+          {
+            title: "Verify provider",
+            description: "Confirm the facility and fax target before the request is sent.",
+            icon: Stethoscope,
+            href: "/npi-lookup",
+            ctaLabel: "Open lookup",
+          },
+          {
+            title: "Send or resend",
+            description: "Use the request table to push the fax out and recover failures quickly.",
+            icon: RefreshCw,
+          },
+          {
+            title: "Track delivery and intake",
+            description: "Watch fulfillment, inbound faxes, and exceptions from one queue.",
+            icon: Inbox,
+            href: "/ocr-inbox",
+            ctaLabel: "Open inbox",
+          },
+        ]}
+      />
 
       {/* ── Pipeline summary — global counts per status ─────────────────── */}
       <div className="space-y-2">

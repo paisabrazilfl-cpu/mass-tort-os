@@ -126,10 +126,21 @@ export default function LeadDetail() {
   const deleteLead = useDeleteLead();
   const qualifyLead = useQualifyLead();
 
-  if (lead && !notesLoaded) {
-    setNotes(lead.notes || "");
-    setNotesLoaded(true);
-  }
+  useEffect(() => {
+    setNotes(null);
+    setNotesLoaded(false);
+    setIntelligence(null);
+    setScoringError(null);
+    setLensScore(null);
+    autoTriggered.current = false;
+  }, [leadId]);
+
+  useEffect(() => {
+    if (lead && !notesLoaded) {
+      setNotes(lead.notes || "");
+      setNotesLoaded(true);
+    }
+  }, [lead, notesLoaded]);
 
   const handleStatusChange = async (newStatus: UpdateLeadBodyStatus) => {
     try {
@@ -164,6 +175,7 @@ export default function LeadDetail() {
         body: JSON.stringify({ notes: notes || "" }),
       });
       if (!res.ok) throw new Error("Save failed");
+      queryClient.invalidateQueries({ queryKey: getGetLeadQueryKey(leadId) });
       toast({ title: "Case notes saved" });
     } catch {
       toast({ title: "Unable to save notes — please retry", variant: "destructive" });
@@ -215,28 +227,6 @@ export default function LeadDetail() {
       setLensLoading(false);
     }
   }, [leadId]);
-
-  const openDoc = async (id: number, download = false) => {
-    try {
-      const res = await apiFetchRaw(`/api/documents/${id}/view${download ? "?download=1" : ""}`);
-      if (!res.ok) throw new Error(`${res.status}`);
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      if (download) {
-        const a = document.createElement("a");
-        a.href = blobUrl;
-        a.download = "";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 15_000);
-      } else {
-        window.open(blobUrl, "_blank", "noopener,noreferrer");
-      }
-    } catch {
-      toast({ title: "Could not load document", description: "Try again or contact support.", variant: "destructive" });
-    }
-  };
 
   useEffect(() => {
     if (lead && !autoTriggered.current) {
@@ -294,47 +284,93 @@ export default function LeadDetail() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="outline" size="icon" asChild>
-            <Link href="/leads"><ArrowLeft className="h-4 w-4" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">{lead.name}</h1>
-            <div className="text-sm text-muted-foreground flex items-center gap-2 mt-1">
-              <span className="font-mono">ID: {lead.id}</span>
-              <span>·</span>
-              <span>{lead.tort_type}</span>
-              <span>·</span>
-              <span>Intake {format(new Date(lead.created_at), "MMM d, yyyy")}</span>
+      <div className="relative overflow-hidden rounded-[32px] border border-primary/15 bg-[linear-gradient(135deg,hsl(var(--card)/0.98),hsl(var(--accent)/0.42))] p-6 shadow-[0_18px_40px_-28px_hsl(var(--primary)/0.55)] md:p-7">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute -left-12 top-0 h-40 w-40 rounded-full bg-primary/16 blur-3xl" />
+          <div className="absolute right-0 top-0 h-48 w-48 rounded-full bg-[hsl(var(--chart-4)/0.14)] blur-3xl" />
+        </div>
+        <div className="relative flex flex-col gap-5">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div className="flex items-start gap-4">
+              <Button variant="outline" size="icon" asChild>
+                <Link href="/leads"><ArrowLeft className="h-4 w-4" /></Link>
+              </Button>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                  <span className="rounded-full border border-primary/15 bg-background/70 px-3 py-1">Lead command center</span>
+                  <span className="rounded-full border border-border/70 bg-background/60 px-3 py-1">{lead.tort_type}</span>
+                </div>
+                <div>
+                  <h1 className="text-3xl font-bold tracking-tight md:text-4xl">{lead.name}</h1>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                    <span className="font-mono">ID: {lead.id}</span>
+                    <span>·</span>
+                    <span>Intake {format(new Date(lead.created_at), "MMM d, yyyy")}</span>
+                    <span>·</span>
+                    <span>{lead.email || lead.phone_primary || lead.phone || "No contact on file"}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+              <SendSmsButton
+                leadId={lead.id}
+                hasPhone={Boolean((lead.phone_primary || lead.phone)?.toString().trim())}
+              />
+              {lead.status === "new" && (
+                <Button onClick={handleRunGatekeeper} disabled={qualifyLead.isPending}>
+                  <Scale className="mr-2 h-4 w-4" />
+                  Run Gatekeeper
+                </Button>
+              )}
+              {lead.status === "qualified" && (
+                <Button onClick={() => handleStatusChange("signed")} className="bg-emerald-600 hover:bg-emerald-700">
+                  <FileSignature className="mr-2 h-4 w-4" />
+                  Execute Retainer
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={() => window.open(`/api/leads/export?lead_id=${lead.id}`, "_blank")}>
+                <Download className="mr-2 h-4 w-4" />
+                Export
+              </Button>
+              <Badge variant={
+                lead.status === "signed" ? "default" :
+                lead.status === "qualified" ? "secondary" :
+                lead.status === "rejected" ? "destructive" :
+                lead.status === "review_required" ? "secondary" : "outline"
+              } className={`text-sm px-3 py-1 ${lead.status === "review_required" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : lead.status === "signed" ? "bg-emerald-600" : ""}`}>
+                {lead.status === "review_required" ? "REVIEW REQUIRED" : lead.status.toUpperCase()}
+              </Badge>
             </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {lead.status === "new" && (
-            <Button onClick={handleRunGatekeeper} disabled={qualifyLead.isPending}>
-              <Scale className="mr-2 h-4 w-4" />
-              Run Gatekeeper
-            </Button>
-          )}
-          {lead.status === "qualified" && (
-            <Button onClick={() => handleStatusChange("signed")} className="bg-emerald-600 hover:bg-emerald-700">
-              <FileSignature className="mr-2 h-4 w-4" />
-              Execute Retainer
-            </Button>
-          )}
-          <Button variant="outline" size="sm" onClick={() => window.open(`/api/leads/export?lead_id=${lead.id}`, "_blank")}>
-            <Download className="mr-2 h-4 w-4" />
-            Export
-          </Button>
-          <Badge variant={
-            lead.status === "signed" ? "default" :
-            lead.status === "qualified" ? "secondary" :
-            lead.status === "rejected" ? "destructive" :
-            lead.status === "review_required" ? "secondary" : "outline"
-          } className={`text-sm px-3 py-1 ${lead.status === "review_required" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : lead.status === "signed" ? "bg-emerald-600" : ""}`}>
-            {lead.status === "review_required" ? "REVIEW REQUIRED" : lead.status.toUpperCase()}
-          </Badge>
+
+          <div className="flex flex-wrap gap-2">
+            <Button variant={activeTab === "profile" ? "default" : "outline"} size="sm" onClick={() => setActiveTab("profile")}>Claimant Profile</Button>
+            <Button variant={activeTab === "medical" ? "default" : "outline"} size="sm" onClick={() => setActiveTab("medical")}>Medical</Button>
+            <Button variant={activeTab === "documents" ? "default" : "outline"} size="sm" onClick={() => setActiveTab("documents")}>Documents</Button>
+            <Button variant={activeTab === "automation" ? "default" : "outline"} size="sm" onClick={() => setActiveTab("automation")}>Automation</Button>
+            <Button variant={activeTab === "intelligence" ? "default" : "outline"} size="sm" onClick={() => setActiveTab("intelligence")}>AI Intelligence</Button>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-4">
+            <div className="rounded-[22px] border border-border/70 bg-background/72 p-4 backdrop-blur-xl">
+              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Status</div>
+              <div className="mt-2 text-lg font-semibold capitalize">{lead.status.replace(/_/g, " ")}</div>
+            </div>
+            <div className="rounded-[22px] border border-border/70 bg-background/72 p-4 backdrop-blur-xl">
+              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Documents</div>
+              <div className="mt-2 text-lg font-semibold">{documents?.length ?? 0} files</div>
+            </div>
+            <div className="rounded-[22px] border border-border/70 bg-background/72 p-4 backdrop-blur-xl">
+              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Conversion</div>
+              <div className="mt-2 text-lg font-semibold">{lensScore ? `${Math.round(lensScore.conversion_probability)}%` : "Scoring…"}</div>
+            </div>
+            <div className="rounded-[22px] border border-border/70 bg-background/72 p-4 backdrop-blur-xl">
+              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Quality tier</div>
+              <div className="mt-2 text-lg font-semibold capitalize">{lensScore?.quality_tier ?? "Pending"}</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -853,24 +889,6 @@ export default function LeadDetail() {
                         ) : (
                           <Badge variant="outline">Pending Execution</Badge>
                         )}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 px-2 text-xs"
-                          onClick={() => openDoc(doc.id, false)}
-                          title="View document"
-                        >
-                          <ExternalLink className="h-3 w-3 mr-1" />View
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 px-2 text-xs"
-                          onClick={() => openDoc(doc.id, true)}
-                          title="Download document"
-                        >
-                          <Download className="h-3 w-3" />
-                        </Button>
                       </div>
                     </div>
                   ))}

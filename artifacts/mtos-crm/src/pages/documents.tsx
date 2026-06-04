@@ -6,12 +6,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
-import { FileText, Eye, Download, Trash2 } from "lucide-react";
+import { FileText, Eye, Download, Trash2, Wand2, FileSignature } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
-import { apiFetchRaw } from "@/lib/api-fetch";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -50,30 +50,28 @@ export default function Documents() {
     },
   });
 
-  const openDoc = async (id: number, fileName: string, download = false) => {
-    try {
-      const res = await apiFetchRaw(`/api/documents/${id}/view${download ? "?download=1" : ""}`);
-      if (!res.ok) throw new Error(`${res.status}`);
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      if (download) {
-        const a = document.createElement("a");
-        a.href = blobUrl;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 15_000);
-      } else {
-        window.open(blobUrl, "_blank", "noopener,noreferrer");
-      }
-    } catch {
-      toast({ title: "Could not load document", description: "Try again or contact support.", variant: "destructive" });
-    }
-  };
+  const viewHref = (id: number, download = false) =>
+    `${import.meta.env.BASE_URL}api/documents/${id}/view${download ? "?download=1" : ""}`.replace(/([^:]\/)\/+/g, "$1");
 
   return (
     <div className="space-y-6">
+      <WorkspaceHero
+        eyebrow="Documents workspace"
+        badge="Big-block document flow"
+        title="Find, draft, and send documents from one clearer hub"
+        description="The document area is organized around the common legal workflow: locate the file, draft what is missing, and move signature-ready paperwork forward."
+        actions={[
+          { label: "AI drafting", href: "/drafting" },
+          { label: "Templates", href: "/document-templates" },
+          { label: "OCR inbox", href: "/ocr-inbox" },
+        ]}
+        steps={[
+          { title: "Find the file", description: "Use the central table to open or download the exact document tied to a lead.", icon: FileText, href: "/documents", ctaLabel: "Browse files" },
+          { title: "Draft missing work", description: "Jump to drafting when legal documents still need to be prepared.", icon: Wand2, href: "/drafting", ctaLabel: "Open drafting" },
+          { title: "Reuse templates", description: "Keep retainer and packet creation consistent across the firm.", icon: FileSignature, href: "/document-templates", ctaLabel: "Open templates" },
+        ]}
+      />
+
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold tracking-tight">Document Center</h1>
       </div>
@@ -133,25 +131,26 @@ export default function Documents() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        data-testid={`button-view-document-${doc.id}`}
-                        onClick={() => openDoc(doc.id, doc.file_name, false)}
-                        title="View document"
-                      >
-                        <Eye className="h-4 w-4 mr-1" />
-                        View
+                      <Button variant="ghost" size="sm" asChild data-testid={`button-view-document-${doc.id}`}>
+                        <a
+                          href={viewHref(doc.id)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="View document"
+                        >
+                          <Eye className="h-4 w-4 mr-1" />
+                          View
+                        </a>
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        data-testid={`button-download-document-${doc.id}`}
-                        onClick={() => openDoc(doc.id, doc.file_name, true)}
-                        title="Download document"
-                      >
-                        <Download className="h-4 w-4 mr-1" />
-                        Download
+                      <Button variant="ghost" size="sm" asChild data-testid={`button-download-document-${doc.id}`}>
+                        <a
+                          href={viewHref(doc.id, true)}
+                          download={doc.file_name}
+                          title="Download document"
+                        >
+                          <Download className="h-4 w-4 mr-1" />
+                          Download
+                        </a>
                       </Button>
                       {canDelete && (
                         <Button

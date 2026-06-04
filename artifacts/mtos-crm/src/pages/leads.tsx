@@ -14,7 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Search, Plus, Download } from "lucide-react";
+import { Search, Plus, Download, AppWindow, ShieldCheck, FileText } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 import { useAuth } from "@/contexts/auth-context";
@@ -255,6 +256,24 @@ export default function Leads() {
 
   return (
     <div className="space-y-6">
+      <WorkspaceHero
+        eyebrow="Lead workspace"
+        badge="Big-block intake flow"
+        title="Capture, qualify, and hand off leads without menu-hopping"
+        description="This workspace is organized around the simple operator path: bring leads in, review qualification, and move the right claimants forward fast."
+        actions={[
+          { label: "New lead", href: "/leads/new" },
+          { label: "Public forms", href: "/web-forms" },
+          { label: "Import leads", href: "/lead-import" },
+          { label: "Outreach", href: "/outreach" },
+        ]}
+        steps={[
+          { title: "Capture intake", description: "Bring in a lead from forms, imports, or manual entry.", icon: AppWindow, href: "/web-forms", ctaLabel: "Open intake" },
+          { title: "Validate and qualify", description: "Use status, source, and qualification signals to decide next action.", icon: ShieldCheck, href: "/background-check", ctaLabel: "Review signals" },
+          { title: "Open the record", description: "Jump into the claimant file when the lead is ready for action.", icon: FileText, href: "/leads/new", ctaLabel: "Create intake" },
+        ]}
+      />
+
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold tracking-tight">Leads</h1>
         <div className="flex items-center gap-2">

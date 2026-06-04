@@ -143,6 +143,9 @@ const ADAPTER_REQUIRED_FIELDS: Record<string, string[]> = {
   // client_secret=PACER password (mapped this way so the existing preset
   // field taxonomy covers it without introducing new field names).
   pacer: ["api_key", "client_secret"],
+
+  // Legal CRM — SmartAdvocate case-intake POST endpoint.
+  smartadvocate: ["api_key"],
 };
 
 export type WiringStatus = "live" | "live_no_vault" | "vault_only";
@@ -259,6 +262,12 @@ const REGISTRY: Record<string, WiringInfo> = {
   openai: {
     status: "live_no_vault",
     note: "Default LLM. Uses the Replit AI Integrations SDK by default (env auth); a vault api_key is accepted as an override but is optional.",
+  },
+
+  // Legal CRM — Becker / RoundUp native intake push.
+  smartadvocate: {
+    status: "live",
+    note: "Pushes RoundUp leads into SmartAdvocate via the documented Simple HTTP POST case-intake endpoint. Uses api_url for the case intake URL, api_key for the Integration Key, optional config.tenant_id / case metadata defaults, field_mapping for exact SmartAdvocate UDF names, and /integrations/:id/sync for bulk RoundUp backfill.",
   },
 };
 

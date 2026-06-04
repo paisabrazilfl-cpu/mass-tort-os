@@ -6,13 +6,15 @@
  * insert). Today it backs both:
  *   - POST /api/lead-import/execute  (bulk import UI)
  *   - POST /api/dialer/campaigns/upload-dial  (CSV "Upload & Dial")
+ *   - POST /api/outreach/execute     (CSV outreach upsert + re-intake)
  *
- * Keeping this as the single source of truth guarantees dialer-uploaded leads
- * get identical dedup + encryption + conflict treatment as imported leads.
+ * Keeping this as the single source of truth guarantees every CSV-backed flow
+ * gets identical parsing, encryption, and dedup semantics while still allowing
+ * each caller to choose how duplicate matches are handled.
  */
 import { db, leadsTable, importBatchesTable, importRowsTable } from "@workspace/db";
 import { eq, and, ilike } from "drizzle-orm";
-import { encryptLeadFields, decrypt, rebindLeadEncryptionAad } from "./encryption";
+import { encryptLeadFields, decrypt, decryptLeadFields, rebindLeadEncryptionAad } from "./encryption";
 import { leadLookupHash } from "./lead-lookup-hash";
 import { runFullConflictCheck } from "./conflict-engine";
 import { logger } from "./logger";
@@ -20,69 +22,69 @@ import { normalizeFaxNumber as normalizeFaxNumberSync } from "./fax/normalize";
 
 export const COLUMN_ALIASES: Record<string, string> = {
   "first name": "first_name",
-  "firstname": "first_name",
+  firstname: "first_name",
   "last name": "last_name",
-  "lastname": "last_name",
+  lastname: "last_name",
   "full name": "name",
-  "fullname": "name",
+  fullname: "name",
   "email address": "email",
-  "email": "email",
+  email: "email",
   "phone number": "phone",
-  "phone": "phone",
+  phone: "phone",
   "primary phone": "phone_primary",
   "cell phone": "phone_primary",
-  "mobile": "phone_primary",
-  "tort": "tort_type",
+  mobile: "phone_primary",
+  tort: "tort_type",
   "tort type": "tort_type",
-  "tort_type": "tort_type",
+  tort_type: "tort_type",
   "mass tort": "tort_type",
-  "dob": "date_of_birth",
+  dob: "date_of_birth",
   "date of birth": "date_of_birth",
-  "birthdate": "date_of_birth",
+  birthdate: "date_of_birth",
   "birth date": "date_of_birth",
-  "ssn": "last_4_ssn",
+  ssn: "last_4_ssn",
   "last 4 ssn": "last_4_ssn",
   "ssn last 4": "last_4_ssn",
-  "last4ssn": "last_4_ssn",
-  "address": "street_address",
+  last4ssn: "last_4_ssn",
+  address: "street_address",
   "street address": "street_address",
-  "street": "street_address",
-  "city": "city",
-  "state": "state",
-  "zip": "zip",
+  street: "street_address",
+  city: "city",
+  state: "state",
+  zip: "zip",
   "zip code": "zip",
-  "zipcode": "zip",
-  "diagnosis": "diagnosis",
+  zipcode: "zip",
+  diagnosis: "diagnosis",
   "diagnosis type": "diagnosis_type",
   "diagnosis date": "diagnosis_date",
   "physician first name": "physician_first_name",
   "physician last name": "physician_last_name",
   "doctor name": "physician_last_name",
-  "physician": "physician_last_name",
-  "hospital": "hospital_name",
+  physician: "physician_last_name",
+  hospital: "hospital_name",
   "hospital name": "hospital_name",
   "hospital fax": "hospital_fax",
-  "fax": "hospital_fax",
+  fax: "hospital_fax",
   "doctor fax": "hospital_fax",
-  "medications": "medications",
-  "meds": "medications",
-  "npi": "npi_number",
+  medications: "medications",
+  meds: "medications",
+  npi: "npi_number",
   "npi number": "npi_number",
-  "source": "source",
+  source: "source",
   "lead source": "source",
-  "vendor": "law_firm",
+  vendor: "law_firm",
   "law firm": "law_firm",
   "client id": "client_id",
-  "notes": "notes",
+  notes: "notes",
   "exposure start": "exposure_start",
   "exposure end": "exposure_end",
-  "location": "location_name",
+  location: "location_name",
   "location name": "location_name",
   "ad spend": "ad_spend",
   "tcpa consent": "tcpa_consent",
-  "tcpa": "tcpa_consent",
-  "consent": "tcpa_consent",
-  "trustedform": "trustedform_cert_url",
+  tcpa: "tcpa_consent",
+  consent: "tcpa_consent",
+  trustedform: "trustedform_cert_url",
   "trustedform cert": "trustedform_cert_url",
   "trustedform cert url": "trustedform_cert_url",
   "cert url": "trustedform_cert_url",
@@ -102,7 +104,7 @@ export const LEAD_FIELDS = new Set([
 ]);
 
 export function parseCSV(text: string): { headers: string[]; rows: Record<string, string>[] } {
-  const lines = text.split(/\r?\n/).filter(line => line.trim());
+  const lines = text.split(/\r?\n/).filter((line) => line.trim());
   if (lines.length < 2) return { headers: [], rows: [] };
 
   const parseRow = (line: string): string[] => {
@@ -131,12 +133,12 @@ export function parseCSV(text: string): { headers: string[]; rows: Record<string
   };
 
   const rawHeaders = parseRow(lines[0]);
-  const headers = rawHeaders.map(h => h.replace(/^["']|["']$/g, "").trim());
+  const headers = rawHeaders.map((h) => h.replace(/^["']|["']$/g, "").trim());
 
   const rows: Record<string, string>[] = [];
   for (let i = 1; i < lines.length; i++) {
     const values = parseRow(lines[i]);
-    if (values.every(v => !v.trim())) continue;
+    if (values.every((v) => !v.trim())) continue;
     const row: Record<string, string> = {};
     headers.forEach((h, idx) => {
       row[h] = (values[idx] || "").trim();
@@ -168,9 +170,6 @@ export function mapRowToLead(row: Record<string, string>, columnMapping: Record<
       if (leadField === "diagnosis_confirmed" || leadField === "was_at_location" || leadField === "tcpa_consent") {
         lead[leadField] = ["true", "yes", "1", "y"].includes(value.toLowerCase());
       } else if (leadField === "hospital_fax") {
-        // Run the imported fax through the shared E.164 normalizer. If it
-        // can't be parsed we drop it (with a marker on the row) rather than
-        // store garbage that would later fail in auto-dispatch.
         const norm = normalizeFaxNumberSync(value);
         if (norm.ok) {
           lead.hospital_fax = norm.e164;
@@ -225,7 +224,6 @@ export async function checkDuplicate(
     }
 
     if (incomingPhones.length > 0) {
-      // Scope phone dedup to the caller's firm — no cross-tenant comparison.
       const existingLeads = await db
         .select({ id: leadsTable.id, name: leadsTable.name, phone: leadsTable.phone, phone_primary: leadsTable.phone_primary })
         .from(leadsTable)
@@ -258,7 +256,7 @@ export async function checkDuplicate(
         for (const incoming of incomingPhones) {
           for (const stored of storedPhones) {
             if (stored.length >= 10 && stored === incoming) {
-              return { isDuplicate: true, matchId: existing.id, reason: `Phone match` };
+              return { isDuplicate: true, matchId: existing.id, reason: "Phone match" };
             }
           }
         }
@@ -280,6 +278,117 @@ export interface ImportBatchSummary {
   conflictCount: number;
   /** Lead ids created during this batch (success + conflict rows). */
   createdLeadIds: number[];
+  /** Existing lead ids updated in-place during upsert mode. */
+  updatedLeadIds: number[];
+  /** All lead ids touched by the batch (created + updated). */
+  touchedLeadIds: number[];
+}
+
+export interface ProcessImportBatchOptions {
+  duplicateMode?: "skip" | "upsert";
+  source?: string;
+}
+
+function isBlankValue(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+function cleanLeadData(leadData: Record<string, any>) {
+  const { _import_warnings: importWarnings, ...leadColumns } = leadData;
+  return {
+    leadColumns,
+    importWarnings: Array.isArray(importWarnings) ? importWarnings.map(String) : [],
+  };
+}
+
+async function upsertExistingLeadFromImport(params: {
+  existingLeadId: number;
+  leadData: Record<string, any>;
+  batchId: number;
+  rowNum: number;
+  source: string;
+}): Promise<{ leadId: number; changedFields: string[]; importWarnings: string[] }> {
+  const { existingLeadId, leadData, batchId, rowNum, source } = params;
+  const [existingRow] = await db
+    .select()
+    .from(leadsTable)
+    .where(eq(leadsTable.id, existingLeadId))
+    .limit(1);
+
+  if (!existingRow) {
+    throw new Error(`Duplicate match ${existingLeadId} disappeared before upsert`);
+  }
+
+  const existingLead = decryptLeadFields(existingRow, String(existingRow.id));
+  const { leadColumns, importWarnings } = cleanLeadData(leadData);
+  const updateData: Record<string, any> = {};
+  const changedFields: string[] = [];
+
+  for (const [field, value] of Object.entries(leadColumns)) {
+    if (isBlankValue(value)) continue;
+
+    if (field === "tcpa_consent") {
+      if (value === true && existingLead.tcpa_consent !== true) {
+        updateData.tcpa_consent = true;
+        changedFields.push(field);
+      }
+      continue;
+    }
+
+    if (field === "source") {
+      if (isBlankValue(existingLead.source)) {
+        updateData.source = value;
+        changedFields.push(field);
+      }
+      continue;
+    }
+
+    if (field === "custom_fields") {
+      continue;
+    }
+
+    if (isBlankValue(existingLead[field])) {
+      updateData[field] = value;
+      changedFields.push(field);
+    }
+  }
+
+  const existingCustomFields =
+    existingRow.custom_fields && typeof existingRow.custom_fields === "object" && !Array.isArray(existingRow.custom_fields)
+      ? (existingRow.custom_fields as Record<string, unknown>)
+      : {};
+
+  updateData.custom_fields = {
+    ...existingCustomFields,
+    outreach: {
+      ...(existingCustomFields.outreach && typeof existingCustomFields.outreach === "object" && !Array.isArray(existingCustomFields.outreach)
+        ? (existingCustomFields.outreach as Record<string, unknown>)
+        : {}),
+      last_batch_id: batchId,
+      last_row_number: rowNum,
+      last_source: source,
+      last_upserted_at: new Date().toISOString(),
+      changed_fields: changedFields,
+      warnings: importWarnings,
+    },
+  };
+
+  const nextTort = (updateData.tort_type ?? existingLead.tort_type ?? null) as string | null;
+  const nextEmail = (updateData.email ?? existingLead.email ?? null) as string | null;
+  const nextPhone = (updateData.phone_primary ?? updateData.phone ?? existingLead.phone_primary ?? existingLead.phone ?? null) as string | null;
+  updateData.lookup_hash = leadLookupHash(nextTort, nextEmail, nextPhone);
+  updateData.updated_at = new Date();
+
+  const encrypted = encryptLeadFields(updateData, String(existingRow.id));
+  await db
+    .update(leadsTable)
+    .set(encrypted as Record<string, any>)
+    .where(eq(leadsTable.id, existingRow.id));
+
+  return { leadId: existingRow.id, changedFields, importWarnings };
 }
 
 export async function processImportBatch(
@@ -287,12 +396,18 @@ export async function processImportBatch(
   rows: Record<string, string>[],
   columnMapping: Record<string, string>,
   firmId: number,
+  options: ProcessImportBatchOptions = {},
 ): Promise<ImportBatchSummary> {
+  const duplicateMode = options.duplicateMode ?? "skip";
+  const source = options.source ?? "csv_import";
+
   let successCount = 0;
   let duplicateCount = 0;
   let errorCount = 0;
   let conflictCount = 0;
   const createdLeadIds: number[] = [];
+  const updatedLeadIds: number[] = [];
+  const touchedLeadIds: number[] = [];
 
   for (let i = 0; i < rows.length; i++) {
     const rowNum = i + 1;
@@ -314,6 +429,38 @@ export async function processImportBatch(
 
       const dedupResult = await checkDuplicate(leadData, firmId);
       if (dedupResult.isDuplicate) {
+        if (duplicateMode === "upsert" && dedupResult.matchId) {
+          const upserted = await upsertExistingLeadFromImport({
+            existingLeadId: dedupResult.matchId,
+            leadData,
+            batchId,
+            rowNum,
+            source,
+          });
+
+          updatedLeadIds.push(upserted.leadId);
+          touchedLeadIds.push(upserted.leadId);
+          successCount++;
+
+          await db.insert(importRowsTable).values({
+            batch_id: batchId,
+            row_number: rowNum,
+            status: "success",
+            raw_data: rows[i],
+            lead_id: upserted.leadId,
+            dedup_match_id: dedupResult.matchId,
+            dedup_reason: `updated_existing:${dedupResult.reason ?? "duplicate_match"}`,
+            error_message:
+              upserted.importWarnings.length > 0
+                ? `updated existing lead; warnings: ${upserted.importWarnings.join("; ")}`
+                : upserted.changedFields.length > 0
+                  ? `updated existing lead fields: ${upserted.changedFields.join(", ")}`
+                  : "matched existing lead; refreshed outreach metadata only",
+            processed_at: new Date(),
+          });
+          continue;
+        }
+
         await db.insert(importRowsTable).values({
           batch_id: batchId,
           row_number: rowNum,
@@ -348,26 +495,17 @@ export async function processImportBatch(
         continue;
       }
 
-      // Strip transient/non-column markers before building the insert
-      // payload — `_import_warnings` is collected in mapRowToLead() so we
-      // can surface per-row notes (e.g. invalid hospital_fax was dropped),
-      // but it is NOT a column on the leads table and would cause the
-      // insert to fail.
-      const { _import_warnings: importWarnings, ...leadColumns } = leadData;
+      const { leadColumns, importWarnings } = cleanLeadData(leadData);
       const insertData: Record<string, any> = {
         ...leadColumns,
         firm_id: firmId,
         status: conflictResult.has_conflict ? "review_required" : "new",
-        source: leadColumns.source || "csv_import",
+        source: leadColumns.source || source,
         diagnosis_confirmed: leadColumns.diagnosis_confirmed || false,
         was_at_location: leadColumns.was_at_location || false,
       };
 
       const encrypted = encryptLeadFields(insertData);
-
-      // Task #15: stamp canonical (tort|email|phone10) hash so subsequent
-      // intake dedup queries can short-circuit. Uses PLAINTEXT inputs from
-      // insertData (pre-encryption) so phone10 normalizes correctly.
       const csvLookupHash = leadLookupHash(
         insertData.tort_type ?? null,
         insertData.email ?? null,
@@ -378,10 +516,10 @@ export async function processImportBatch(
         .insert(leadsTable)
         .values({ ...(encrypted as any), lookup_hash: csvLookupHash })
         .returning();
-      // Task #8: rebind ciphertext AAD to the freshly-assigned lead.id.
       await rebindLeadEncryptionAad(db, leadsTable, newLead as Record<string, unknown>, eq);
 
       createdLeadIds.push(newLead.id);
+      touchedLeadIds.push(newLead.id);
 
       const rowStatus = conflictResult.has_conflict ? "conflict" : "success";
       if (conflictResult.has_conflict) conflictCount++;
@@ -394,12 +532,8 @@ export async function processImportBatch(
         raw_data: rows[i],
         lead_id: newLead.id,
         conflict_details: conflictResult.has_conflict ? conflictResult : null,
-        // Surface per-row warnings (e.g. invalid hospital_fax was dropped)
-        // in the import row itself so operators can audit later. We piggyback
-        // on `error_message` for free-text since adding a new column would
-        // be a schema change.
         error_message:
-          importWarnings && importWarnings.length > 0 ? `warnings: ${importWarnings.join("; ")}` : null,
+          importWarnings.length > 0 ? `warnings: ${importWarnings.join("; ")}` : null,
         processed_at: new Date(),
       });
     } catch (err: unknown) {
@@ -448,9 +582,26 @@ export async function processImportBatch(
     .where(eq(importBatchesTable.id, batchId));
 
   logger.info(
-    { batch_id: batchId, success: successCount, duplicates: duplicateCount, errors: errorCount, conflicts: conflictCount },
-    "Import batch completed"
+    {
+      batch_id: batchId,
+      success: successCount,
+      duplicates: duplicateCount,
+      errors: errorCount,
+      conflicts: conflictCount,
+      created: createdLeadIds.length,
+      updated: updatedLeadIds.length,
+    },
+    "Import batch completed",
   );
 
-  return { batchId, successCount, duplicateCount, errorCount, conflictCount, createdLeadIds };
+  return {
+    batchId,
+    successCount,
+    duplicateCount,
+    errorCount,
+    conflictCount,
+    createdLeadIds,
+    updatedLeadIds,
+    touchedLeadIds,
+  };
 }

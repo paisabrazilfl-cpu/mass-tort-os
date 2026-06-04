@@ -1,7 +1,8 @@
 import React, { useState, useRef } from "react";
 import { useListFaxResults, getListFaxResultsQueryKey, useUploadFax, useGetOcrQueueStats } from "@workspace/api-client-react";
 import { format } from "date-fns";
-import { Search, AlertCircle, CheckCircle, Clock, UploadCloud, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { Search, AlertCircle, CheckCircle, Clock, UploadCloud, ChevronDown, ChevronRight, RefreshCw, FileSearch, HeartPulse } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -120,6 +121,23 @@ export default function OcrInbox() {
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
+      <WorkspaceHero
+        eyebrow="OCR workspace"
+        badge="Simple document intake"
+        title="Turn incoming faxes into usable medical record work in three moves"
+        description="Operators can now follow a plain-language flow: upload the fax, monitor extraction, and hand verified results into review or records processing."
+        actions={[
+          { label: "Medical records", href: "/medical-records" },
+          { label: "Document review", href: "/doc-review" },
+          { label: "Provider lookup", href: "/npi-lookup" },
+        ]}
+        steps={[
+          { title: "Upload the fax", description: "Send scanned records or PDFs into the OCR lane.", icon: UploadCloud, href: "/ocr-inbox", ctaLabel: "Use upload" },
+          { title: "Watch extraction", description: "Use queue counts to see whether records are pending, processing, done, or failed.", icon: FileSearch, href: "/doc-review", ctaLabel: "Review output" },
+          { title: "Route the result", description: "Move the cleaned record into provider lookup or medical records follow-up.", icon: HeartPulse, href: "/medical-records", ctaLabel: "Open records" },
+        ]}
+      />
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-foreground">OCR Inbox</h2>

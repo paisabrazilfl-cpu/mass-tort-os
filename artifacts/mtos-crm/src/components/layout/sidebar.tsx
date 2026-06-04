@@ -21,7 +21,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
   if (collapsed) {
     return (
       <aside
-        className="hidden md:flex h-full w-10 flex-col bg-sidebar border-r border-sidebar-border items-center pt-3"
+        className="hidden md:flex h-full w-12 flex-col border-r border-sidebar-border/80 bg-[linear-gradient(180deg,hsl(var(--sidebar)/0.95),hsl(var(--sidebar)/0.84))] backdrop-blur-xl items-center pt-3 shadow-[10px_0_40px_-28px_hsl(var(--foreground)/0.35)]"
         aria-label="Sidebar (collapsed)"
       >
         <button
@@ -29,7 +29,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
           onClick={onToggleCollapsed}
           title="Expand sidebar"
           aria-label="Expand sidebar"
-          className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-sidebar-accent/60 text-sidebar-foreground/80"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/50 text-sidebar-foreground/80 shadow-sm transition hover:-translate-y-0.5 hover:bg-sidebar-accent/80"
         >
           <ChevronsRight className="h-4 w-4" />
         </button>
@@ -39,10 +39,10 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
 
   return (
     <aside
-      className="hidden md:flex h-full w-64 flex-col bg-sidebar border-r border-sidebar-border"
+      className="hidden md:flex h-full w-[17rem] flex-col border-r border-sidebar-border/80 bg-[linear-gradient(180deg,hsl(var(--sidebar)/0.92),hsl(var(--sidebar)/0.78))] backdrop-blur-xl shadow-[20px_0_50px_-34px_hsl(var(--foreground)/0.35)]"
       aria-label="Sidebar"
     >
-      <div className="flex h-14 items-center justify-between border-b border-sidebar-border px-4">
+      <div className="flex h-16 items-center justify-between border-b border-sidebar-border/80 px-4">
         <span className="font-bold text-lg tracking-tight text-sidebar-foreground">
           MTOS<span className="text-primary">v1.0</span>
         </span>
@@ -51,13 +51,13 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
           onClick={onToggleCollapsed}
           title="Collapse sidebar"
           aria-label="Collapse sidebar"
-          className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-sidebar-accent/60 text-sidebar-foreground/70"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/50 text-sidebar-foreground/70 shadow-sm transition hover:-translate-y-0.5 hover:bg-sidebar-accent/80"
         >
           <ChevronsLeft className="h-4 w-4" />
         </button>
       </div>
       <SidebarNav />
-      <div className="p-4 border-t border-sidebar-border">
+      <div className="m-3 rounded-[24px] border border-sidebar-border/70 bg-background/40 p-4 backdrop-blur-xl">
         <div className="flex items-center gap-3">
           <div
             className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-medium text-sm"

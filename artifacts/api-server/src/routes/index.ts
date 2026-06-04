@@ -52,6 +52,7 @@ import vapiMcpRouter from "./vapi-mcp";
 import dialerRouter from "./dialer";
 import vendorPortalRouter from "./vendor-portal";
 import mrrRouter from "./mrr";
+import outreachRouter from "./outreach";
 import { authMiddleware } from "../lib/rbac";
 import { firmContextMiddleware } from "../lib/firm-context";
 import { markPublic, labelRouter } from "../lib/route-protection";
@@ -128,6 +129,7 @@ labelRouter(adminEventCatalogRouter, "admin-event-catalog");
 labelRouter(adminWebhookDeliveriesRouter, "admin-webhook-deliveries");
 labelRouter(formsApiDirectoryRouter, "forms-api-directory");
 labelRouter(mrrRouter, "mrr");
+labelRouter(outreachRouter, "outreach");
 
 const router: IRouter = Router();
 
@@ -214,5 +216,6 @@ router.use("/ai-observer", aiObserverRouter);
 router.use("/ai-chat", aiChatRouter);
 router.use("/vapi-mcp", vapiMcpRouter);
 router.use("/mrr", mrrRouter);
+router.use("/outreach", outreachRouter);
 
 export default router;

@@ -9,6 +9,7 @@ import { encrypt, decrypt } from "../lib/encryption";
 import { logger } from "../lib/logger";
 import { pingLeadWebhook } from "../lib/lead-webhook-dispatcher";
 import { badRequest } from "../lib/http-errors";
+import { getSyncHandler } from "../lib/integration-sync";
 import crypto from "crypto";
 
 const router = Router();
@@ -417,24 +418,46 @@ router.post("/:id/sync", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
   const [integration] = await db.select().from(integrationsTable).where(eq(integrationsTable.id, id));
   if (!integration) { res.status(404).json({ error: "Not found" }); return; }
 
-  // Honest stub: there is no per-provider sync handler in this codebase yet,
-  // so we don't pretend to have synced records and we don't bump
-  // `last_sync_at` (that column is meant to reflect a real sync). We still
-  // emit the audit row so a future implementation has a clear hook and so
-  // operators can see who clicked Sync. Records-synced is 0, not a random
-  // number, and `implemented: false` lets the UI render an honest message.
+  const handler = getSyncHandler(integration.provider);
+  if (!handler) {
+    await auditLog("integration", String(req.user?.id || 0), "integration_sync_requested", {
+      id,
+      provider: integration.provider,
+      handler_implemented: false,
+    });
+    res.status(501).json({
+      success: false,
+      implemented: false,
+      records_synced: 0,
+      direction: integration.sync_direction,
+      message: `Sync handler for ${integration.provider} is not yet implemented. The credential vault is wired up — once a provider-specific sync worker is added, this button will run it.`,
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
+  const outcome = await handler(integration);
   await auditLog("integration", String(req.user?.id || 0), "integration_sync_requested", {
     id,
     provider: integration.provider,
-    handler_implemented: false,
+    handler_implemented: true,
+    ok: outcome.ok,
+    records_synced: outcome.records_synced,
+    direction: outcome.direction,
+    details: outcome.details,
+    error: outcome.error ?? null,
   });
 
   res.json({
-    success: false,
-    implemented: false,
-    records_synced: 0,
-    direction: integration.sync_direction,
-    message: `Sync handler for ${integration.provider} is not yet implemented. The credential vault is wired up — once a provider-specific sync worker is added, this button will run it.`,
+    success: outcome.ok,
+    implemented: true,
+    records_synced: outcome.records_synced,
+    direction: outcome.direction,
+    details: outcome.details ?? null,
+    error: outcome.error ?? null,
+    message: outcome.ok
+      ? `Sync completed for ${integration.provider}.`
+      : `Sync for ${integration.provider} finished with errors.`,
     timestamp: new Date().toISOString(),
   });
 });

@@ -716,6 +716,12 @@ async function runWebFormPipeline(
   }
   pipeline.push(step6);
 
+  // Fire-and-forget SmartAdvocate push for any active SA integration.
+  if (leadId) {
+    const { enqueueSmartAdvocatePushForLead } = await import("../lib/crm/smartadvocate");
+    void enqueueSmartAdvocatePushForLead(leadId, { source: "web_form" });
+  }
+
   return {
     status: 200,
     body: {
