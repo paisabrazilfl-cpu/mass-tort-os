@@ -819,6 +819,365 @@ export const NODE_CATALOG: NodeDefinition[] = [
     ],
   },
 
+  // ──────────────── More Triggers ────────────────
+  {
+    type: "trigger.lead_status_changed", label: "On Lead Status Changed", category: "trigger",
+    description: "Fires when a lead is moved to a new pipeline status.",
+    icon: "ArrowRightLeft", color: "bg-emerald-600",
+    params: [
+      { key: "toStatus", label: "To status filter (optional)", type: "string", placeholder: "qualified" },
+      { key: "tort", label: "Tort filter (optional)", type: "string" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.note_added", label: "On Note Added", category: "trigger",
+    description: "Fires when a timeline note is added to a lead or case.",
+    icon: "StickyNote", color: "bg-emerald-600",
+    params: [
+      { key: "entity", label: "Entity filter", type: "select", default: "lead", options: [
+        { label: "Lead", value: "lead" }, { label: "Case", value: "case" }, { label: "Any", value: "" },
+      ]},
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.payment_received", label: "On Payment Received", category: "trigger",
+    description: "Fires when a payment or fee is recorded on a case.",
+    icon: "DollarSign", color: "bg-emerald-600",
+    params: [
+      { key: "minAmount", label: "Minimum amount (optional)", type: "number" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.time_since_last_contact", label: "No Contact Reminder", category: "trigger",
+    description: "Fires when a lead has had no contact for N days.",
+    icon: "BellOff", color: "bg-emerald-600",
+    params: [
+      { key: "days", label: "Days without contact", type: "number", default: 7, required: true },
+      { key: "status", label: "Lead status filter (optional)", type: "string" },
+    ], inputs: 0, outputs: 1,
+  },
+
+  // ──────────────── More CRM ────────────────
+  {
+    type: "crm.search_leads", label: "Search Leads", category: "crm",
+    description: "Query leads by status, tort, date range, or custom filters.",
+    icon: "Search", color: "bg-violet-600",
+    params: [
+      { key: "filters", label: "Filters (JSON)", type: "json", required: true, placeholder: '{"status":"qualified","tort":"roundup"}' },
+      { key: "limit", label: "Max results", type: "number", default: 50 },
+      { key: "orderBy", label: "Order by", type: "string", placeholder: "created_at desc" },
+    ],
+  },
+  {
+    type: "crm.tag_lead", label: "Tag / Label Lead", category: "crm",
+    description: "Add one or more tags to a lead for filtering and routing.",
+    icon: "Tag", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "tags", label: "Tags (JSON array)", type: "json", required: true, placeholder: '["priority","review-needed"]' },
+      { key: "mode", label: "Mode", type: "select", default: "add", options: [
+        { label: "Add", value: "add" }, { label: "Replace all", value: "replace" }, { label: "Remove", value: "remove" },
+      ]},
+    ],
+  },
+  {
+    type: "crm.close_lead", label: "Close / Archive Lead", category: "crm",
+    description: "Mark a lead as closed with a reason code.",
+    icon: "Archive", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "reason", label: "Reason", type: "select", default: "not_qualified", options: [
+        { label: "Not qualified", value: "not_qualified" }, { label: "Duplicate", value: "duplicate" },
+        { label: "Client withdrew", value: "client_withdrew" }, { label: "Statute of limitations", value: "sol" },
+        { label: "Lost to competitor", value: "lost" }, { label: "Settled", value: "settled" },
+      ]},
+      { key: "note", label: "Closing note", type: "text" },
+    ],
+  },
+  {
+    type: "crm.escalate_to_attorney", label: "Escalate to Attorney", category: "crm",
+    description: "Flag a lead or case for immediate attorney review.",
+    icon: "Scale", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "reason", label: "Escalation reason", type: "text", required: true, placeholder: "High-value case — possible class action coordination." },
+      { key: "urgent", label: "Mark urgent", type: "boolean", default: false },
+    ],
+  },
+  {
+    type: "crm.merge_leads", label: "Merge Duplicate Leads", category: "crm",
+    description: "Merge two lead records, keeping one as the canonical record.",
+    icon: "GitMerge", color: "bg-violet-600",
+    params: [
+      { key: "primaryId", label: "Primary lead id (keep)", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "duplicateId", label: "Duplicate lead id (discard)", type: "string", required: true, placeholder: "input.duplicate_id" },
+    ], outputs: ["merged", "error"],
+  },
+  {
+    type: "crm.send_internal_alert", label: "Send Internal Alert", category: "crm",
+    description: "Notify your team via an internal bell notification inside the CRM.",
+    icon: "Bell", color: "bg-violet-600",
+    params: [
+      { key: "title", label: "Alert title", type: "string", required: true, placeholder: "Action required: {{input.lead.full_name}}" },
+      { key: "body", label: "Alert body", type: "text", placeholder: "Background check flagged. Please review before proceeding." },
+      { key: "role", label: "Notify role", type: "select", default: "admin", options: [
+        { label: "Admin", value: "admin" }, { label: "Attorney", value: "attorney" },
+        { label: "Paralegal", value: "paralegal" }, { label: "All", value: "all" },
+      ]},
+      { key: "leadId", label: "Link to lead id (optional)", type: "string", placeholder: "input.lead.id" },
+    ],
+  },
+  {
+    type: "crm.export_leads", label: "Export Leads to CSV", category: "crm",
+    description: "Export a set of leads to a CSV file in the vault.",
+    icon: "FileDown", color: "bg-violet-600",
+    params: [
+      { key: "filters", label: "Filters (JSON)", type: "json", placeholder: '{"status":"qualified","tort":"roundup"}' },
+      { key: "fields", label: "Fields to include (JSON array)", type: "json", placeholder: '["first_name","last_name","email","status","tort"]' },
+      { key: "filename", label: "Output filename", type: "string", placeholder: "qualified-leads-{{date}}.csv" },
+    ],
+  },
+
+  // ──────────────── More Communication ────────────────
+  {
+    type: "comm.bulk_sms", label: "Bulk SMS Campaign", category: "communication",
+    description: "Send an SMS to a list of leads matching a filter.",
+    icon: "MessagesSquare", color: "bg-pink-600",
+    params: [
+      { key: "filters", label: "Lead filters (JSON)", type: "json", required: true, placeholder: '{"status":"working","tort":"talcum"}' },
+      { key: "body", label: "Message template", type: "text", required: true, placeholder: "Hi {{lead.first_name}}, important update about your case…" },
+      { key: "maxBatch", label: "Max batch size", type: "number", default: 100, help: "Hard cap per run to prevent accidental mass sends." },
+    ], outputs: ["sent", "partial", "error"],
+  },
+  {
+    type: "comm.schedule_callback", label: "Schedule Callback", category: "communication",
+    description: "Schedule a follow-up call to a lead at a specific time.",
+    icon: "PhoneCall", color: "bg-pink-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "scheduledAt", label: "Scheduled at (ISO)", type: "string", required: true, placeholder: "2026-06-15T14:00:00Z" },
+      { key: "agentId", label: "Assigned agent id (optional)", type: "string" },
+      { key: "note", label: "Call notes", type: "text", placeholder: "Follow up on intake. Ask about surgery date." },
+    ],
+  },
+  {
+    type: "comm.send_email_sequence", label: "Start Email Drip Sequence", category: "communication",
+    description: "Enroll a lead in a multi-step email drip campaign.",
+    icon: "MailCheck", color: "bg-pink-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "sequenceId", label: "Sequence id", type: "string", required: true, placeholder: "roundup-nurture-v2" },
+      { key: "startAt", label: "Start at (ISO, blank = now)", type: "string" },
+    ],
+  },
+  {
+    type: "comm.ringless_voicemail", label: "Ringless Voicemail Drop", category: "communication",
+    description: "Drop a pre-recorded voicemail directly to mailbox without ringing.",
+    icon: "Voicemail", color: "bg-pink-600",
+    params: [
+      { key: "to", label: "To number (E.164)", type: "string", required: true, placeholder: "input.lead.phone" },
+      { key: "audioUrl", label: "Audio file URL (mp3/wav)", type: "string", required: true, placeholder: "https://files.example.com/vm-intro.mp3" },
+      { key: "callerIdName", label: "Caller ID name", type: "string", placeholder: "Justice Legal Group" },
+    ],
+  },
+
+  // ──────────────── More Documents ────────────────
+  {
+    type: "documents.generate_pdf", label: "Generate PDF Report", category: "documents",
+    description: "Generate a formatted PDF report and save to the file vault.",
+    icon: "FileText", color: "bg-indigo-600",
+    params: [
+      { key: "templateId", label: "Report template id", type: "string", required: true, placeholder: "case-summary-v1" },
+      { key: "data", label: "Report data (JSON)", type: "json", required: true, placeholder: '{"lead_id":"input.lead.id","include_notes":true}' },
+      { key: "filename", label: "Output filename", type: "string", placeholder: "case-summary-{{date}}.pdf" },
+    ],
+  },
+  {
+    type: "documents.request_medical_auth", label: "Request Medical Authorization", category: "documents",
+    description: "Send a HIPAA medical authorization form to the claimant for e-signature.",
+    icon: "FileLock", color: "bg-indigo-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "providerName", label: "Provider name", type: "string", placeholder: "input.lead.physician_last_name" },
+      { key: "sendSms", label: "Text signing link to claimant", type: "boolean", default: true },
+    ], outputs: ["sent", "error"],
+  },
+  {
+    type: "documents.archive", label: "Archive Document", category: "documents",
+    description: "Move a document to the archive tier in the file vault.",
+    icon: "FolderArchive", color: "bg-indigo-600",
+    params: [
+      { key: "documentId", label: "Document id", type: "string", required: true, placeholder: "input.document.id" },
+      { key: "reason", label: "Archive reason", type: "string", placeholder: "Superseded by updated version." },
+    ],
+  },
+
+  // ──────────────── More AI ────────────────
+  {
+    type: "ai.risk_score", label: "AI Risk Score", category: "ai",
+    description: "Score a lead's litigation risk and merit using AI analysis of their intake data.",
+    icon: "AlertTriangle", color: "bg-fuchsia-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "factors", label: "Custom risk factors (JSON, optional)", type: "json", placeholder: '{"injury_severity":"high","SOL_years_remaining":2}' },
+    ], outputs: ["high", "medium", "low"],
+  },
+  {
+    type: "ai.sentiment", label: "Sentiment Analysis", category: "ai",
+    description: "Detect positive, negative, or neutral sentiment from text.",
+    icon: "SmilePlus", color: "bg-fuchsia-600",
+    params: [
+      { key: "text", label: "Text path", type: "string", required: true, placeholder: "input.message.body" },
+    ], outputs: ["positive", "negative", "neutral"],
+  },
+  {
+    type: "ai.translate", label: "Translate Text", category: "ai",
+    description: "Translate text to a target language using AI.",
+    icon: "Languages", color: "bg-fuchsia-600",
+    params: [
+      { key: "text", label: "Text path", type: "string", required: true, placeholder: "input.body" },
+      { key: "targetLanguage", label: "Target language", type: "string", required: true, placeholder: "Spanish" },
+    ],
+  },
+  {
+    type: "ai.medical_summary", label: "Medical Summary", category: "ai",
+    description: "Generate a plain-language medical summary from clinical records for attorney review.",
+    icon: "Stethoscope", color: "bg-fuchsia-600",
+    params: [
+      { key: "documentId", label: "Document id", type: "string", required: true, placeholder: "input.document.id" },
+      { key: "focusAreas", label: "Focus areas (JSON array, optional)", type: "json", placeholder: '["diagnoses","procedures","medications","prognosis"]' },
+    ],
+  },
+  {
+    type: "ai.fraud_detect", label: "AI Fraud Detection", category: "ai",
+    description: "Analyze intake data for signs of fraud, duplicate identity, or manipulated documents.",
+    icon: "ShieldAlert", color: "bg-fuchsia-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+    ], outputs: ["clear", "suspicious", "flagged"],
+  },
+
+  // ──────────────── More Integrations ────────────────
+  {
+    type: "integration.slack_notify", label: "Slack Notification", category: "integration",
+    description: "Post a message to a Slack channel via an incoming webhook.",
+    icon: "MessageSquare", color: "bg-rose-600",
+    params: [
+      { key: "webhookUrl", label: "Slack Incoming Webhook URL", type: "string", required: true, placeholder: "https://hooks.slack.com/services/…" },
+      { key: "channel", label: "Channel (optional override)", type: "string", placeholder: "#intake-alerts" },
+      { key: "text", label: "Message", type: "text", required: true, placeholder: "🚨 New qualified lead: {{input.lead.full_name}} ({{input.lead.tort}})" },
+      { key: "username", label: "Bot username", type: "string", placeholder: "MTOS Bot" },
+    ],
+  },
+  {
+    type: "integration.stripe_charge", label: "Stripe Charge / Invoice", category: "integration",
+    description: "Create a Stripe payment intent or invoice for a client.",
+    icon: "CreditCard", color: "bg-rose-600",
+    params: [
+      { key: "amount", label: "Amount (cents)", type: "number", required: true, placeholder: "50000" },
+      { key: "currency", label: "Currency", type: "string", default: "usd" },
+      { key: "customerId", label: "Stripe customer id", type: "string", placeholder: "cus_xxxxx" },
+      { key: "description", label: "Description", type: "string", placeholder: "Case filing fee — {{input.lead.full_name}}" },
+      { key: "mode", label: "Mode", type: "select", default: "payment_intent", options: [
+        { label: "Payment intent", value: "payment_intent" }, { label: "Invoice", value: "invoice" },
+      ]},
+    ], outputs: ["succeeded", "requires_action", "failed"],
+  },
+  {
+    type: "integration.twilio_lookup", label: "Twilio Number Lookup", category: "integration",
+    description: "Validate a phone number and check for TCPA wireless/landline type via Twilio Lookup.",
+    icon: "Phone", color: "bg-rose-600",
+    params: [
+      { key: "phoneNumber", label: "Phone number (E.164)", type: "string", required: true, placeholder: "input.lead.phone" },
+      { key: "lookupType", label: "Lookup types", type: "select", default: "line_type_intelligence", options: [
+        { label: "Line type (wireless/landline)", value: "line_type_intelligence" },
+        { label: "Caller name (CNAM)", value: "caller_name" },
+        { label: "Both", value: "both" },
+      ]},
+    ], outputs: ["valid", "invalid", "error"],
+  },
+  {
+    type: "integration.hubspot_sync", label: "HubSpot Contact Sync", category: "integration",
+    description: "Create or update a HubSpot contact record with lead data.",
+    icon: "RefreshCw", color: "bg-rose-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "portalId", label: "HubSpot portal id", type: "string", required: true, placeholder: "12345678" },
+      { key: "apiKey", label: "HubSpot API key (Private App Token)", type: "string", required: true },
+      { key: "extraFields", label: "Extra properties (JSON)", type: "json", placeholder: '{"hs_lead_status":"IN_PROGRESS","lifecyclestage":"lead"}' },
+    ], outputs: ["created", "updated", "error"],
+  },
+  {
+    type: "integration.zapier_trigger", label: "Zapier Trigger", category: "integration",
+    description: "Hit a Zapier Catch Hook to trigger any Zap in your account.",
+    icon: "Zap", color: "bg-rose-600",
+    params: [
+      { key: "webhookUrl", label: "Zapier Catch Hook URL", type: "string", required: true, placeholder: "https://hooks.zapier.com/hooks/catch/…" },
+      { key: "payload", label: "Payload (JSON)", type: "json", required: true, placeholder: '{"lead_id":"input.lead.id","status":"input.lead.status","tort":"input.lead.tort"}' },
+    ],
+  },
+
+  // ──────────────── More Logic ────────────────
+  {
+    type: "logic.try_catch", label: "Try / Catch", category: "logic",
+    description: "Run downstream nodes; if any throw, route to the error branch instead of failing the run.",
+    icon: "ShieldOff", color: "bg-amber-500",
+    params: [
+      { key: "errorVar", label: "Store error in variable", type: "string", placeholder: "lastError" },
+    ], outputs: ["try", "catch"],
+  },
+  {
+    type: "logic.rate_limit", label: "Rate Limit / Throttle", category: "logic",
+    description: "Allow only N executions per time window; route excess to throttled branch.",
+    icon: "Gauge", color: "bg-amber-500",
+    params: [
+      { key: "maxRuns", label: "Max runs", type: "number", default: 100, required: true },
+      { key: "windowSeconds", label: "Window (seconds)", type: "number", default: 3600, required: true },
+      { key: "key", label: "Rate key (e.g. per-lead, per-firm)", type: "string", placeholder: "input.lead.id" },
+    ], outputs: ["allowed", "throttled"],
+  },
+  {
+    type: "logic.wait_for_condition", label: "Wait for Condition", category: "logic",
+    description: "Poll until a condition is true or until a timeout expires.",
+    icon: "TimerReset", color: "bg-amber-500",
+    params: [
+      { key: "expression", label: "Condition (JS expression)", type: "code", language: "javascript", required: true, placeholder: "input.lead.status === 'qualified'" },
+      { key: "pollEverySeconds", label: "Poll every N seconds", type: "number", default: 10 },
+      { key: "timeoutSeconds", label: "Timeout (seconds)", type: "number", default: 30 },
+    ], outputs: ["resolved", "timeout"],
+  },
+
+  // ──────────────── More Data ────────────────
+  {
+    type: "data.merge", label: "Merge Objects", category: "data",
+    description: "Deep-merge two or more JSON objects into one.",
+    icon: "Layers", color: "bg-sky-600",
+    params: [
+      { key: "base", label: "Base object path", type: "string", required: true, placeholder: "input.lead" },
+      { key: "override", label: "Override object (JSON)", type: "json", required: true, placeholder: '{"status":"qualified","score":85}' },
+    ],
+  },
+  {
+    type: "data.format_date", label: "Format Date", category: "data",
+    description: "Parse and reformat a date string.",
+    icon: "Calendar", color: "bg-sky-600",
+    params: [
+      { key: "date", label: "Date path or value", type: "string", required: true, placeholder: "input.created_at" },
+      { key: "outputFormat", label: "Output format", type: "string", default: "YYYY-MM-DD", placeholder: "MM/DD/YYYY" },
+    ],
+  },
+  {
+    type: "data.generate_id", label: "Generate Unique ID", category: "data",
+    description: "Generate a UUID or short unique identifier.",
+    icon: "Hash", color: "bg-sky-600",
+    params: [
+      { key: "format", label: "Format", type: "select", default: "uuid", options: [
+        { label: "UUID v4", value: "uuid" }, { label: "Short (8 chars)", value: "short" }, { label: "Numeric (timestamp-based)", value: "numeric" },
+      ]},
+      { key: "varName", label: "Store in variable", type: "string", placeholder: "generatedId" },
+    ],
+  },
+
   // ──────────────── Utility ────────────────
   {
     type: "utility.log", label: "Log Message", category: "utility",
