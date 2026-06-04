@@ -2,6 +2,7 @@ import { useGetAnalyticsOverview, useGetConversionFunnel, useGetTortBreakdown, u
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Users, CheckCircle, Percent, TrendingUp } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from "recharts";
 import { format } from "date-fns";
 
@@ -30,9 +31,12 @@ export default function Analytics() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Analytics & ROI</h1>
-      </div>
+      <WorkspaceHero
+        eyebrow="Intelligence"
+        title="Analytics & ROI"
+        description="Conversion funnel, pipeline trends, and tort breakdown — everything you need to measure lead acquisition performance at a glance."
+        badge="Live data"
+      />
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
