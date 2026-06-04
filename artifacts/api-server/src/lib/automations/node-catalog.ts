@@ -1198,6 +1198,241 @@ export const NODE_CATALOG: NodeDefinition[] = [
       { key: "output", label: "Return value (JSON)", type: "json", placeholder: '{"status":"done","lead_id":"input.lead.id"}' },
     ], outputs: 0,
   },
+
+  // ──────────────── More Triggers ────────────────
+  {
+    type: "trigger.esign_completed", label: "On E-Signature Completed", category: "trigger",
+    description: "Fires when a claimant finishes signing all documents in an e-sign packet.",
+    icon: "FileBadge", color: "bg-emerald-600",
+    params: [
+      { key: "provider", label: "Provider filter (optional)", type: "select", default: "", options: [
+        { label: "Any", value: "" }, { label: "Dropbox Sign", value: "dropbox_sign" }, { label: "DocuSign", value: "docusign" },
+      ]},
+      { key: "tort", label: "Tort filter (optional)", type: "string", placeholder: "roundup" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.document_uploaded", label: "On Document Uploaded", category: "trigger",
+    description: "Fires when a new document is added to the file vault for a lead or case.",
+    icon: "FileUp", color: "bg-emerald-600",
+    params: [
+      { key: "documentType", label: "Document type filter (optional)", type: "string", placeholder: "medical_records" },
+    ], inputs: 0, outputs: 1,
+  },
+  {
+    type: "trigger.background_check_done", label: "On Background Check Done", category: "trigger",
+    description: "Fires when a background check hub run completes for a lead.",
+    icon: "ShieldCheck", color: "bg-emerald-600",
+    params: [
+      { key: "result", label: "Result filter (optional)", type: "select", default: "", options: [
+        { label: "Any", value: "" }, { label: "Clear", value: "clear" }, { label: "Flagged", value: "flagged" },
+      ]},
+    ], inputs: 0, outputs: 1,
+  },
+
+  // ──────────────── More CRM ────────────────
+  {
+    type: "crm.add_timeline_note", label: "Add Timeline Note", category: "crm",
+    description: "Add a rich text note to a lead's activity timeline (visible on the lead detail page).",
+    icon: "StickyNote", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "note", label: "Note text", type: "text", required: true, placeholder: "Background check passed. Assigned to paralegal for retainer follow-up." },
+      { key: "pinned", label: "Pin note", type: "boolean", default: false },
+    ],
+  },
+  {
+    type: "crm.create_task", label: "Create Team Task", category: "crm",
+    description: "Create an action-item task and assign it to a team member or role.",
+    icon: "CheckSquare", color: "bg-violet-600",
+    params: [
+      { key: "title", label: "Task title", type: "string", required: true, placeholder: "Follow up on retainer — {{input.lead.full_name}}" },
+      { key: "body", label: "Details", type: "text", placeholder: "Call claimant to confirm injury date and surgeon." },
+      { key: "assignTo", label: "Assign to role", type: "select", default: "paralegal", options: [
+        { label: "Paralegal", value: "paralegal" }, { label: "Attorney", value: "attorney" },
+        { label: "Admin", value: "admin" }, { label: "Auto-round-robin", value: "auto" },
+      ]},
+      { key: "dueInHours", label: "Due in (hours)", type: "number", default: 24 },
+      { key: "leadId", label: "Link to lead id (optional)", type: "string", placeholder: "input.lead.id" },
+    ],
+  },
+  {
+    type: "crm.flag_for_settlement", label: "Flag for Settlement Review", category: "crm",
+    description: "Flag a lead as a strong settlement candidate and route it to the settlement review queue.",
+    icon: "Gavel", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "estimatedValue", label: "Estimated case value ($)", type: "number", placeholder: "250000" },
+      { key: "notes", label: "Settlement notes", type: "text", placeholder: "Strong liability, clear causation — recommend early resolution offer." },
+    ],
+  },
+  {
+    type: "crm.sol_check", label: "SOL Deadline Check", category: "crm",
+    description: "Check whether a lead is within its statute of limitations window and flag if approaching expiry.",
+    icon: "CalendarClock", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "warnDays", label: "Warn when SOL is within N days", type: "number", default: 90 },
+    ], outputs: ["active", "warning", "expired"],
+  },
+  {
+    type: "crm.update_custom_field", label: "Update Custom Field", category: "crm",
+    description: "Write a value to one of the lead's custom_fields JSON columns.",
+    icon: "PenLine", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "field", label: "Field key", type: "string", required: true, placeholder: "surgery_confirmed" },
+      { key: "value", label: "Value (any JSON)", type: "json", required: true, placeholder: "true" },
+    ],
+  },
+  {
+    type: "crm.bulk_assign", label: "Bulk Assign Leads", category: "crm",
+    description: "Assign a set of leads matching a filter to a specific paralegal or attorney.",
+    icon: "Users", color: "bg-violet-600",
+    params: [
+      { key: "filters", label: "Lead filters (JSON)", type: "json", required: true, placeholder: '{"status":"new","tort":"roundup"}' },
+      { key: "assignRole", label: "Assign to role", type: "select", default: "paralegal", options: [
+        { label: "Paralegal (round-robin)", value: "paralegal" }, { label: "Attorney (round-robin)", value: "attorney" },
+      ]},
+      { key: "maxLeads", label: "Max leads", type: "number", default: 50 },
+    ],
+  },
+  {
+    type: "crm.run_background_check", label: "Run Background Check Hub", category: "crm",
+    description: "Execute the full 9-lane background check hub (OFAC, CourtListener, NPI, address verify…) on a lead.",
+    icon: "ScanSearch", color: "bg-violet-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "lanes", label: "Lanes to run (blank = all)", type: "json", placeholder: '["ofac","court_listener","address"]' },
+    ], outputs: ["clear", "flagged", "error"],
+  },
+
+  // ──────────────── More AI ────────────────
+  {
+    type: "ai.demand_letter", label: "Draft Demand Letter", category: "ai",
+    description: "AI-draft a demand letter for a lead using case facts, injury summary, and applicable tort law.",
+    icon: "FileEdit", color: "bg-fuchsia-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "tone", label: "Tone", type: "select", default: "firm", options: [
+        { label: "Firm", value: "firm" }, { label: "Urgent", value: "urgent" }, { label: "Conciliatory", value: "conciliatory" },
+      ]},
+      { key: "maxWords", label: "Max words", type: "number", default: 600 },
+      { key: "includeFactSection", label: "Include facts section", type: "boolean", default: true },
+    ],
+  },
+  {
+    type: "ai.case_strength", label: "AI Case Strength", category: "ai",
+    description: "Score the overall strength of a lead's case: liability, causation, damages, and SOL.",
+    icon: "Scale", color: "bg-fuchsia-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "tort", label: "Tort context (optional)", type: "string", placeholder: "roundup" },
+    ], outputs: ["strong", "moderate", "weak"],
+  },
+  {
+    type: "ai.intake_qa", label: "Intake QA Check", category: "ai",
+    description: "Run an AI quality check on a newly submitted intake: completeness, red flags, missing fields.",
+    icon: "ClipboardCheck", color: "bg-fuchsia-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "strictMode", label: "Strict mode (fail on any gap)", type: "boolean", default: false },
+    ], outputs: ["pass", "needs_review", "fail"],
+  },
+
+  // ──────────────── More Documents ────────────────
+  {
+    type: "documents.generate_loa", label: "Generate Letter of Authorization", category: "documents",
+    description: "Render a HIPAA-compliant Letter of Authorization for medical record release and send to claimant for signature.",
+    icon: "FilePen", color: "bg-indigo-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "providerName", label: "Provider / facility name", type: "string", placeholder: "input.lead.physician_last_name" },
+      { key: "sendToClaimant", label: "Text signing link to claimant", type: "boolean", default: true },
+    ], outputs: ["sent", "error"],
+  },
+  {
+    type: "documents.bundle_case_file", label: "Bundle Case File PDF", category: "documents",
+    description: "Combine all documents in the file vault for a lead into a single paginated PDF bundle.",
+    icon: "BookCopy", color: "bg-indigo-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "includeTypes", label: "Document types to include (blank = all)", type: "json", placeholder: '["medical_records","retainer","loa"]' },
+      { key: "filename", label: "Output filename", type: "string", placeholder: "case-bundle-{{date}}.pdf" },
+    ],
+  },
+
+  // ──────────────── More Logic ────────────────
+  {
+    type: "logic.human_approval", label: "Wait for Human Approval", category: "logic",
+    description: "Pause the workflow and send a task to a reviewer. Resume only after manual approval or rejection.",
+    icon: "UserCheck", color: "bg-amber-500",
+    params: [
+      { key: "title", label: "Approval request title", type: "string", required: true, placeholder: "Approve settlement offer — {{input.lead.full_name}}" },
+      { key: "body", label: "Details for reviewer", type: "text", placeholder: "AI estimated case value: $250,000. Client confirmed surgery date. Recommend accepting." },
+      { key: "role", label: "Assign to role", type: "select", default: "attorney", options: [
+        { label: "Attorney", value: "attorney" }, { label: "Admin", value: "admin" }, { label: "Any", value: "all" },
+      ]},
+      { key: "timeoutHours", label: "Auto-reject after (hours, 0 = never)", type: "number", default: 48 },
+    ], outputs: ["approved", "rejected", "pending"],
+  },
+  {
+    type: "logic.abort_if", label: "Abort If", category: "logic",
+    description: "Immediately stop the workflow run if a condition evaluates to true.",
+    icon: "XCircle", color: "bg-amber-500",
+    params: [
+      { key: "condition", label: "Condition (JS expression)", type: "code", language: "javascript", required: true, placeholder: "input.lead.status === 'closed'" },
+      { key: "reason", label: "Abort reason message", type: "string", placeholder: "Lead already closed — skipping workflow." },
+    ],
+  },
+
+  // ──────────────── More Utility ────────────────
+  {
+    type: "utility.set_variable", label: "Set Variable", category: "utility",
+    description: "Compute and store a value in the workflow's variable scope, accessible as vars.myKey in later nodes.",
+    icon: "Variable", color: "bg-slate-500",
+    params: [
+      { key: "key", label: "Variable name", type: "string", required: true, placeholder: "qualifiedAt" },
+      { key: "value", label: "Value (path or literal JSON)", type: "json", required: true, placeholder: '"input.lead.created_at"' },
+    ],
+  },
+  {
+    type: "utility.deduplicate", label: "Deduplicate List", category: "utility",
+    description: "Remove duplicate items from an array, keeping the first occurrence of each unique value.",
+    icon: "ListFilter", color: "bg-slate-500",
+    params: [
+      { key: "list", label: "Array path", type: "string", required: true, placeholder: "input.leads" },
+      { key: "key", label: "Dedup key (for objects)", type: "string", placeholder: "id" },
+    ],
+  },
+  {
+    type: "utility.notify_team", label: "Notify Team (In-App)", category: "utility",
+    description: "Send an in-app bell notification to all users with a given role, linked to a lead or case.",
+    icon: "Bell", color: "bg-slate-500",
+    params: [
+      { key: "title", label: "Notification title", type: "string", required: true, placeholder: "Hot lead ready for review — {{input.lead.full_name}}" },
+      { key: "body", label: "Body", type: "text", placeholder: "Background check passed. Risk score: high. Ready for retainer." },
+      { key: "role", label: "Target role", type: "select", default: "attorney", options: [
+        { label: "Attorney", value: "attorney" }, { label: "Paralegal", value: "paralegal" },
+        { label: "Admin", value: "admin" }, { label: "All", value: "all" },
+      ]},
+      { key: "leadId", label: "Link to lead (optional)", type: "string", placeholder: "input.lead.id" },
+    ],
+  },
+
+  // ──────────────── More Integrations ────────────────
+  {
+    type: "integration.smartadvocate_push", label: "Push to SmartAdvocate", category: "integration",
+    description: "Sync a qualified lead or case into your SmartAdvocate case management system.",
+    icon: "ArrowUpFromLine", color: "bg-rose-600",
+    params: [
+      { key: "leadId", label: "Lead id", type: "string", required: true, placeholder: "input.lead.id" },
+      { key: "integrationId", label: "SmartAdvocate integration id", type: "string", required: true, placeholder: "From Integrations → SmartAdvocate" },
+      { key: "caseType", label: "SA case type", type: "string", placeholder: "Mass Tort" },
+      { key: "referralSource", label: "Referral source", type: "string", placeholder: "MTOS Intake" },
+      { key: "extraFields", label: "Extra SA fields (JSON)", type: "json", placeholder: '{"attorney_code":"JD01","status_code":"NEW"}' },
+    ], outputs: ["synced", "error"],
+  },
 ];
 
 export function getNodeDefinition(type: string): NodeDefinition | undefined {

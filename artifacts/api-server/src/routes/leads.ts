@@ -243,10 +243,10 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
 
   const data = parsed.data;
 
-  const rawBody = req.body as Record<string, unknown>;
-  const trustedformCertUrl = typeof rawBody.trustedform_cert_url === "string" ? rawBody.trustedform_cert_url.trim() : "";
-  const trustedformPingUrl = typeof rawBody.trustedform_ping_url === "string" ? rawBody.trustedform_ping_url.trim() : "";
-  const trustedformCertToken = typeof rawBody.trustedform_cert_token === "string" ? rawBody.trustedform_cert_token.trim() : "";
+  const _d = data as Record<string, unknown>;
+  const trustedformCertUrl = typeof _d.trustedform_cert_url === "string" ? _d.trustedform_cert_url.trim() : "";
+  const trustedformPingUrl = typeof _d.trustedform_ping_url === "string" ? _d.trustedform_ping_url.trim() : "";
+  const trustedformCertToken = typeof _d.trustedform_cert_token === "string" ? _d.trustedform_cert_token.trim() : "";
   const forwardedFor = typeof req.headers["x-forwarded-for"] === "string" ? req.headers["x-forwarded-for"].split(",")[0]?.trim() : "";
   const requestIp = forwardedFor || req.socket.remoteAddress || null;
   const requestUserAgent = req.get("user-agent") ?? null;
@@ -255,14 +255,13 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
     httpBadRequest(res, "Invalid TrustedForm certificate URL");
     return;
   }
-  const trustedformFields: Record<string, unknown> = {};
   if (trustedformCertUrl) {
-    trustedformFields.trustedform_cert_url = trustedformCertUrl;
-    trustedformFields.trustedform_ping_url = trustedformPingUrl || null;
-    trustedformFields.trustedform_cert_token = trustedformCertToken || null;
-    trustedformFields.trustedform_ip = (typeof rawBody.trustedform_ip === "string" ? rawBody.trustedform_ip : null) ?? requestIp;
-    trustedformFields.trustedform_user_agent = (typeof rawBody.trustedform_user_agent === "string" ? rawBody.trustedform_user_agent : null) ?? requestUserAgent;
-    trustedformFields.trustedform_timestamp = new Date();
+    _d.trustedform_cert_url = trustedformCertUrl;
+    _d.trustedform_ping_url = trustedformPingUrl || null;
+    _d.trustedform_cert_token = trustedformCertToken || null;
+    _d.trustedform_ip = _d.trustedform_ip ?? requestIp;
+    _d.trustedform_user_agent = _d.trustedform_user_agent ?? requestUserAgent;
+    _d.trustedform_timestamp = _d.trustedform_timestamp ?? new Date().toISOString();
   }
 
   // Normalize hospital_fax to E.164 via shared validator. A 4xx is returned
