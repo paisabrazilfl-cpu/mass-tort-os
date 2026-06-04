@@ -8,8 +8,8 @@ import { getWiring, isWired, consumesVaultCredentials } from "../lib/integration
 import { encrypt, decrypt } from "../lib/encryption";
 import { logger } from "../lib/logger";
 import { pingLeadWebhook } from "../lib/lead-webhook-dispatcher";
-import { badRequest } from "../lib/http-errors";
 import { getSyncHandler } from "../lib/integration-sync";
+import { badRequest } from "../lib/http-errors";
 import crypto from "crypto";
 
 const router = Router();
@@ -425,6 +425,7 @@ router.post("/:id/sync", requirePermission(Permission.INTEGRATIONS_MANAGE), asyn
       provider: integration.provider,
       handler_implemented: false,
     });
+
     res.status(501).json({
       success: false,
       implemented: false,
