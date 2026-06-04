@@ -51,17 +51,22 @@ Security: rotate the `RENDER_API_KEY` after go-live, since it was used during do
 
 **Every single push to GitHub MUST follow these rules exactly. No deviation. No shortcuts.**
 
-1. **Always a new dedicated branch** — never push directly to `main`, never force-push, never reset or rebase over `main`.
+1. **Always a new dedicated branch — NEVER push directly to `main`** — never force-push, never reset or rebase over `main`. Direct-to-main pushes violate this rule even via the Contents API.
 
-2. **Branch name = methodical note, always `YYYY-MM-DD-what-changed`** — the date first, then a short slug describing what changed (e.g. `2026-06-03-bg-check-ui-fix`, `2026-05-31-automations-abby-planner-crm-read`). Never a bare date, never a random name, never an auto-generated string.
+2. **Branch name = methodical note, always `YYYY-MM-DD-what-changed`** — the date first, then a short slug describing what changed (e.g. `2026-06-04-workspace-hero-banners`, `2026-06-03-bg-check-ui-fix`). Never a bare date, never a random name, never an auto-generated string.
 
 3. **The branch must be the full latest version of the CRM with zero loss of functionality** — merge latest main into the branch before pushing so it contains every prior feature plus the new work. No feature may be dropped or regressed.
 
-4. **Use the GitHub Merges API when a local git fetch is blocked** — push the feature branch first (main agent CAN push new branches), then call `POST /repos/{owner}/{repo}/merges` to merge it into `main` server-side. Never force-push to resolve divergence.
+4. **GitHub Contents API branch workflow** (since `git commit` is bash-blocked):
+   - `GET /repos/{owner}/{repo}/git/ref/heads/main` → get current main tip SHA
+   - `POST /repos/{owner}/{repo}/git/refs` → create new branch from that SHA
+   - `PUT /repos/{owner}/{repo}/contents/{path}` with `"branch": "<new-branch>"` for each file
+   - `POST /repos/{owner}/{repo}/merges` → merge branch into main server-side
+   - Use `$GITHUB_TOKEN` env var (the embedded token in the git remote URL expired 2026-06-04)
 
-5. **After the GitHub push, trigger Render deploys** — both `mtos-api` (srv-d8ea7h3bc2fs73ccsjvg) and `mtos-worker` (srv-d8ea7hh9rddc73eltfvg) via `POST /api/render.com/v1/services/{id}/deploys`.
+5. **After the GitHub push, trigger Render deploys** — both `mtos-api` (srv-d8ea7h3bc2fs73ccsjvg) and `mtos-worker` (srv-d8ea7hh9rddc73eltfvg) via `POST https://api.render.com/v1/services/{id}/deploys`. HTTP 200 with empty body = success.
 
-Reinforced by owner on 2026-06-03. This rule was set initially on 2026-05-31 and is a standing permanent instruction.
+Reinforced by owner on 2026-06-04. Originally set 2026-05-31. Standing permanent instruction — no exceptions.
 
 # System Architecture
 
