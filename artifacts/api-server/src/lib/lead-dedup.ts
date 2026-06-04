@@ -97,8 +97,7 @@ export async function findExistingLeadForIntake(
   const tortType = (input.tortType ?? "").trim();
   if (!tortType) return null;
 
-  const firmPred =
-    input.firmId != null ? eq(leadsTable.firm_id, input.firmId) : undefined;
+  const firmPred = input.firmId != null ? eq(leadsTable.firm_id, input.firmId) : undefined;
 
   // ---- Path 0: canonical lookup_hash short-circuit (Task #15) -------------
   // When the submitter provides BOTH email and phone, we can skip the entire
@@ -108,22 +107,13 @@ export async function findExistingLeadForIntake(
   // match. A miss does NOT mean "no duplicate" — it only means there is no
   // EXACT triple match, so we still fall through to the email + phone paths
   // below for legacy rows and partial-input submissions.
-  const fastHash = leadLookupHash(
-    tortType,
-    input.email ?? null,
-    input.phone ?? null,
-  );
+  const fastHash = leadLookupHash(tortType, input.email ?? null, input.phone ?? null);
   if (fastHash) {
     try {
       const fastRows = await db
         .select({ id: leadsTable.id })
         .from(leadsTable)
-        .where(
-          and(
-            eq(leadsTable.lookup_hash, fastHash),
-            ...(firmPred ? [firmPred] : []),
-          ),
-        )
+        .where(and(eq(leadsTable.lookup_hash, fastHash), ...(firmPred ? [firmPred] : [])))
         .limit(1);
       if (fastRows.length > 0 && fastRows[0]) {
         return { leadId: fastRows[0].id, matchedBy: "email" };
@@ -182,10 +172,7 @@ export async function findExistingLeadForIntake(
             // Engine writes `phone_primary` while the Web Forms widget
             // writes `phone`. Filtering on `phone` alone would miss
             // every phone_primary-only row and silently degrade dedup.
-            or(
-              isNotNull(leadsTable.phone),
-              isNotNull(leadsTable.phone_primary),
-            ),
+            or(isNotNull(leadsTable.phone), isNotNull(leadsTable.phone_primary)),
             ...(firmPred ? [firmPred] : []),
           ),
         )
@@ -194,11 +181,8 @@ export async function findExistingLeadForIntake(
       for (const row of candidates) {
         // Optimization: use short-circuiting OR to avoid redundant decryptions
         // and temporary array allocations. Most leads have only one phone populated.
-        const isMatch =
-          safeDecryptPhone(row.phone, "phone") === incomingPhone ||
-          safeDecryptPhone(row.phone_primary, "phone_primary") ===
-            incomingPhone;
-
+        const isMatch = safeDecryptPhone(row.phone, "phone") === incomingPhone ||
+                        safeDecryptPhone(row.phone_primary, "phone_primary") === incomingPhone;
         if (isMatch) {
           return { leadId: row.id, matchedBy: "phone" };
         }
