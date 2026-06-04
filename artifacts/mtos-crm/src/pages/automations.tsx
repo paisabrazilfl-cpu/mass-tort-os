@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Workflow, Plus, Play, Trash2, Pencil, Upload, Copy, Plug, Sparkles, Megaphone, ChevronRight, ArrowRight, Zap } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { useAuth } from "@/contexts/auth-context";
 import { getLucide } from "@/lib/lucide-icon";
@@ -194,16 +195,13 @@ export default function AutomationsPage() {
   return (
     <div className="p-6 space-y-8">
       {/* ── Page header ───────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Workflow className="h-6 w-6 text-primary" /> Automations
-          </h1>
-          <p className="text-sm text-muted-foreground max-w-2xl mt-0.5">
-            Build powerful workflows from big, visual blocks — no tiny node wall. Start with a guided starter flow, then add or customize blocks.
-          </p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
+      <WorkspaceHero
+        eyebrow="Operations"
+        title="Automation Workflows"
+        description="Build powerful workflows from big, visual blocks — no tiny node wall. Start with a guided starter flow, then add or customize blocks across 37 node types."
+        badge="37-node catalog"
+      />
+      <div className="flex gap-2 flex-wrap justify-end">
           {isSuperAdmin && (
             <Button variant="outline" size="sm" asChild>
               <Link href="/n8n-control"><Plug className="h-4 w-4 mr-1" /> n8n Control</Link>
@@ -221,7 +219,6 @@ export default function AutomationsPage() {
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4 mr-1" /> New Workflow
           </Button>
-        </div>
       </div>
 
       {/* ── Starter Flows — big block cards with visual flow previews ─────── */}
