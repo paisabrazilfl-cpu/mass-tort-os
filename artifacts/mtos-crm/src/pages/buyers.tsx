@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Building2, Plus, Pencil, Trash2 } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface Buyer {
@@ -109,13 +110,13 @@ export default function BuyersPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Building2 className="h-6 w-6" /> Buyers
-          </h1>
-          <p className="text-sm text-muted-foreground">Configure case buyers and per-buyer provider overrides.</p>
-        </div>
+      <WorkspaceHero
+        eyebrow="Configuration"
+        title="Lead Buyers"
+        description="Configure case buyers and per-buyer e-sign, fax, and provider overrides. Each buyer can have its own document routing."
+        badge="Buyer management"
+      />
+      <div className="flex justify-end">
         <Button onClick={() => { setEditing(EMPTY); setOpen(true); }}>
           <Plus className="mr-2 h-4 w-4" /> New Buyer
         </Button>
