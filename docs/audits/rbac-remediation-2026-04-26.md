@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **335 checked / 50 public / 285 protected / 0 unprotected.**
+Boot-time count: **331 checked / 50 public / 281 protected / 0 unprotected.**
 
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
@@ -858,10 +858,6 @@ Boot-time count: **335 checked / 50 public / 285 protected / 0 unprotected.**
 | paralegals | GET | `/api/paralegals/:id` | ✓ | ✓ |  |  |  | — | `paralegal:view` | ✓ |
 | paralegals | GET | `/api/paralegals/` | ✓ | ✓ |  |  |  | — | `paralegal:view` | ✓ |
 | paralegals | POST | `/api/paralegals/` | ✓ | ✓ |  |  |  | — | `paralegal:manage` | ✓ |
-| pipeline | POST | `/api/pipeline/leads/:id/docs-signed` | ✓ | ✓ |  |  |  | — | `automations:execute` | ✓ |
-| pipeline | POST | `/api/pipeline/leads/:id/intake-completed` | ✓ | ✓ |  |  |  | — | `automations:execute` | ✓ |
-| pipeline | POST | `/api/pipeline/leads/:id/med-recs-received` | ✓ | ✓ |  |  |  | — | `automations:execute` | ✓ |
-| pipeline | GET | `/api/pipeline/leads/:id/status` | ✓ | ✓ |  |  |  | — | `automations:view` | ✓ |
 | review-queue | PATCH | `/api/review-queue/:id` | ✓ | ✓ |  |  |  | — | `review_queue:resolve` | ✓ |
 | review-queue | GET | `/api/review-queue/` | ✓ | ✓ |  |  |  | — | `review_queue:view` | ✓ |
 | review-queue | POST | `/api/review-queue/` | ✓ | ✓ |  |  |  | — | `review_queue:resolve` | ✓ |
