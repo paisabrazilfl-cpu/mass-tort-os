@@ -1,3 +1,7 @@
 ## 2025-05-15 - [String Similarity Optimization]
 **Learning:** Redundant normalization in fuzzy matching functions (calling `normalize()` multiple times on the same input) is a significant bottleneck. Standard `Array<number>` for Levenshtein distance creates GC pressure and is slower than `Int32Array`. String swapping ensures the auxiliary array is as small as possible.
 **Action:** Use `Int32Array` and single-vector DP approach for Levenshtein. Always reuse normalized strings instead of re-normalizing in wrapper functions. Add early returns for near-exact matches to skip expensive fuzzy logic.
+
+## 2025-05-16 - [Encryption & Dedup Optimizations]
+**Learning:** Unconditional object spreading in transformation helpers (like `encryptLeadFields`) creates significant GC pressure in high-throughput paths. A 'lazy cloning' pattern (only clone if a change is made) maintains reference identity and improves performance. In deduplication loops, short-circuiting logical ORs are significantly faster than array-based checks (`filter().includes()`) because they avoid allocations and skip redundant expensive decryptions. A global `keyCache` in `encryption.ts` causes CI build failures for the 'mtosvelocity' Cloudflare Worker.
+**Action:** Use lazy cloning for object transformations. Prefer short-circuiting logic over temporary array allocations in loops. Avoid top-level mutable caches in modules targeted by Cloudflare Worker builds.
