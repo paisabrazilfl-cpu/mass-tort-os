@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { CreditCard, ExternalLink, Loader2, RefreshCw, AlertCircle } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import {
   useGetBillingState,
   useListBillingInvoices,
@@ -154,15 +155,13 @@ export default function BillingPage() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6" data-testid="page-billing">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <CreditCard className="w-6 h-6" /> Billing
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Manage your Stripe subscription and view invoices.
-          </p>
-        </div>
+      <WorkspaceHero
+        eyebrow="Account"
+        title="Billing & Subscriptions"
+        description="Manage your plan, invoices, and payment methods. Upgrade or cancel at any time from the Stripe billing portal."
+        badge="Stripe-powered"
+      />
+      <div className="flex justify-end">
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} data-testid="button-refresh-billing">
           <RefreshCw className={`w-4 h-4 mr-2 ${loading ? "animate-spin" : ""}`} />
           Refresh
