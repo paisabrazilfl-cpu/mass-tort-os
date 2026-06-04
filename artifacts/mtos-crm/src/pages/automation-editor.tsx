@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Fragment, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useRoute, useLocation } from "wouter";
 import ReactFlow, {
   Background, Controls, MiniMap, addEdge,
   applyNodeChanges, applyEdgeChanges,
   type Node, type Edge, type NodeChange, type EdgeChange, type Connection,
   ReactFlowProvider, useReactFlow, MarkerType,
+  Handle, Position, type NodeProps,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { Card } from "@/components/ui/card";
@@ -19,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Sparkles, X, Loader2, Copy } from "lucide-react";
+import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Sparkles, X, Loader2, Copy, ChevronRight as ArrowRight } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { getLucide } from "@/lib/lucide-icon";
@@ -42,6 +43,82 @@ function uid(prefix = "n") {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+// ─── Category color mapping ────────────────────────────────────────────────────
+const CATEGORY_COLORS: Record<string, string> = {
+  triggers: "bg-blue-600",
+  trigger: "bg-blue-600",
+  crm: "bg-emerald-600",
+  messaging: "bg-violet-600",
+  comm: "bg-violet-600",
+  documents: "bg-orange-500",
+  ai: "bg-pink-500",
+  logic: "bg-slate-500",
+  scripts: "bg-amber-500",
+  data: "bg-teal-600",
+  io: "bg-cyan-600",
+  utility: "bg-gray-500",
+  integrations: "bg-indigo-600",
+};
+
+function catColor(category: string | undefined): string {
+  return CATEGORY_COLORS[(category ?? "").toLowerCase()] ?? "bg-slate-600";
+}
+
+// ─── BigBlockNode — custom ReactFlow node rendered as a large card ─────────────
+function BigBlockNode({ data, selected }: NodeProps) {
+  const Icon = getLucide(data.icon ?? "Box");
+  const colorClass = data.color ?? catColor(data.category);
+  const paramsEntries = Object.entries(data.params ?? {})
+    .filter(([, v]) => v !== "" && v !== null && v !== undefined)
+    .slice(0, 3) as [string, unknown][];
+
+  return (
+    <div
+      className={`rounded-xl overflow-hidden shadow-md border-2 transition-all bg-background
+        ${selected ? "border-primary ring-2 ring-primary/20 shadow-lg shadow-primary/10" : "border-border/70 hover:border-primary/40"}`}
+      style={{ width: 248, minWidth: 248 }}
+    >
+      <Handle
+        type="target"
+        position={Position.Top}
+        style={{ background: "hsl(var(--primary))", width: 11, height: 11, top: -6, border: "2px solid hsl(var(--background))" }}
+      />
+      {/* Colored category header */}
+      <div className={`flex items-center gap-2 px-3 py-1.5 ${colorClass}`}>
+        <Icon className="h-3.5 w-3.5 text-white shrink-0" />
+        <span className="text-[10px] font-bold uppercase tracking-widest text-white/90 truncate">
+          {data.category ?? "node"}
+        </span>
+      </div>
+      {/* Body */}
+      <div className="px-3 py-2.5 space-y-1.5">
+        <div className="font-semibold text-sm leading-snug text-foreground">{data.label ?? data.nodeType}</div>
+        {data.description && (
+          <p className="text-[11px] text-muted-foreground line-clamp-2 leading-snug">{data.description}</p>
+        )}
+        {paramsEntries.length > 0 && (
+          <div className="mt-1 space-y-0.5 border-t border-border/40 pt-1.5">
+            {paramsEntries.map(([k, v]) => (
+              <div key={k} className="flex items-start gap-1 text-[10px]">
+                <span className="text-muted-foreground font-mono shrink-0 min-w-0">{k}:</span>
+                <span className="text-foreground/70 truncate min-w-0">{String(v).slice(0, 30)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        style={{ background: "hsl(var(--primary))", width: 11, height: 11, bottom: -6, border: "2px solid hsl(var(--background))" }}
+      />
+    </div>
+  );
+}
+
+// Registered outside the component tree so ReactFlow never sees a new reference
+const NODE_TYPES = { bigBlock: BigBlockNode };
+
 export default function AutomationEditorPage() {
   return (
     <ReactFlowProvider>
@@ -61,25 +138,18 @@ function EditorInner() {
   const [description, setDescription] = useState("");
   const [enabled, setEnabled] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
-  // A system template (firm_id IS NULL) is read-only to a firm — you clone it
-  // into your firm before editing/enabling.
   const [isSystem, setIsSystem] = useState(false);
   const [cloning, setCloning] = useState(false);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [catalog, setCatalog] = useState<NodeDef[]>([]);
   const [openCat, setOpenCat] = useState<Record<string, boolean>>({});
-  // Track only the selected node's id; derive the live node from `nodes`
-  // below so every state update (typing in a param field, dragging the node,
-  // running the graph) re-renders the config panel with fresh data instead
-  // of a stale snapshot.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [runResult, setRunResult] = useState<any>(null);
   const [runOpen, setRunOpen] = useState(false);
   const [runInput, setRunInput] = useState("{}");
   const [running, setRunning] = useState(false);
-  // AI Assistant drawer state
   const [assistOpen, setAssistOpen] = useState(false);
   const [assistPrompt, setAssistPrompt] = useState("");
   const [assistMode, setAssistMode] = useState<"replace" | "patch">("replace");
@@ -133,18 +203,29 @@ function EditorInner() {
         setTags(wf.tags ?? []);
         setIsSystem(wf.firm_id == null);
         const g = wf.graph ?? { nodes: [], edges: [] };
-        // Server stores the catalog node type on `n.type` (e.g. "trigger.manual").
-        // ReactFlow's `type` field, however, must point to a registered renderer
-        // — we use the built-in "default" everywhere. Translate by stashing the
-        // catalog type on `data.nodeType` and resetting the rf-level type so
-        // saved graphs round-trip cleanly through the editor.
-        setNodes((g.nodes ?? []).map((n: any) => ({
-          ...n,
-          type: "default",
-          position: n.position ?? { x: 100, y: 100 },
-          style: n.style ?? { borderRadius: 8, border: "1px solid #334155", padding: 0, width: 200 },
-          data: { ...(n.data ?? {}), nodeType: n.data?.nodeType ?? n.type, params: n.data?.params ?? {} },
-        })));
+        // Build a local lookup so we can bake visual metadata into each node immediately.
+        const localCatByType: Record<string, NodeDef> = Object.fromEntries(
+          (cat.nodes ?? []).map((n: NodeDef) => [n.type, n]),
+        );
+        setNodes((g.nodes ?? []).map((n: any) => {
+          const nodeType = n.data?.nodeType ?? n.type;
+          const def = localCatByType[nodeType];
+          return {
+            ...n,
+            type: "bigBlock",
+            position: n.position ?? { x: 100, y: 100 },
+            data: {
+              ...(n.data ?? {}),
+              nodeType,
+              params: n.data?.params ?? {},
+              icon: def?.icon,
+              color: def?.color,
+              category: def?.category,
+              description: def?.description,
+            },
+            style: undefined,
+          };
+        }));
         setEdges((g.edges ?? []).map((e: any) => ({ ...e, markerEnd: { type: MarkerType.ArrowClosed } })));
         setCatalog(cat.nodes ?? []);
         const cats = new Set<string>((cat.nodes ?? []).map((n: NodeDef) => n.category));
@@ -188,19 +269,9 @@ function EditorInner() {
   const onNodesChange = useCallback((c: NodeChange[]) => setNodes((ns) => applyNodeChanges(c, ns)), []);
   const onEdgesChange = useCallback((c: EdgeChange[]) => setEdges((es) => applyEdgeChanges(c, es)), []);
   const onConnect = useCallback((c: Connection) => setEdges((es) => addEdge({ ...c, id: uid("e"), markerEnd: { type: MarkerType.ArrowClosed } }, es)), []);
-  // The node passed to onNodeClick is the *rendered* one (whose data.label has
-  // been replaced with a JSX element for the canvas badge). Look the original
-  // node up from state so the config panel sees the plain string label and
-  // raw params, not React elements.
-  const onNodeClick = useCallback((_: any, n: Node) => {
-    setSelectedId(n.id);
-  }, []);
+  const onNodeClick = useCallback((_: any, n: Node) => { setSelectedId(n.id); }, []);
   const onPaneClick = useCallback(() => setSelectedId(null), []);
 
-  // Defensive: if the selected node disappears from the graph (keyboard
-  // Backspace/Delete via ReactFlow's built-in handler, AI Assist "replace",
-  // future JSON import, etc.) clear the stale id so the config panel
-  // doesn't keep a phantom selection.
   useEffect(() => {
     if (selectedId && !nodes.some((n) => n.id === selectedId)) {
       setSelectedId(null);
@@ -209,29 +280,18 @@ function EditorInner() {
 
   function addNode(def: NodeDef) {
     const center = wrapperRef.current?.getBoundingClientRect();
-    const pos = flow.project({ x: (center?.width ?? 600) / 2 - 100, y: 100 });
+    const pos = flow.project({ x: (center?.width ?? 600) / 2 - 124, y: 100 });
     const n: Node = {
       id: uid(),
-      type: "default",
+      type: "bigBlock",
       position: pos,
       data: {
         label: def.label,
         nodeType: def.type,
-        // Pre-fill each parameter with the most obvious starter value:
-        // an explicit `default` if the catalog declared one, otherwise the
-        // `placeholder` example (which is always written to demonstrate what
-        // the field should contain), otherwise empty. This means dragging a
-        // fresh node into the canvas shows meaningful example content for
-        // every slot rather than a wall of empty inputs.
-        //
-        // For `type: "json"` params, we mirror the textarea's `onChange`
-        // behavior (see ParamField below): if the seed string parses as JSON
-        // we store the parsed value, otherwise we keep it as a raw string.
-        // This is critical because the executor uses json params directly
-        // as objects (e.g. `{...patch}`); spreading a raw JSON string would
-        // produce character-indexed garbage instead of the intended object.
-        // Path-style placeholders like "input.payload" stay as strings and
-        // are handled by `resolveOrLiteral` at run time.
+        icon: def.icon,
+        color: def.color,
+        category: def.category,
+        description: def.description,
         params: Object.fromEntries(def.params.map((p) => {
           const seed = p.default ?? p.placeholder ?? "";
           if (p.type === "json" && typeof seed === "string" && seed.length > 0) {
@@ -241,9 +301,7 @@ function EditorInner() {
         })),
       },
     };
-    // We use the default reactflow node type but render a custom inner label.
-    n.style = { borderRadius: 8, border: "1px solid #334155", padding: 0, width: 200 };
-    setNodes((ns) => [...ns, decorateNode(n, def)]);
+    setNodes((ns) => [...ns, n]);
   }
 
   function decorateNode(n: Node, def?: NodeDef): Node {
@@ -251,30 +309,37 @@ function EditorInner() {
     if (!d) return n;
     return {
       ...n,
-      // Expose node type on the runtime node so executor can use it.
-      // We mirror it as the reactflow-level `type` so saved graphs round-trip.
-      data: { ...n.data, label: n.data?.label ?? d.label, nodeType: d.type },
+      type: "bigBlock",
+      data: {
+        ...n.data,
+        label: n.data?.label ?? d.label,
+        nodeType: d.type,
+        icon: d.icon,
+        color: d.color,
+        category: d.category,
+        description: d.description,
+      },
     };
   }
 
   function deleteSelected() {
     if (!selectedId) return;
-    const id = selectedId;
-    setNodes((ns) => ns.filter((n) => n.id !== id));
-    setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
+    const sid = selectedId;
+    setNodes((ns) => ns.filter((n) => n.id !== sid));
+    setEdges((es) => es.filter((e) => e.source !== sid && e.target !== sid));
     setSelectedId(null);
   }
 
   function updateParam(key: string, value: any) {
     if (!selectedId) return;
-    const id = selectedId;
-    setNodes((ns) => ns.map((n) => n.id === id ? { ...n, data: { ...n.data, params: { ...(n.data?.params ?? {}), [key]: value } } } : n));
+    const sid = selectedId;
+    setNodes((ns) => ns.map((n) => n.id === sid ? { ...n, data: { ...n.data, params: { ...(n.data?.params ?? {}), [key]: value } } } : n));
   }
 
   function updateLabel(label: string) {
     if (!selectedId) return;
-    const id = selectedId;
-    setNodes((ns) => ns.map((n) => n.id === id ? { ...n, data: { ...n.data, label } } : n));
+    const sid = selectedId;
+    setNodes((ns) => ns.map((n) => n.id === sid ? { ...n, data: { ...n.data, label } } : n));
   }
 
   function buildGraphForSave() {
@@ -327,7 +392,6 @@ function EditorInner() {
     try {
       let parsed: any = {};
       try { parsed = JSON.parse(runInput || "{}"); } catch { toast({ title: "Input is not valid JSON", variant: "destructive" }); setRunning(false); return; }
-      // Save first so the executor sees latest graph.
       await save();
       const res = await apiFetchRaw(`/api/automations/${id}/run`, {
         method: "POST",
@@ -344,10 +408,7 @@ function EditorInner() {
 
   async function askAssistant() {
     const trimmed = assistPrompt.trim();
-    if (trimmed.length < 3) {
-      toast({ title: "Type a longer prompt", variant: "destructive" });
-      return;
-    }
+    if (trimmed.length < 3) { toast({ title: "Type a longer prompt", variant: "destructive" }); return; }
     setAssistLoading(true); setAssistError(null); setAssistResult(null);
     try {
       const res = await apiFetchRaw(`/api/automations/assist`, {
@@ -358,29 +419,18 @@ function EditorInner() {
       const data = await res.json();
       if (!res.ok || data.status === "error") {
         const issues = data?.details?.issues;
-        const detail = Array.isArray(issues) ? issues.join("\n• ") : (data?.message ?? "Assistant failed");
-        setAssistError(detail);
+        setAssistError(Array.isArray(issues) ? issues.join("\n• ") : (data?.message ?? "Assistant failed"));
         return;
       }
-      setAssistResult({
-        explanation: data.explanation ?? "",
-        graph: data.graph,
-        mode: data.mode ?? assistMode,
-      });
+      setAssistResult({ explanation: data.explanation ?? "", graph: data.graph, mode: data.mode ?? assistMode });
     } catch (e: any) {
       setAssistError(e?.message ?? String(e));
-    } finally {
-      setAssistLoading(false);
-    }
+    } finally { setAssistLoading(false); }
   }
 
   function applyAssistResult() {
     if (!assistResult) return;
     const proposed = assistResult.graph;
-    // Defensive client-side guard: even though /assist already validated the
-    // graph against the catalog, double-check here so a stale catalog cache
-    // (e.g. after a server deploy) can't slip an unknown node onto the
-    // canvas. We also ensure every edge points at a node we know about.
     const proposedNodes: any[] = Array.isArray(proposed?.nodes) ? proposed.nodes : [];
     const proposedEdges: any[] = Array.isArray(proposed?.edges) ? proposed.edges : [];
     const ids = new Set(proposedNodes.map((n: any) => n.id));
@@ -394,9 +444,6 @@ function EditorInner() {
       toast({ title: "Refused to apply proposal", description: detail, variant: "destructive" });
       return;
     }
-    // Map the proposed catalog graph onto ReactFlow nodes the same way the
-    // initial-load path does — keeping `data.nodeType` so the editor's per-
-    // node config panel works on the new nodes.
     const newNodes = proposedNodes.map((n) => decorateNodeFromCatalog(n));
     const newEdges = proposedEdges.map((e) => ({
       ...e,
@@ -407,7 +454,6 @@ function EditorInner() {
     if (assistResult.mode === "replace") {
       setNodes(newNodes); setEdges(newEdges);
     } else {
-      // Patch: append new nodes/edges, dedupe by id (incoming wins).
       const incomingIds = new Set(newNodes.map((n) => n.id));
       setNodes((curr) => [...curr.filter((n) => !incomingIds.has(n.id)), ...newNodes]);
       const incomingEdgeIds = new Set(newEdges.map((e) => e.id));
@@ -417,22 +463,21 @@ function EditorInner() {
     setAssistResult(null); setAssistOpen(false); setAssistPrompt("");
   }
 
-  // Decorate a catalog-shaped node {id,type,position,data:{label,params}} into
-  // the ReactFlow node shape the editor uses (mirrors the initial-load logic).
   function decorateNodeFromCatalog(n: any): Node {
     const def = catalogByType[n.type];
     return {
       id: n.id,
       position: n.position ?? { x: 100, y: 100 },
-      type: "default",
+      type: "bigBlock",
       data: {
         nodeType: n.type,
         label: n.data?.label ?? def?.label ?? n.type,
         params: n.data?.params ?? {},
+        icon: def?.icon,
+        color: def?.color,
+        category: def?.category,
+        description: def?.description,
       },
-      style: def
-        ? { borderLeft: `4px solid var(--accent, #6366f1)`, paddingLeft: 8 }
-        : undefined,
     } as Node;
   }
 
@@ -462,10 +507,6 @@ function EditorInner() {
     toast({ title: "Starter loaded", description: `${template.name} is now on the canvas.` });
   }
 
-  // Render
-  // Derive the selected node from the live nodes array so every state update
-  // (typing in a param field, dragging the node, etc.) re-renders the config
-  // panel against fresh data instead of a stale snapshot.
   const selected = useMemo(
     () => (selectedId ? nodes.find((n) => n.id === selectedId) ?? null : null),
     [nodes, selectedId],
@@ -488,7 +529,7 @@ function EditorInner() {
         )}
         <div className="ml-auto flex items-center gap-3">
           <div className="flex items-center gap-2 rounded-md border px-2 py-1">
-            <Label htmlFor="simple-mode" className="text-xs">Simple builder</Label>
+            <Label htmlFor="simple-mode" className="text-xs">Big blocks only</Label>
             <Switch id="simple-mode" checked={simpleMode} onCheckedChange={setSimpleMode} />
           </div>
           <Button size="sm" variant="outline" onClick={exportLocal}><Download className="h-4 w-4 mr-1" /> Export</Button>
@@ -504,6 +545,7 @@ function EditorInner() {
         </div>
       </div>
 
+      {/* AI Assistant drawer */}
       {assistOpen && (
         <div className="fixed inset-y-0 right-0 z-50 w-[420px] bg-background border-l shadow-2xl flex flex-col" data-testid="drawer-ai-assist">
           <div className="flex items-center justify-between border-b px-4 py-3">
@@ -542,13 +584,11 @@ function EditorInner() {
             <Button onClick={askAssistant} disabled={assistLoading} className="w-full" data-testid="button-ask-assist">
               {assistLoading ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Thinking…</> : <><Sparkles className="h-4 w-4 mr-1" /> Generate</>}
             </Button>
-
             {assistError && (
               <div className="rounded border border-destructive/40 bg-destructive/10 p-2 text-xs whitespace-pre-wrap text-destructive" data-testid="text-assist-error">
                 {assistError}
               </div>
             )}
-
             {assistResult && (
               <div className="space-y-2 border rounded p-2 bg-muted/30" data-testid="block-assist-result">
                 <div className="text-xs font-medium">Proposal</div>
@@ -575,80 +615,135 @@ function EditorInner() {
       )}
 
       <div className="flex flex-1 min-h-0">
-        {/* Node palette */}
+        {/* ── Big Block Palette ─────────────────────────────────────────────── */}
         {paletteOpen ? (
-        <div className="w-64 border-r bg-muted/20 overflow-y-auto relative">
-          <div className="p-2 flex items-center justify-between gap-2">
-            <div>
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{simpleMode ? "Big blocks first" : "Full node palette"}</div>
-              <div className="text-[11px] text-muted-foreground">{simpleMode ? "Start with a guided workflow, then add only the common blocks." : "Advanced mode shows the entire automation catalog."}</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setPaletteOpen(false)}
-              title="Collapse palette"
-              aria-label="Collapse palette"
-              className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
-            >
-              <ChevronsLeft className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="border-t px-2 py-2 space-y-2">
-            <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Starter flows</div>
-            {AUTOMATION_STARTER_TEMPLATES.map((template) => {
-              const Icon = getLucide(template.icon);
-              return (
-                <button
-                  key={template.id}
-                  onClick={() => loadStarterTemplate(template.id)}
-                  disabled={isSystem}
-                  className="w-full rounded-md border bg-background px-2 py-2 text-left hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <div className="flex items-start gap-2">
-                    <span className="inline-flex h-7 w-7 items-center justify-center rounded bg-primary/10 text-primary shrink-0">
-                      <Icon className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium">{template.name}</div>
-                      <div className="text-[11px] text-muted-foreground line-clamp-2">{template.summary}</div>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          {Object.entries(visibleGrouped).map(([cat, list]) => (
-            <div key={cat} className="border-t">
+          <div className="w-80 border-r bg-muted/10 flex flex-col overflow-hidden">
+            {/* Palette header */}
+            <div className="p-3 flex items-center justify-between gap-2 border-b bg-background">
+              <div>
+                <div className="text-xs font-bold text-foreground">
+                  {simpleMode ? "Big Blocks" : "All Blocks"}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {simpleMode ? "Click a block to place it on the canvas" : "Full automation catalog"}
+                </div>
+              </div>
               <button
-                onClick={() => setOpenCat((s) => ({ ...s, [cat]: !s[cat] }))}
-                className="w-full flex items-center justify-between px-2 py-1.5 text-xs font-medium hover:bg-muted/40"
+                type="button"
+                onClick={() => setPaletteOpen(false)}
+                title="Collapse palette"
+                aria-label="Collapse palette"
+                className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground shrink-0"
               >
-                <span>{cat}</span>
-                {openCat[cat] ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                <ChevronsLeft className="h-4 w-4" />
               </button>
-              {openCat[cat] && (
-                <div className="pb-1">
-                  {list.map((d) => {
-                    const Icon = getLucide(d.icon);
+            </div>
+
+            <ScrollArea className="flex-1">
+              {/* ── Starter flows ────────────────────────────── */}
+              <div className="px-2.5 pt-3 pb-1">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">
+                  Starter Flows
+                </div>
+                <div className="space-y-1.5">
+                  {AUTOMATION_STARTER_TEMPLATES.map((template) => {
+                    const TIcon = getLucide(template.icon);
+                    const previewNodes = template.graph.nodes.slice(0, 5);
                     return (
                       <button
-                        key={d.type}
-                        onClick={() => addNode(d)}
-                        title={d.description}
-                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted flex items-center gap-2"
+                        key={template.id}
+                        onClick={() => loadStarterTemplate(template.id)}
+                        disabled={isSystem}
+                        className="w-full rounded-lg border border-border/60 bg-background px-2.5 py-2 text-left
+                          hover:border-primary/60 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60 transition-all group"
                       >
-                        <span className={`inline-flex h-5 w-5 items-center justify-center rounded text-white ${d.color}`}>
-                          <Icon className="h-3 w-3" />
-                        </span>
-                        <span className="truncate">{d.label}</span>
+                        {/* Flow icon strip */}
+                        <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+                          {previewNodes.map((n, i) => {
+                            const def = catalogByType[n.type];
+                            const Icon = getLucide(def?.icon ?? "Box");
+                            const cc = def?.color ?? catColor(def?.category);
+                            return (
+                              <Fragment key={n.id}>
+                                <span className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${cc} shadow-sm shrink-0`}>
+                                  <Icon className="h-3 w-3 text-white" />
+                                </span>
+                                {i < previewNodes.length - 1 && (
+                                  <span className="text-muted-foreground text-[11px]">›</span>
+                                )}
+                              </Fragment>
+                            );
+                          })}
+                          {template.graph.nodes.length > 5 && (
+                            <span className="text-[10px] text-muted-foreground ml-1">
+                              +{template.graph.nodes.length - 5} more
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs font-semibold text-foreground leading-snug">{template.name}</div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-1">{template.summary}</div>
                       </button>
                     );
                   })}
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
+              </div>
+
+              <Separator className="my-2.5" />
+
+              {/* ── Block categories ─────────────────────────── */}
+              {Object.entries(visibleGrouped).map(([cat, list]) => {
+                const cc = catColor(cat);
+                return (
+                  <div key={cat}>
+                    <button
+                      onClick={() => setOpenCat((s) => ({ ...s, [cat]: !s[cat] }))}
+                      className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs font-bold uppercase tracking-wider hover:bg-muted/40 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-block w-2 h-2 rounded-full ${cc}`} />
+                        <span>{cat}</span>
+                        <span className="text-muted-foreground font-normal normal-case">({list.length})</span>
+                      </div>
+                      {openCat[cat]
+                        ? <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                        : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+                    </button>
+                    {openCat[cat] && (
+                      <div className="px-2 pb-2 space-y-1.5">
+                        {list.map((d) => {
+                          const Icon = getLucide(d.icon);
+                          const blockColor = d.color ?? catColor(d.category);
+                          return (
+                            <button
+                              key={d.type}
+                              onClick={() => addNode(d)}
+                              title={d.description}
+                              className="w-full text-left rounded-lg border border-border/60 bg-background
+                                hover:border-primary/60 hover:bg-primary/5 transition-all overflow-hidden group"
+                            >
+                              {/* Colored top strip */}
+                              <div className={`flex items-center gap-2 px-2.5 py-1 ${blockColor}`}>
+                                <Icon className="h-3 w-3 text-white shrink-0" />
+                                <span className="text-[9px] font-bold uppercase tracking-widest text-white/80 truncate">
+                                  {d.category}
+                                </span>
+                              </div>
+                              {/* Block info */}
+                              <div className="px-2.5 py-1.5">
+                                <div className="text-xs font-semibold text-foreground leading-snug">{d.label}</div>
+                                <div className="text-[10px] text-muted-foreground line-clamp-1 mt-0.5">{d.description}</div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <div className="h-4" />
+            </ScrollArea>
+          </div>
         ) : (
           <div className="w-8 border-r bg-muted/20 flex flex-col items-center pt-2">
             <button
@@ -663,33 +758,12 @@ function EditorInner() {
           </div>
         )}
 
-        {/* Canvas */}
+        {/* ── Canvas ──────────────────────────────────────────────────────── */}
         <div className="flex-1 relative" ref={wrapperRef}>
           <ReactFlow
-            nodes={nodes.map((n) => {
-              const def = catalogByType[n.data?.nodeType];
-              const colorClass = def?.color ?? "bg-slate-600";
-              const Icon = getLucide(def?.icon);
-              return {
-                ...n,
-                data: {
-                  ...n.data,
-                  label: (
-                    <div className="text-left">
-                      <div className={`flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-white px-2 py-0.5 ${colorClass} rounded-t`}>
-                        <Icon className="h-3 w-3" aria-hidden="true" />
-                        <span>{def?.category ?? "node"}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium">
-                        <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-                        <span>{n.data?.label ?? def?.label ?? n.data?.nodeType}</span>
-                      </div>
-                    </div>
-                  ),
-                },
-              };
-            })}
+            nodes={nodes}
             edges={edges}
+            nodeTypes={NODE_TYPES}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -702,76 +776,116 @@ function EditorInner() {
             <Controls />
             <MiniMap pannable zoomable />
           </ReactFlow>
-        </div>
 
-        {/* Config panel */}
-        {configOpen ? (
-        <div className="w-80 border-l bg-background overflow-y-auto relative">
-          <div className="sticky top-0 z-10 flex items-center justify-end bg-background/95 backdrop-blur px-2 py-1 border-b">
-            <button
-              type="button"
-              onClick={() => setConfigOpen(false)}
-              title="Collapse panel"
-              aria-label="Collapse panel"
-              className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
-            >
-              <ChevronsRight className="h-4 w-4" />
-            </button>
-          </div>
-          {!selected ? (
-            <div className="p-4 text-sm text-muted-foreground">
-              <div className="font-medium mb-1">No node selected</div>
-              <p className="text-xs">Start with a starter flow on the left if you want a big, friendly block. You can still add or edit individual nodes after that.</p>
-              <Separator className="my-3" />
-              <div className="text-xs space-y-1">
-                <div><kbd>Backspace/Delete</kbd> removes selected nodes</div>
-                <div><kbd>Drag</kbd> from bottom port to connect</div>
-                <div><kbd>Scroll</kbd> to zoom, <kbd>Space+drag</kbd> to pan</div>
+          {/* Run result overlay */}
+          {runOpen && (
+            <div className="absolute bottom-4 left-4 right-4 z-40 max-h-80 overflow-auto rounded-xl border bg-background shadow-2xl">
+              <div className="flex items-center justify-between px-4 py-2 border-b">
+                <span className="text-sm font-semibold">Test Run</span>
+                <button onClick={() => setRunOpen(false)} className="p-1 rounded hover:bg-muted"><X className="h-4 w-4" /></button>
               </div>
-              <Separator className="my-3" />
-              <div className="space-y-2">
-                <div><Label className="text-xs">Description</Label><Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} /></div>
-                <div><Label className="text-xs">Tags (comma)</Label><Input value={tags.join(", ")} onChange={(e) => setTags(e.target.value.split(",").map((t) => t.trim()).filter(Boolean))} /></div>
-              </div>
-            </div>
-          ) : (
-            <div className="p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  {(() => {
-                    const Icon = getLucide(selectedDef?.icon);
-                    return (
-                      <span className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-white ${selectedDef?.color ?? "bg-slate-600"}`}>
-                        <Icon className="h-4 w-4" aria-hidden="true" />
-                      </span>
-                    );
-                  })()}
+              <div className="p-4 space-y-3">
+                <div>
+                  <Label className="text-xs">Input JSON</Label>
+                  <Textarea
+                    value={runInput}
+                    onChange={(e) => setRunInput(e.target.value)}
+                    rows={3}
+                    className="font-mono text-xs"
+                    placeholder='{"lead": {"id": 123}}'
+                  />
+                </div>
+                <Button size="sm" onClick={run} disabled={running}>
+                  {running ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Running…</> : <><Play className="h-4 w-4 mr-1" /> Run</>}
+                </Button>
+                {runResult && (
                   <div>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{selectedDef?.category}</div>
-                    <div className="font-semibold">{selectedDef?.label ?? selected.data?.nodeType}</div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <Badge variant={runResult.status === "completed" ? "default" : "destructive"}>{runResult.status}</Badge>
+                      <span className="text-xs text-muted-foreground">{runResult.steps?.length ?? 0} steps</span>
+                    </div>
+                    {runResult.error && <div className="text-xs text-destructive">{runResult.error}</div>}
+                    <pre className="text-[10px] bg-muted rounded p-2 overflow-auto max-h-32 mt-1">
+                      {JSON.stringify(runResult, null, 2)}
+                    </pre>
                   </div>
-                </div>
-                <Button size="sm" variant="ghost" className="text-destructive" onClick={deleteSelected}><Trash2 className="h-4 w-4" /></Button>
+                )}
               </div>
-              <p className="text-xs text-muted-foreground">{selectedDef?.description}</p>
-              <Separator />
-              <div>
-                <Label className="text-xs">Node label</Label>
-                <Input value={selected.data?.label ?? ""} onChange={(e) => updateLabel(e.target.value)} />
-              </div>
-              {selectedDef?.params.map((p) => (
-                <ParamField key={p.key} spec={p} value={selected.data?.params?.[p.key]} onChange={(v) => updateParam(p.key, v)} />
-              ))}
-              {Array.isArray(selectedDef?.outputs) && (
-                <div className="text-xs">
-                  <Label className="text-xs">Outputs</Label>
-                  <div className="flex gap-1 mt-1 flex-wrap">{selectedDef!.outputs.map((o) => <Badge key={String(o)} variant="outline">{String(o)}</Badge>)}</div>
-                  <p className="text-[10px] text-muted-foreground mt-1">Set the edge's source-handle to one of these names to route on that branch.</p>
-                </div>
-              )}
             </div>
           )}
         </div>
+
+        {/* ── Config panel ─────────────────────────────────────────────────── */}
+        {configOpen ? (
+          <div className="w-80 border-l bg-background overflow-y-auto relative">
+            <div className="sticky top-0 z-10 flex items-center justify-end bg-background/95 backdrop-blur px-2 py-1 border-b">
+              <button
+                type="button"
+                onClick={() => setConfigOpen(false)}
+                title="Collapse panel"
+                aria-label="Collapse panel"
+                className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground"
+              >
+                <ChevronsRight className="h-4 w-4" />
+              </button>
+            </div>
+            {!selected ? (
+              <div className="p-4 text-sm text-muted-foreground">
+                <div className="font-medium mb-1 text-foreground">No block selected</div>
+                <p className="text-xs">Click a block on the canvas to configure it, or pick a starter flow from the left panel.</p>
+                <Separator className="my-3" />
+                <div className="text-xs space-y-1">
+                  <div><kbd className="font-mono bg-muted px-1 rounded">Backspace</kbd> removes selected block</div>
+                  <div><kbd className="font-mono bg-muted px-1 rounded">Drag</kbd> from bottom port to connect</div>
+                  <div><kbd className="font-mono bg-muted px-1 rounded">Scroll</kbd> to zoom, <kbd className="font-mono bg-muted px-1 rounded">Space+drag</kbd> to pan</div>
+                </div>
+                <Separator className="my-3" />
+                <div className="space-y-2">
+                  <div><Label className="text-xs">Description</Label><Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} /></div>
+                  <div><Label className="text-xs">Tags (comma)</Label><Input value={tags.join(", ")} onChange={(e) => setTags(e.target.value.split(",").map((t) => t.trim()).filter(Boolean))} /></div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    {(() => {
+                      const Icon = getLucide(selectedDef?.icon ?? "Box");
+                      const cc = selectedDef?.color ?? catColor(selectedDef?.category);
+                      return (
+                        <span className={`inline-flex h-9 w-9 items-center justify-center rounded-lg text-white shadow-sm ${cc}`}>
+                          <Icon className="h-4.5 w-4.5" aria-hidden="true" />
+                        </span>
+                      );
+                    })()}
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{selectedDef?.category}</div>
+                      <div className="font-semibold text-sm">{selectedDef?.label ?? selected.data?.nodeType}</div>
+                    </div>
+                  </div>
+                  <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={deleteSelected}><Trash2 className="h-4 w-4" /></Button>
+                </div>
+                <p className="text-xs text-muted-foreground">{selectedDef?.description}</p>
+                <Separator />
+                <div>
+                  <Label className="text-xs">Block label</Label>
+                  <Input value={selected.data?.label ?? ""} onChange={(e) => updateLabel(e.target.value)} />
+                </div>
+                {selectedDef?.params.map((p) => (
+                  <ParamField key={p.key} spec={p} value={selected.data?.params?.[p.key]} onChange={(v) => updateParam(p.key, v)} />
+                ))}
+                {Array.isArray(selectedDef?.outputs) && (
+                  <div className="text-xs">
+                    <Label className="text-xs">Output branches</Label>
+                    <div className="flex gap-1 mt-1 flex-wrap">
+                      {selectedDef!.outputs.map((o) => <Badge key={String(o)} variant="outline">{String(o)}</Badge>)}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-1">Set the edge's source-handle to one of these names to route on that branch.</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         ) : (
           <div className="w-8 border-l bg-muted/20 flex flex-col items-center pt-2">
             <button
@@ -786,108 +900,58 @@ function EditorInner() {
           </div>
         )}
       </div>
-
-      {/* Run drawer */}
-      {runOpen && (
-        <div className="border-t bg-background max-h-[40vh] overflow-y-auto">
-          <div className="p-3 flex items-start gap-3">
-            <div className="flex-1">
-              <Label className="text-xs">Input (JSON, available as <code>input</code> in nodes)</Label>
-              <Textarea rows={3} className="font-mono text-xs" value={runInput} onChange={(e) => setRunInput(e.target.value)} />
-            </div>
-            <Button size="sm" onClick={run} disabled={running}><Play className="h-4 w-4 mr-1" /> {running ? "Running…" : "Execute"}</Button>
-          </div>
-          {runResult && (
-            <div className="px-3 pb-3 space-y-2">
-              <div className="flex items-center gap-2 text-xs">
-                <Badge variant={runResult.status === "completed" ? "default" : "destructive"}>{runResult.status}</Badge>
-                <span className="text-muted-foreground">run #{runResult.runId} · {runResult.steps?.length ?? 0} steps</span>
-                {runResult.error && <span className="text-destructive">{runResult.error}</span>}
-              </div>
-              <Tabs defaultValue="steps">
-                <TabsList>
-                  <TabsTrigger value="steps">Steps</TabsTrigger>
-                  <TabsTrigger value="output">Output</TabsTrigger>
-                </TabsList>
-                <TabsContent value="steps">
-                  <div className="space-y-1">
-                    {(runResult.steps ?? []).map((s: any, i: number) => (
-                      <div key={i} className="text-xs border rounded p-2">
-                        <div className="flex items-center gap-2">
-                          <Badge variant={s.status === "ok" ? "default" : "destructive"}>{s.status}</Badge>
-                          <span className="font-mono">{s.type}</span>
-                          {s.label && <span className="text-muted-foreground">{s.label}</span>}
-                          {s.branch && <Badge variant="outline">→ {s.branch}</Badge>}
-                        </div>
-                        {s.error && <pre className="mt-1 text-destructive whitespace-pre-wrap">{s.error}</pre>}
-                        {s.output !== undefined && <pre className="mt-1 text-[11px] bg-muted/40 p-1 rounded overflow-x-auto">{JSON.stringify(s.output, null, 2)}</pre>}
-                      </div>
-                    ))}
-                  </div>
-                </TabsContent>
-                <TabsContent value="output">
-                  <pre className="text-xs bg-muted/40 p-2 rounded overflow-x-auto">{JSON.stringify(runResult.output, null, 2)}</pre>
-                </TabsContent>
-              </Tabs>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
 
+// ─── ParamField ──────────────────────────────────────────────────────────────
 function ParamField({ spec, value, onChange }: { spec: NodeParamSpec; value: any; onChange: (v: any) => void }) {
-  const common = (
-    <div className="flex items-center justify-between">
-      <Label className="text-xs">{spec.label}{spec.required && <span className="text-destructive ml-0.5">*</span>}</Label>
-    </div>
-  );
-  if (spec.type === "boolean") {
-    return (
-      <div className="flex items-center justify-between">
-        <Label className="text-xs">{spec.label}</Label>
-        <Switch checked={!!value} onCheckedChange={onChange} />
-      </div>
-    );
-  }
-  if (spec.type === "select") {
-    return (
-      <div>{common}
-        <Select value={String(value ?? spec.default ?? "")} onValueChange={onChange}>
-          <SelectTrigger><SelectValue /></SelectTrigger>
-          <SelectContent>{spec.options?.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-        </Select>
-        {spec.help && <p className="text-[10px] text-muted-foreground mt-0.5">{spec.help}</p>}
-      </div>
-    );
-  }
-  if (spec.type === "number") {
-    return (
-      <div>{common}<Input type="number" value={value ?? ""} onChange={(e) => onChange(Number(e.target.value))} placeholder={spec.placeholder} /></div>
-    );
-  }
-  if (spec.type === "text" || spec.type === "code") {
-    return (
-      <div>{common}
-        <Textarea rows={spec.type === "code" ? 6 : 3} className={spec.type === "code" ? "font-mono text-xs" : "text-xs"} value={value ?? ""} onChange={(e) => onChange(e.target.value)} placeholder={spec.placeholder} />
-        {spec.help && <p className="text-[10px] text-muted-foreground mt-0.5">{spec.help}</p>}
-      </div>
-    );
-  }
-  if (spec.type === "json") {
-    const str = typeof value === "string" ? value : JSON.stringify(value ?? "", null, 2);
-    return (
-      <div>{common}
-        <Textarea rows={4} className="font-mono text-xs" value={str} onChange={(e) => {
-          const t = e.target.value;
-          try { onChange(JSON.parse(t)); } catch { onChange(t); }
-        }} placeholder={spec.placeholder} />
-        <p className="text-[10px] text-muted-foreground mt-0.5">JSON. Invalid JSON is kept as a raw string until corrected.</p>
-      </div>
-    );
-  }
+  const id = `param-${spec.key}`;
   return (
-    <div>{common}<Input value={value ?? ""} onChange={(e) => onChange(e.target.value)} placeholder={spec.placeholder} />{spec.help && <p className="text-[10px] text-muted-foreground mt-0.5">{spec.help}</p>}</div>
+    <div className="space-y-1">
+      <Label htmlFor={id} className="text-xs flex items-center gap-1">
+        {spec.label}
+        {spec.required && <span className="text-destructive">*</span>}
+      </Label>
+      {spec.type === "boolean" ? (
+        <div className="flex items-center gap-2">
+          <Switch id={id} checked={!!value} onCheckedChange={onChange} />
+          <span className="text-xs text-muted-foreground">{value ? "true" : "false"}</span>
+        </div>
+      ) : spec.type === "select" && spec.options ? (
+        <Select value={String(value ?? "")} onValueChange={onChange}>
+          <SelectTrigger id={id} className="h-8 text-xs"><SelectValue placeholder="Select…" /></SelectTrigger>
+          <SelectContent>
+            {spec.options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      ) : spec.type === "text" || spec.type === "json" || spec.type === "code" ? (
+        <Textarea
+          id={id}
+          rows={spec.type === "code" ? 6 : 3}
+          className="font-mono text-xs"
+          value={typeof value === "string" ? value : JSON.stringify(value ?? "", null, 2)}
+          placeholder={spec.placeholder}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (spec.type === "json") {
+              try { onChange(JSON.parse(raw)); } catch { onChange(raw); }
+            } else {
+              onChange(raw);
+            }
+          }}
+        />
+      ) : (
+        <Input
+          id={id}
+          type={spec.type === "number" ? "number" : "text"}
+          className="text-xs h-8"
+          value={value ?? ""}
+          placeholder={spec.placeholder}
+          onChange={(e) => onChange(spec.type === "number" ? Number(e.target.value) : e.target.value)}
+        />
+      )}
+      {spec.help && <p className="text-[10px] text-muted-foreground">{spec.help}</p>}
+    </div>
   );
 }
