@@ -5,6 +5,7 @@ import {
   getListLeadsQueryKey,
 } from "@workspace/api-client-react";
 import { ShieldCheck, Search, UserSearch, ExternalLink } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,19 +40,13 @@ export default function BackgroundCheck() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <ShieldCheck className="h-5 w-5" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Background Check</h1>
-          <p className="text-sm text-muted-foreground">
-            Run the full multi-lane verification hub against any lead — address, email, phone,
-            residency, criminal/court, incarceration, sex-offender registry, attorney conflict,
-            business entity, and federal PACER.
-          </p>
-        </div>
-      </div>
+      <WorkspaceHero
+        eyebrow="Verification"
+        title="Background Check Hub"
+        description="Nine-lane verification against any lead — address, email, phone, residency, criminal/court, incarceration, sex-offender registry, attorney conflict, and federal PACER."
+        badge="9 lanes"
+        actions={[{ label: "Run hub check", href: "#hub", icon: ShieldCheck }]}
+      />
 
       <Card>
         <CardHeader>
