@@ -10,6 +10,10 @@ export interface EmailSendRequest {
   html: string;
   text?: string;
   replyTo?: string;
+  /** SendGrid dynamic template ID (e.g. "d-9aaeefe05abe4c3d82f53d96b76708d1") */
+  templateId?: string;
+  /** Dynamic template substitution data (maps handlebars {{variable}} names to values) */
+  templateData?: Record<string, string>;
 }
 
 export interface EmailSendResult {
@@ -44,18 +48,28 @@ export const sendgridAdapter: EmailAdapter = {
     }
 
     const url = "https://api.sendgrid.com/v3/mail/send";
-    const payload = {
+    const payload: any = {
       personalizations: [
-        { to: [{ email: req.to, name: req.toName }] },
+        {
+          to: [{ email: req.to, name: req.toName }],
+          ...(req.templateData ? { dynamic_template_data: req.templateData } : {}),
+        },
       ],
       from: { email: req.fromEmail, name: req.fromName },
       reply_to: req.replyTo ? { email: req.replyTo } : undefined,
       subject: req.subject,
-      content: [
+    };
+
+    // Use SendGrid dynamic template if templateId provided
+    if (req.templateId) {
+      payload.template_id = req.templateId;
+      // Remove content fields when using templates (SendGrid ignores them)
+    } else {
+      payload.content = [
         ...(req.text ? [{ type: "text/plain", value: req.text }] : []),
         { type: "text/html", value: req.html },
-      ],
-    };
+      ];
+    }
 
     let response: Response;
     try {
