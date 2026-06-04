@@ -33,6 +33,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 
 const US_STATES = [
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", 
@@ -456,6 +457,23 @@ export default function NpiLookup() {
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6 max-w-7xl mx-auto w-full">
+      <WorkspaceHero
+        eyebrow="Provider lookup workspace"
+        badge="Verification-first"
+        title="Find and verify medical providers using a clearer two-step workflow"
+        description="This page now presents provider search and match verification as the main operator flow so staff can confirm the right facility before faxing or filing record requests."
+        actions={[
+          { label: "Medical records", href: "/medical-records" },
+          { label: "OCR inbox", href: "/ocr-inbox" },
+          { label: "Document review", href: "/doc-review" },
+        ]}
+        steps={[
+          { title: "Search the registry", description: "Look up providers by NPI, name, city, state, or specialty.", icon: Search, href: "/npi-lookup", ctaLabel: "Search providers" },
+          { title: "Verify the match", description: "Use the verification tab when intake details need a confidence-backed match.", icon: ShieldCheck, href: "/npi-lookup", ctaLabel: "Verify match" },
+          { title: "Continue records work", description: "Send the verified provider into the records and faxing workflow.", icon: Stethoscope, href: "/medical-records", ctaLabel: "Open records" },
+        ]}
+      />
+
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <h2 className="text-3xl font-bold tracking-tight">NPI Provider Lookup</h2>

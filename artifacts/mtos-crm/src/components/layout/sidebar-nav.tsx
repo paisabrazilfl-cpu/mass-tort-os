@@ -26,6 +26,20 @@ type NavSection = {
 };
 
 export const navigation: NavSection[] = [
+  {
+    section: "Start Here",
+    icon: Sparkles,
+    color: "indigo",
+    items: [
+      { name: "Overview", href: "/", icon: LayoutDashboard },
+      { name: "New Lead", href: "/leads/new", icon: PlusCircle },
+      { name: "Intake Forms", href: "/web-forms", icon: AppWindow },
+      { name: "Medical Records", href: "/medical-records", icon: HeartPulse },
+      { name: "Dialer", href: "/dialer", icon: PhoneCall },
+      { name: "Automations", href: "/automations", icon: Workflow },
+    ],
+  },
+
   // ── DASHBOARD ───────────────────────────────────────────────────────────────
   // High-level overview — the first thing anyone opens.
   {

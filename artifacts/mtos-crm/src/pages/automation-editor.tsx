@@ -23,6 +23,7 @@ import { ArrowLeft, Save, Play, Download, Trash2, ChevronDown, ChevronRight, Che
 import { Link } from "wouter";
 import { apiFetchRaw } from "@/lib/api-fetch";
 import { getLucide } from "@/lib/lucide-icon";
+import { AUTOMATION_STARTER_TEMPLATES, getAutomationStarterTemplate } from "@/lib/automation-templates";
 
 interface NodeParamSpec {
   key: string; label: string;
@@ -107,6 +108,15 @@ function EditorInner() {
       window.localStorage.setItem("mtos:automation:configOpen", configOpen ? "1" : "0");
     }
   }, [configOpen]);
+  const [simpleMode, setSimpleMode] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem("mtos:automation:simpleMode") !== "0";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("mtos:automation:simpleMode", simpleMode ? "1" : "0");
+    }
+  }, [simpleMode]);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Load workflow + catalog
@@ -147,11 +157,33 @@ function EditorInner() {
   }, [id]);
 
   const catalogByType = useMemo(() => Object.fromEntries((Array.isArray(catalog) ? catalog : []).map((c) => [c.type, c])), [catalog]);
-  const grouped = useMemo(() => {
+  const essentialNodeTypes = useMemo(() => new Set([
+    "trigger.manual",
+    "trigger.form_submitted",
+    "trigger.lead_created",
+    "trigger.document_signed",
+    "crm.create_lead",
+    "crm.decision_engine",
+    "crm.set_lead_status",
+    "crm.send_to_review_queue",
+    "crm.assign_paralegal",
+    "crm.add_note",
+    "crm.consent_gate",
+    "crm.npi_lookup",
+    "documents.fax_medical_records",
+    "documents.send_dropbox_sign",
+    "documents.render_template",
+    "comm.send_sms",
+    "comm.send_calendar_invite",
+  ]), []);
+  const visibleGrouped = useMemo(() => {
+    const source = simpleMode
+      ? (Array.isArray(catalog) ? catalog : []).filter((node) => essentialNodeTypes.has(node.type))
+      : (Array.isArray(catalog) ? catalog : []);
     const m: Record<string, NodeDef[]> = {};
-    (Array.isArray(catalog) ? catalog : []).forEach((d) => { (m[d.category] ??= []).push(d); });
+    source.forEach((d) => { (m[d.category] ??= []).push(d); });
     return m;
-  }, [catalog]);
+  }, [catalog, simpleMode, essentialNodeTypes]);
 
   const onNodesChange = useCallback((c: NodeChange[]) => setNodes((ns) => applyNodeChanges(c, ns)), []);
   const onEdgesChange = useCallback((c: EdgeChange[]) => setEdges((es) => applyEdgeChanges(c, es)), []);
@@ -412,6 +444,24 @@ function EditorInner() {
     a.click(); URL.revokeObjectURL(url);
   }
 
+  function loadStarterTemplate(templateId: string) {
+    const template = getAutomationStarterTemplate(templateId);
+    if (!template) return;
+    const nextNodes = template.graph.nodes.map((n) => decorateNodeFromCatalog(n));
+    const nextEdges = template.graph.edges.map((e) => ({
+      ...e,
+      sourceHandle: e.sourceHandle ?? null,
+      targetHandle: e.targetHandle ?? null,
+      markerEnd: { type: MarkerType.ArrowClosed },
+    }));
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    if (!name.trim()) setName(template.name);
+    if (!description.trim()) setDescription(template.description);
+    setTags((current) => Array.from(new Set([...current, ...template.tags])));
+    toast({ title: "Starter loaded", description: `${template.name} is now on the canvas.` });
+  }
+
   // Render
   // Derive the selected node from the live nodes array so every state update
   // (typing in a param field, dragging the node, etc.) re-renders the config
@@ -436,7 +486,11 @@ function EditorInner() {
             <Label htmlFor="enabled" className="text-xs">Enabled</Label>
           </div>
         )}
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex items-center gap-3">
+          <div className="flex items-center gap-2 rounded-md border px-2 py-1">
+            <Label htmlFor="simple-mode" className="text-xs">Simple builder</Label>
+            <Switch id="simple-mode" checked={simpleMode} onCheckedChange={setSimpleMode} />
+          </div>
           <Button size="sm" variant="outline" onClick={exportLocal}><Download className="h-4 w-4 mr-1" /> Export</Button>
           {isSystem ? (
             <Button size="sm" onClick={cloneToFirm} disabled={cloning}><Copy className="h-4 w-4 mr-1" /> {cloning ? "Cloning…" : "Clone to my firm"}</Button>
@@ -525,7 +579,10 @@ function EditorInner() {
         {paletteOpen ? (
         <div className="w-64 border-r bg-muted/20 overflow-y-auto relative">
           <div className="p-2 flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Drag a node into the canvas</span>
+            <div>
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{simpleMode ? "Big blocks first" : "Full node palette"}</div>
+              <div className="text-[11px] text-muted-foreground">{simpleMode ? "Start with a guided workflow, then add only the common blocks." : "Advanced mode shows the entire automation catalog."}</div>
+            </div>
             <button
               type="button"
               onClick={() => setPaletteOpen(false)}
@@ -536,7 +593,31 @@ function EditorInner() {
               <ChevronsLeft className="h-4 w-4" />
             </button>
           </div>
-          {Object.entries(grouped).map(([cat, list]) => (
+          <div className="border-t px-2 py-2 space-y-2">
+            <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Starter flows</div>
+            {AUTOMATION_STARTER_TEMPLATES.map((template) => {
+              const Icon = getLucide(template.icon);
+              return (
+                <button
+                  key={template.id}
+                  onClick={() => loadStarterTemplate(template.id)}
+                  disabled={isSystem}
+                  className="w-full rounded-md border bg-background px-2 py-2 text-left hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <div className="flex items-start gap-2">
+                    <span className="inline-flex h-7 w-7 items-center justify-center rounded bg-primary/10 text-primary shrink-0">
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium">{template.name}</div>
+                      <div className="text-[11px] text-muted-foreground line-clamp-2">{template.summary}</div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {Object.entries(visibleGrouped).map(([cat, list]) => (
             <div key={cat} className="border-t">
               <button
                 onClick={() => setOpenCat((s) => ({ ...s, [cat]: !s[cat] }))}
@@ -640,7 +721,7 @@ function EditorInner() {
           {!selected ? (
             <div className="p-4 text-sm text-muted-foreground">
               <div className="font-medium mb-1">No node selected</div>
-              <p className="text-xs">Click a node to edit its parameters. Add nodes from the left palette. Connect by dragging from one node's bottom dot to another node's top dot.</p>
+              <p className="text-xs">Start with a starter flow on the left if you want a big, friendly block. You can still add or edit individual nodes after that.</p>
               <Separator className="my-3" />
               <div className="text-xs space-y-1">
                 <div><kbd>Backspace/Delete</kbd> removes selected nodes</div>

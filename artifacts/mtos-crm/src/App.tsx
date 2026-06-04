@@ -74,6 +74,7 @@ import AiAgentsPage from "@/pages/ai-agents";
 import AbbyPage from "@/pages/abby";
 import MedicalRecordsPage from "@/pages/medical-records";
 import FavoritesPage from "@/pages/favorites";
+import OutreachPage from "@/pages/outreach";
 
 // Surface generated-hook ApiErrors as toasts so 4xx/5xx don't fail silently.
 // 401s are handled separately by api-fetch's auth-failure callback.
@@ -170,6 +171,7 @@ function AuthedRoutes() {
           <Route path="/abby" component={AbbyPage} />
           <Route path="/medical-records" component={MedicalRecordsPage} />
           <Route path="/favorites" component={FavoritesPage} />
+          <Route path="/outreach" component={OutreachPage} />
           <Route component={NotFound} />
         </Switch>
       </RouteErrorBoundary>

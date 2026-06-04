@@ -27,8 +27,9 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import {
-  Phone, RefreshCw, Loader2, ChevronLeft, ChevronRight, AlertCircle,
+  Phone, RefreshCw, Loader2, ChevronLeft, ChevronRight, AlertCircle, Bot, UploadCloud,
 } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import {
   useListCalls,
   useGetCall,
@@ -151,6 +152,23 @@ export default function CallsPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-4" data-testid="page-calls">
+      <WorkspaceHero
+        eyebrow="Calls workspace"
+        badge="Simple call operations"
+        title="See conversations, track outcomes, and open the next calling tool fast"
+        description="The calls area now leads with the real operator journey: review activity, move to dialer operations when needed, and escalate into voice tooling only when required."
+        actions={[
+          { label: "Dialer", href: "/dialer" },
+          { label: "Voice agents", href: "/voice-agents" },
+          { label: "Integrations", href: "/integrations" },
+        ]}
+        steps={[
+          { title: "Review activity", description: "Search completed and in-progress calls from a single table.", icon: Phone, href: "/calls", ctaLabel: "Stay in calls" },
+          { title: "Open calling tools", description: "Jump into the dialer when it is time to run outreach at scale.", icon: UploadCloud, href: "/dialer", ctaLabel: "Open dialer" },
+          { title: "Tune the voice stack", description: "Manage assistants and call operations without digging through admin menus.", icon: Bot, href: "/voice-agents", ctaLabel: "Voice agents" },
+        ]}
+      />
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">

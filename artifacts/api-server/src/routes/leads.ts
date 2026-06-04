@@ -25,6 +25,7 @@ import { dispatchLeadCreated } from "../lib/lead-webhook-dispatcher";
 import { dispatchTrigger } from "../lib/automations/dispatch";
 import { dispatchEvent } from "../lib/event-dispatcher";
 import { sendSmsViaRouter } from "../lib/sms/send";
+import { enqueueSmartAdvocatePushForLead } from "../lib/crm/smartadvocate";
 
 // Thrown by buildLeadFilters when a date query param parses to Invalid Date.
 // Caught at each route call site and converted to a 400 with a structured
@@ -423,6 +424,9 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
         },
       });
 
+      // Push to SmartAdvocate if any active SA integration is configured.
+      void enqueueSmartAdvocatePushForLead(lead.id, { source: lead.source ?? "operator_intake" });
+
       // Internal automation trigger — fan out to any enabled trigger.lead_created workflows.
       void dispatchTrigger("trigger.lead_created", {
         input: {
@@ -522,6 +526,9 @@ router.post("/", requirePermission(Permission.LEAD_CREATE), auditAction("create_
       created_at: lead.created_at ? new Date(lead.created_at).toISOString() : new Date().toISOString(),
     },
   });
+
+  // Push to SmartAdvocate if any active SA integration is configured.
+  void enqueueSmartAdvocatePushForLead(lead.id, { source: lead.source ?? "operator_intake" });
 
   // Internal automation trigger — fan out to any enabled trigger.lead_created workflows.
   void dispatchTrigger("trigger.lead_created", {

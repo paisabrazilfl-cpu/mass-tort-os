@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { AlertTriangle, CheckCircle, XCircle, FileSearch, Search } from "lucide-react";
+import { AlertTriangle, CheckCircle, XCircle, FileSearch, Search, FileText, Brain, ShieldCheck } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import { apiFetchRaw } from "@/lib/api-fetch";
 
 interface FieldComparison {
@@ -124,6 +125,23 @@ export default function DocReview() {
 
   return (
     <div className="space-y-6">
+      <WorkspaceHero
+        eyebrow="Document review workspace"
+        badge="Compare in business steps"
+        title="Validate intake against records without bouncing between tools"
+        description="This review area is now framed as a guided comparison flow: load the claimant record, load the incoming document, and let the mismatch panel direct human review."
+        actions={[
+          { label: "OCR inbox", href: "/ocr-inbox" },
+          { label: "Medical records", href: "/medical-records" },
+          { label: "Leads", href: "/leads" },
+        ]}
+        steps={[
+          { title: "Load intake", description: "Pull the claimant's CRM data into the comparison workspace.", icon: FileText, href: "/leads", ctaLabel: "Open leads" },
+          { title: "Analyze the document", description: "Load OCR or run deeper AI extraction on the fax result.", icon: Brain, href: "/ocr-inbox", ctaLabel: "Open OCR inbox" },
+          { title: "Decide confidence", description: "Use mismatches and fraud risk to decide whether the record is trustworthy.", icon: ShieldCheck, href: "/medical-records", ctaLabel: "Continue record work" },
+        ]}
+      />
+
       <h1 className="text-3xl font-bold tracking-tight">Side-by-Side Document Review</h1>
       <p className="text-muted-foreground">Compare medical records against intake data to spot discrepancies and potential fraud.</p>
 

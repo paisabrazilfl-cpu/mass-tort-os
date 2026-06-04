@@ -22,7 +22,12 @@ export function Layout({ children }: LayoutProps) {
   }, [sidebarCollapsed]);
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-background">
+    <div className="relative flex h-[100dvh] overflow-hidden bg-background">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-[-10rem] top-[-8rem] h-80 w-80 rounded-full bg-primary/12 blur-3xl" />
+        <div className="absolute right-[-8rem] top-12 h-72 w-72 rounded-full bg-[hsl(var(--chart-4)/0.12)] blur-3xl" />
+        <div className="absolute bottom-[-8rem] left-1/3 h-80 w-80 rounded-full bg-[hsl(var(--chart-2)/0.1)] blur-3xl" />
+      </div>
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
@@ -38,7 +43,7 @@ export function Layout({ children }: LayoutProps) {
         </SheetContent>
       </Sheet>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col">
         <TopBar onOpenSidebar={() => setSidebarOpen(true)} />
         <BillingBanner />
         <main id="main" className="flex-1 overflow-y-auto">

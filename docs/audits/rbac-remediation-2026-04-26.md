@@ -581,7 +581,7 @@ applies. A route is healthy iff one of the following is true:
 
 
 
-Boot-time count: **332 checked / 50 public / 282 protected / 0 unprotected.**
+Boot-time count: **336 checked / 50 public / 286 protected / 0 unprotected.**
 | Router | Method | Path | Auth | Gate | Public allowlist? | Auth-only allowlist? | Login-exception | Required role | Required permission(s) | Audited on denial? |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|---|---|:-:|
 | (root) | POST | `/api/call` | ✓ | ✓ |  |  |  | — | `dashboard:view` | ✓ |
@@ -849,6 +849,10 @@ Boot-time count: **332 checked / 50 public / 282 protected / 0 unprotected.**
 | ocr | GET | `/api/ocr/results/:id` | ✓ | ✓ |  |  |  | — | `ocr:view` | ✓ |
 | ocr | GET | `/api/ocr/results` | ✓ | ✓ |  |  |  | — | `ocr:view` | ✓ |
 | ocr | POST | `/api/ocr/upload` | ✓ | ✓ |  |  |  | — | `ocr:upload` | ✓ |
+| outreach | GET | `/api/outreach/batches/:id` | ✓ | ✓ |  |  |  | — | `lead_import:preview` | ✓ |
+| outreach | GET | `/api/outreach/batches` | ✓ | ✓ |  |  |  | — | `lead_import:preview` | ✓ |
+| outreach | POST | `/api/outreach/execute` | ✓ | ✓ |  |  |  | — | `lead_import:execute` | ✓ |
+| outreach | POST | `/api/outreach/preview` | ✓ | ✓ |  |  |  | — | `lead_import:preview` | ✓ |
 | paralegals | GET | `/api/paralegals/:id/performance` | ✓ | ✓ |  |  |  | — | `paralegal:view` | ✓ |
 | paralegals | DELETE | `/api/paralegals/:id` | ✓ | ✓ |  |  |  | — | `paralegal:manage` | ✓ |
 | paralegals | GET | `/api/paralegals/:id` | ✓ | ✓ |  |  |  | — | `paralegal:view` | ✓ |

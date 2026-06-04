@@ -30,6 +30,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 
 const US_STATES = [
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", 
@@ -410,6 +411,39 @@ export default function FormEngine() {
         </div>
       </div>
 
+      <WorkspaceHero
+        eyebrow="Intake workspace"
+        badge="Simple builder flow"
+        title="Design intake in business steps"
+        description="Most teams only need to decide what fields to ask, how to validate the claimant, and where qualified records should route next. This workspace keeps those three moves front and center."
+        actions={[
+          { label: "Public forms", href: "/web-forms", icon: Copy },
+          { label: "Background check", href: "/background-check", icon: Shield, variant: "outline" },
+          { label: "Decision engine", href: "/decision-engine", icon: Scale, variant: "outline" },
+        ]}
+        steps={[
+          {
+            title: "Define questions",
+            description: "Edit the claimant-facing fields and campaign-specific logic in one builder.",
+            icon: Pencil,
+          },
+          {
+            title: "Validate risk",
+            description: "Check email, address, and background results before the lead moves deeper.",
+            icon: ShieldCheck,
+            href: "/background-check",
+            ctaLabel: "Open validation",
+          },
+          {
+            title: "Publish intake",
+            description: "Hand the finished form to public web forms or automations when ready.",
+            icon: Download,
+            href: "/web-forms",
+            ctaLabel: "Publish forms",
+          },
+        ]}
+      />
+
       {/* Security trust strip */}
       <div className="flex flex-wrap gap-2">
         <div className="flex items-center gap-1.5 rounded-full border border-green-500/30 bg-green-500/8 px-3 py-1 text-xs font-medium text-green-700 dark:text-green-400">
@@ -754,16 +788,6 @@ export default function FormEngine() {
                       )}
                     </div>
                     
-                    {/* ── Sources actually checked ── */}
-                    <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-t bg-muted/20 text-xs text-muted-foreground">
-                      <span className="font-medium text-foreground">Sources checked:</span>
-                      <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> Federal Courts (CourtListener / RECAP)</span>
-                      <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> OFAC Sanctions (US Treasury SDN)</span>
-                      {bgCheckResult.pacer?.ok && (
-                        <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> PACER</span>
-                      )}
-                    </div>
-
                     {bgCheckResult.records && bgCheckResult.records.length > 0 && (
                       <Table>
                         <TableHeader>
@@ -789,13 +813,8 @@ export default function FormEngine() {
                       </Table>
                     )}
 
-                    {/* ── PACER: only show when it actually ran (configured + results) ── */}
-                    {bgCheckResult.pacer && bgCheckResult.pacer.ok !== false && (
-                      <PacerResultSection pacer={bgCheckResult.pacer} />
-                    )}
-                    {bgCheckResult.pacer?.ok === false && bgCheckResult.pacer.reason !== "NOT_CONFIGURED" && (
-                      <PacerResultSection pacer={bgCheckResult.pacer} />
-                    )}
+                    {/* ── PACER Federal Courts section ── */}
+                    <PacerResultSection pacer={bgCheckResult.pacer} />
                   </div>
                 )}
               </CardContent>

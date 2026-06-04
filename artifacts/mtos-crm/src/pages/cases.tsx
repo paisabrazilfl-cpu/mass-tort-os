@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useListCases, useGetQueueStats } from "@workspace/api-client-react";
 import { format } from "date-fns";
-import { Briefcase, AlertCircle, CheckCircle, Clock, Search, Plus } from "lucide-react";
+import { Briefcase, AlertCircle, CheckCircle, Clock, Search, Plus, ShieldAlert, Activity } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,6 +50,23 @@ export default function Cases() {
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
+      <WorkspaceHero
+        eyebrow="Cases workspace"
+        badge="Simple case flow"
+        title="Move accepted claimants into active case work in three steps"
+        description="The case area now follows the operator journey: launch a case, watch processing, and step into the queue only when something needs attention."
+        actions={[
+          { label: "Submit case", href: "/cases/new" },
+          { label: "Review queue", href: "/review-queue" },
+          { label: "Job queue", href: "/job-queue" },
+        ]}
+        steps={[
+          { title: "Open the matter", description: "Create a new case once the lead is ready to convert.", icon: Plus, href: "/cases/new", ctaLabel: "Create case" },
+          { title: "Watch processing", description: "Use worker cards to see what is moving and what is blocked.", icon: Activity, href: "/job-queue", ctaLabel: "View jobs" },
+          { title: "Resolve exceptions", description: "Send edge cases to the review team instead of losing them in the pipeline.", icon: ShieldAlert, href: "/review-queue", ctaLabel: "Open review queue" },
+        ]}
+      />
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-foreground">Case Pipeline</h2>

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import Vapi from "@vapi-ai/web";
-import { getAccessToken } from "@/lib/auth-store";
+import { apiFetch as sharedApiFetch } from "@/lib/api-fetch";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -28,24 +28,13 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
+import { getAccessToken } from "@/lib/auth-store";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 
 const API = (path: string) => `/api/dialer${path}`;
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  const token = getAccessToken();
-  const res = await fetch(API(path), {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts?.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(err.message ?? "Request failed");
-  }
-  return res.json() as Promise<T>;
+  return sharedApiFetch<T>(API(path), opts);
 }
 
 // ─── STATS CARDS ─────────────────────────────────────────────────────────────
@@ -1950,6 +1939,37 @@ export default function DialerPage() {
           <p className="text-xs text-muted-foreground">Enterprise outbound call center — campaigns, DNC, scripts, and live analytics</p>
         </div>
       </div>
+
+      <WorkspaceHero
+        eyebrow="Calls workspace"
+        badge="Simple operating flow"
+        title="Launch follow-up without getting lost"
+        description="Most teams only need three moves: connect voice setup, load a lead list, and start or monitor campaigns. The advanced tabs are still here when you need them."
+        actions={[
+          { label: "Open voice setup", href: "/integrations", icon: Settings },
+          { label: "Voice agents", href: "/voice-agents", icon: Bot, variant: "outline" },
+          { label: "Automations", href: "/automations", icon: Zap, variant: "outline" },
+        ]}
+        steps={[
+          {
+            title: "Connect calling tools",
+            description: "Confirm Vapi and phone settings before your team dials.",
+            icon: Settings,
+            href: "/integrations",
+            ctaLabel: "Open setup",
+          },
+          {
+            title: "Load a lead list",
+            description: "Use upload-and-dial or build a campaign from your existing leads.",
+            icon: Upload,
+          },
+          {
+            title: "Run and monitor",
+            description: "Watch the live dashboard, recordings, DNC, and reports from one place.",
+            icon: BarChart3,
+          },
+        ]}
+      />
 
       <Tabs defaultValue="dashboard" className="space-y-4">
         <TabsList className="flex-wrap h-auto gap-1">

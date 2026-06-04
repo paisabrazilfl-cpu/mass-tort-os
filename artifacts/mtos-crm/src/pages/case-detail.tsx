@@ -149,29 +149,69 @@ export default function CaseDetail() {
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => setLocation("/cases")}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div>
-            <div className="flex items-center gap-3">
-              <h2 className="text-3xl font-bold tracking-tight text-foreground">
-                {(caseData.data?.patient_name as string) || "Unknown Patient"}
-              </h2>
-              {getStatusBadge(caseData.status)}
-            </div>
-            <p className="text-muted-foreground font-mono text-sm mt-1">ID: {caseData.id}</p>
-          </div>
+      <div className="relative overflow-hidden rounded-[32px] border border-primary/15 bg-[linear-gradient(135deg,hsl(var(--card)/0.98),hsl(var(--accent)/0.42))] p-6 shadow-[0_18px_40px_-28px_hsl(var(--primary)/0.55)] md:p-7">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute -left-10 top-0 h-40 w-40 rounded-full bg-primary/16 blur-3xl" />
+          <div className="absolute right-0 top-0 h-44 w-44 rounded-full bg-[hsl(var(--chart-4)/0.14)] blur-3xl" />
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => refetch()}>
-            Refresh
-          </Button>
-          <Button onClick={handleAnalyze} disabled={analyzeFiles.isPending || caseData.status === 'processing'}>
-            {analyzeFiles.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BrainCircuit className="mr-2 h-4 w-4" />}
-            Analyze Documents
-          </Button>
+        <div className="relative flex flex-col gap-5">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div className="flex items-start gap-4">
+              <Button variant="ghost" size="icon" onClick={() => setLocation("/cases")}>
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                  <span className="rounded-full border border-primary/15 bg-background/70 px-3 py-1">Case command center</span>
+                  <span className="rounded-full border border-border/70 bg-background/60 px-3 py-1">{(caseData.data?.tort_type as string) || "Unknown tort"}</span>
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h2 className="text-3xl font-bold tracking-tight text-foreground md:text-4xl">
+                      {(caseData.data?.patient_name as string) || "Unknown Patient"}
+                    </h2>
+                    {getStatusBadge(caseData.status)}
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground font-mono">ID: {caseData.id}</p>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 xl:justify-end">
+              <Button variant="outline" onClick={() => refetch()}>
+                Refresh
+              </Button>
+              <Button onClick={handleAnalyze} disabled={analyzeFiles.isPending || caseData.status === 'processing'}>
+                {analyzeFiles.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BrainCircuit className="mr-2 h-4 w-4" />}
+                Analyze Documents
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button variant={activeTab === "overview" ? "default" : "outline"} size="sm" onClick={() => setActiveTab("overview")}>Overview</Button>
+            <Button variant={activeTab === "documents" ? "default" : "outline"} size="sm" onClick={() => setActiveTab("documents")}>Documents</Button>
+            <Button variant={activeTab === "analysis" ? "default" : "outline"} size="sm" onClick={() => setActiveTab("analysis")}>AI Analysis</Button>
+            <Button variant={activeTab === "audit" ? "default" : "outline"} size="sm" onClick={() => setActiveTab("audit")}>Audit Trail</Button>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-4">
+            <div className="rounded-[22px] border border-border/70 bg-background/72 p-4 backdrop-blur-xl">
+              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Status</div>
+              <div className="mt-2 text-lg font-semibold capitalize">{caseData.status}</div>
+            </div>
+            <div className="rounded-[22px] border border-border/70 bg-background/72 p-4 backdrop-blur-xl">
+              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Documents</div>
+              <div className="mt-2 text-lg font-semibold">{documents?.length || 0} files</div>
+            </div>
+            <div className="rounded-[22px] border border-border/70 bg-background/72 p-4 backdrop-blur-xl">
+              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">AI verdict</div>
+              <div className="mt-2 text-lg font-semibold">{latestAnalysis && latestAnalysis.score != null ? getScoreVerdict(latestAnalysis.score) : "Pending"}</div>
+            </div>
+            <div className="rounded-[22px] border border-border/70 bg-background/72 p-4 backdrop-blur-xl">
+              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Created</div>
+              <div className="mt-2 text-lg font-semibold">{format(new Date(caseData.created_at), "MMM d, yyyy")}</div>
+            </div>
+          </div>
         </div>
       </div>
 

@@ -91,3 +91,19 @@ registerSyncHandler("fasten_connect", async (integration) => {
     },
   };
 });
+
+registerSyncHandler("smartadvocate", async (integration) => {
+  const { syncSmartAdvocateBackfill } = await import("./crm/smartadvocate");
+  const out = await syncSmartAdvocateBackfill(integration.id);
+  return {
+    ok: out.ok,
+    records_synced: out.pushed,
+    direction: "push",
+    details: {
+      attempted: out.attempted,
+      skipped: out.skipped,
+      ...out.details,
+    },
+    error: out.ok ? undefined : String((out.details && out.details["reason"]) ?? "smartadvocate sync failed"),
+  };
+});

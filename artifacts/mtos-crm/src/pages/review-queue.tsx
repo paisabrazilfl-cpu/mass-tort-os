@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { ChevronDown, ChevronRight, Check, X, Search, AlertTriangle, MessageSquare } from "lucide-react";
+import { ChevronDown, ChevronRight, Check, X, Search, AlertTriangle, MessageSquare, ShieldCheck } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 
 import {
   useListReviewQueue,
@@ -400,6 +401,23 @@ export default function ReviewQueue() {
 
   return (
     <div className="flex flex-col gap-6 p-8 max-w-7xl mx-auto w-full">
+      <WorkspaceHero
+        eyebrow="Review workspace"
+        badge="Human-in-the-loop"
+        title="Handle exceptions in a calm, guided review flow"
+        description="This queue is framed around triage: see what is urgent, open the flagged record, and resolve with confidence instead of decoding raw system events."
+        actions={[
+          { label: "Cases", href: "/cases" },
+          { label: "Automations", href: "/automations" },
+          { label: "Decision engine", href: "/decision-engine" },
+        ]}
+        steps={[
+          { title: "Triage priority", description: "Use severity counts to decide what your team should touch first.", icon: AlertTriangle, href: "/review-queue", ctaLabel: "Stay in queue" },
+          { title: "Inspect the conflict", description: "Open the row details and review the full summary before acting.", icon: Search, href: "/cases", ctaLabel: "Open related work" },
+          { title: "Resolve with audit trail", description: "Accept, reject, or escalate while preserving who made the call.", icon: ShieldCheck, href: "/automations", ctaLabel: "See automations" },
+        ]}
+      />
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Review Queue</h1>

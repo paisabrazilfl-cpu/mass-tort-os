@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -45,7 +45,19 @@ const formSchema = z.object({
   notes: z.string().optional(),
   law_firm: z.string().optional(),
   client_id: z.string().optional(),
+  tcpa_consent: z.boolean().refine((value) => value === true, {
+    message: "Claimant consent is required before submitting."
+  }),
 });
+
+const CLAIMANT_CONSENT_ACKNOWLEDGMENT =
+  "By checking this box and submitting this form, I knowingly, voluntarily, and affirmatively agree and attest, intending to be legally bound, that: " +
+  "(1) Consent to Contact (TCPA / Automated & AI Systems) — I expressly consent to be contacted by [COMPANY], its affiliates, participating attorneys, and their authorized representatives at the telephone number(s) and email address(es) I have provided regarding my potential claim, by live persons and/or by automated and artificial-intelligence (AI) systems, including automatic telephone dialing systems, prerecorded or artificial-voice messages, AI-powered voice agents, and AI-generated or automated text (SMS/MMS) messages, even if my number appears on any state or federal Do-Not-Call registry; I understand message and data rates may apply, message frequency may vary, and I may opt out of text messages at any time by replying STOP; this consent is not a condition of any purchase or of legal representation. " +
+  "(2) Electronic Communications & Signatures — I consent to receive disclosures and to transact electronically, and I agree that my electronic signature and electronic acceptance are legally binding and have the same force and effect as a handwritten signature under the federal E-SIGN Act and the Uniform Electronic Transactions Act (UETA). " +
+  "(3) Affidavit / Attestation of Truth — I affirm, under penalty of perjury under the laws of the United States and of my state of residence, that all information I have provided is true, accurate, and complete to the best of my knowledge and belief, and that I have not knowingly made any false or misleading statement. " +
+  "(4) Adult Capacity — I affirm that I am at least eighteen (18) years of age and legally competent to provide these consents and attestations. " +
+  "(5) Indemnification — to the fullest extent permitted by law, I agree to indemnify, defend, and hold harmless [COMPANY], its affiliates, and participating attorneys and their representatives from and against any and all claims, damages, losses, liabilities, and expenses (including reasonable attorneys' fees) arising out of or relating to any false, inaccurate, incomplete, or misleading information I provide or my breach of these acknowledgments and attestations. " +
+  "(6) Nationwide Validity & Severability — I intend these consents, acknowledgments, and attestations to be valid and enforceable to the maximum extent permitted in every state of the United States, and if any provision is held unenforceable in a jurisdiction, the remaining provisions shall remain in full force and effect.";
 
 const STATES = [
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", 
@@ -108,6 +120,7 @@ export default function LeadIntake() {
       notes: "",
       law_firm: "",
       client_id: "",
+      tcpa_consent: false,
     },
   });
 
@@ -115,6 +128,20 @@ export default function LeadIntake() {
   const wasAtLocation = form.watch("was_at_location");
   const tortType = form.watch("tort_type");
   const diagnosis = form.watch("diagnosis");
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (document.getElementById("mtos-crm-trustedform-loader")) return;
+    const formEl = document.getElementById("mtos-lead-intake-form");
+    if (!formEl) return;
+    const script = document.createElement("script");
+    script.id = "mtos-crm-trustedform-loader";
+    script.async = true;
+    script.src = `https://api.trustedform.com/trustedform.js?field=xxTrustedFormCertUrl&ping_field=xxTrustedFormPingUrl&use_tagged_consent=true&l=${Date.now()}${Math.random()}`;
+    const firstScript = document.getElementsByTagName("script")[0];
+    if (firstScript?.parentNode) firstScript.parentNode.insertBefore(script, firstScript);
+    else document.body.appendChild(script);
+  }, []);
 
   // Only show the disqualification warning once the operator has actually
   // started filling in the medical section. Showing it on a pristine form is
@@ -127,7 +154,21 @@ export default function LeadIntake() {
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     try {
+      const tfCert = (document.getElementById("xxTrustedFormCertUrl_0") as HTMLInputElement | null)?.value?.trim() || "";
+      const tfPing = (document.getElementById("xxTrustedFormPingUrl_0") as HTMLInputElement | null)?.value?.trim() || "";
+      const tfToken = (document.getElementById("xxTrustedFormCertToken_0") as HTMLInputElement | null)?.value?.trim() || "";
+
+      if (!tfCert) {
+        toast({
+          title: "TrustedForm certificate missing",
+          description: "TrustedForm did not populate the certificate URL. Disable blockers, reload the page, and try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const newLead = await createLead.mutateAsync({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         data: {
           ...values,
           name: `${values.first_name} ${values.last_name}`,
@@ -137,7 +178,14 @@ export default function LeadIntake() {
           notes: values.notes || undefined,
           law_firm: values.law_firm || undefined,
           client_id: values.client_id || undefined,
-        }
+          // TrustedForm + TCPA fields — not in generated schema but accepted by the server.
+          tcpa_consent: values.tcpa_consent,
+          trustedform_cert_url: tfCert,
+          trustedform_ping_url: tfPing || undefined,
+          trustedform_cert_token: tfToken || undefined,
+          trustedform_user_agent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+          trustedform_timestamp: new Date().toISOString(),
+        } as any
       });
 
       if ((newLead as any)?._conflict?.output_state === "REVIEW_REQUIRED") {
@@ -202,7 +250,7 @@ export default function LeadIntake() {
       )}
 
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+        <form id="mtos-lead-intake-form" onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
           
           {/* SECTION 1: Personal Information */}
           <Card>
@@ -244,7 +292,7 @@ export default function LeadIntake() {
                     <FormItem>
                       <FormLabel>Date of Birth *</FormLabel>
                       <FormControl>
-                        <Input type="date" {...field} />
+                        <Input type="date" data-tf-sensitive="true" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -283,7 +331,7 @@ export default function LeadIntake() {
                     <FormItem>
                       <FormLabel>Last 4 of SSN *</FormLabel>
                       <FormControl>
-                        <Input placeholder="0000" maxLength={4} pattern="\d{4}" {...field} />
+                        <Input placeholder="0000" maxLength={4} pattern="\d{4}" data-tf-sensitive="true" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -589,6 +637,49 @@ export default function LeadIntake() {
             </CardContent>
           </Card>
 
+          <Card>
+            <CardHeader>
+              <CardTitle>Compliance</CardTitle>
+              <CardDescription>
+                TrustedForm and claimant consent are required before the lead can be created.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div data-tf-element-role="offer" className="rounded-lg border border-primary/20 bg-primary/5 p-4 space-y-4">
+                <FormField
+                  control={form.control}
+                  name="tcpa_consent"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormControl>
+                        <div className="flex items-start gap-3">
+                          <input
+                            id="tcpa_consent_box"
+                            type="checkbox"
+                            checked={field.value}
+                            onChange={(event) => field.onChange(event.target.checked)}
+                            data-tf-element-role="consent-opt-in"
+                            className="mt-1 h-4 w-4 shrink-0 rounded border border-primary"
+                          />
+                          <label htmlFor="tcpa_consent_box" className="text-sm leading-6 text-foreground">
+                            <span data-tf-element-role="consent-language">{CLAIMANT_CONSENT_ACKNOWLEDGMENT}</span>
+                          </label>
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <input type="hidden" name="xxTrustedFormCertUrl" id="xxTrustedFormCertUrl_0" value="" />
+                <input type="hidden" name="xxTrustedFormPingUrl" id="xxTrustedFormPingUrl_0" value="" />
+                <input type="hidden" name="xxTrustedFormCertToken" id="xxTrustedFormCertToken_0" value="" />
+                <noscript>
+                  <img src="https://api.trustedform.com/ns.gif" alt="" style={{ display: "none" }} />
+                </noscript>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* BOTTOM SECTION */}
           <Card>
             <CardContent className="pt-6">
@@ -663,8 +754,8 @@ export default function LeadIntake() {
 
           <div className="flex justify-end gap-4">
             <Button type="button" variant="outline" onClick={() => setLocation("/leads")}>Cancel</Button>
-            <Button type="submit" disabled={createLead.isPending || qualifyLead.isPending}>
-              {createLead.isPending || qualifyLead.isPending ? "Processing..." : "Run Gatekeeper & Submit"}
+            <Button type="submit" data-tf-element-role="submit" disabled={createLead.isPending || qualifyLead.isPending}>
+              <span data-tf-element-role="submit-text">{createLead.isPending || qualifyLead.isPending ? "Processing..." : "Run Gatekeeper & Submit"}</span>
             </Button>
           </div>
         </form>
