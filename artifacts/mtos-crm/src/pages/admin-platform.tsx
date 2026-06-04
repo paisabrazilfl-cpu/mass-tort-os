@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Building2, Users as UsersIcon, ShieldCheck, Activity, RefreshCw } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 import { format } from "date-fns";
 import { apiFetchRaw } from "@/lib/api-fetch";
 
@@ -155,18 +156,12 @@ export default function AdminPlatform() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Platform Admin</h1>
-          <p className="text-sm text-muted-foreground">
-            Cross-firm view of every user and every firm on this MTOS instance.
-          </p>
-        </div>
-        <Button variant="outline" onClick={refresh}>
-          <RefreshCw className="mr-2 h-4 w-4" />
-          Refresh
-        </Button>
-      </div>
+      <WorkspaceHero
+        eyebrow="Super Admin"
+        title="Platform Administration"
+        description="Cross-firm view of every user, firm, and system metric on this MTOS instance. Only visible to super_admin."
+        badge="Owner-only"
+      />
 
       {/* Stats ─────────────────────────────────────────────────────────── */}
       <div className="grid gap-4 md:grid-cols-4">
