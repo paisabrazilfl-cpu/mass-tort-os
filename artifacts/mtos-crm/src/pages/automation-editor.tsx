@@ -188,6 +188,7 @@ function EditorInner() {
     }
   }, [simpleMode]);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   // Load workflow + catalog
   useEffect(() => {
@@ -278,30 +279,62 @@ function EditorInner() {
     }
   }, [nodes, selectedId]);
 
-  function addNode(def: NodeDef) {
-    const center = wrapperRef.current?.getBoundingClientRect();
-    const pos = flow.project({ x: (center?.width ?? 600) / 2 - 124, y: 100 });
-    const n: Node = {
-      id: uid(),
-      type: "bigBlock",
-      position: pos,
-      data: {
-        label: def.label,
-        nodeType: def.type,
-        icon: def.icon,
-        color: def.color,
-        category: def.category,
-        description: def.description,
-        params: Object.fromEntries(def.params.map((p) => {
-          const seed = p.default ?? p.placeholder ?? "";
-          if (p.type === "json" && typeof seed === "string" && seed.length > 0) {
-            try { return [p.key, JSON.parse(seed)]; } catch { return [p.key, seed]; }
-          }
-          return [p.key, seed];
-        })),
-      },
+  function buildNodeData(def: NodeDef) {
+    return {
+      label: def.label,
+      nodeType: def.type,
+      icon: def.icon,
+      color: def.color,
+      category: def.category,
+      description: def.description,
+      params: Object.fromEntries(def.params.map((p) => {
+        const seed = p.default ?? p.placeholder ?? "";
+        if (p.type === "json" && typeof seed === "string" && seed.length > 0) {
+          try { return [p.key, JSON.parse(seed)]; } catch { return [p.key, seed]; }
+        }
+        return [p.key, seed];
+      })),
     };
+  }
+
+  function addNodeAtPosition(def: NodeDef, position: { x: number; y: number }) {
+    const n: Node = { id: uid(), type: "bigBlock", position, data: buildNodeData(def) };
     setNodes((ns) => [...ns, n]);
+    setSelectedId(n.id);
+    return n;
+  }
+
+  function addNode(def: NodeDef) {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    const pos = flow.project({ x: (rect?.width ?? 600) / 2 - 124, y: Math.max(80, (nodes.length * 60) % 400) });
+    addNodeAtPosition(def, pos);
+  }
+
+  function handleCanvasDragOver(e: React.DragEvent) {
+    if (!e.dataTransfer.types.includes("application/mtos-block-type")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setIsDragOver(true);
+  }
+
+  function handleCanvasDragLeave(e: React.DragEvent) {
+    if (wrapperRef.current && !wrapperRef.current.contains(e.relatedTarget as Element)) {
+      setIsDragOver(false);
+    }
+  }
+
+  function handleCanvasDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragOver(false);
+    const nodeType = e.dataTransfer.getData("application/mtos-block-type");
+    if (!nodeType) return;
+    const def = catalogByType[nodeType];
+    if (!def) return;
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const flowPos = flow.project({ x: e.clientX - rect.left - 124, y: e.clientY - rect.top - 30 });
+    addNodeAtPosition(def, flowPos);
+    toast({ title: "Block added", description: def.label });
   }
 
   function decorateNode(n: Node, def?: NodeDef): Node {
@@ -625,7 +658,7 @@ function EditorInner() {
                   {simpleMode ? "Big Blocks" : "All Blocks"}
                 </div>
                 <div className="text-[10px] text-muted-foreground">
-                  {simpleMode ? "Click a block to place it on the canvas" : "Full automation catalog"}
+                  Click to add · <span className="font-medium text-primary/80">Drag to place anywhere</span>
                 </div>
               </div>
               <button
@@ -716,10 +749,16 @@ function EditorInner() {
                           return (
                             <button
                               key={d.type}
+                              draggable
+                              onDragStart={(e) => {
+                                e.dataTransfer.setData("application/mtos-block-type", d.type);
+                                e.dataTransfer.effectAllowed = "copy";
+                              }}
                               onClick={() => addNode(d)}
-                              title={d.description}
+                              title={`Click to add · Drag to place: ${d.description}`}
                               className="w-full text-left rounded-lg border border-border/60 bg-background
-                                hover:border-primary/60 hover:bg-primary/5 transition-all overflow-hidden group"
+                                hover:border-primary/60 hover:bg-primary/5 active:scale-[0.98]
+                                transition-all overflow-hidden group cursor-grab active:cursor-grabbing"
                             >
                               {/* Colored top strip */}
                               <div className={`flex items-center gap-2 px-2.5 py-1 ${blockColor}`}>
@@ -759,7 +798,21 @@ function EditorInner() {
         )}
 
         {/* ── Canvas ──────────────────────────────────────────────────────── */}
-        <div className="flex-1 relative" ref={wrapperRef}>
+        <div
+          className={`flex-1 relative transition-all duration-150 ${isDragOver ? "ring-2 ring-inset ring-primary/50 bg-primary/5" : ""}`}
+          ref={wrapperRef}
+          onDragOver={handleCanvasDragOver}
+          onDragLeave={handleCanvasDragLeave}
+          onDrop={handleCanvasDrop}
+        >
+          {isDragOver && (
+            <div className="absolute inset-0 z-20 pointer-events-none flex items-center justify-center">
+              <div className="flex flex-col items-center gap-2 rounded-2xl bg-background/80 border-2 border-dashed border-primary px-8 py-5 shadow-xl backdrop-blur-sm">
+                <span className="text-3xl">⬇</span>
+                <span className="text-sm font-semibold text-primary">Drop block here</span>
+              </div>
+            </div>
+          )}
           <ReactFlow
             nodes={nodes}
             edges={edges}
