@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { format } from "date-fns";
 import { Activity, AlertCircle, Clock } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace/workspace-hero";
 
 export default function Compliance() {
   const [entityTypeFilter, setEntityTypeFilter] = useState<string>("all");
@@ -28,9 +29,12 @@ export default function Compliance() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Compliance Audit Trail</h1>
-      </div>
+      <WorkspaceHero
+        eyebrow="Compliance"
+        title="Audit Trail"
+        description="Full immutable log of every action taken in the system — by operator, entity, and timestamp. Export for legal review at any time."
+        badge="HIPAA-adjacent"
+      />
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
