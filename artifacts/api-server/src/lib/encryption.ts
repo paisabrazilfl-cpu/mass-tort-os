@@ -126,16 +126,26 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
 
   if (ciphertext.startsWith("enc:v")) {
     const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
+    // Use version-aware split to ensure Cloudflare Worker compatibility
+    keyVersion = parseInt(parts[1].startsWith("v") ? parts[1].slice(1) : parts[1], 10) || 1;
     hasAADFlag = parseInt(parts[2], 10) || 0;
     payloadStr = parts.slice(3).join(":");
   } else {
-    payloadStr = ciphertext.slice(4);
+    // Legacy format "enc:<payload>"
+    payloadStr = ciphertext.split(":").slice(1).join(":");
   }
 
   // Pre-decode payload and resolve key once to avoid redundant overhead in fallback loops.
-  const key = getKey(keyVersion);
-  const combined = Buffer.from(payloadStr, ENCODING);
+  // Wrapped in try/catch to maintain [DECRYPTION_ERROR] contract if key or format is invalid.
+  let key: Buffer;
+  let combined: Buffer;
+  try {
+    key = getKey(keyVersion);
+    combined = Buffer.from(payloadStr, ENCODING);
+  } catch (err) {
+    logger.error({ err, keyVersion, payloadLen: payloadStr.length }, "Decryption setup failed");
+    return "[DECRYPTION_ERROR]";
+  }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
   // fails, fall back through other AAD variants — historical inconsistencies

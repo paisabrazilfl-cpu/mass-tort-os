@@ -1,4 +1,4 @@
-import { levenshtein, similarity, similarityName, normalize, normalizeName } from "../string-similarity";
+import { levenshtein, similarity, similarityName, normalize, normalizeName } from "../src/lib/string-similarity.js";
 
 const a = "Dr. Micah Edwin, MD";
 const b = "Micah Edwin";
