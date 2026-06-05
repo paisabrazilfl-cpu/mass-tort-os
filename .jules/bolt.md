@@ -9,3 +9,7 @@
 ## 2025-05-21 - [Cloudflare Worker Build Sensitivity]
 **Learning:** The 'mtosvelocity' Cloudflare Worker build in CI is extremely sensitive to files in the `src` directory. Adding benchmark files with external dependencies to `src/lib/__benchmarks__` can cause build failures. Additionally, certain string operations like `slice()` for parsing headers were identified as fragile in the Worker environment compared to `split(':')`.
 **Action:** Keep benchmark files in a top-level `__benchmarks__` directory outside of `src`. Use `split(':')` for parsing versioned headers to ensure robust compatibility with the Worker runtime. Always verify builds with `pnpm --filter @workspace/api-server run build` before PR.
+
+## 2025-05-22 - [Extreme Worker Build Sensitivity & Environment Robustness]
+**Learning:** The Cloudflare Worker build environment ('mtosvelocity') is even more restrictive than previously thought. Even directories with `__` prefixes outside of `src` can cause issues if they reside within a package that is being bundled. Additionally, `startsWith()` and `slice()` on certain string-like objects in the Worker runtime can trigger build failures. `indexOf() === 0` and `charAt()` or `substring()` are safer, more primitive alternatives.
+**Action:** Move all benchmarks and non-source artifacts to the repository root, completely outside the package directories. Use the most primitive string methods (`indexOf`, `charAt`, `substring`) in core modules that are bundled for Workers. Ensure every ciphertext format check is type-safe and range-checked.

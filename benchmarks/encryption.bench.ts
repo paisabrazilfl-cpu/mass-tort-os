@@ -1,4 +1,4 @@
-import { encrypt, decrypt, encryptLeadFields, decryptLeadFields } from "../src/lib/encryption.js";
+import { encrypt, decrypt, encryptLeadFields, decryptLeadFields } from "../artifacts/api-server/src/lib/encryption.js";
 
 const iterations = 10000;
 const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

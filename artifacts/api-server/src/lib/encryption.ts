@@ -118,20 +118,22 @@ function tryDecryptWithAAD(
 }
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
-  if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (!ciphertext || typeof ciphertext !== "string") return ciphertext;
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payloadStr: string;
 
   const parts = ciphertext.split(":");
-  if (parts.length >= 4 && parts[0] === "enc" && parts[1][0] === "v") {
+  const firstPart = parts[0];
+  const secondPart = parts[1];
+
+  if (parts.length >= 4 && firstPart === "enc" && secondPart && secondPart.charAt(0) === "v") {
     // Versioned format "enc:v<N>:<hasAAD>:<payload>"
-    const vStr = parts[1];
-    keyVersion = parseInt(vStr.substring(1), 10) || 1;
+    keyVersion = parseInt(secondPart.substring(1), 10) || 1;
     hasAADFlag = parseInt(parts[2], 10) || 0;
     payloadStr = parts.slice(3).join(":");
-  } else if (parts.length >= 2 && parts[0] === "enc") {
+  } else if (parts.length >= 2 && firstPart === "enc") {
     // Legacy format "enc:<payload>"
     payloadStr = parts.slice(1).join(":");
   } else {
