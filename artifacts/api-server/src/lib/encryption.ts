@@ -99,13 +99,11 @@ export function encrypt(plaintext: string, fieldName?: string, entityId?: string
  * caller is now passing.
  */
 function tryDecryptWithAAD(
-  payload: string,
-  keyVersion: number,
+  combined: Buffer,
+  key: Buffer,
   aad: Buffer | undefined,
 ): string | null {
   try {
-    const key = getKey(keyVersion);
-    const combined = Buffer.from(payload, ENCODING);
     const iv = combined.subarray(0, IV_LENGTH);
     const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
     const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
@@ -120,19 +118,38 @@ function tryDecryptWithAAD(
 }
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
-  if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (!ciphertext || typeof ciphertext !== "string") return ciphertext;
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
-  let payload: string;
+  let payloadStr: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
+  const parts = ciphertext.split(":");
+  const firstPart = parts[0];
+  const secondPart = parts[1];
+
+  if (parts.length >= 4 && firstPart === "enc" && secondPart && secondPart.charAt(0) === "v") {
+    // Versioned format "enc:v<N>:<hasAAD>:<payload>"
+    keyVersion = parseInt(secondPart.substring(1), 10) || 1;
     hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+    payloadStr = parts.slice(3).join(":");
+  } else if (parts.length >= 2 && firstPart === "enc") {
+    // Legacy format "enc:<payload>"
+    payloadStr = parts.slice(1).join(":");
   } else {
-    payload = ciphertext.slice(4);
+    return ciphertext;
+  }
+
+  // Pre-decode payload and resolve key once to avoid redundant overhead in fallback loops.
+  // Wrapped in try/catch to maintain [DECRYPTION_ERROR] contract if key or format is invalid.
+  let key: Buffer;
+  let combined: Buffer;
+  try {
+    key = getKey(keyVersion);
+    combined = Buffer.from(payloadStr, ENCODING);
+  } catch (err) {
+    logger.error({ err, keyVersion, payloadLen: payloadStr.length }, "Decryption setup failed");
+    return "[DECRYPTION_ERROR]";
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
@@ -149,7 +166,7 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   candidates.push(undefined);                             // fallback: no AAD
 
   for (const aad of candidates) {
-    const result = tryDecryptWithAAD(payload, keyVersion, aad);
+    const result = tryDecryptWithAAD(combined, key, aad);
     if (result !== null) return result;
   }
 
@@ -177,26 +194,33 @@ export const ENCRYPTED_FIELDS = [
 ] as const;
 
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  const result = { ...data };
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
+    const val = data[field];
+    if (val !== undefined && val !== null && typeof val === "string") {
+      if (!val.startsWith("enc:")) {
+        if (!result) result = { ...data };
+        result[field] = encrypt(val, field, entityId);
       }
     }
   }
-  return result;
+  return result ?? data;
 }
 
 export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   if (!data) return data;
-  const result = { ...data };
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
+    const val = data[field];
+    if (val !== undefined && val !== null && typeof val === "string") {
+      const decrypted = decrypt(val, field, entityId);
+      if (decrypted !== val) {
+        if (!result) result = { ...data };
+        result[field] = decrypted;
+      }
     }
   }
-  return result;
+  return result ?? data;
 }
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
