@@ -124,15 +124,18 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   let hasAADFlag = 0;
   let payloadStr: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    // Use version-aware split to ensure Cloudflare Worker compatibility
-    keyVersion = parseInt(parts[1].startsWith("v") ? parts[1].slice(1) : parts[1], 10) || 1;
+  const parts = ciphertext.split(":");
+  if (parts.length >= 4 && parts[0] === "enc" && parts[1][0] === "v") {
+    // Versioned format "enc:v<N>:<hasAAD>:<payload>"
+    const vStr = parts[1];
+    keyVersion = parseInt(vStr.substring(1), 10) || 1;
     hasAADFlag = parseInt(parts[2], 10) || 0;
     payloadStr = parts.slice(3).join(":");
-  } else {
+  } else if (parts.length >= 2 && parts[0] === "enc") {
     // Legacy format "enc:<payload>"
-    payloadStr = ciphertext.split(":").slice(1).join(":");
+    payloadStr = parts.slice(1).join(":");
+  } else {
+    return ciphertext;
   }
 
   // Pre-decode payload and resolve key once to avoid redundant overhead in fallback loops.
