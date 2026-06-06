@@ -75,6 +75,7 @@ function normalizePhone(value: string | null | undefined): string | null {
 function safeDecryptPhone(
   value: string | null | undefined,
   fieldName: "phone" | "phone_primary",
+  entityId?: string,
 ): string | null {
   if (!value) return null;
   try {
@@ -82,7 +83,7 @@ function safeDecryptPhone(
     // for ciphertexts produced by encryptLeadFields(...). Calling
     // decrypt() without fieldName when the original encryption used
     // AAD returns "[DECRYPTION_ERROR]" and silently breaks dedup.
-    const decrypted = decrypt(value, fieldName);
+    const decrypted = decrypt(value, fieldName, entityId);
     if (!decrypted || decrypted === "[DECRYPTION_ERROR]") return null;
     return normalizePhone(decrypted);
   } catch {
@@ -97,7 +98,8 @@ export async function findExistingLeadForIntake(
   const tortType = (input.tortType ?? "").trim();
   if (!tortType) return null;
 
-  const firmPred = input.firmId != null ? eq(leadsTable.firm_id, input.firmId) : undefined;
+  const firmPred =
+    input.firmId != null ? eq(leadsTable.firm_id, input.firmId) : undefined;
 
   // ---- Path 0: canonical lookup_hash short-circuit (Task #15) -------------
   // When the submitter provides BOTH email and phone, we can skip the entire
@@ -107,13 +109,22 @@ export async function findExistingLeadForIntake(
   // match. A miss does NOT mean "no duplicate" — it only means there is no
   // EXACT triple match, so we still fall through to the email + phone paths
   // below for legacy rows and partial-input submissions.
-  const fastHash = leadLookupHash(tortType, input.email ?? null, input.phone ?? null);
+  const fastHash = leadLookupHash(
+    tortType,
+    input.email ?? null,
+    input.phone ?? null,
+  );
   if (fastHash) {
     try {
       const fastRows = await db
         .select({ id: leadsTable.id })
         .from(leadsTable)
-        .where(and(eq(leadsTable.lookup_hash, fastHash), ...(firmPred ? [firmPred] : [])))
+        .where(
+          and(
+            eq(leadsTable.lookup_hash, fastHash),
+            ...(firmPred ? [firmPred] : []),
+          ),
+        )
         .limit(1);
       if (fastRows.length > 0 && fastRows[0]) {
         return { leadId: fastRows[0].id, matchedBy: "email" };
@@ -172,18 +183,26 @@ export async function findExistingLeadForIntake(
             // Engine writes `phone_primary` while the Web Forms widget
             // writes `phone`. Filtering on `phone` alone would miss
             // every phone_primary-only row and silently degrade dedup.
-            or(isNotNull(leadsTable.phone), isNotNull(leadsTable.phone_primary)),
+            or(
+              isNotNull(leadsTable.phone),
+              isNotNull(leadsTable.phone_primary),
+            ),
             ...(firmPred ? [firmPred] : []),
           ),
         )
         .limit(PHONE_SCAN_LIMIT);
 
       for (const row of candidates) {
-        const stored = [
-          safeDecryptPhone(row.phone, "phone"),
-          safeDecryptPhone(row.phone_primary, "phone_primary"),
-        ].filter((p): p is string => p !== null);
-        if (stored.includes(incomingPhone)) {
+        // Passing String(row.id) as entityId ensures AAD verification succeeds on the
+        // first attempt for 'rebound' leads, skipping expensive fallback cycles.
+        // Short-circuiting || avoids redundant decryption if the first field matches.
+        const idStr = String(row.id);
+        const p1 = safeDecryptPhone(row.phone, "phone", idStr);
+        if (p1 === incomingPhone) {
+          return { leadId: row.id, matchedBy: "phone" };
+        }
+        const p2 = safeDecryptPhone(row.phone_primary, "phone_primary", idStr);
+        if (p2 === incomingPhone) {
           return { leadId: row.id, matchedBy: "phone" };
         }
       }

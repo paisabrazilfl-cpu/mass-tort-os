@@ -296,7 +296,8 @@ function pickBestSearchResult(
   for (const r of results) {
     const basic = r.basic ?? {};
     const name =
-      basic.name ?? [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
+      basic.name ??
+      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
 
@@ -322,7 +323,9 @@ function pickBestSearchResult(
 
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
     const score =
-      0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
+      0.5 * Math.max(nameScore, orgScore) +
+      0.25 * cityScore +
+      0.25 * stateScore;
 
     if (score > bestScore) {
       bestScore = score;
