@@ -60,6 +60,27 @@ export function normalizeName(s: string | null | undefined): string {
   return normalizeNameFromNormalized(normalize(s));
 }
 
+/**
+ * Internal helper: similarity that also tries the title-stripped variant between
+ * two ALREADY normalized strings. Accepts an optional pre-stripped version of `na`
+ * to avoid redundant regex processing in loops.
+ */
+export function similarityNamePreNormalized(
+  na: string,
+  nb: string,
+  naStripped?: string,
+): number {
+  if (na === nb) return 1;
+  const raw = similarityPreNormalized(na, nb);
+  if (raw >= 0.98) return raw; // Early return for near-perfect matches
+
+  const stripped = similarityPreNormalized(
+    naStripped ?? normalizeNameFromNormalized(na),
+    normalizeNameFromNormalized(nb),
+  );
+  return Math.max(raw, stripped);
+}
+
 // Convenience: similarity that also tries the title-stripped variant and
 // returns whichever is HIGHER. Strictly additive — can never lower a
 // previously-passing score; existing thresholds keep their meaning.
@@ -67,17 +88,7 @@ export function similarityName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
-  const na = normalize(a);
-  const nb = normalize(b);
-
-  const raw = similarityPreNormalized(na, nb);
-  if (raw >= 0.98) return raw; // Early return for near-perfect matches
-
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
-  return Math.max(raw, stripped);
+  return similarityNamePreNormalized(normalize(a), normalize(b));
 }
 
 export function levenshtein(a: string, b: string): number {
