@@ -159,7 +159,21 @@ export function decrypt(
     const vPart = parts[1] ?? "";
     keyVersion = parseInt(vPart.substring(1), 10) || 1;
     hasAADFlag = parseInt(parts[2] ?? "0", 10) || 0;
-    payload = parts.slice(3).join(":");
+
+    // Cloudflare Worker compatibility: avoid slice/join on array if possible
+    // Extract everything after the 3rd colon
+    let colonCount = 0;
+    let payloadIdx = 0;
+    for (let i = 0; i < ciphertext.length; i++) {
+      if (ciphertext.charAt(i) === ":") {
+        colonCount++;
+        if (colonCount === 3) {
+          payloadIdx = i + 1;
+          break;
+        }
+      }
+    }
+    payload = ciphertext.substring(payloadIdx);
   } else {
     payload = ciphertext.substring(4);
   }
@@ -274,7 +288,15 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (
+      typeof cur !== "string" ||
+      cur.charAt(0) !== "e" ||
+      cur.charAt(1) !== "n" ||
+      cur.charAt(2) !== "c" ||
+      cur.charAt(3) !== ":"
+    ) {
+      continue;
+    }
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;

@@ -17,7 +17,11 @@ export function leadLookupHash(
   const tort = (tortType ?? "").trim().toLowerCase();
   const mail = (email ?? "").trim().toLowerCase();
   const phoneDigits = (phone ?? "").replace(/\D/g, "");
-  const phone10 = phoneDigits.length >= 10 ? phoneDigits.slice(-10) : "";
+  // Cloudflare Worker compatibility: use substring instead of slice
+  const phone10 =
+    phoneDigits.length >= 10
+      ? phoneDigits.substring(phoneDigits.length - 10)
+      : "";
   if (!tort || !mail || !phone10) return null;
   const norm = `${tort}|${mail}|${phone10}`;
   return crypto.createHash("sha256").update(norm).digest("hex");
