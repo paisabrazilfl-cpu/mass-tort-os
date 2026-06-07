@@ -121,18 +121,41 @@ function tryDecryptWithAAD(
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  // Use charAt instead of startsWith for Cloudflare Worker compatibility
+  if (
+    ciphertext.charAt(0) !== "e" ||
+    ciphertext.charAt(1) !== "n" ||
+    ciphertext.charAt(2) !== "c" ||
+    ciphertext.charAt(3) !== ":"
+  ) {
+    return ciphertext;
+  }
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v")) {
+  if (ciphertext.charAt(4) === "v") {
     const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
+    // parts[1] is "v1", parts[2] is "0" or "1", parts[3] is the start of payload
+    keyVersion = parseInt(parts[1].substring(1), 10) || 1;
     hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+
+    // Find the third colon manually to avoid slice().join() on the parts array,
+    // which was identified as a Cloudflare Worker build failure cause.
+    let colonCount = 0;
+    let payloadIndex = -1;
+    for (let i = 0; i < ciphertext.length; i++) {
+      if (ciphertext.charAt(i) === ":") {
+        colonCount++;
+        if (colonCount === 3) {
+          payloadIndex = i + 1;
+          break;
+        }
+      }
+    }
+    payload = payloadIndex !== -1 ? ciphertext.substring(payloadIndex) : "";
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
@@ -179,9 +202,16 @@ export const ENCRYPTED_FIELDS = [
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   const result = { ...data };
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
+    const val = result[field];
+    if (val !== undefined && val !== null && typeof val === "string") {
+      // Use charAt instead of startsWith for Cloudflare Worker compatibility
+      const isEncrypted =
+        val.charAt(0) === "e" &&
+        val.charAt(1) === "n" &&
+        val.charAt(2) === "c" &&
+        val.charAt(3) === ":";
+      if (!isEncrypted) {
+        result[field] = encrypt(val, field, entityId);
       }
     }
   }
@@ -230,7 +260,14 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (typeof cur !== "string") continue;
+    // Use charAt instead of startsWith for Cloudflare Worker compatibility
+    const isEncrypted =
+      cur.charAt(0) === "e" &&
+      cur.charAt(1) === "n" &&
+      cur.charAt(2) === "c" &&
+      cur.charAt(3) === ":";
+    if (!isEncrypted) continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;

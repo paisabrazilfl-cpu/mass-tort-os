@@ -22,7 +22,8 @@ import { TORT_REGISTRY } from "../tort-engine";
 function phone10(value: string | null | undefined): string | null {
   if (!value) return null;
   const digits = value.replace(/\D/g, "");
-  return digits.length >= 10 ? digits.slice(-10) : null;
+  // Use substring(length - 10) instead of slice(-10) for Cloudflare Worker compatibility
+  return digits.length >= 10 ? digits.substring(digits.length - 10) : null;
 }
 
 /**
