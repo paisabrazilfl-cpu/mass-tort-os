@@ -128,11 +128,23 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
 
   if (ciphertext.startsWith("enc:v")) {
     const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
+    keyVersion = parseInt(parts[1].substring(1), 10) || 1;
     hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+    // Extract payload from third colon to avoid slice/join (CF Worker build safety)
+    let colonCount = 0;
+    let payloadIdx = -1;
+    for (let i = 0; i < ciphertext.length; i++) {
+      if (ciphertext[i] === ":") {
+        colonCount++;
+        if (colonCount === 3) {
+          payloadIdx = i + 1;
+          break;
+        }
+      }
+    }
+    payload = payloadIdx !== -1 ? ciphertext.substring(payloadIdx) : "";
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
