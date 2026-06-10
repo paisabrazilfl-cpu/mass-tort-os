@@ -166,7 +166,7 @@ export async function adaptPhone(lead: LeadLike): Promise<BackgroundLaneResult> 
   }
 
   // Normalize: strip leading country code if present.
-  const normalized = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  const normalized = digits.length === 11 && digits.startsWith("1") ? digits.substring(1) : digits;
 
   const flags: string[] = [];
   const warnings: string[] = [];
