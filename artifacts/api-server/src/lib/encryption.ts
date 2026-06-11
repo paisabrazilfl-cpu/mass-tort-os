@@ -119,12 +119,12 @@ function tryDecryptWithAAD(
 }
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
-  if (!ciphertext || !ciphertext.startsWith("enc:")) return ciphertext;
+  if (!ciphertext || ciphertext.substring(0, 4) !== "enc:") return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payloadStr: string;
 
-  if (ciphertext.startsWith("enc:v", 0)) {
+  if (ciphertext.substring(0, 5) === "enc:v") {
     // Header format: enc:v<keyVersion>:<hasAADFlag>:<payload>
     // Using substring/indexOf for Cloudflare Worker compatibility and performance
     const vEnd = ciphertext.indexOf(":", 5); // Skip "enc:v"
@@ -189,7 +189,7 @@ export function encryptLeadFields(data: Record<string, any>, entityId?: string):
   for (const field of ENCRYPTED_FIELDS) {
     const val = data[field];
     if (val !== undefined && val !== null && typeof val === "string") {
-      if (!val.startsWith("enc:")) {
+      if (val.substring(0, 4) !== "enc:") {
         if (!result) result = { ...data };
         result[field] = encrypt(val, field, entityId);
       }
@@ -204,7 +204,7 @@ export function decryptLeadFields(data: Record<string, any>, entityId?: string):
   let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
     const val = data[field];
-    if (val !== undefined && val !== null && typeof val === "string" && val.startsWith("enc:")) {
+    if (val !== undefined && val !== null && typeof val === "string" && val.substring(0, 4) === "enc:") {
       if (!result) result = { ...data };
       result[field] = decrypt(val, field, entityId);
     }
@@ -244,7 +244,7 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (typeof cur !== "string" || cur.substring(0, 4) !== "enc:") continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
