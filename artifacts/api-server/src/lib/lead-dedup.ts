@@ -69,12 +69,14 @@ const PHONE_SCAN_LIMIT = 1000;
 function normalizePhone(value: string | null | undefined): string | null {
   if (!value) return null;
   const digits = value.replace(/\D/g, "");
-  return digits.length >= 10 ? digits.slice(-10) : null;
+  // Using substring for Cloudflare Worker compatibility
+  return digits.length >= 10 ? digits.substring(digits.length - 10) : null;
 }
 
 function safeDecryptPhone(
   value: string | null | undefined,
   fieldName: "phone" | "phone_primary",
+  entityId?: string,
 ): string | null {
   if (!value) return null;
   try {
@@ -82,7 +84,10 @@ function safeDecryptPhone(
     // for ciphertexts produced by encryptLeadFields(...). Calling
     // decrypt() without fieldName when the original encryption used
     // AAD returns "[DECRYPTION_ERROR]" and silently breaks dedup.
-    const decrypted = decrypt(value, fieldName);
+    //
+    // Passing entityId ensures we hit the primary (field+entity) AAD first,
+    // skipping expensive fallback cycles for rebound leads.
+    const decrypted = decrypt(value, fieldName, entityId);
     if (!decrypted || decrypted === "[DECRYPTION_ERROR]") return null;
     return normalizePhone(decrypted);
   } catch {
@@ -179,12 +184,14 @@ export async function findExistingLeadForIntake(
         .limit(PHONE_SCAN_LIMIT);
 
       for (const row of candidates) {
-        const stored = [
-          safeDecryptPhone(row.phone, "phone"),
-          safeDecryptPhone(row.phone_primary, "phone_primary"),
-        ].filter((p): p is string => p !== null);
-        if (stored.includes(incomingPhone)) {
-          return { leadId: row.id, matchedBy: "phone" };
+        const idStr = String(row.id);
+        if (row.phone) {
+          const p = safeDecryptPhone(row.phone, "phone", idStr);
+          if (p === incomingPhone) return { leadId: row.id, matchedBy: "phone" };
+        }
+        if (row.phone_primary) {
+          const p = safeDecryptPhone(row.phone_primary, "phone_primary", idStr);
+          if (p === incomingPhone) return { leadId: row.id, matchedBy: "phone" };
         }
       }
     } catch (err) {
