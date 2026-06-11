@@ -99,16 +99,15 @@ export function encrypt(plaintext: string, fieldName?: string, entityId?: string
  * caller is now passing.
  */
 function tryDecryptWithAAD(
-  payload: string,
+  payload: Buffer,
   keyVersion: number,
   aad: Buffer | undefined,
 ): string | null {
   try {
     const key = getKey(keyVersion);
-    const combined = Buffer.from(payload, ENCODING);
-    const iv = combined.subarray(0, IV_LENGTH);
-    const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
-    const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
+    const iv = payload.subarray(0, IV_LENGTH);
+    const authTag = payload.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
+    const encrypted = payload.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
     const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
     decipher.setAuthTag(authTag);
     if (aad) decipher.setAAD(aad);
@@ -120,20 +119,29 @@ function tryDecryptWithAAD(
 }
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
-  if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (!ciphertext || !ciphertext.startsWith("enc:")) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
-  let payload: string;
+  let payloadStr: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+  if (ciphertext.startsWith("enc:v", 0)) {
+    // Header format: enc:v<keyVersion>:<hasAADFlag>:<payload>
+    // Using substring/indexOf for Cloudflare Worker compatibility and performance
+    const vEnd = ciphertext.indexOf(":", 5); // Skip "enc:v"
+    if (vEnd === -1) return "[DECRYPTION_ERROR]";
+    keyVersion = parseInt(ciphertext.substring(5, vEnd), 10) || 1;
+
+    const flagEnd = ciphertext.indexOf(":", vEnd + 1);
+    if (flagEnd === -1) return "[DECRYPTION_ERROR]";
+    hasAADFlag = parseInt(ciphertext.substring(vEnd + 1, flagEnd), 10) || 0;
+    payloadStr = ciphertext.substring(flagEnd + 1);
   } else {
-    payload = ciphertext.slice(4);
+    // Legacy format: enc:<payload>
+    payloadStr = ciphertext.substring(4);
   }
+
+  // Pre-decode payload once and reuse Buffer across AAD fallback attempts
+  const payload = Buffer.from(payloadStr, ENCODING);
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
   // fails, fall back through other AAD variants — historical inconsistencies
@@ -177,26 +185,32 @@ export const ENCRYPTED_FIELDS = [
 ] as const;
 
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  const result = { ...data };
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
+    const val = data[field];
+    if (val !== undefined && val !== null && typeof val === "string") {
+      if (!val.startsWith("enc:")) {
+        if (!result) result = { ...data };
+        result[field] = encrypt(val, field, entityId);
       }
     }
   }
-  return result;
+  // Lazy cloning: return original reference if no fields were actually modified
+  return result ?? data;
 }
 
 export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   if (!data) return data;
-  const result = { ...data };
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
+    const val = data[field];
+    if (val !== undefined && val !== null && typeof val === "string" && val.startsWith("enc:")) {
+      if (!result) result = { ...data };
+      result[field] = decrypt(val, field, entityId);
     }
   }
-  return result;
+  // Lazy cloning: return original reference if no fields were actually modified
+  return result ?? data;
 }
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
