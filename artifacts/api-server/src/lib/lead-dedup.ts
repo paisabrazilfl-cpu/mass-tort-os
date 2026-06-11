@@ -184,15 +184,14 @@ export async function findExistingLeadForIntake(
         .limit(PHONE_SCAN_LIMIT);
 
       for (const row of candidates) {
-        // Optimized: pass String(row.id) as entityId to hit first AAD variant.
-        // Use short-circuiting OR to avoid redundant decryptions and array allocations.
         const idStr = String(row.id);
-        const match =
-          (row.phone && safeDecryptPhone(row.phone, "phone", idStr) === incomingPhone) ||
-          (row.phone_primary && safeDecryptPhone(row.phone_primary, "phone_primary", idStr) === incomingPhone);
-
-        if (match) {
-          return { leadId: row.id, matchedBy: "phone" };
+        if (row.phone) {
+          const p = safeDecryptPhone(row.phone, "phone", idStr);
+          if (p === incomingPhone) return { leadId: row.id, matchedBy: "phone" };
+        }
+        if (row.phone_primary) {
+          const p = safeDecryptPhone(row.phone_primary, "phone_primary", idStr);
+          if (p === incomingPhone) return { leadId: row.id, matchedBy: "phone" };
         }
       }
     } catch (err) {

@@ -130,14 +130,11 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
       keyVersion = parseInt(parts[1].substring(1), 10) || 1;
       hasAADFlag = parseInt(parts[2] || "0", 10) || 0;
 
-      // Find the third colon index manually to avoid slice/join on the split array
-      let colons = 0;
-      let i = 0;
-      while (colons < 3 && i < ciphertext.length) {
-        if (ciphertext.charAt(i) === ":") colons++;
-        i++;
-      }
-      payloadStr = ciphertext.substring(i);
+      // Extract payload using indexOf to avoid slice/join on sub-parts
+      let pos = ciphertext.indexOf(":"); // first
+      pos = ciphertext.indexOf(":", pos + 1); // second
+      pos = ciphertext.indexOf(":", pos + 1); // third
+      payloadStr = pos !== -1 ? ciphertext.substring(pos + 1) : "";
     } else {
       payloadStr = ciphertext.substring(4);
     }
