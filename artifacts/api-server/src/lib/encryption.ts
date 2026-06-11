@@ -125,18 +125,23 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   let payloadStr: string;
 
   if (ciphertext.substring(0, 5) === "enc:v") {
-    // Header format: enc:v<keyVersion>:<hasAADFlag>:<payload>
-    // Using substring/indexOf for Cloudflare Worker compatibility and performance
-    const vEnd = ciphertext.indexOf(":", 5); // Skip "enc:v"
-    if (vEnd === -1) return "[DECRYPTION_ERROR]";
-    keyVersion = parseInt(ciphertext.substring(5, vEnd), 10) || 1;
+    const parts = ciphertext.split(":");
+    if (parts.length >= 4 && parts[1] && parts[1].charAt(0) === "v") {
+      keyVersion = parseInt(parts[1].substring(1), 10) || 1;
+      hasAADFlag = parseInt(parts[2] || "0", 10) || 0;
 
-    const flagEnd = ciphertext.indexOf(":", vEnd + 1);
-    if (flagEnd === -1) return "[DECRYPTION_ERROR]";
-    hasAADFlag = parseInt(ciphertext.substring(vEnd + 1, flagEnd), 10) || 0;
-    payloadStr = ciphertext.substring(flagEnd + 1);
+      // Find the third colon index manually to avoid slice/join on the split array
+      let colons = 0;
+      let i = 0;
+      while (colons < 3 && i < ciphertext.length) {
+        if (ciphertext.charAt(i) === ":") colons++;
+        i++;
+      }
+      payloadStr = ciphertext.substring(i);
+    } else {
+      payloadStr = ciphertext.substring(4);
+    }
   } else {
-    // Legacy format: enc:<payload>
     payloadStr = ciphertext.substring(4);
   }
 
