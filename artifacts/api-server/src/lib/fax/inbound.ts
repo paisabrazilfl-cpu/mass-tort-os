@@ -82,7 +82,7 @@ async function correlateLead(
 
   const digits = fromNumber.replace(/\D/g, "");
   if (digits.length < 10) return null;
-  const last10 = digits.slice(-10);
+  const last10 = digits.substring(digits.length - 10);
 
   const candidates = await pool.query<{ id: number; firm_id: number | null }>(
     `SELECT id, firm_id FROM leads

@@ -1679,10 +1679,15 @@ router.post("/inbound-fax/:provider", async (req, res) => {
   //    then restrict candidates to that firm's leads. If the DID is missing or
   //    unmapped, we do NOT fall back to a cross-firm scan; the lead parks.
   if (!leadId && senderFaxRaw) {
-    const digits = senderFaxRaw.replace(/\D/g, "").slice(-10);
+    const tempDigits = senderFaxRaw.replace(/\D/g, "");
+    const digits = tempDigits.substring(tempDigits.length - 10);
     if (digits.length === 10) {
-      const { findMappingForDialedNumber } = await import("../lib/voice/inbound-routing.js");
-      const mapping = receivedDid ? await findMappingForDialedNumber(receivedDid) : null;
+      const { findMappingForDialedNumber } = await import(
+        "../lib/voice/inbound-routing.js"
+      );
+      const mapping = receivedDid
+        ? await findMappingForDialedNumber(receivedDid)
+        : null;
       const firmId = mapping?.firmId ?? null;
       if (firmId == null) {
         logger.warn(
@@ -1699,9 +1704,10 @@ router.post("/inbound-fax/:provider", async (req, res) => {
               eq(leadsTable.firm_id, firmId),
             ),
           );
-        const matches = candidates.filter(
-          (c) => (c.fax || "").replace(/\D/g, "").slice(-10) === digits,
-        );
+        const matches = candidates.filter((c) => {
+          const cfax = (c.fax || "").replace(/\D/g, "");
+          return cfax.substring(cfax.length - 10) === digits;
+        });
         if (matches.length === 1) leadId = matches[0]!.id;
         else if (matches.length > 1) {
           logger.warn({ provider, firmId, count: matches.length }, "inbound-fax: ambiguous sender match within firm — parking");
