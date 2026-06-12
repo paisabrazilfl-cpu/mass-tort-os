@@ -137,13 +137,14 @@ export function decrypt(
   entityId?: string,
 ): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  // Use indexOf === 0 instead of startsWith for worker compatibility
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
 
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payloadStr: string;
 
-  if (ciphertext.startsWith("enc:v")) {
+  if (ciphertext.indexOf("enc:v") === 0) {
     // Header format: enc:v<version>:<hasAAD>:<payload>
     const vPrefixLen = 5; // end of "enc:v"
     const secondColon = ciphertext.indexOf(":", vPrefixLen);
@@ -219,7 +220,7 @@ export function encryptLeadFields(
   let result: Record<string, any> | null = null;
   for (const field of ENCRYPTED_FIELDS) {
     const val = data[field];
-    if (typeof val === "string" && !val.startsWith("enc:")) {
+    if (typeof val === "string" && val.indexOf("enc:") !== 0) {
       result = result ?? { ...data };
       result[field] = encrypt(val, field, entityId);
     }
@@ -235,7 +236,7 @@ export function decryptLeadFields(
   let result: Record<string, any> | null = null;
   for (const field of ENCRYPTED_FIELDS) {
     const val = data[field];
-    if (typeof val === "string" && val.startsWith("enc:")) {
+    if (typeof val === "string" && val.indexOf("enc:") === 0) {
       result = result ?? { ...data };
       result[field] = decrypt(val, field, entityId);
     }
@@ -276,7 +277,7 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (typeof cur !== "string" || cur.indexOf("enc:") !== 0) continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
