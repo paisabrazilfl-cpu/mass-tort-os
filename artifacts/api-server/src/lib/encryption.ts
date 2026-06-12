@@ -137,14 +137,22 @@ export function decrypt(
   entityId?: string,
 ): string {
   if (!ciphertext) return ciphertext;
-  // Use indexOf === 0 instead of startsWith for worker compatibility
-  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
+  // Use charAt comparisons instead of startsWith for worker compatibility
+  if (
+    ciphertext.length < 4 ||
+    ciphertext.charAt(0) !== "e" ||
+    ciphertext.charAt(1) !== "n" ||
+    ciphertext.charAt(2) !== "c" ||
+    ciphertext.charAt(3) !== ":"
+  ) {
+    return ciphertext;
+  }
 
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payloadStr: string;
 
-  if (ciphertext.indexOf("enc:v") === 0) {
+  if (ciphertext.charAt(4) === "v") {
     // Header format: enc:v<version>:<hasAAD>:<payload>
     const vPrefixLen = 5; // end of "enc:v"
     const secondColon = ciphertext.indexOf(":", vPrefixLen);
@@ -220,7 +228,14 @@ export function encryptLeadFields(
   let result: Record<string, any> | null = null;
   for (const field of ENCRYPTED_FIELDS) {
     const val = data[field];
-    if (typeof val === "string" && val.indexOf("enc:") !== 0) {
+    if (
+      typeof val === "string" &&
+      (val.length < 4 ||
+        val.charAt(0) !== "e" ||
+        val.charAt(1) !== "n" ||
+        val.charAt(2) !== "c" ||
+        val.charAt(3) !== ":")
+    ) {
       result = result ?? { ...data };
       result[field] = encrypt(val, field, entityId);
     }
@@ -236,7 +251,14 @@ export function decryptLeadFields(
   let result: Record<string, any> | null = null;
   for (const field of ENCRYPTED_FIELDS) {
     const val = data[field];
-    if (typeof val === "string" && val.indexOf("enc:") === 0) {
+    if (
+      typeof val === "string" &&
+      val.length >= 4 &&
+      val.charAt(0) === "e" &&
+      val.charAt(1) === "n" &&
+      val.charAt(2) === "c" &&
+      val.charAt(3) === ":"
+    ) {
       result = result ?? { ...data };
       result[field] = decrypt(val, field, entityId);
     }
@@ -277,7 +299,16 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || cur.indexOf("enc:") !== 0) continue;
+    if (
+      typeof cur !== "string" ||
+      cur.length < 4 ||
+      cur.charAt(0) !== "e" ||
+      cur.charAt(1) !== "n" ||
+      cur.charAt(2) !== "c" ||
+      cur.charAt(3) !== ":"
+    ) {
+      continue;
+    }
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
