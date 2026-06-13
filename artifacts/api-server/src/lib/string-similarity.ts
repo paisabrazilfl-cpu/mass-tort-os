@@ -3,15 +3,12 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
-const PUNCTUATION_RE = /[^\w\s]/g;
-const WHITESPACE_RE = /\s+/g;
-
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
   return s
     .toLowerCase()
-    .replace(PUNCTUATION_RE, " ")
-    .replace(WHITESPACE_RE, " ")
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
