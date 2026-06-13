@@ -25,7 +25,14 @@
  * The pure classification + download logic lives in inbound-classify.ts
  * (no DB import) so it stays unit-testable without a database.
  */
-import { db, pool, faxResultsTable, documentsTable, jobQueueTable, medicalRecordsRequestsTable } from "@workspace/db";
+import {
+  db,
+  pool,
+  faxResultsTable,
+  documentsTable,
+  jobQueueTable,
+  medicalRecordsRequestsTable,
+} from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
 import { saveFile } from "../vault";
 import { logger } from "../logger";
@@ -82,7 +89,7 @@ async function correlateLead(
 
   const digits = fromNumber.replace(/\D/g, "");
   if (digits.length < 10) return null;
-  const last10 = digits.slice(-10);
+  const last10 = digits.substring(digits.length - 10);
 
   const candidates = await pool.query<{ id: number; firm_id: number | null }>(
     `SELECT id, firm_id FROM leads
@@ -115,7 +122,9 @@ async function correlateLead(
  * Process one inbound fax webhook. Never throws — always returns a result
  * object so the webhook route can stay a clean 200 OK.
  */
-export async function processInboundFax(input: InboundFaxInput): Promise<InboundFaxResult> {
+export async function processInboundFax(
+  input: InboundFaxInput,
+): Promise<InboundFaxResult> {
   try {
     if (!isInboundReceivedEvent(input.eventType, input.status, input.payload)) {
       return { handled: false, reason: "not_inbound_event" };
@@ -164,7 +173,9 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
 
     // 2. Correlate to a claimant by sender fax number.
     const fromNumber = deepFindString(input.payload, FROM_KEYS) ?? "";
-    const lead = fromNumber ? await correlateLead(fromNumber, input.firmId) : null;
+    const lead = fromNumber
+      ? await correlateLead(fromNumber, input.firmId)
+      : null;
     const leadId = lead?.id ?? null;
 
     // 3. Store: vault file (base64 — the format process_fax expects),
@@ -279,13 +290,19 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
           if (openRequest.fax_result_id) {
             await db
               .update(faxResultsTable)
-              .set({ delivery_status: "delivered", delivery_checked_at: new Date() })
+              .set({
+                delivery_status: "delivered",
+                delivery_checked_at: new Date(),
+              })
               .where(eq(faxResultsTable.id, openRequest.fax_result_id));
           }
         }
       } catch (err) {
         // Non-fatal: don't let MRR update failure break the inbound fax pipeline.
-        logger.warn({ err, leadId }, "inbound fax: failed to mark MRR request fulfilled");
+        logger.warn(
+          { err, leadId },
+          "inbound fax: failed to mark MRR request fulfilled",
+        );
       }
     }
 
@@ -318,11 +335,18 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
         firmId: lead?.firm_id ?? input.firmId ?? "any",
         source: "inbound_fax_webhook",
       }).catch((err) =>
-        logger.error({ err, leadId }, "inbound fax: dispatchTrigger(trigger.inbound_fax) failed"),
+        logger.error(
+          { err, leadId },
+          "inbound fax: dispatchTrigger(trigger.inbound_fax) failed",
+        ),
       );
     } else {
       logger.warn(
-        { provider: input.provider, from: fromNumber || null, externalFaxId: input.externalFaxId },
+        {
+          provider: input.provider,
+          from: fromNumber || null,
+          externalFaxId: input.externalFaxId,
+        },
         "inbound fax: stored but no claimant matched on hospital_fax — left in inbox for manual assignment",
       );
     }
@@ -335,7 +359,10 @@ export async function processInboundFax(input: InboundFaxInput): Promise<Inbound
       document_id: documentId,
     };
   } catch (err) {
-    logger.error({ err, provider: input.provider }, "inbound fax: processInboundFax crashed");
+    logger.error(
+      { err, provider: input.provider },
+      "inbound fax: processInboundFax crashed",
+    );
     return { handled: false, reason: "internal_error" };
   }
 }

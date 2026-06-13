@@ -37,7 +37,11 @@ export function normalizePhone(raw: string): string | null {
 /** Mask an E.164 number for display — keeps the country prefix + last 4. */
 export function maskPhone(e164: string): string {
   if (!e164 || e164.length < 6) return "•••••";
-  return e164.slice(0, 2) + "•".repeat(Math.max(0, e164.length - 6)) + e164.slice(-4);
+  return (
+    e164.substring(0, 2) +
+    "•".repeat(Math.max(0, e164.length - 6)) +
+    e164.substring(e164.length - 4)
+  );
 }
 
 function hashCode(code: string): string {
@@ -77,7 +81,12 @@ export async function verifyOtp(
   code: string,
   opts: { consume?: boolean } = {},
 ): Promise<OtpResult> {
-  const r = await pool.query<{ id: number; code_hash: string; phone: string; attempts: number }>(
+  const r = await pool.query<{
+    id: number;
+    code_hash: string;
+    phone: string;
+    attempts: number;
+  }>(
     `SELECT id, code_hash, phone, attempts FROM auth_otp_codes
        WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > NOW()
        ORDER BY id DESC LIMIT 1`,
@@ -85,13 +94,17 @@ export async function verifyOtp(
   );
   const row = r.rows[0];
   if (!row) return { ok: false, reason: "expired" };
-  if (row.attempts >= OTP_MAX_ATTEMPTS) return { ok: false, reason: "too_many" };
+  if (row.attempts >= OTP_MAX_ATTEMPTS)
+    return { ok: false, reason: "too_many" };
 
   const a = Buffer.from(hashCode(code), "hex");
   const b = Buffer.from(row.code_hash, "hex");
   const match = a.length === b.length && crypto.timingSafeEqual(a, b);
   if (!match) {
-    await pool.query(`UPDATE auth_otp_codes SET attempts = attempts + 1 WHERE id = $1`, [row.id]);
+    await pool.query(
+      `UPDATE auth_otp_codes SET attempts = attempts + 1 WHERE id = $1`,
+      [row.id],
+    );
     return { ok: false, reason: "mismatch" };
   }
 
@@ -123,7 +136,8 @@ export async function sendOtpSms(
     `It expires in ${OTP_TTL_MINUTES} minutes. Do not share it with anyone.`;
   try {
     const res = await sendSms({ to: phone, body });
-    if (!res.ok) logger.warn({ error: res.error, purpose }, "OTP SMS send failed");
+    if (!res.ok)
+      logger.warn({ error: res.error, purpose }, "OTP SMS send failed");
     return { ok: res.ok, error: res.error };
   } catch (err) {
     logger.error({ err, purpose }, "OTP SMS send threw");

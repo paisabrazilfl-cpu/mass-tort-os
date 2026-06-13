@@ -43,7 +43,7 @@ export function maskPhone(value: unknown): unknown {
   if (typeof value !== "string" || value.length === 0) return value;
   const digits = value.replace(/\D/g, "");
   if (digits.length === 0) return "***";
-  const last4 = digits.slice(-4);
+  const last4 = digits.substring(digits.length - 4);
   return `***-***-${last4}`;
 }
 
@@ -84,7 +84,8 @@ export function summarizeRecords(value: unknown): unknown {
 
 /** Free-text fields that may have PII embedded in prose (e.g. "No records found for John Doe"). */
 export function redactFreeText(value: unknown): unknown {
-  if (typeof value === "string" && value.length > 0) return "[redacted: may contain PII]";
+  if (typeof value === "string" && value.length > 0)
+    return "[redacted: may contain PII]";
   if (Array.isArray(value) && value.length > 0)
     return [{ count: value.length, redacted: true, reason: "may contain PII" }];
   return value;
@@ -178,7 +179,9 @@ function sanitizeValue(value: unknown): unknown {
  * a marker so operators know an error occurred (the full message is
  * still available in the request log).
  */
-export function sanitizeLaneResult(result: BackgroundLaneResult): BackgroundLaneResult {
+export function sanitizeLaneResult(
+  result: BackgroundLaneResult,
+): BackgroundLaneResult {
   const out: BackgroundLaneResult = { ...result };
   if (out.raw !== undefined) out.raw = sanitizeValue(out.raw);
   if (typeof out.error === "string" && out.error.length > 0) {

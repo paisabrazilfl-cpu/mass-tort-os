@@ -22,7 +22,7 @@ import { TORT_REGISTRY } from "../tort-engine";
 function phone10(value: string | null | undefined): string | null {
   if (!value) return null;
   const digits = value.replace(/\D/g, "");
-  return digits.length >= 10 ? digits.slice(-10) : null;
+  return digits.length >= 10 ? digits.substring(digits.length - 10) : null;
 }
 
 /**
@@ -45,7 +45,8 @@ export async function findMappingForDialedNumber(
     .from(tortPhoneNumbersTable)
     .where(eq(tortPhoneNumbersTable.active, true));
   for (const r of rows) {
-    if (phone10(r.phone_number) === target) return { tortId: r.tort_id, firmId: r.firm_id };
+    if (phone10(r.phone_number) === target)
+      return { tortId: r.tort_id, firmId: r.firm_id };
   }
   return null;
 }
@@ -66,7 +67,12 @@ export async function findMappingForVapiNumberId(
       firm_id: tortPhoneNumbersTable.firm_id,
     })
     .from(tortPhoneNumbersTable)
-    .where(and(eq(tortPhoneNumbersTable.vapi_phone_number_id, id), eq(tortPhoneNumbersTable.active, true)))
+    .where(
+      and(
+        eq(tortPhoneNumbersTable.vapi_phone_number_id, id),
+        eq(tortPhoneNumbersTable.active, true),
+      ),
+    )
     .limit(1);
   const r = rows[0];
   return r ? { tortId: r.tort_id, firmId: r.firm_id } : null;
@@ -80,7 +86,12 @@ export async function findTortForAssistant(
   const rows = await db
     .select({ tort_id: tortVoiceAgentsTable.tort_id })
     .from(tortVoiceAgentsTable)
-    .where(and(eq(tortVoiceAgentsTable.vapi_assistant_id, assistantId), eq(tortVoiceAgentsTable.status, "active")))
+    .where(
+      and(
+        eq(tortVoiceAgentsTable.vapi_assistant_id, assistantId),
+        eq(tortVoiceAgentsTable.status, "active"),
+      ),
+    )
     .limit(1);
   return rows[0]?.tort_id ?? null;
 }
@@ -112,7 +123,9 @@ export interface InboundRouting {
  *   2. the Vapi assistant id
  *   3. the dialed (destination) number — also yields the firm
  */
-export async function resolveInboundTort(signals: InboundTortSignals): Promise<InboundRouting> {
+export async function resolveInboundTort(
+  signals: InboundTortSignals,
+): Promise<InboundRouting> {
   // The dialed (destination) number is the authoritative tenancy signal for
   // inbound, so always resolve it up front — even when a stronger tort signal
   // (metadata/assistant) wins the tort itself. Otherwise a call whose tort
@@ -125,7 +138,8 @@ export async function resolveInboundTort(signals: InboundTortSignals): Promise<I
   const numberFirmId = byNumber?.firmId ?? null;
 
   const meta = (signals.metadataTortId ?? "").trim();
-  if (meta && TORT_REGISTRY[meta]) return { tortId: meta, firmId: numberFirmId };
+  if (meta && TORT_REGISTRY[meta])
+    return { tortId: meta, firmId: numberFirmId };
 
   const byAssistant = await findTortForAssistant(signals.assistantId);
   if (byAssistant) return { tortId: byAssistant, firmId: numberFirmId };
