@@ -73,9 +73,8 @@ export function isKeyConfigured(version: number): boolean {
 
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
-  const parts = [fieldName];
-  if (entityId) parts.push(entityId);
-  return Buffer.from(parts.join(":"), "utf8");
+  if (!entityId) return Buffer.from(fieldName, "utf8");
+  return Buffer.from(`${fieldName}:${entityId}`, "utf8");
 }
 
 export function encrypt(plaintext: string, fieldName?: string, entityId?: string): string {
@@ -99,13 +98,12 @@ export function encrypt(plaintext: string, fieldName?: string, entityId?: string
  * caller is now passing.
  */
 function tryDecryptWithAAD(
-  payload: string,
+  combined: Buffer,
   keyVersion: number,
   aad: Buffer | undefined,
 ): string | null {
   try {
     const key = getKey(keyVersion);
-    const combined = Buffer.from(payload, ENCODING);
     const iv = combined.subarray(0, IV_LENGTH);
     const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
     const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
@@ -120,19 +118,35 @@ function tryDecryptWithAAD(
 }
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
-  if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (!ciphertext || !ciphertext.startsWith("enc:")) return ciphertext;
+
   let keyVersion = 1;
   let hasAADFlag = 0;
-  let payload: string;
+  let payloadStr: string;
 
   if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+    // enc:v<version>:<hasAAD>:<payload>
+    // BOLT OPTIMIZATION: Use indexOf/substring instead of split() to avoid
+    // unnecessary array allocations and join() overhead.
+    const firstColon = ciphertext.indexOf(":", 4);
+    const secondColon = ciphertext.indexOf(":", firstColon + 1);
+    if (firstColon === -1 || secondColon === -1) {
+      return "[DECRYPTION_ERROR]";
+    }
+    keyVersion = parseInt(ciphertext.substring(5, firstColon), 10) || 1;
+    hasAADFlag = parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
+    payloadStr = ciphertext.substring(secondColon + 1);
   } else {
-    payload = ciphertext.slice(4);
+    payloadStr = ciphertext.substring(4);
+  }
+
+  let combined: Buffer;
+  try {
+    // BOLT OPTIMIZATION: Pre-decode base64 once and reuse the Buffer in
+    // the AAD fallback loop to avoid redundant decoding.
+    combined = Buffer.from(payloadStr, ENCODING);
+  } catch {
+    return "[DECRYPTION_ERROR]";
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
@@ -142,14 +156,19 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   // still prevents corruption: every fallback that succeeds is cryptographically
   // valid for the key + IV.
   const candidates: (Buffer | undefined)[] = [];
-  if (hasAADFlag && fieldName) {
-    candidates.push(buildAAD(fieldName, entityId));      // primary: field+entity
-    candidates.push(buildAAD(fieldName, undefined));     // fallback: field only
+  if (fieldName) {
+    // BOLT OPTIMIZATION: When AAD is present, prioritize field+entity first,
+    // then field-only, then no AAD. Skip expensive cryptographic failures
+    // for legacy rows that we KNOW don't have AAD.
+    if (hasAADFlag) {
+      candidates.push(buildAAD(fieldName, entityId)); // primary: field+entity
+      candidates.push(buildAAD(fieldName, undefined)); // fallback: field only
+    }
   }
-  candidates.push(undefined);                             // fallback: no AAD
+  candidates.push(undefined); // fallback: no AAD
 
   for (const aad of candidates) {
-    const result = tryDecryptWithAAD(payload, keyVersion, aad);
+    const result = tryDecryptWithAAD(combined, keyVersion, aad);
     if (result !== null) return result;
   }
 
@@ -177,26 +196,35 @@ export const ENCRYPTED_FIELDS = [
 ] as const;
 
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  const result = { ...data };
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
-      }
+    const val = data[field];
+    if (typeof val === "string" && !val.startsWith("enc:")) {
+      // BOLT OPTIMIZATION: Lazy cloning — only shallow copy the object if
+      // we actually perform an encryption transformation.
+      if (!result) result = { ...data };
+      result[field] = encrypt(val, field, entityId);
     }
   }
-  return result;
+  return result ?? data;
 }
 
 export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   if (!data) return data;
-  const result = { ...data };
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
+    const val = data[field];
+    if (typeof val === "string" && val.startsWith("enc:")) {
+      const decrypted = decrypt(val, field, entityId);
+      if (decrypted !== val) {
+        // BOLT OPTIMIZATION: Lazy cloning — avoid object allocation unless
+        // decryption actually changes the field value.
+        if (!result) result = { ...data };
+        result[field] = decrypted;
+      }
     }
   }
-  return result;
+  return result ?? data;
 }
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
