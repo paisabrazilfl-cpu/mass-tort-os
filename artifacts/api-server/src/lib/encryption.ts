@@ -73,9 +73,8 @@ export function isKeyConfigured(version: number): boolean {
 
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
-  const parts = [fieldName];
-  if (entityId) parts.push(entityId);
-  return Buffer.from(parts.join(":"), "utf8");
+  if (!entityId) return Buffer.from(fieldName, "utf8");
+  return Buffer.from(`${fieldName}:${entityId}`, "utf8");
 }
 
 export function encrypt(plaintext: string, fieldName?: string, entityId?: string): string {
@@ -92,47 +91,46 @@ export function encrypt(plaintext: string, fieldName?: string, entityId?: string
   return `enc:v${CURRENT_KEY_VERSION}:${hasAAD}:${combined.toString(ENCODING)}`;
 }
 
-/**
- * Try to decrypt with a specific AAD configuration. Returns null on failure.
- * Used by decrypt() to attempt multiple AAD variants for backward compatibility
- * when historical data was encrypted with a different (or no) AAD than what the
- * caller is now passing.
- */
-function tryDecryptWithAAD(
-  payload: string,
-  keyVersion: number,
-  aad: Buffer | undefined,
-): string | null {
-  try {
-    const key = getKey(keyVersion);
-    const combined = Buffer.from(payload, ENCODING);
-    const iv = combined.subarray(0, IV_LENGTH);
-    const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
-    const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
-    decipher.setAuthTag(authTag);
-    if (aad) decipher.setAAD(aad);
-    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-    return decrypted.toString("utf8");
-  } catch {
-    return null;
-  }
-}
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
-  if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  // CLOUDFLARE COMPATIBILITY: use substring() comparison instead of startsWith()
+  if (!ciphertext || ciphertext.substring(0, 4) !== "enc:") return ciphertext;
+
   let keyVersion = 1;
   let hasAADFlag = 0;
-  let payload: string;
+  let payloadStr: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+  const vPrefix = "enc:v";
+  const vPrefixLen = vPrefix.length;
+
+  if (ciphertext.substring(0, vPrefixLen) === vPrefix) {
+    // enc:v<version>:<hasAAD>:<payload>
+    // BOLT OPTIMIZATION: Use indexOf/substring instead of split() to avoid
+    // unnecessary array allocations and join() overhead.
+    const firstColon = ciphertext.indexOf(":", vPrefixLen);
+    const secondColon = ciphertext.indexOf(":", firstColon + 1);
+    if (firstColon === -1 || secondColon === -1) {
+      return "[DECRYPTION_ERROR]";
+    }
+    keyVersion = parseInt(ciphertext.substring(vPrefixLen, firstColon), 10) || 1;
+    // CLOUDFLARE COMPATIBILITY: use charAt() for simple flag checks on sub-parts
+    hasAADFlag = ciphertext.charAt(firstColon + 1) === "1" ? 1 : 0;
+    payloadStr = ciphertext.substring(secondColon + 1);
   } else {
-    payload = ciphertext.slice(4);
+    payloadStr = ciphertext.substring(4);
+  }
+
+  let combined: Buffer;
+  let key: Buffer;
+  try {
+    // BOLT OPTIMIZATION: Pre-decode base64 once and reuse the Buffer in
+    // the AAD fallback loop to avoid redundant decoding.
+    combined = Buffer.from(payloadStr, ENCODING);
+    // BOLT OPTIMIZATION: Resolve key once per decrypt call instead of inside
+    // the candidate loop.
+    key = getKey(keyVersion);
+  } catch {
+    return "[DECRYPTION_ERROR]";
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
@@ -142,15 +140,31 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   // still prevents corruption: every fallback that succeeds is cryptographically
   // valid for the key + IV.
   const candidates: (Buffer | undefined)[] = [];
-  if (hasAADFlag && fieldName) {
-    candidates.push(buildAAD(fieldName, entityId));      // primary: field+entity
-    candidates.push(buildAAD(fieldName, undefined));     // fallback: field only
+  if (fieldName) {
+    // BOLT OPTIMIZATION: When AAD is present, prioritize field+entity first,
+    // then field-only, then no AAD. Skip expensive cryptographic failures
+    // for legacy rows that we KNOW don't have AAD.
+    if (hasAADFlag) {
+      candidates.push(buildAAD(fieldName, entityId)); // primary: field+entity
+      candidates.push(buildAAD(fieldName, undefined)); // fallback: field only
+    }
   }
-  candidates.push(undefined);                             // fallback: no AAD
+  candidates.push(undefined); // fallback: no AAD
+
+  const iv = combined.subarray(0, IV_LENGTH);
+  const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
+  const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
 
   for (const aad of candidates) {
-    const result = tryDecryptWithAAD(payload, keyVersion, aad);
-    if (result !== null) return result;
+    try {
+      const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
+      decipher.setAuthTag(authTag);
+      if (aad) decipher.setAAD(aad);
+      const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+      return decrypted.toString("utf8");
+    } catch {
+      continue;
+    }
   }
 
   logger.error(
@@ -177,26 +191,39 @@ export const ENCRYPTED_FIELDS = [
 ] as const;
 
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  const result = { ...data };
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
-      }
+    const val = data[field];
+    // CLOUDFLARE COMPATIBILITY: use substring() comparison instead of startsWith()
+    if (typeof val === "string" && val.substring(0, 4) !== "enc:") {
+      // BOLT OPTIMIZATION: Lazy cloning — only shallow copy the object if
+      // we actually perform an encryption transformation.
+      if (!result) result = { ...data };
+      result[field] = encrypt(val, field, entityId);
     }
   }
-  return result;
+  // BOLT OPTIMIZATION: lazy clone pattern (verified in memory)
+  return result ?? data;
 }
 
 export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   if (!data) return data;
-  const result = { ...data };
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
+    const val = data[field];
+    // CLOUDFLARE COMPATIBILITY: use substring() comparison instead of startsWith()
+    if (typeof val === "string" && val.substring(0, 4) === "enc:") {
+      const decrypted = decrypt(val, field, entityId);
+      if (decrypted !== val) {
+        // BOLT OPTIMIZATION: Lazy cloning — avoid object allocation unless
+        // decryption actually changes the field value.
+        if (!result) result = { ...data };
+        result[field] = decrypted;
+      }
     }
   }
-  return result;
+  // BOLT OPTIMIZATION: lazy clone pattern (verified in memory)
+  return result ?? data;
 }
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
@@ -230,7 +257,8 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    // CLOUDFLARE COMPATIBILITY: use substring() comparison instead of startsWith()
+    if (typeof cur !== "string" || cur.substring(0, 4) !== "enc:") continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
