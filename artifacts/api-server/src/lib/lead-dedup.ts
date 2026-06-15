@@ -76,6 +76,7 @@ function normalizePhone(value: string | null | undefined): string | null {
 function safeDecryptPhone(
   value: string | null | undefined,
   fieldName: "phone" | "phone_primary",
+  entityId?: string,
 ): string | null {
   if (!value) return null;
   try {
@@ -83,7 +84,9 @@ function safeDecryptPhone(
     // for ciphertexts produced by encryptLeadFields(...). Calling
     // decrypt() without fieldName when the original encryption used
     // AAD returns "[DECRYPTION_ERROR]" and silently breaks dedup.
-    const decrypted = decrypt(value, fieldName);
+    // BOLT OPTIMIZATION: Passing entityId allows matching the primary
+    // AAD candidate (field+entity) immediately.
+    const decrypted = decrypt(value, fieldName, entityId);
     if (!decrypted || decrypted === "[DECRYPTION_ERROR]") return null;
     return normalizePhone(decrypted);
   } catch {
@@ -180,11 +183,15 @@ export async function findExistingLeadForIntake(
         .limit(PHONE_SCAN_LIMIT);
 
       for (const row of candidates) {
-        const stored = [
-          safeDecryptPhone(row.phone, "phone"),
-          safeDecryptPhone(row.phone_primary, "phone_primary"),
-        ].filter((p): p is string => p !== null);
-        if (stored.includes(incomingPhone)) {
+        // BOLT OPTIMIZATION: pass row.id as entityId to safeDecryptPhone to ensure
+        // AAD verification succeeds on the first attempt (skipping fallback loops).
+        // Use short-circuiting OR to avoid redundant decryptions and array allocations.
+        const id = String(row.id);
+        const match =
+          (incomingPhone && safeDecryptPhone(row.phone, "phone", id) === incomingPhone) ||
+          (incomingPhone && safeDecryptPhone(row.phone_primary, "phone_primary", id) === incomingPhone);
+
+        if (match) {
           return { leadId: row.id, matchedBy: "phone" };
         }
       }

@@ -113,7 +113,8 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
       return "[DECRYPTION_ERROR]";
     }
     keyVersion = parseInt(ciphertext.substring(vPrefixLen, firstColon), 10) || 1;
-    hasAADFlag = parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
+    // CLOUDFLARE COMPATIBILITY: use charAt() for simple flag checks on sub-parts
+    hasAADFlag = ciphertext.charAt(firstColon + 1) === "1" ? 1 : 0;
     payloadStr = ciphertext.substring(secondColon + 1);
   } else {
     payloadStr = ciphertext.substring(4);
