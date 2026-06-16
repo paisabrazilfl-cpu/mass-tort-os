@@ -15,7 +15,6 @@
   "private": true,
   "devDependencies": {
     "prettier": "^3.8.1",
-    "tsx": "catalog:",
     "typescript": "~5.9.2"
   }
 }
