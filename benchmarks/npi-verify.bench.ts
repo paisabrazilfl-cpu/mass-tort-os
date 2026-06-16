@@ -1,4 +1,4 @@
-import { __test } from "../npi-verify";
+import { __test } from "../artifacts/api-server/src/lib/npi-verify";
 const { pickBestSearchResult } = __test;
 
 const mockResults = Array.from({ length: 20 }, (_, i) => ({
