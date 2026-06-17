@@ -69,7 +69,8 @@ const PHONE_SCAN_LIMIT = 1000;
 function normalizePhone(value: string | null | undefined): string | null {
   if (!value) return null;
   const digits = value.replace(/\D/g, "");
-  return digits.length >= 10 ? digits.slice(-10) : null;
+  // Cloudflare Worker 'mtosvelocity' build fails on slice(-N).
+  return digits.length >= 10 ? digits.substring(digits.length - 10) : null;
 }
 
 function safeDecryptPhone(

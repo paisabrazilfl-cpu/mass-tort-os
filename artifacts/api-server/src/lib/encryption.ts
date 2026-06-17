@@ -138,14 +138,15 @@ export function decrypt(
   entityId?: string,
 ): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  // Performance: avoid startsWith() for Cloudflare Worker 'mtosvelocity' compatibility.
+  if (ciphertext.substring(0, 4) !== "enc:") return ciphertext;
 
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
   try {
-    if (ciphertext.startsWith("enc:v")) {
+    if (ciphertext.substring(0, 5) === "enc:v") {
       // Performance: use indexOf/substring instead of split/join to avoid
       // intermediate array allocations. Ensures Cloudflare Worker compatibility.
       const firstColon = 5; // "enc:v".length
@@ -216,7 +217,7 @@ export function encryptLeadFields(
   let result: Record<string, any> | null = null;
   for (const field of ENCRYPTED_FIELDS) {
     const val = data[field];
-    if (typeof val === "string" && !val.startsWith("enc:")) {
+    if (typeof val === "string" && val.substring(0, 4) !== "enc:") {
       result = result ?? { ...data };
       result[field] = encrypt(val, field, entityId);
     }
@@ -232,7 +233,7 @@ export function decryptLeadFields(
   let result: Record<string, any> | null = null;
   for (const field of ENCRYPTED_FIELDS) {
     const val = data[field];
-    if (typeof val === "string" && val.startsWith("enc:")) {
+    if (typeof val === "string" && val.substring(0, 4) === "enc:") {
       result = result ?? { ...data };
       result[field] = decrypt(val, field, entityId);
     }
@@ -273,7 +274,7 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (typeof cur !== "string" || cur.substring(0, 4) !== "enc:") continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
