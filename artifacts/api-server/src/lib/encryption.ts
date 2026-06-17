@@ -37,6 +37,15 @@ const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
  * historical deployments stored the v1 key under that bare name (before
  * versioning existed). This is the ONLY cross-name fallback allowed.
  */
+/**
+ * Resolve the AES-256 key for a given version. Strict, no silent fallbacks
+ * across versions (a missing v2 must NOT silently use v1, or you'd produce
+ * v2-tagged ciphertext encrypted with the v1 key — undetectable disaster).
+ *
+ * Performance: accessing process.env is slow. We resolve the key once per
+ * call at the entry points (encrypt/decrypt) to avoid repeated lookups
+ * in loops.
+ */
 function getKey(version?: number): Buffer {
   const keyVersion = version ?? CURRENT_KEY_VERSION;
   const envName = `ENCRYPTION_KEY_V${keyVersion}`;
@@ -85,6 +94,7 @@ export function encrypt(
   entityId?: string,
 ): string {
   if (!plaintext) return plaintext;
+  // Performance: avoid process.env lookup inside hot loops by resolving once here.
   const key = getKey(CURRENT_KEY_VERSION);
   const iv = crypto.randomBytes(IV_LENGTH);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv, {
@@ -340,8 +350,10 @@ export async function rebindLeadEncryptionAad(
 }
 
 export function hashForLookup(value: string): string {
+  // Performance: avoid process.env lookup inside hot loops.
+  const key = getKey(CURRENT_KEY_VERSION);
   return crypto
-    .createHmac("sha256", getKey())
+    .createHmac("sha256", key)
     .update(value.toLowerCase().trim())
     .digest("hex");
 }
