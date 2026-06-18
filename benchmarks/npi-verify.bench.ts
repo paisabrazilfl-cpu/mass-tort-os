@@ -1,4 +1,4 @@
-import { __test, ExpectedProvider } from "../npi-verify";
+import { __test, ExpectedProvider } from "../artifacts/api-server/src/lib/npi-verify";
 
 const { pickBestSearchResult } = __test;
 
@@ -25,7 +25,7 @@ const results = [
     basic: { first_name: "Jane", last_name: "Smith", organization_name: "Smith Org" },
     addresses: [{ address_purpose: "LOCATION", city: "Orlando", state: "FL" }],
   },
-];
+] as any;
 
 const iterations = 10000;
 
