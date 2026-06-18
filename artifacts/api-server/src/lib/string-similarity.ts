@@ -3,12 +3,15 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+const RE_PUNCTUATION = /[^\w\s]/g;
+const RE_WHITESPACE = /\s+/g;
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(RE_PUNCTUATION, " ")
+    .replace(RE_WHITESPACE, " ")
     .trim();
 }
 
@@ -67,9 +70,14 @@ export function similarityName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
-  const na = normalize(a);
-  const nb = normalize(b);
+  return similarityNamePreNormalized(normalize(a), normalize(b));
+}
 
+/**
+ * Internal helper: 0..1 similarity ratio between two ALREADY normalized strings,
+ * including title/credential stripping checks.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
