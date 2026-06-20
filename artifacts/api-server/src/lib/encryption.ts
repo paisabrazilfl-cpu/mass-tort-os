@@ -149,8 +149,9 @@ export function decrypt(
     const firstColon = ciphertext.indexOf(":", 5);
     const secondColon = ciphertext.indexOf(":", firstColon + 1);
     if (firstColon !== -1 && secondColon !== -1) {
-      keyVersion = Number(ciphertext.substring(5, firstColon)) || 1;
-      hasAADFlag = Number(ciphertext.substring(firstColon + 1, secondColon)) || 0;
+      keyVersion = parseInt(ciphertext.substring(5, firstColon), 10) || 1;
+      hasAADFlag =
+        parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
       payloadStr = ciphertext.substring(secondColon + 1);
     } else {
       payloadStr = ciphertext.substring(5);
@@ -163,25 +164,19 @@ export function decrypt(
     const key = getKey(keyVersion);
     // Performance: pre-decode base64 payload ONCE and reuse Buffer across
     // AAD fallback attempts.
-    const payload = Buffer.from(payloadStr, ENCODING);
+    const payload = Buffer.from(payloadStr, "base64");
 
     // Try the AAD configuration the ciphertext was tagged with first. If that
-    // fails, fall back through other AAD variants — historical inconsistencies
-    // (e.g. data encrypted before the entityId was known on insert) would
-    // otherwise be permanently unrecoverable. AES-GCM auth tag verification
-    // still prevents corruption: every fallback that succeeds is cryptographically
-    // valid for the key + IV.
-    const candidates: (Buffer | undefined)[] = [];
+    // fails, fall back through other AAD variants. Manual calls instead of
+    // array/loop to avoid allocations and satisfy Worker build.
     if (hasAADFlag && fieldName) {
-      candidates.push(buildAAD(fieldName, entityId)); // primary: field+entity
-      candidates.push(buildAAD(fieldName, undefined)); // fallback: field only
+      const r1 = tryDecryptWithAAD(payload, key, buildAAD(fieldName, entityId));
+      if (r1 !== null) return r1;
+      const r2 = tryDecryptWithAAD(payload, key, buildAAD(fieldName, undefined));
+      if (r2 !== null) return r2;
     }
-    candidates.push(undefined); // fallback: no AAD
-
-    for (const aad of candidates) {
-      const result = tryDecryptWithAAD(payload, key, aad);
-      if (result !== null) return result;
-    }
+    const r3 = tryDecryptWithAAD(payload, key, undefined);
+    if (r3 !== null) return r3;
   } catch {
     // getKey or Buffer.from failure
   }
