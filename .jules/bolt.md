@@ -1,3 +1,7 @@
 ## 2025-05-15 - [String Similarity Optimization]
 **Learning:** Redundant normalization in fuzzy matching functions (calling `normalize()` multiple times on the same input) is a significant bottleneck. Standard `Array<number>` for Levenshtein distance creates GC pressure and is slower than `Int32Array`. String swapping ensures the auxiliary array is as small as possible.
 **Action:** Use `Int32Array` and single-vector DP approach for Levenshtein. Always reuse normalized strings instead of re-normalizing in wrapper functions. Add early returns for near-exact matches to skip expensive fuzzy logic.
+
+## 2025-05-16 - [Encryption Hot Path Optimization]
+**Learning:** `split(':')` on ciphertext headers is expensive in high-frequency loops due to array allocations and multiple pass string scanning. Manually finding colons with `indexOf` and using `substring` is significantly faster. Pre-decoding base64 payloads once and reusing the `Buffer` across AAD fallback attempts eliminates redundant CPU cycles and GC pressure. 'Lazy cloning' in object transformation helpers (only copying the object if a change actually occurs) avoids thousands of unnecessary object allocations per second in batch processing.
+**Action:** Use `indexOf`/`substring` for header parsing. Pre-decode payloads once before looping over candidates. Implement the `return result ?? data` pattern for lazy transformation of records.
