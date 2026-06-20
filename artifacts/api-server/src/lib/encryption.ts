@@ -132,34 +132,33 @@ function tryDecryptWithAAD(
   }
 }
 
-const vPrefixLen = "enc:v".length;
-
 export function decrypt(
   ciphertext: string,
   fieldName?: string,
   entityId?: string,
 ): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  // Performance: using indexOf() === 0 instead of startsWith() for
+  // Cloudflare Worker compatibility in the "mtosvelocity" environment.
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payloadStr: string;
 
-  if (ciphertext.startsWith("enc:v")) {
+  if (ciphertext.indexOf("enc:v") === 0) {
     // Performance: use indexOf and substring instead of split/join to avoid
     // array allocation and redundant string processing.
-    const firstColon = ciphertext.indexOf(":", vPrefixLen);
+    const firstColon = ciphertext.indexOf(":", 5); // 5 is "enc:v".length
     const secondColon = ciphertext.indexOf(":", firstColon + 1);
 
     if (firstColon !== -1 && secondColon !== -1) {
-      keyVersion =
-        parseInt(ciphertext.substring(vPrefixLen, firstColon), 10) || 1;
+      keyVersion = parseInt(ciphertext.substring(5, firstColon), 10) || 1;
       hasAADFlag =
         parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
       payloadStr = ciphertext.substring(secondColon + 1);
     } else {
       // Fallback for malformed versioned headers
-      payloadStr = ciphertext.substring(vPrefixLen);
+      payloadStr = ciphertext.substring(5);
     }
   } else {
     payloadStr = ciphertext.substring(4);
@@ -224,7 +223,7 @@ export function encryptLeadFields(
   for (const field of ENCRYPTED_FIELDS) {
     const val = data[field];
     if (val !== undefined && val !== null && typeof val === "string") {
-      if (!val.startsWith("enc:")) {
+      if (val.indexOf("enc:") !== 0) {
         // Performance: lazy clone. Only create a shallow copy if we actually
         // transform a field. Reduces GC pressure in batch processing.
         if (!result) result = { ...data };
@@ -247,7 +246,7 @@ export function decryptLeadFields(
       val !== undefined &&
       val !== null &&
       typeof val === "string" &&
-      val.startsWith("enc:")
+      val.indexOf("enc:") === 0
     ) {
       // Performance: lazy clone. Only create a shallow copy if we actually
       // transform a field.
@@ -291,7 +290,7 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (typeof cur !== "string" || cur.indexOf("enc:") !== 0) continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
