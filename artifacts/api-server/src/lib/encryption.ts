@@ -146,18 +146,13 @@ export function decrypt(
   let payloadStr: string;
 
   if (ciphertext.indexOf("enc:v") === 0) {
-    // Performance: use indexOf and substring instead of split/join to avoid
-    // array allocation and redundant string processing.
-    const firstColon = ciphertext.indexOf(":", 5); // 5 is "enc:v".length
+    const firstColon = ciphertext.indexOf(":", 5);
     const secondColon = ciphertext.indexOf(":", firstColon + 1);
-
     if (firstColon !== -1 && secondColon !== -1) {
-      keyVersion = parseInt(ciphertext.substring(5, firstColon), 10) || 1;
-      hasAADFlag =
-        parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
+      keyVersion = Number(ciphertext.substring(5, firstColon)) || 1;
+      hasAADFlag = Number(ciphertext.substring(firstColon + 1, secondColon)) || 0;
       payloadStr = ciphertext.substring(secondColon + 1);
     } else {
-      // Fallback for malformed versioned headers
       payloadStr = ciphertext.substring(5);
     }
   } else {
@@ -187,7 +182,7 @@ export function decrypt(
       const result = tryDecryptWithAAD(payload, key, aad);
       if (result !== null) return result;
     }
-  } catch (err) {
+  } catch {
     // getKey or Buffer.from failure
   }
 
@@ -242,16 +237,14 @@ export function decryptLeadFields(
   let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
     const val = data[field];
-    if (
-      val !== undefined &&
-      val !== null &&
-      typeof val === "string" &&
-      val.indexOf("enc:") === 0
-    ) {
-      // Performance: lazy clone. Only create a shallow copy if we actually
-      // transform a field.
-      if (!result) result = { ...data };
-      result[field] = decrypt(val, field, entityId);
+    if (val !== undefined && val !== null && typeof val === "string" && val.indexOf("enc:") === 0) {
+      const decrypted = decrypt(val, field, entityId);
+      if (decrypted !== val) {
+        // Performance: lazy clone. Only create a shallow copy if we actually
+        // transform a field.
+        if (!result) result = { ...data };
+        result[field] = decrypted;
+      }
     }
   }
   return result ?? data;
