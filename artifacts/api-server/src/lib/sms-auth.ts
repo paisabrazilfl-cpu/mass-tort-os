@@ -37,7 +37,7 @@ export function normalizePhone(raw: string): string | null {
 /** Mask an E.164 number for display — keeps the country prefix + last 4. */
 export function maskPhone(e164: string): string {
   if (!e164 || e164.length < 6) return "•••••";
-  return e164.slice(0, 2) + "•".repeat(Math.max(0, e164.length - 6)) + e164.slice(-4);
+  return e164.substring(0, 2) + "•".repeat(Math.max(0, e164.length - 6)) + e164.substring(e164.length - 4);
 }
 
 function hashCode(code: string): string {

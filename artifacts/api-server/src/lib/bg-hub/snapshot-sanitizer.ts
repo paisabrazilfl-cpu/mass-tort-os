@@ -43,7 +43,7 @@ export function maskPhone(value: unknown): unknown {
   if (typeof value !== "string" || value.length === 0) return value;
   const digits = value.replace(/\D/g, "");
   if (digits.length === 0) return "***";
-  const last4 = digits.slice(-4);
+  const last4 = digits.substring(digits.length - 4);
   return `***-***-${last4}`;
 }
 
