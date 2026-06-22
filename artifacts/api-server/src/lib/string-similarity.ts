@@ -3,12 +3,15 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+const NON_ALPHANUM_REGEX = /[^\w\s]/g;
+const WHITESPACE_REGEX = /\s+/g;
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(NON_ALPHANUM_REGEX, " ")
+    .replace(WHITESPACE_REGEX, " ")
     .trim();
 }
 
@@ -60,16 +63,11 @@ export function normalizeName(s: string | null | undefined): string {
   return normalizeNameFromNormalized(normalize(s));
 }
 
-// Convenience: similarity that also tries the title-stripped variant and
-// returns whichever is HIGHER. Strictly additive — can never lower a
-// previously-passing score; existing thresholds keep their meaning.
-export function similarityName(
-  a: string | null | undefined,
-  b: string | null | undefined,
-): number {
-  const na = normalize(a);
-  const nb = normalize(b);
-
+/**
+ * 0..1 similarity ratio between two ALREADY normalized strings, trying
+ * both raw and title/credential-stripped variants.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
@@ -78,6 +76,16 @@ export function similarityName(
     normalizeNameFromNormalized(nb),
   );
   return Math.max(raw, stripped);
+}
+
+// Convenience: similarity that also tries the title-stripped variant and
+// returns whichever is HIGHER. Strictly additive — can never lower a
+// previously-passing score; existing thresholds keep their meaning.
+export function similarityName(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  return similarityNamePreNormalized(normalize(a), normalize(b));
 }
 
 export function levenshtein(a: string, b: string): number {
