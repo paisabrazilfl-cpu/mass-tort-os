@@ -33,8 +33,8 @@ export function maskEmail(value: unknown): unknown {
   if (typeof value !== "string" || value.length === 0) return value;
   const at = value.indexOf("@");
   if (at < 1) return "***";
-  const local = value.slice(0, at);
-  const domain = value.slice(at);
+  const local = value.substring(0, at);
+  const domain = value.substring(at);
   return `${local[0]}***${domain}`;
 }
 
@@ -43,7 +43,7 @@ export function maskPhone(value: unknown): unknown {
   if (typeof value !== "string" || value.length === 0) return value;
   const digits = value.replace(/\D/g, "");
   if (digits.length === 0) return "***";
-  const last4 = digits.substring(digits.length - 4);
+  const last4 = digits.substring(Math.max(0, digits.length - 4));
   return `***-***-${last4}`;
 }
 

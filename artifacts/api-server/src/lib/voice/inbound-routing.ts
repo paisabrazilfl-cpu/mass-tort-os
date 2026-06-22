@@ -22,7 +22,7 @@ import { TORT_REGISTRY } from "../tort-engine";
 function phone10(value: string | null | undefined): string | null {
   if (!value) return null;
   const digits = value.replace(/\D/g, "");
-  return digits.length >= 10 ? digits.substring(digits.length - 10) : null;
+  return digits.length >= 10 ? digits.substring(Math.max(0, digits.length - 10)) : null;
 }
 
 /**

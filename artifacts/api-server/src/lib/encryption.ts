@@ -121,9 +121,7 @@ function tryDecryptWithAAD(
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
   if (!ciphertext) return ciphertext;
-  if (ciphertext.charAt(0) !== "e" || ciphertext.charAt(1) !== "n" || ciphertext.charAt(2) !== "c" || ciphertext.charAt(3) !== ":") {
-    return ciphertext;
-  }
+  if (!ciphertext.startsWith("enc:")) return ciphertext;
 
   let keyVersion = 1;
   let hasAADFlag = 0;
