@@ -122,17 +122,26 @@ function tryDecryptWithAAD(
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
   if (!ciphertext) return ciphertext;
   if (!ciphertext.startsWith("enc:")) return ciphertext;
+
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+  if (ciphertext.charAt(4) === "v") {
+    // enc:v<version>:<aadFlag>:<payload>
+    const secondColon = ciphertext.indexOf(":", 5);
+    const thirdColon = ciphertext.indexOf(":", secondColon + 1);
+
+    if (secondColon !== -1 && thirdColon !== -1) {
+      keyVersion = parseInt(ciphertext.substring(5, secondColon), 10) || 1;
+      hasAADFlag = parseInt(ciphertext.substring(secondColon + 1, thirdColon), 10) || 0;
+      payload = ciphertext.substring(thirdColon + 1);
+    } else {
+      // Malformed but versioned? Default to legacy-style payload extract
+      payload = ciphertext.substring(4);
+    }
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
@@ -154,7 +163,7 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   }
 
   logger.error(
-    { fieldName, hasAAD: !!hasAADFlag, keyVersion },
+    { fieldName, hasAAD: Boolean(hasAADFlag), keyVersion },
     "Decryption failed — exhausted all AAD variants. Data may be corrupted or encryption key changed.",
   );
   return "[DECRYPTION_ERROR]";
