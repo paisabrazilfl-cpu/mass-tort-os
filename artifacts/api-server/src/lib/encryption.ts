@@ -73,9 +73,8 @@ export function isKeyConfigured(version: number): boolean {
 
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
-  const parts = [fieldName];
-  if (entityId) parts.push(entityId);
-  return Buffer.from(parts.join(":"), "utf8");
+  const val = entityId ? `${fieldName}:${entityId}` : fieldName;
+  return Buffer.from(val, "utf8");
 }
 
 export function encrypt(plaintext: string, fieldName?: string, entityId?: string): string {
@@ -120,38 +119,34 @@ function tryDecryptWithAAD(
 }
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
-  if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (!ciphertext || ciphertext.length < 4) return ciphertext;
+  if (ciphertext.charAt(0) !== "e" || ciphertext.charAt(1) !== "n" || ciphertext.charAt(2) !== "c" || ciphertext.charAt(3) !== ":") return ciphertext;
+
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+  if (ciphertext.charAt(4) === "v") {
+    const firstColon = ciphertext.indexOf(":", 5);
+    const secondColon = ciphertext.indexOf(":", firstColon + 1);
+    if (firstColon === -1 || secondColon === -1) return "[DECRYPTION_ERROR]";
+
+    keyVersion = parseInt(ciphertext.substring(5, firstColon), 10) || 1;
+    hasAADFlag = parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
+    payload = ciphertext.substring(secondColon + 1);
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
-  // Try the AAD configuration the ciphertext was tagged with first. If that
-  // fails, fall back through other AAD variants — historical inconsistencies
-  // (e.g. data encrypted before the entityId was known on insert) would
-  // otherwise be permanently unrecoverable. AES-GCM auth tag verification
-  // still prevents corruption: every fallback that succeeds is cryptographically
-  // valid for the key + IV.
-  const candidates: (Buffer | undefined)[] = [];
+  // Sequential fallback chain to avoid array allocations in Worker environment.
   if (hasAADFlag && fieldName) {
-    candidates.push(buildAAD(fieldName, entityId));      // primary: field+entity
-    candidates.push(buildAAD(fieldName, undefined));     // fallback: field only
+    const res1 = tryDecryptWithAAD(payload, keyVersion, buildAAD(fieldName, entityId));
+    if (res1 !== null) return res1;
+    const res2 = tryDecryptWithAAD(payload, keyVersion, buildAAD(fieldName, undefined));
+    if (res2 !== null) return res2;
   }
-  candidates.push(undefined);                             // fallback: no AAD
-
-  for (const aad of candidates) {
-    const result = tryDecryptWithAAD(payload, keyVersion, aad);
-    if (result !== null) return result;
-  }
+  const res3 = tryDecryptWithAAD(payload, keyVersion, undefined);
+  if (res3 !== null) return res3;
 
   logger.error(
     { fieldName, hasAAD: !!hasAADFlag, keyVersion },
@@ -177,12 +172,13 @@ export const ENCRYPTED_FIELDS = [
 ] as const;
 
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  const result = { ...data };
+  if (!data) return data;
+  let result = data;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
-      }
+    const val = data[field];
+    if (typeof val === "string" && (val.length < 4 || val.charAt(0) !== "e" || val.substring(0, 4) !== "enc:")) {
+      if (result === data) result = { ...data };
+      result[field] = encrypt(val, field, entityId);
     }
   }
   return result;
@@ -190,10 +186,15 @@ export function encryptLeadFields(data: Record<string, any>, entityId?: string):
 
 export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   if (!data) return data;
-  const result = { ...data };
+  let result = data;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
+    const val = data[field];
+    if (typeof val === "string" && val.length >= 4 && val.charAt(0) === "e" && val.substring(0, 4) === "enc:") {
+      const decrypted = decrypt(val, field, entityId);
+      if (decrypted !== val) {
+        if (result === data) result = { ...data };
+        result[field] = decrypted;
+      }
     }
   }
   return result;
