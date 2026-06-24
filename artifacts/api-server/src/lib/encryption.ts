@@ -121,18 +121,17 @@ function tryDecryptWithAAD(
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const firstColon = ciphertext.indexOf(":", 5);
-    const secondColon = ciphertext.indexOf(":", firstColon + 1);
-    const thirdColon = ciphertext.indexOf(":", secondColon + 1);
-    keyVersion = parseInt(ciphertext.substring(5, firstColon), 10) || 1;
-    hasAADFlag = parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
-    payload = ciphertext.substring(thirdColon + 1);
+  if (ciphertext.indexOf("enc:v") === 0) {
+    const vEnd = ciphertext.indexOf(":", 5);
+    const aadEnd = ciphertext.indexOf(":", vEnd + 1);
+    keyVersion = parseInt(ciphertext.substring(5, vEnd), 10) || 1;
+    hasAADFlag = parseInt(ciphertext.substring(vEnd + 1, aadEnd), 10) || 0;
+    payload = ciphertext.substring(aadEnd + 1);
   } else {
     payload = ciphertext.substring(4);
   }

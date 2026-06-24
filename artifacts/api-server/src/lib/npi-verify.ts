@@ -13,8 +13,6 @@ import { logger } from "./logger";
 import {
   normalize,
   normalizeNameFromNormalized,
-  similarity,
-  similarityName,
   similarityNamePreNormalized,
   similarityPreNormalized,
 } from "./string-similarity";
@@ -331,9 +329,10 @@ function compareStringsField(
   providerValue: string | null | undefined,
   expectedValue: string | null | undefined,
   threshold = 0.8,
+  expectedNormalized?: string,
 ): { match: boolean; score: number } {
   if (!expectedValue) return { match: true, score: 1.0 };
-  const score = similarity(providerValue ?? "", expectedValue);
+  const score = similarityPreNormalized(normalize(providerValue ?? ""), expectedNormalized ?? normalize(expectedValue));
   return { match: score >= threshold, score };
 }
 
@@ -471,13 +470,19 @@ export async function verifyProvider(
 
   result.provider = summarizeProvider(provider);
 
-  // Per-field scoring against the resolved provider. Use similarityName
+  const expNameNorm = normalize(expected.name);
+  const expNameStripped = normalizeNameFromNormalized(expNameNorm);
+  const expOrgNorm = normalize(expected.organization);
+  const expCityNorm = normalize(expected.city);
+  const expStateNorm = normalize(expected.state);
+
+  // Per-field scoring against the resolved provider. Use similarityNamePreNormalized
   // (title/credential aware) for the person name so "Dr. John Smith MD"
   // matches the registered "John Smith" cleanly. Inline rather than extending
   // compareStringsField so this stays opt-in to person-name compares only.
   const provName = result.provider.name || result.provider.organization_name;
   const nameRawScore = expected.name
-    ? similarityName(provName, expected.name)
+    ? similarityNamePreNormalized(normalize(provName), expNameNorm, expNameStripped)
     : 1.0;
   const nameCheck = { score: nameRawScore, match: nameRawScore >= 0.75 };
   result.checks.name = {
@@ -488,7 +493,7 @@ export async function verifyProvider(
   };
 
   const provOrg = result.provider.organization_name;
-  const orgCheck = compareStringsField(provOrg, expected.organization, 0.7);
+  const orgCheck = compareStringsField(provOrg, expected.organization, 0.7, expOrgNorm);
   result.checks.organization = {
     expected: expected.organization ?? "",
     provider: provOrg,
@@ -498,9 +503,10 @@ export async function verifyProvider(
 
   const provCity = result.provider.address.city;
   const provState = result.provider.address.state;
-  const cityCheck = compareStringsField(provCity, expected.city, 0.85);
-  const stateExact = normalize(provState) === normalize(expected.state ?? "");
-  const stateScore = stateExact ? 1.0 : similarity(provState, expected.state ?? "");
+  const cityCheck = compareStringsField(provCity, expected.city, 0.85, expCityNorm);
+  const provStateNorm = normalize(provState);
+  const stateExact = provStateNorm === expStateNorm;
+  const stateScore = stateExact ? 1.0 : similarityPreNormalized(provStateNorm, expStateNorm);
   result.checks.location = {
     expected_city: expected.city ?? "",
     provider_city: provCity,
