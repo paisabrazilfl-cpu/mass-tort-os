@@ -67,14 +67,24 @@ export function similarityName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
-  const na = normalize(a);
-  const nb = normalize(b);
+  return similarityNamePreNormalized(normalize(a), normalize(b));
+}
 
+/**
+ * Internal helper: similarityName logic applied to strings that are ALREADY normalized.
+ * Optionally accepts a pre-calculated stripped version of the first string (`sna`)
+ * to avoid redundant processing in loops.
+ */
+export function similarityNamePreNormalized(
+  na: string,
+  nb: string,
+  sna?: string,
+): number {
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
   const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
+    sna ?? normalizeNameFromNormalized(na),
     normalizeNameFromNormalized(nb),
   );
   return Math.max(raw, stripped);
