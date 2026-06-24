@@ -127,12 +127,14 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   let payload: string;
 
   if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+    const firstColon = ciphertext.indexOf(":", 5);
+    const secondColon = ciphertext.indexOf(":", firstColon + 1);
+    const thirdColon = ciphertext.indexOf(":", secondColon + 1);
+    keyVersion = parseInt(ciphertext.substring(5, firstColon), 10) || 1;
+    hasAADFlag = parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
+    payload = ciphertext.substring(thirdColon + 1);
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that

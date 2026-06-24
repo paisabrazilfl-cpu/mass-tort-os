@@ -260,9 +260,7 @@ function pickBestSearchResult(
 
   for (const r of results) {
     const basic = r.basic ?? {};
-    const name =
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
+    const name = basic.name ?? `${basic.first_name || ""} ${basic.last_name || ""}`.trim();
     const nameNorm = normalize(name);
     const org = basic.organization_name ?? "";
     const orgNorm = normalize(org);
@@ -347,9 +345,7 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   const primary = pickPrimaryAddress(p.addresses);
   return {
     npi: String(p.number ?? ""),
-    name:
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim(),
+    name: basic.name ?? `${basic.first_name || ""} ${basic.last_name || ""}`.trim(),
     organization_name: basic.organization_name ?? "",
     taxonomies: (p.taxonomies ?? []).map((t) => ({
       code: t.code ?? "",
