@@ -177,26 +177,28 @@ export const ENCRYPTED_FIELDS = [
 ] as const;
 
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  const result = { ...data };
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
-      }
+    const val = data[field];
+    if (typeof val === "string" && !val.startsWith("enc:")) {
+      if (!result) result = { ...data };
+      result[field] = encrypt(val, field, entityId);
     }
   }
-  return result;
+  return result ?? data;
 }
 
 export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   if (!data) return data;
-  const result = { ...data };
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
+    const val = data[field];
+    if (typeof val === "string" && val.startsWith("enc:")) {
+      if (!result) result = { ...data };
+      result[field] = decrypt(val, field, entityId);
     }
   }
-  return result;
+  return result ?? data;
 }
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
