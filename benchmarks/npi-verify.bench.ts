@@ -1,4 +1,4 @@
-import { __test, ExpectedProvider } from "../npi-verify";
+import { __test, ExpectedProvider } from "../artifacts/api-server/src/lib/npi-verify";
 const { pickBestSearchResult } = __test;
 
 const results = Array.from({ length: 20 }, (_, i) => ({
