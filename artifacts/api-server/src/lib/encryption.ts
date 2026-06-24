@@ -28,6 +28,8 @@ const CURRENT_KEY_VERSION = 1;
 
 const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
 
+const keyCache: Record<number, Buffer> = {};
+
 /**
  * Resolve the AES-256 key for a given version. Strict, no silent fallbacks
  * across versions (a missing v2 must NOT silently use v1, or you'd produce
@@ -39,6 +41,8 @@ const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
  */
 function getKey(version?: number): Buffer {
   const keyVersion = version ?? CURRENT_KEY_VERSION;
+  if (keyCache[keyVersion]) return keyCache[keyVersion];
+
   const envName = `ENCRYPTION_KEY_V${keyVersion}`;
   let raw = process.env[envName];
   if (!raw && keyVersion === 1) {
@@ -54,7 +58,9 @@ function getKey(version?: number): Buffer {
       `${envName} must be exactly 64 hex characters (32 bytes for AES-256-GCM); got ${raw.length} chars`,
     );
   }
-  return Buffer.from(raw, "hex");
+  const key = Buffer.from(raw, "hex");
+  keyCache[keyVersion] = key;
+  return key;
 }
 
 export function getCurrentKeyVersion(): number {
