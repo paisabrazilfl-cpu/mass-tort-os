@@ -121,18 +121,19 @@ function tryDecryptWithAAD(
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+  if (ciphertext.indexOf("enc:v") === 0) {
+    const vEnd = ciphertext.indexOf(":", 5);
+    const aadEnd = ciphertext.indexOf(":", vEnd + 1);
+    keyVersion = parseInt(ciphertext.substring(5, vEnd), 10) || 1;
+    hasAADFlag = parseInt(ciphertext.substring(vEnd + 1, aadEnd), 10) || 0;
+    payload = ciphertext.substring(aadEnd + 1);
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
