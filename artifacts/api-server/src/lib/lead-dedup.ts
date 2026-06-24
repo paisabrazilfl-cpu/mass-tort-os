@@ -179,11 +179,12 @@ export async function findExistingLeadForIntake(
         .limit(PHONE_SCAN_LIMIT);
 
       for (const row of candidates) {
-        const stored = [
-          safeDecryptPhone(row.phone, "phone"),
-          safeDecryptPhone(row.phone_primary, "phone_primary"),
-        ].filter((p): p is string => p !== null);
-        if (stored.includes(incomingPhone)) {
+        // Optimized check: short-circuiting OR avoids unnecessary decryption
+        // and array allocations for every row in the candidate scan.
+        if (
+          safeDecryptPhone(row.phone, "phone") === incomingPhone ||
+          safeDecryptPhone(row.phone_primary, "phone_primary") === incomingPhone
+        ) {
           return { leadId: row.id, matchedBy: "phone" };
         }
       }
