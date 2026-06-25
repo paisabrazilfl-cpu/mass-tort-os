@@ -10,7 +10,13 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity, similarityName } from "./string-similarity";
+import {
+  normalize,
+  similarity,
+  similarityName,
+  similarityPreNormalized,
+  normalizeNameFromNormalized,
+} from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
@@ -227,9 +233,18 @@ async function searchByNameLocation(
   const params = new URLSearchParams({ version: NPI_VERSION, limit: String(limit) });
 
   // Extract first/last from a free-text name if provided
-  const nameParts = (expected.name ?? "").trim().split(/\s+/).filter(Boolean);
-  if (nameParts.length >= 1) params.set("first_name", nameParts[0]);
-  if (nameParts.length >= 2) params.set("last_name", nameParts[nameParts.length - 1]);
+  const full = (expected.name ?? "").trim();
+  if (full) {
+    // Cloudflare Worker compatibility: avoid regex split
+    const firstSpace = full.indexOf(" ");
+    if (firstSpace === -1) {
+      params.set("first_name", full);
+    } else {
+      params.set("first_name", full.substring(0, firstSpace));
+      const lastSpace = full.lastIndexOf(" ");
+      params.set("last_name", full.substring(lastSpace + 1));
+    }
+  }
 
   if (expected.organization) params.set("organization_name", expected.organization);
   if (expected.city) params.set("city", expected.city);
@@ -244,30 +259,69 @@ function pickBestSearchResult(
 ): { best: NpiRegistryResult; score: number } | null {
   let best: NpiRegistryResult | null = null;
   let bestScore = -1;
-  const expName = expected.name ?? "";
-  const expOrg = expected.organization ?? "";
-  const expCity = expected.city ?? "";
-  const expState = expected.state ?? "";
+
+  // Hoist normalization outside the search loop to avoid redundant regex processing
+  const expNameNorm = normalize(expected.name);
+  const expNameStripped = normalizeNameFromNormalized(expNameNorm);
+  const expOrgNorm = normalize(expected.organization);
+  const expCityNorm = normalize(expected.city);
+  const expStateNorm = normalize(expected.state);
 
   for (const r of results) {
     const basic = r.basic ?? {};
+    // Optimized name construction avoids temporary array allocations
     const name =
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
+      basic.name ?? `${basic.first_name || ""} ${basic.last_name || ""}`.trim();
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
-    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
-    const orgScore = similarity(expOrg, org);
-    const cityScore = similarity(expCity, primaryAddr.city ?? "");
+
+    const nameNorm = normalize(name);
+    const orgNorm = normalize(org);
+
+    // Manual expansion of similarityNamePreNormalized to reuse expNameStripped
+    const nameRaw = similarityPreNormalized(expNameNorm, nameNorm);
+    let nameScore;
+    if (nameRaw >= 0.98) {
+      nameScore = nameRaw;
+    } else {
+      const nameStripped = normalizeNameFromNormalized(nameNorm);
+      const nameFuzzy = similarityPreNormalized(expNameStripped, nameStripped);
+      nameScore = Math.max(nameRaw, nameFuzzy);
+    }
+
+    const orgRaw = similarityPreNormalized(expNameNorm, orgNorm);
+    let nameOrgScore;
+    if (orgRaw >= 0.98) {
+      nameOrgScore = orgRaw;
+    } else {
+      const orgStripped = normalizeNameFromNormalized(orgNorm);
+      const nameOrgFuzzy = similarityPreNormalized(expNameStripped, orgStripped);
+      nameOrgScore = Math.max(orgRaw, nameOrgFuzzy);
+    }
+
+    const identityScore = Math.max(nameScore, nameOrgScore);
+    const orgScore = similarityPreNormalized(expOrgNorm, orgNorm);
+
+    const cityNorm = normalize(primaryAddr.city);
+    const cityScore = similarityPreNormalized(expCityNorm, cityNorm);
+
+    const stateNorm = normalize(primaryAddr.state);
     const stateScore =
-      normalize(expState) === normalize(primaryAddr.state ?? "")
+      expStateNorm === stateNorm
         ? 1.0
-        : similarity(expState, primaryAddr.state ?? "");
+        : similarityPreNormalized(expStateNorm, stateNorm);
+
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
-    const score = 0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
+    const score =
+      0.5 * Math.max(identityScore, orgScore) +
+      0.25 * cityScore +
+      0.25 * stateScore;
+
     if (score > bestScore) {
       bestScore = score;
       best = r;
+      // Early break if we found a perfect match (common for single-result searches)
+      if (score >= 1.0) break;
     }
   }
 
@@ -332,8 +386,7 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   return {
     npi: String(p.number ?? ""),
     name:
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim(),
+      basic.name ?? `${basic.first_name || ""} ${basic.last_name || ""}`.trim(),
     organization_name: basic.organization_name ?? "",
     taxonomies: (p.taxonomies ?? []).map((t) => ({
       code: t.code ?? "",

@@ -8,6 +8,15 @@ const US_STATES: Set<string> = new Set([
 const US_ZIP_REGEX = /^\d{5}(-\d{4})?$/;
 const STREET_PATTERN = /\d+\s+\S+/;
 
+const GARBAGE_PATTERNS = [
+  /^[x]+$/i,
+  /^[0]+$/,
+  /^test$/i,
+  /^asdf$/i,
+  /^na$/i,
+  /^none$/i,
+];
+
 export interface AddressValidationResult {
   valid: boolean;
   errors: string[];
@@ -45,12 +54,12 @@ export function validateAddress(address: {
     errors.push("INVALID_ZIP_FORMAT");
   }
 
-  const garbagePatterns = [/^[x]+$/i, /^[0]+$/, /^test$/i, /^asdf$/i, /^na$/i, /^none$/i];
   const fieldsToCheck = [address.street_address, address.city];
   for (const field of fieldsToCheck) {
     if (field) {
-      for (const pat of garbagePatterns) {
-        if (pat.test(field.trim())) {
+      const trimmedField = field.trim();
+      for (const pat of GARBAGE_PATTERNS) {
+        if (pat.test(trimmedField)) {
           errors.push("GARBAGE_ADDRESS_DATA");
           break;
         }

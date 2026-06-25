@@ -3,12 +3,15 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+const NORMALIZE_RE_PUNCT = /[^\w\s]/g;
+const NORMALIZE_RE_SPACE = /\s+/g;
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(NORMALIZE_RE_PUNCT, " ")
+    .replace(NORMALIZE_RE_SPACE, " ")
     .trim();
 }
 
@@ -47,10 +50,26 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+
+  // Cloudflare Worker compatibility: avoid split/filter/join
+  let result = "";
+  let start = 0;
+  while (true) {
+    const nextSpace = normalized.indexOf(" ", start);
+    const token =
+      nextSpace === -1
+        ? normalized.substring(start)
+        : normalized.substring(start, nextSpace);
+
+    if (token && !TITLE_TOKENS.has(token) && !CREDENTIAL_TOKENS.has(token)) {
+      if (result) result += " ";
+      result += token;
+    }
+
+    if (nextSpace === -1) break;
+    start = nextSpace + 1;
+  }
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -60,16 +79,11 @@ export function normalizeName(s: string | null | undefined): string {
   return normalizeNameFromNormalized(normalize(s));
 }
 
-// Convenience: similarity that also tries the title-stripped variant and
-// returns whichever is HIGHER. Strictly additive — can never lower a
-// previously-passing score; existing thresholds keep their meaning.
-export function similarityName(
-  a: string | null | undefined,
-  b: string | null | undefined,
-): number {
-  const na = normalize(a);
-  const nb = normalize(b);
-
+/**
+ * Internal helper: similarity that also tries the title-stripped variant and
+ * returns whichever is HIGHER. Accepts ALREADY normalized strings.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
@@ -78,6 +92,16 @@ export function similarityName(
     normalizeNameFromNormalized(nb),
   );
   return Math.max(raw, stripped);
+}
+
+// Convenience: similarity that also tries the title-stripped variant and
+// returns whichever is HIGHER. Strictly additive — can never lower a
+// previously-passing score; existing thresholds keep their meaning.
+export function similarityName(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  return similarityNamePreNormalized(normalize(a), normalize(b));
 }
 
 export function levenshtein(a: string, b: string): number {
