@@ -50,15 +50,26 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  if (tokens.length === 1) {
-    const t = tokens[0];
-    if (TITLE_TOKENS.has(t) || CREDENTIAL_TOKENS.has(t)) return "";
-    return t;
+
+  // Cloudflare Worker compatibility: avoid split/filter/join
+  let result = "";
+  let start = 0;
+  while (true) {
+    const nextSpace = normalized.indexOf(" ", start);
+    const token =
+      nextSpace === -1
+        ? normalized.substring(start)
+        : normalized.substring(start, nextSpace);
+
+    if (token && !TITLE_TOKENS.has(token) && !CREDENTIAL_TOKENS.has(token)) {
+      if (result) result += " ";
+      result += token;
+    }
+
+    if (nextSpace === -1) break;
+    start = nextSpace + 1;
   }
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that

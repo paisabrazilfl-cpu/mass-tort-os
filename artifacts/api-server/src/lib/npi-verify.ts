@@ -233,9 +233,18 @@ async function searchByNameLocation(
   const params = new URLSearchParams({ version: NPI_VERSION, limit: String(limit) });
 
   // Extract first/last from a free-text name if provided
-  const nameParts = (expected.name ?? "").trim().split(/\s+/).filter(Boolean);
-  if (nameParts.length >= 1) params.set("first_name", nameParts[0]);
-  if (nameParts.length >= 2) params.set("last_name", nameParts[nameParts.length - 1]);
+  const full = (expected.name ?? "").trim();
+  if (full) {
+    // Cloudflare Worker compatibility: avoid regex split
+    const firstSpace = full.indexOf(" ");
+    if (firstSpace === -1) {
+      params.set("first_name", full);
+    } else {
+      params.set("first_name", full.substring(0, firstSpace));
+      const lastSpace = full.lastIndexOf(" ");
+      params.set("last_name", full.substring(lastSpace + 1));
+    }
+  }
 
   if (expected.organization) params.set("organization_name", expected.organization);
   if (expected.city) params.set("city", expected.city);
