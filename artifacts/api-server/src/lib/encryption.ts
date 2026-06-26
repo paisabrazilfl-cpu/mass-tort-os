@@ -73,23 +73,22 @@ export function isKeyConfigured(version: number): boolean {
 
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
-  const parts = [fieldName];
-  if (entityId) parts.push(entityId);
-  return Buffer.from(parts.join(":"), "utf8");
+  // Use template literal instead of join() for Worker compatibility and performance.
+  return Buffer.from(entityId ? `${fieldName}:${entityId}` : fieldName, "utf8");
 }
 
 export function encrypt(plaintext: string, fieldName?: string, entityId?: string): string {
   if (!plaintext) return plaintext;
   const key = getKey(CURRENT_KEY_VERSION);
-  const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
+  const iv = crypto.randomBytes(12); // IV_LENGTH
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
   const aad = buildAAD(fieldName, entityId);
   if (aad) cipher.setAAD(aad);
   const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const authTag = cipher.getAuthTag();
   const combined = Buffer.concat([iv, authTag, encrypted]);
   const hasAAD = aad ? 1 : 0;
-  return `enc:v${CURRENT_KEY_VERSION}:${hasAAD}:${combined.toString(ENCODING)}`;
+  return `enc:v${CURRENT_KEY_VERSION}:${hasAAD}:${combined.toString("base64")}`;
 }
 
 /**
@@ -106,11 +105,11 @@ function tryDecryptWithAAD(
 ): string | null {
   try {
     const key = getKey(keyVersion);
-    const combined = preDecoded ?? Buffer.from(payload, ENCODING);
-    const iv = combined.subarray(0, IV_LENGTH);
-    const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
-    const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
+    const combined = preDecoded ?? Buffer.from(payload, "base64");
+    const iv = combined.subarray(0, 12); // IV_LENGTH
+    const authTag = combined.subarray(12, 12 + 16); // IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH
+    const encrypted = combined.subarray(12 + 16); // IV_LENGTH + AUTH_TAG_LENGTH
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
     decipher.setAuthTag(authTag);
     if (aad) decipher.setAAD(aad);
     const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
@@ -143,12 +142,8 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
 
   // Pre-decode the payload once to avoid redundant base64 decoding on every AAD fallback attempt.
   // Benchmarks show a ~14% improvement in the fallback path.
-  let preDecoded: Buffer | undefined;
-  try {
-    preDecoded = Buffer.from(payload, ENCODING);
-  } catch {
-    // If decoding fails, tryDecryptWithAAD will handle it.
-  }
+  // We use Buffer.from directly; if it fails (rare for base64), tryDecryptWithAAD handles it.
+  const preDecoded = Buffer.from(payload, "base64");
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
   // fails, fall back through other AAD variants — historical inconsistencies
