@@ -46,8 +46,9 @@ const COMMON_PROVIDERS_FUZZY: Array<{ prefix: string; canonical: string; minLen:
 function findFuzzyProviderMatch(domain: string): string | null {
   const lastDot = domain.lastIndexOf(".");
   if (lastDot === -1) return null;
-  const prefix = domain.slice(0, lastDot);
-  const tld = domain.slice(lastDot);
+  // Cloudflare Worker compatibility: use substring instead of slice
+  const prefix = domain.substring(0, lastDot);
+  const tld = domain.substring(lastDot);
   if (tld !== ".com") return null;
   if (prefix.length < 3) return null;
   let best: { canonical: string; distance: number } | null = null;
@@ -71,6 +72,17 @@ const DISPOSABLE_DOMAINS = [
   "tempmail.com", "throwaway.email", "guerrillamail.com", "mailinator.com",
   "yopmail.com", "sharklasers.com", "trashmail.com", "10minutemail.com",
   "fakeinbox.com", "dispostable.com", "maildrop.cc", "guerrillamailblock.com",
+];
+
+// Hoisted static regex patterns to avoid redundant allocations on every call.
+const SUSPICIOUS_PATTERNS = [
+  /^test@/,
+  /^fake@/,
+  /^none@/,
+  /^noemail@/,
+  /^na@/,
+  /^asdf/,
+  /^aaa+@/,
 ];
 
 export interface EmailValidationResult {
@@ -101,13 +113,15 @@ export function validateEmail(email: string): EmailValidationResult {
     return { valid: false, errors };
   }
 
-  const parts = trimmed.split("@");
-  if (parts.length !== 2) {
+  // Cloudflare Worker compatibility: avoid split() where simple indexOf works
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex === -1) {
     errors.push("INVALID_EMAIL_STRUCTURE");
     return { valid: false, errors };
   }
 
-  const [localPart, domain] = parts;
+  const localPart = trimmed.substring(0, atIndex);
+  const domain = trimmed.substring(atIndex + 1);
 
   if (localPart.length === 0 || localPart.length > 64) {
     errors.push("INVALID_LOCAL_PART");
@@ -117,7 +131,8 @@ export function validateEmail(email: string): EmailValidationResult {
     errors.push("INVALID_DOMAIN");
   }
 
-  if (!domain.includes(".")) {
+  // Cloudflare Worker compatibility: use indexOf instead of includes
+  if (domain.indexOf(".") === -1) {
     errors.push("MISSING_TLD");
   }
 
@@ -133,28 +148,21 @@ export function validateEmail(email: string): EmailValidationResult {
   }
 
   for (const tld of MALFORMED_TLDS) {
-    if (trimmed.endsWith(tld)) {
+    // Cloudflare Worker compatibility: use substring instead of endsWith/slice
+    if (trimmed.substring(Math.max(0, trimmed.length - tld.length)) === tld) {
       errors.push("MALFORMED_TLD");
-      const corrected = trimmed.slice(0, -tld.length) + ".com";
+      const corrected = trimmed.substring(0, trimmed.length - tld.length) + ".com";
       suggestion = corrected;
       break;
     }
   }
 
-  if (DISPOSABLE_DOMAINS.includes(domain)) {
+  // Cloudflare Worker compatibility: use indexOf instead of includes
+  if (DISPOSABLE_DOMAINS.indexOf(domain) !== -1) {
     errors.push("DISPOSABLE_EMAIL");
   }
 
-  const suspiciousPatterns = [
-    /^test@/,
-    /^fake@/,
-    /^none@/,
-    /^noemail@/,
-    /^na@/,
-    /^asdf/,
-    /^aaa+@/,
-  ];
-  for (const pat of suspiciousPatterns) {
+  for (const pat of SUSPICIOUS_PATTERNS) {
     if (pat.test(trimmed)) {
       errors.push("SUSPICIOUS_EMAIL_PATTERN");
       break;

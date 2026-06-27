@@ -3,12 +3,15 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+const NORMALIZE_RE_PUNCT = /[^\w\s]/g;
+const NORMALIZE_RE_SPACE = /\s+/g;
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(NORMALIZE_RE_PUNCT, " ")
+    .replace(NORMALIZE_RE_SPACE, " ")
     .trim();
 }
 
@@ -44,13 +47,27 @@ const CREDENTIAL_TOKENS = new Set([
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
+ *
+ * Cloudflare Worker compatibility: Avoids split() to minimize GC and ensure
+ * stability in restricted environments.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  let result = "";
+  let start = 0;
+  while (true) {
+    const end = normalized.indexOf(" ", start);
+    const token = end === -1 ? normalized.substring(start) : normalized.substring(start, end);
+    if (token) {
+      if (!TITLE_TOKENS.has(token) && !CREDENTIAL_TOKENS.has(token)) {
+        if (result) result += " ";
+        result += token;
+      }
+    }
+    if (end === -1) break;
+    start = end + 1;
+  }
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -60,16 +77,11 @@ export function normalizeName(s: string | null | undefined): string {
   return normalizeNameFromNormalized(normalize(s));
 }
 
-// Convenience: similarity that also tries the title-stripped variant and
-// returns whichever is HIGHER. Strictly additive — can never lower a
-// previously-passing score; existing thresholds keep their meaning.
-export function similarityName(
-  a: string | null | undefined,
-  b: string | null | undefined,
-): number {
-  const na = normalize(a);
-  const nb = normalize(b);
-
+/**
+ * Internal helper: similarity between two ALREADY normalized strings, trying
+ * both raw and title-stripped variants.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
@@ -80,39 +92,83 @@ export function similarityName(
   return Math.max(raw, stripped);
 }
 
+// Convenience: similarity that also tries the title-stripped variant and
+// returns whichever is HIGHER. Strictly additive — can never lower a
+// previously-passing score; existing thresholds keep their meaning.
+export function similarityName(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  return similarityNamePreNormalized(normalize(a), normalize(b));
+}
+
+/**
+ * Optimized Levenshtein distance with prefix/suffix skipping and Int32Array.
+ *
+ * Cloudflare Worker compatibility: Avoids substring() for prefix/suffix
+ * clipping and uses indices instead to minimize allocations.
+ */
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
+  let alen = a.length;
+  let blen = b.length;
+  if (alen === 0) return blen;
+  if (blen === 0) return alen;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
-  let s1 = a;
-  let s2 = b;
-  if (s1.length < s2.length) {
-    [s1, s2] = [s2, s1];
+  // Skip common prefix
+  let start = 0;
+  while (start < alen && start < blen && a.charCodeAt(start) === b.charCodeAt(start)) {
+    start++;
+  }
+  if (start === alen) return blen - start;
+  if (start === blen) return alen - start;
+
+  // Skip common suffix
+  while (alen > start && blen > start && a.charCodeAt(alen - 1) === b.charCodeAt(blen - 1)) {
+    alen--;
+    blen--;
   }
 
-  const alen = s1.length;
-  const blen = s2.length;
-  const row = new Int32Array(blen + 1);
+  const n = alen - start;
+  const m = blen - start;
+  if (n <= 0) return m;
+  if (m <= 0) return n;
 
-  for (let j = 0; j <= blen; j++) row[j] = j;
+  // Ensure s2 is the shorter string to minimize auxiliary array size
+  let s1 = a;
+  let s2 = b;
+  let len1 = n;
+  let len2 = m;
+  let start1 = start;
+  let start2 = start;
+  if (len1 < len2) {
+    s1 = b;
+    s2 = a;
+    len1 = m;
+    len2 = n;
+    start1 = start;
+    start2 = start;
+  }
 
-  for (let i = 1; i <= alen; i++) {
+  const row = new Int32Array(len2 + 1);
+  for (let j = 0; j <= len2; j++) row[j] = j;
+
+  for (let i = 1; i <= len1; i++) {
     let prevDiag = row[0]; // (i-1, j-1)
+    const charA = s1.charCodeAt(start1 + i - 1);
     row[0] = i;
-    for (let j = 1; j <= blen; j++) {
+    for (let j = 1; j <= len2; j++) {
       const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+      const cost = charA === s2.charCodeAt(start2 + j - 1) ? 0 : 1;
       row[j] = Math.min(
-        row[j] + 1, // (i-1, j) + 1
+        temp + 1, // (i-1, j) + 1
         row[j - 1] + 1, // (i, j-1) + 1
         prevDiag + cost, // (i-1, j-1) + cost
       );
       prevDiag = temp;
     }
   }
-  return row[blen];
+  return row[len2];
 }
 
 /**
