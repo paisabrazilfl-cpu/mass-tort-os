@@ -47,20 +47,25 @@ const CREDENTIAL_TOKENS = new Set([
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
+ *
+ * Cloudflare Worker compatibility: Avoids split() to minimize GC and ensure
+ * stability in restricted environments.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  if (tokens.length === 1) {
-    return TITLE_TOKENS.has(tokens[0]) || CREDENTIAL_TOKENS.has(tokens[0]) ? "" : tokens[0];
-  }
   let result = "";
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (!TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t)) {
-      if (result) result += " ";
-      result += t;
+  let start = 0;
+  while (true) {
+    const end = normalized.indexOf(" ", start);
+    const token = end === -1 ? normalized.substring(start) : normalized.substring(start, end);
+    if (token) {
+      if (!TITLE_TOKENS.has(token) && !CREDENTIAL_TOKENS.has(token)) {
+        if (result) result += " ";
+        result += token;
+      }
     }
+    if (end === -1) break;
+    start = end + 1;
   }
   return result;
 }
@@ -97,6 +102,12 @@ export function similarityName(
   return similarityNamePreNormalized(normalize(a), normalize(b));
 }
 
+/**
+ * Optimized Levenshtein distance with prefix/suffix skipping and Int32Array.
+ *
+ * Cloudflare Worker compatibility: Avoids substring() for prefix/suffix
+ * clipping and uses indices instead to minimize allocations.
+ */
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   let alen = a.length;
@@ -109,43 +120,46 @@ export function levenshtein(a: string, b: string): number {
   while (start < alen && start < blen && a.charCodeAt(start) === b.charCodeAt(start)) {
     start++;
   }
-  if (start > 0) {
-    a = a.substring(start);
-    b = b.substring(start);
-    alen -= start;
-    blen -= start;
-  }
-  if (alen === 0) return blen;
-  if (blen === 0) return alen;
+  if (start === alen) return blen - start;
+  if (start === blen) return alen - start;
 
   // Skip common suffix
-  while (alen > 0 && blen > 0 && a.charCodeAt(alen - 1) === b.charCodeAt(blen - 1)) {
+  while (alen > start && blen > start && a.charCodeAt(alen - 1) === b.charCodeAt(blen - 1)) {
     alen--;
     blen--;
   }
-  if (alen === 0) return blen;
-  if (blen === 0) return alen;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
+  const n = alen - start;
+  const m = blen - start;
+  if (n <= 0) return m;
+  if (m <= 0) return n;
+
+  // Ensure s2 is the shorter string to minimize auxiliary array size
   let s1 = a;
   let s2 = b;
-  let n = alen;
-  let m = blen;
-  if (n < m) {
-    [s1, s2] = [s2, s1];
-    [n, m] = [m, n];
+  let len1 = n;
+  let len2 = m;
+  let start1 = start;
+  let start2 = start;
+  if (len1 < len2) {
+    s1 = b;
+    s2 = a;
+    len1 = m;
+    len2 = n;
+    start1 = start;
+    start2 = start;
   }
 
-  const row = new Int32Array(m + 1);
-  for (let j = 0; j <= m; j++) row[j] = j;
+  const row = new Int32Array(len2 + 1);
+  for (let j = 0; j <= len2; j++) row[j] = j;
 
-  for (let i = 1; i <= n; i++) {
+  for (let i = 1; i <= len1; i++) {
     let prevDiag = row[0]; // (i-1, j-1)
-    const charA = s1.charCodeAt(i - 1);
+    const charA = s1.charCodeAt(start1 + i - 1);
     row[0] = i;
-    for (let j = 1; j <= m; j++) {
+    for (let j = 1; j <= len2; j++) {
       const temp = row[j]; // (i-1, j)
-      const cost = charA === s2.charCodeAt(j - 1) ? 0 : 1;
+      const cost = charA === s2.charCodeAt(start2 + j - 1) ? 0 : 1;
       row[j] = Math.min(
         temp + 1, // (i-1, j) + 1
         row[j - 1] + 1, // (i, j-1) + 1
@@ -154,7 +168,7 @@ export function levenshtein(a: string, b: string): number {
       prevDiag = temp;
     }
   }
-  return row[m];
+  return row[len2];
 }
 
 /**

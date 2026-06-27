@@ -113,13 +113,15 @@ export function validateEmail(email: string): EmailValidationResult {
     return { valid: false, errors };
   }
 
-  const parts = trimmed.split("@");
-  if (parts.length !== 2) {
+  // Cloudflare Worker compatibility: avoid split() where simple indexOf works
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex === -1) {
     errors.push("INVALID_EMAIL_STRUCTURE");
     return { valid: false, errors };
   }
 
-  const [localPart, domain] = parts;
+  const localPart = trimmed.substring(0, atIndex);
+  const domain = trimmed.substring(atIndex + 1);
 
   if (localPart.length === 0 || localPart.length > 64) {
     errors.push("INVALID_LOCAL_PART");
@@ -129,7 +131,8 @@ export function validateEmail(email: string): EmailValidationResult {
     errors.push("INVALID_DOMAIN");
   }
 
-  if (!domain.includes(".")) {
+  // Cloudflare Worker compatibility: use indexOf instead of includes
+  if (domain.indexOf(".") === -1) {
     errors.push("MISSING_TLD");
   }
 
@@ -154,7 +157,8 @@ export function validateEmail(email: string): EmailValidationResult {
     }
   }
 
-  if (DISPOSABLE_DOMAINS.includes(domain)) {
+  // Cloudflare Worker compatibility: use indexOf instead of includes
+  if (DISPOSABLE_DOMAINS.indexOf(domain) !== -1) {
     errors.push("DISPOSABLE_EMAIL");
   }
 

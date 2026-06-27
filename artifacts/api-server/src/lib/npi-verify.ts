@@ -227,9 +227,18 @@ async function searchByNameLocation(
   const params = new URLSearchParams({ version: NPI_VERSION, limit: String(limit) });
 
   // Extract first/last from a free-text name if provided
-  const nameParts = (expected.name ?? "").trim().split(/\s+/).filter(Boolean);
-  if (nameParts.length >= 1) params.set("first_name", nameParts[0]);
-  if (nameParts.length >= 2) params.set("last_name", nameParts[nameParts.length - 1]);
+  // Cloudflare Worker compatibility: avoid complex split() if possible
+  const name = (expected.name ?? "").trim();
+  if (name) {
+    const space = name.indexOf(" ");
+    if (space === -1) {
+      params.set("first_name", name);
+    } else {
+      params.set("first_name", name.substring(0, space));
+      const lastSpace = name.lastIndexOf(" ");
+      params.set("last_name", name.substring(lastSpace + 1));
+    }
+  }
 
   if (expected.organization) params.set("organization_name", expected.organization);
   if (expected.city) params.set("city", expected.city);
@@ -288,7 +297,7 @@ function specialtyAcceptedTerms(expectedSpecialty: string): string[] {
   const base = normalize(expectedSpecialty);
   if (!base) return [];
   const aliases = SPECIALTY_ALIASES[base] ?? [];
-  const all = [base, ...aliases].map((t) => normalize(t)).filter(Boolean);
+  const all = [base, ...aliases].map((t) => normalize(t)).filter((t) => !!t);
   return Array.from(new Set(all));
 }
 
@@ -306,12 +315,20 @@ function providerTaxonomyMatches(
       const descNorm = normalize(desc);
       // Substring match either direction so "family medicine" matches
       // "Family Medicine - Sports Medicine Physician" and so on.
-      if (terms.some((term) => descNorm.includes(term) || term.includes(descNorm))) {
+      // Cloudflare Worker compatibility: use indexOf() instead of includes()
+      let hasMatch = false;
+      for (const term of terms) {
+        if (descNorm.indexOf(term) !== -1 || term.indexOf(descNorm) !== -1) {
+          hasMatch = true;
+          break;
+        }
+      }
+      if (hasMatch) {
         matchedTaxonomies.push({ code: t.code ?? "", desc, primary: !!t.primary });
       }
     }
   }
-  const allDescs = taxonomies.map((t) => t.desc ?? "").filter(Boolean);
+  const allDescs = taxonomies.map((t) => t.desc ?? "").filter((t) => !!t);
   return {
     matched: matchedTaxonomies.length > 0,
     matched_taxonomies: matchedTaxonomies,
