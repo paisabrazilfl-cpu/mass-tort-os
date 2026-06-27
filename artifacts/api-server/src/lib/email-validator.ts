@@ -73,6 +73,17 @@ const DISPOSABLE_DOMAINS = [
   "fakeinbox.com", "dispostable.com", "maildrop.cc", "guerrillamailblock.com",
 ];
 
+// Hoisted static regex patterns to avoid redundant allocations on every call.
+const SUSPICIOUS_PATTERNS = [
+  /^test@/,
+  /^fake@/,
+  /^none@/,
+  /^noemail@/,
+  /^na@/,
+  /^asdf/,
+  /^aaa+@/,
+];
+
 export interface EmailValidationResult {
   valid: boolean;
   errors: string[];
@@ -145,16 +156,7 @@ export function validateEmail(email: string): EmailValidationResult {
     errors.push("DISPOSABLE_EMAIL");
   }
 
-  const suspiciousPatterns = [
-    /^test@/,
-    /^fake@/,
-    /^none@/,
-    /^noemail@/,
-    /^na@/,
-    /^asdf/,
-    /^aaa+@/,
-  ];
-  for (const pat of suspiciousPatterns) {
+  for (const pat of SUSPICIOUS_PATTERNS) {
     if (pat.test(trimmed)) {
       errors.push("SUSPICIOUS_EMAIL_PATTERN");
       break;
