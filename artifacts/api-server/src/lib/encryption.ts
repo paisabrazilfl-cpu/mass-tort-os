@@ -4,7 +4,6 @@ import { logger } from "./logger";
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12;
 const AUTH_TAG_LENGTH = 16;
-const ENCODING = "base64" as const;
 
 /**
  * Current encryption key version used for ALL new encrypts.
@@ -71,11 +70,14 @@ export function isKeyConfigured(version: number): boolean {
   }
 }
 
+/**
+ * Build Additional Authenticated Data (AAD) buffer.
+ * Optimization: Uses template literals to avoid array allocations and join().
+ */
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
-  const parts = [fieldName];
-  if (entityId) parts.push(entityId);
-  return Buffer.from(parts.join(":"), "utf8");
+  if (!entityId) return Buffer.from(fieldName, "utf8");
+  return Buffer.from(`${fieldName}:${entityId}`, "utf8");
 }
 
 export function encrypt(plaintext: string, fieldName?: string, entityId?: string): string {
@@ -89,26 +91,23 @@ export function encrypt(plaintext: string, fieldName?: string, entityId?: string
   const authTag = cipher.getAuthTag();
   const combined = Buffer.concat([iv, authTag, encrypted]);
   const hasAAD = aad ? 1 : 0;
-  return `enc:v${CURRENT_KEY_VERSION}:${hasAAD}:${combined.toString(ENCODING)}`;
+  return `enc:v${CURRENT_KEY_VERSION}:${hasAAD}:${combined.toString("base64")}`;
 }
 
 /**
  * Try to decrypt with a specific AAD configuration. Returns null on failure.
- * Used by decrypt() to attempt multiple AAD variants for backward compatibility
- * when historical data was encrypted with a different (or no) AAD than what the
- * caller is now passing.
+ * Optimization: Pre-decodes base64 payload to avoid redundant work in fallback chain.
  */
 function tryDecryptWithAAD(
-  payload: string,
+  decodedCombined: Buffer,
   keyVersion: number,
   aad: Buffer | undefined,
 ): string | null {
   try {
     const key = getKey(keyVersion);
-    const combined = Buffer.from(payload, ENCODING);
-    const iv = combined.subarray(0, IV_LENGTH);
-    const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
-    const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
+    const iv = decodedCombined.subarray(0, IV_LENGTH);
+    const authTag = decodedCombined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
+    const encrypted = decodedCombined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
     const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
     decipher.setAuthTag(authTag);
     if (aad) decipher.setAAD(aad);
@@ -121,37 +120,52 @@ function tryDecryptWithAAD(
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
+
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+  if (ciphertext.indexOf("enc:v") === 0) {
+    // Manual parsing to avoid split/slice/startsWith (Worker compatibility)
+    const vStart = 5; // after "enc:v"
+    const firstColon = ciphertext.indexOf(":", vStart);
+    const secondColon = ciphertext.indexOf(":", firstColon + 1);
+
+    if (firstColon !== -1 && secondColon !== -1) {
+      keyVersion = parseInt(ciphertext.substring(vStart, firstColon), 10) || 1;
+      hasAADFlag = parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
+      payload = ciphertext.substring(secondColon + 1);
+    } else {
+      payload = ciphertext.substring(vStart);
+    }
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
-  // Try the AAD configuration the ciphertext was tagged with first. If that
-  // fails, fall back through other AAD variants — historical inconsistencies
-  // (e.g. data encrypted before the entityId was known on insert) would
-  // otherwise be permanently unrecoverable. AES-GCM auth tag verification
-  // still prevents corruption: every fallback that succeeds is cryptographically
-  // valid for the key + IV.
-  const candidates: (Buffer | undefined)[] = [];
+  // Pre-decode payload once for all AAD variants
+  let decodedPayload: Buffer;
+  try {
+    decodedPayload = Buffer.from(payload, "base64");
+  } catch {
+    return "[DECRYPTION_ERROR]";
+  }
+
+  // Try the AAD configuration the ciphertext was tagged with first.
+  // Optimization: Use sequential calls instead of array iteration to minimize allocations.
   if (hasAADFlag && fieldName) {
-    candidates.push(buildAAD(fieldName, entityId));      // primary: field+entity
-    candidates.push(buildAAD(fieldName, undefined));     // fallback: field only
-  }
-  candidates.push(undefined);                             // fallback: no AAD
+    // 1. Primary: field+entity
+    const r1 = tryDecryptWithAAD(decodedPayload, keyVersion, buildAAD(fieldName, entityId));
+    if (r1 !== null) return r1;
 
-  for (const aad of candidates) {
-    const result = tryDecryptWithAAD(payload, keyVersion, aad);
-    if (result !== null) return result;
+    // 2. Secondary: field only
+    const r2 = tryDecryptWithAAD(decodedPayload, keyVersion, buildAAD(fieldName, undefined));
+    if (r2 !== null) return r2;
   }
+
+  // 3. Tertiary: no AAD (always try as final fallback)
+  const r3 = tryDecryptWithAAD(decodedPayload, keyVersion, undefined);
+  if (r3 !== null) return r3;
 
   logger.error(
     { fieldName, hasAAD: !!hasAADFlag, keyVersion },
@@ -176,27 +190,39 @@ export const ENCRYPTED_FIELDS = [
   "background_check_data",
 ] as const;
 
+/**
+ * Lazy cloning encryption helper. Only copies object if a transformation occurs.
+ */
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  const result = { ...data };
+  if (!data) return data;
+  let result: Record<string, any> | undefined;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
+    const val = data[field];
+    if (typeof val === "string" && val.indexOf("enc:") !== 0) {
+      if (!result) result = { ...data };
+      result[field] = encrypt(val, field, entityId);
+    }
+  }
+  return result ?? data;
+}
+
+/**
+ * Lazy cloning decryption helper. Only copies object if a transformation occurs.
+ */
+export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
+  if (!data) return data;
+  let result: Record<string, any> | undefined;
+  for (const field of ENCRYPTED_FIELDS) {
+    const val = data[field];
+    if (typeof val === "string" && val.indexOf("enc:") === 0) {
+      const decrypted = decrypt(val, field, entityId);
+      if (decrypted !== val) {
+        if (!result) result = { ...data };
+        result[field] = decrypted;
       }
     }
   }
-  return result;
-}
-
-export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  if (!data) return data;
-  const result = { ...data };
-  for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
-    }
-  }
-  return result;
+  return result ?? data;
 }
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
@@ -205,19 +231,6 @@ export function decryptLeadArray(leads: Record<string, any>[]): Record<string, a
 
 /**
  * Task #8: post-insert rebind of AAD to the freshly-assigned lead.id.
- *
- * Lead inserts cannot pass `entityId` to `encryptLeadFields` because the
- * serial id is only known after `INSERT … RETURNING id`. Without rebind,
- * the AAD-tagged ciphertexts are bound to (fieldName) only, and a future
- * UPDATE on a different row can paste those bytes in without AES-GCM
- * detecting the swap.
- *
- * This helper takes the just-inserted row, re-encrypts every populated
- * encrypted field with `(fieldName, String(lead.id))` AAD, and writes
- * the rebound ciphertexts back. The decrypt-side AAD-fallback chain in
- * `decrypt()` makes this a no-op for already-bound rows and a one-shot
- * upgrade for legacy rows; either way, any subsequent decrypt with the
- * row's id verifies against the strict (field+entity) AAD first.
  */
 export async function rebindLeadEncryptionAad(
   db: { update: (...args: any[]) => any },
@@ -230,14 +243,13 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (typeof cur !== "string" || cur.indexOf("enc:") !== 0) continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
       update[field] = encrypt(plain, field, id);
     } catch {
-      // Skip individual field on rebind failure — the original ciphertext
-      // remains intact and decrypt-side fallback still recovers it.
+      // Skip individual field on rebind failure
     }
   }
   if (Object.keys(update).length === 0) return;

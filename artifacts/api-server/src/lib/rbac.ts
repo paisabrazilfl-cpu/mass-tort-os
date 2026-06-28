@@ -606,7 +606,7 @@ export function isTokenVersionRevoked(decodedTv: number | undefined, currentDbTv
 // NODE_ENV === "development" AND no Authorization header is present.
 async function _authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
+  if (typeof authHeader !== "string" || authHeader.indexOf("Bearer ") !== 0) {
     // Task #20: dev bypass is now OPT-IN via MTOS_DEV_LOGIN=1 even under
     // NODE_ENV=development. Without this flag, the dev login UI exercises
     // the real /auth/login + /auth/refresh JWT path, so MFA, lockout, and
@@ -625,7 +625,7 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
     return;
   }
 
-  const token = authHeader.slice(7);
+  const token = authHeader.substring(7);
 
   // Task #52 — API key bearer path. The `mtos_` prefix lets us
   // disambiguate cheaply without paying the JWT verify cost. API key

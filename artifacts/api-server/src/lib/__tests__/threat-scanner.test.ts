@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { scanValue, deepScan } from "../ids";
+import { scanValue, deepScan } from "../threat-scanner";
 
-test("IDS scanning logic: scanValue", async (t) => {
+test("Threat scanning logic: scanValue", async (t) => {
   await t.test("detects SQL injection", () => {
     assert.ok(scanValue("SELECT * FROM users"));
     assert.ok(scanValue("' OR '1'='1"));
@@ -37,7 +37,7 @@ test("IDS scanning logic: scanValue", async (t) => {
   });
 });
 
-test("IDS scanning logic: deepScan", async (t) => {
+test("Threat scanning logic: deepScan", async (t) => {
   await t.test("detects threat in nested object", () => {
     const payload = {
       user: {
