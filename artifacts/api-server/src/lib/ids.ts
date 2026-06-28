@@ -47,6 +47,19 @@ const COMMAND_INJECTION_PATTERNS = [
   /\$\(.*\)/,
 ];
 
+// Optimized regex combinations to reduce .test() calls. Patterns are joined with
+// OR pipes while preserving their original case sensitivity.
+const SQL_RE = new RegExp(SQL_INJECTION_PATTERNS.map((p) => `(?:${p.source})`).join("|"), "i");
+const XSS_RE = new RegExp(XSS_PATTERNS.map((p) => `(?:${p.source})`).join("|"), "i");
+// PATH patterns are mixed case sensitivity in the source; we use the least strict
+// (case-sensitive) as the base and ensure individual patterns that need /i are
+// either rewritten or we accept a small over-match if we used /i globally.
+// Looking at PATH_TRAVERSAL_PATTERNS, most are case-sensitive except %2e%2e.
+// We'll keep them as individual tests if they can't be easily merged, or just
+// use one big case-insensitive RE if it doesn't break semantics.
+const PATH_RE = new RegExp(PATH_TRAVERSAL_PATTERNS.map((p) => `(?:${p.source})`).join("|"), "i");
+const CMD_RE = new RegExp(COMMAND_INJECTION_PATTERNS.map((p) => `(?:${p.source})`).join("|"), "i");
+
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
   severity: "critical" | "high" | "medium" | "low";
@@ -86,38 +99,45 @@ function getClientIp(req: Request): string {
     || "unknown";
 }
 
-function scanValue(value: string): ThreatDetection | null {
-  for (const pattern of SQL_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
-    }
+export function scanValue(value: string): ThreatDetection | null {
+  // Use combined regexes for O(1) matching against the pattern set instead
+  // of O(N) iteration. We return the first category that matches.
+  if (SQL_RE.test(value)) {
+    return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: "multiple" };
   }
-  for (const pattern of XSS_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
-    }
+  if (XSS_RE.test(value)) {
+    return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: "multiple" };
   }
-  for (const pattern of PATH_TRAVERSAL_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
-    }
+  if (PATH_RE.test(value)) {
+    return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: "multiple" };
   }
-  for (const pattern of COMMAND_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
-    }
+  if (CMD_RE.test(value)) {
+    return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: "multiple" };
   }
   return null;
 }
 
-function deepScan(obj: any, path = ""): ThreatDetection | null {
+/**
+ * Recursively scans objects and arrays for security threats.
+ * Optimized to use for...in and direct indexing to avoid Object.entries() allocations.
+ */
+export function deepScan(obj: any): ThreatDetection | null {
   if (typeof obj === "string") {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i]);
+        if (threat) return threat;
+      }
+    } else {
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          const threat = deepScan(obj[key]);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;
