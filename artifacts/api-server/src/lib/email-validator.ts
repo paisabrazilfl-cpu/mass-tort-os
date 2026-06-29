@@ -46,8 +46,8 @@ const COMMON_PROVIDERS_FUZZY: Array<{ prefix: string; canonical: string; minLen:
 function findFuzzyProviderMatch(domain: string): string | null {
   const lastDot = domain.lastIndexOf(".");
   if (lastDot === -1) return null;
-  const prefix = domain.slice(0, lastDot);
-  const tld = domain.slice(lastDot);
+  const prefix = domain.substring(0, lastDot);
+  const tld = domain.substring(lastDot);
   if (tld !== ".com") return null;
   if (prefix.length < 3) return null;
   let best: { canonical: string; distance: number } | null = null;
@@ -143,9 +143,9 @@ export function validateEmail(email: string): EmailValidationResult {
   }
 
   for (const tld of MALFORMED_TLDS) {
-    if (trimmed.endsWith(tld)) {
+    if (trimmed.indexOf(tld) === trimmed.length - tld.length && trimmed.length >= tld.length) {
       errors.push("MALFORMED_TLD");
-      const corrected = trimmed.slice(0, -tld.length) + ".com";
+      const corrected = trimmed.substring(0, trimmed.length - tld.length) + ".com";
       suggestion = corrected;
       break;
     }
