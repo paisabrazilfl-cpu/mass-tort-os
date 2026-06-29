@@ -117,7 +117,7 @@ function deepScan(obj: any, path = ""): ThreatDetection | null {
   if (typeof obj === "object" && obj !== null) {
     if (Array.isArray(obj)) {
       for (let i = 0; i < obj.length; i++) {
-        const threat = deepScan(obj[i], `${path}[${i}]`);
+        const threat = deepScan(obj[i], `${path}.${i}`);
         if (threat) return threat;
       }
     } else {

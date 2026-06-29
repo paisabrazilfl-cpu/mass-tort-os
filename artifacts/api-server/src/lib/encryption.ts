@@ -121,18 +121,18 @@ function tryDecryptWithAAD(
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v")) {
+  if (ciphertext.indexOf("enc:v") === 0) {
     const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
+    keyVersion = parseInt(parts[1].substring(1), 10) || 1;
     hasAADFlag = parseInt(parts[2], 10) || 0;
     payload = parts.slice(3).join(":");
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
@@ -180,7 +180,7 @@ export function encryptLeadFields(data: Record<string, any>, entityId?: string):
   const result = { ...data };
   for (const field of ENCRYPTED_FIELDS) {
     if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
+      if (result[field].indexOf("enc:") !== 0) {
         result[field] = encrypt(result[field], field, entityId);
       }
     }
@@ -230,7 +230,7 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (typeof cur !== "string" || cur.indexOf("enc:") !== 0) continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;

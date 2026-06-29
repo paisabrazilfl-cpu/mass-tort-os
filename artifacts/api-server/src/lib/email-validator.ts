@@ -143,7 +143,7 @@ export function validateEmail(email: string): EmailValidationResult {
   }
 
   for (const tld of MALFORMED_TLDS) {
-    if (trimmed.indexOf(tld) === trimmed.length - tld.length && trimmed.length >= tld.length) {
+    if (trimmed.lastIndexOf(tld) === trimmed.length - tld.length && trimmed.length >= tld.length) {
       errors.push("MALFORMED_TLD");
       const corrected = trimmed.substring(0, trimmed.length - tld.length) + ".com";
       suggestion = corrected;
