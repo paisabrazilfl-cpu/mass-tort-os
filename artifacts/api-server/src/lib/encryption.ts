@@ -73,9 +73,8 @@ export function isKeyConfigured(version: number): boolean {
 
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
-  const parts = [fieldName];
-  if (entityId) parts.push(entityId);
-  return Buffer.from(parts.join(":"), "utf8");
+  const val = entityId ? `${fieldName}:${entityId}` : fieldName;
+  return Buffer.from(val, "utf8");
 }
 
 export function encrypt(plaintext: string, fieldName?: string, entityId?: string): string {
@@ -127,10 +126,14 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   let payload: string;
 
   if (ciphertext.indexOf("enc:v") === 0) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].substring(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+    const firstColon = ciphertext.indexOf(":", 5);
+    if (firstColon === -1) return "[DECRYPTION_ERROR]";
+    const secondColon = ciphertext.indexOf(":", firstColon + 1);
+    if (secondColon === -1) return "[DECRYPTION_ERROR]";
+
+    keyVersion = parseInt(ciphertext.substring(5, firstColon), 10) || 1;
+    hasAADFlag = parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
+    payload = ciphertext.substring(secondColon + 1);
   } else {
     payload = ciphertext.substring(4);
   }

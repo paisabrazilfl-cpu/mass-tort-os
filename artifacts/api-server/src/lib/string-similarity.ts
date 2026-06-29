@@ -50,15 +50,28 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  // Fast path for single-token strings (most common after normalize() on short inputs)
-  if (tokens.length === 1) {
-    const t = tokens[0];
-    return !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t) ? t : "";
+
+  let result = "";
+  let start = 0;
+  let end = normalized.indexOf(" ");
+
+  while (end !== -1) {
+    const t = normalized.substring(start, end);
+    if (t.length > 0 && !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t)) {
+      if (result.length > 0) result += " ";
+      result += t;
+    }
+    start = end + 1;
+    end = normalized.indexOf(" ", start);
   }
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+
+  const lastToken = normalized.substring(start);
+  if (lastToken.length > 0 && !TITLE_TOKENS.has(lastToken) && !CREDENTIAL_TOKENS.has(lastToken)) {
+    if (result.length > 0) result += " ";
+    result += lastToken;
+  }
+
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that

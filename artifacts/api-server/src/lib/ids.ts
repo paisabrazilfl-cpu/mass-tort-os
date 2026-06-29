@@ -81,9 +81,13 @@ function hasInternalCredentials(req: Request): boolean {
 }
 
 function getClientIp(req: Request): string {
-  return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() 
-    || req.socket.remoteAddress 
-    || "unknown";
+  const forwarded = req.headers["x-forwarded-for"] as string;
+  if (forwarded) {
+    const comma = forwarded.indexOf(",");
+    const first = comma === -1 ? forwarded : forwarded.substring(0, comma);
+    return first.trim();
+  }
+  return req.socket.remoteAddress || "unknown";
 }
 
 function scanValue(value: string): ThreatDetection | null {
