@@ -70,10 +70,10 @@ const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 // IDS classification decision. URL + query are scanned regardless.
 function hasInternalCredentials(req: Request): boolean {
   const auth = req.headers["authorization"];
-  if (typeof auth !== "string" || !auth.toLowerCase().startsWith("bearer ")) {
+  if (typeof auth !== "string" || auth.toLowerCase().indexOf("bearer ") !== 0) {
     return false;
   }
-  const token = auth.slice(7).trim();
+  const token = auth.substring(7).trim();
   if (!token) return false;
   // verifyToken returns null for any malformed/unsigned/expired token,
   // so spoofed Bearer headers fall back to anonymous-traffic limits.
@@ -81,9 +81,13 @@ function hasInternalCredentials(req: Request): boolean {
 }
 
 function getClientIp(req: Request): string {
-  return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() 
-    || req.socket.remoteAddress 
-    || "unknown";
+  const forwarded = req.headers["x-forwarded-for"] as string;
+  if (forwarded) {
+    const comma = forwarded.indexOf(",");
+    const first = comma === -1 ? forwarded : forwarded.substring(0, comma);
+    return first.trim();
+  }
+  return req.socket.remoteAddress || "unknown";
 }
 
 function scanValue(value: string): ThreatDetection | null {
@@ -115,9 +119,18 @@ function deepScan(obj: any, path = ""): ThreatDetection | null {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i], `${path}.${i}`);
+        if (threat) return threat;
+      }
+    } else {
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          const threat = deepScan(obj[key], `${path}.${key}`);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;
@@ -180,7 +193,7 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
         query: req.query,
         body: typeof req.body === "object" ? Object.keys(req.body) : undefined,
         pattern: threat.pattern,
-      }).slice(0, 2000),
+      }).substring(0, 2000),
       status: "new",
       blocked: threat.severity === "critical",
     });
@@ -281,11 +294,14 @@ export function idsMiddleware() {
 }
 
 // .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-setInterval(() => {
+const janitor = setInterval(() => {
   const now = Date.now();
   for (const [ip, entry] of ipRequestLog.entries()) {
     if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
       ipRequestLog.delete(ip);
     }
   }
-}, 60_000).unref();
+}, 60_000);
+if (typeof janitor.unref === "function") {
+  janitor.unref();
+}
