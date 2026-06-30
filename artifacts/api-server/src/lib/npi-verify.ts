@@ -10,7 +10,13 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity, similarityName } from "./string-similarity";
+import {
+  normalize,
+  similarity,
+  similarityName,
+  similarityPreNormalized,
+  similarityNamePreNormalized,
+} from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
@@ -244,30 +250,42 @@ function pickBestSearchResult(
 ): { best: NpiRegistryResult; score: number } | null {
   let best: NpiRegistryResult | null = null;
   let bestScore = -1;
-  const expName = expected.name ?? "";
-  const expOrg = expected.organization ?? "";
-  const expCity = expected.city ?? "";
-  const expState = expected.state ?? "";
+
+  // Pre-normalize expected fields once to avoid redundant work in the loop
+  const expNameNorm = normalize(expected.name);
+  const expOrgNorm = normalize(expected.organization);
+  const expCityNorm = normalize(expected.city);
+  const expStateNorm = normalize(expected.state);
 
   for (const r of results) {
     const basic = r.basic ?? {};
-    const name =
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
+    const first = basic.first_name;
+    const last = basic.last_name;
+    const name = basic.name ?? `${first || ""} ${last || ""}`.trim();
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
-    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
-    const orgScore = similarity(expOrg, org);
-    const cityScore = similarity(expCity, primaryAddr.city ?? "");
+
+    // Reuse pre-normalized values and specialized helpers to minimize overhead
+    const nameScore = Math.max(
+      similarityNamePreNormalized(expNameNorm, normalize(name)),
+      similarityNamePreNormalized(expNameNorm, normalize(org)),
+    );
+    const orgScore = similarityPreNormalized(expOrgNorm, normalize(org));
+    const cityScore = similarityPreNormalized(expCityNorm, normalize(primaryAddr.city));
+
+    const provStateNorm = normalize(primaryAddr.state);
     const stateScore =
-      normalize(expState) === normalize(primaryAddr.state ?? "")
+      expStateNorm === provStateNorm
         ? 1.0
-        : similarity(expState, primaryAddr.state ?? "");
+        : similarityPreNormalized(expStateNorm, provStateNorm);
+
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
     const score = 0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
     if (score > bestScore) {
       bestScore = score;
       best = r;
+      // Early exit on perfect match — impossible to beat
+      if (bestScore >= 1.0) break;
     }
   }
 
@@ -315,11 +333,11 @@ function providerTaxonomyMatches(
 
 function compareStringsField(
   providerValue: string | null | undefined,
-  expectedValue: string | null | undefined,
+  expectedValueNormalized: string, // Accept pre-normalized expected value
   threshold = 0.8,
 ): { match: boolean; score: number } {
-  if (!expectedValue) return { match: true, score: 1.0 };
-  const score = similarity(providerValue ?? "", expectedValue);
+  if (!expectedValueNormalized) return { match: true, score: 1.0 };
+  const score = similarityPreNormalized(normalize(providerValue), expectedValueNormalized);
   return { match: score >= threshold, score };
 }
 
@@ -329,11 +347,11 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   // hospital systems often resolve to a corporate PO box hundreds of miles
   // from the actual practice, which would tank city scoring.
   const primary = pickPrimaryAddress(p.addresses);
+  const first = basic.first_name;
+  const last = basic.last_name;
   return {
     npi: String(p.number ?? ""),
-    name:
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim(),
+    name: basic.name ?? `${first || ""} ${last || ""}`.trim(),
     organization_name: basic.organization_name ?? "",
     taxonomies: (p.taxonomies ?? []).map((t) => ({
       code: t.code ?? "",
@@ -463,9 +481,14 @@ export async function verifyProvider(
   // (title/credential aware) for the person name so "Dr. John Smith MD"
   // matches the registered "John Smith" cleanly. Inline rather than extending
   // compareStringsField so this stays opt-in to person-name compares only.
+  const expNameNorm = normalize(expected.name);
+  const expOrgNorm = normalize(expected.organization);
+  const expCityNorm = normalize(expected.city);
+  const expStateNorm = normalize(expected.state);
+
   const provName = result.provider.name || result.provider.organization_name;
   const nameRawScore = expected.name
-    ? similarityName(provName, expected.name)
+    ? similarityNamePreNormalized(normalize(provName), expNameNorm)
     : 1.0;
   const nameCheck = { score: nameRawScore, match: nameRawScore >= 0.75 };
   result.checks.name = {
@@ -476,7 +499,7 @@ export async function verifyProvider(
   };
 
   const provOrg = result.provider.organization_name;
-  const orgCheck = compareStringsField(provOrg, expected.organization, 0.7);
+  const orgCheck = compareStringsField(provOrg, expOrgNorm, 0.7);
   result.checks.organization = {
     expected: expected.organization ?? "",
     provider: provOrg,
@@ -486,9 +509,14 @@ export async function verifyProvider(
 
   const provCity = result.provider.address.city;
   const provState = result.provider.address.state;
-  const cityCheck = compareStringsField(provCity, expected.city, 0.85);
-  const stateExact = normalize(provState) === normalize(expected.state ?? "");
-  const stateScore = stateExact ? 1.0 : similarity(provState, expected.state ?? "");
+  const cityCheck = compareStringsField(provCity, expCityNorm, 0.85);
+
+  const provStateNorm = normalize(provState);
+  const stateExact = provStateNorm === expStateNorm;
+  const stateScore = stateExact
+    ? 1.0
+    : similarityPreNormalized(provStateNorm, expStateNorm);
+
   result.checks.location = {
     expected_city: expected.city ?? "",
     provider_city: provCity,
