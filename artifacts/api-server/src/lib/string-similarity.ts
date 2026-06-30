@@ -3,12 +3,15 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+const NORMALIZE_RE_PUNCT = /[^\w\s]/g;
+const NORMALIZE_RE_SPACE = /\s+/g;
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(NORMALIZE_RE_PUNCT, " ")
+    .replace(NORMALIZE_RE_SPACE, " ")
     .trim();
 }
 
@@ -47,10 +50,21 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+
+  let result = "";
+  let start = 0;
+  while (start < normalized.length) {
+    let end = normalized.indexOf(" ", start);
+    if (end === -1) end = normalized.length;
+
+    const token = normalized.substring(start, end);
+    if (token && !TITLE_TOKENS.has(token) && !CREDENTIAL_TOKENS.has(token)) {
+      result = result ? `${result} ${token}` : token;
+    }
+
+    start = end + 1;
+  }
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -67,9 +81,14 @@ export function similarityName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
-  const na = normalize(a);
-  const nb = normalize(b);
+  return similarityNamePreNormalized(normalize(a), normalize(b));
+}
 
+/**
+ * 0..1 similarity ratio between two ALREADY normalized name strings,
+ * accounting for titles/credentials.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
@@ -101,9 +120,10 @@ export function levenshtein(a: string, b: string): number {
   for (let i = 1; i <= alen; i++) {
     let prevDiag = row[0]; // (i-1, j-1)
     row[0] = i;
+    const charCodeA = s1.charCodeAt(i - 1);
     for (let j = 1; j <= blen; j++) {
       const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+      const cost = charCodeA === s2.charCodeAt(j - 1) ? 0 : 1;
       row[j] = Math.min(
         row[j] + 1, // (i-1, j) + 1
         row[j - 1] + 1, // (i, j-1) + 1

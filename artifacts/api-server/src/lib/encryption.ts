@@ -73,9 +73,8 @@ export function isKeyConfigured(version: number): boolean {
 
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
-  const parts = [fieldName];
-  if (entityId) parts.push(entityId);
-  return Buffer.from(parts.join(":"), "utf8");
+  const aad = entityId ? `${fieldName}:${entityId}` : fieldName;
+  return Buffer.from(aad, "utf8");
 }
 
 export function encrypt(plaintext: string, fieldName?: string, entityId?: string): string {
@@ -121,18 +120,22 @@ function tryDecryptWithAAD(
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+  if (ciphertext.indexOf("enc:v") === 0) {
+    const firstColon = ciphertext.indexOf(":", 5);
+    const secondColon = ciphertext.indexOf(":", firstColon + 1);
+
+    // enc:v<version>:<aadFlag>:<payload>
+    const versionStr = ciphertext.substring(5, firstColon);
+    keyVersion = parseInt(versionStr, 10) || 1;
+    hasAADFlag = parseInt(ciphertext.substring(firstColon + 1, secondColon), 10) || 0;
+    payload = ciphertext.substring(secondColon + 1);
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
@@ -177,12 +180,13 @@ export const ENCRYPTED_FIELDS = [
 ] as const;
 
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  const result = { ...data };
+  if (!data) return data;
+  let result = data;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
-      }
+    const val = data[field];
+    if (typeof val === "string" && val.indexOf("enc:") !== 0) {
+      if (result === data) result = { ...data };
+      result[field] = encrypt(val, field, entityId);
     }
   }
   return result;
@@ -190,10 +194,15 @@ export function encryptLeadFields(data: Record<string, any>, entityId?: string):
 
 export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   if (!data) return data;
-  const result = { ...data };
+  let result = data;
   for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
+    const val = data[field];
+    if (typeof val === "string" && val.indexOf("enc:") === 0) {
+      const decrypted = decrypt(val, field, entityId);
+      if (decrypted !== val) {
+        if (result === data) result = { ...data };
+        result[field] = decrypted;
+      }
     }
   }
   return result;
@@ -230,7 +239,7 @@ export async function rebindLeadEncryptionAad(
   const update: Record<string, any> = {};
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (typeof cur !== "string" || cur.indexOf("enc:") !== 0) continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
@@ -240,7 +249,14 @@ export async function rebindLeadEncryptionAad(
       // remains intact and decrypt-side fallback still recovers it.
     }
   }
-  if (Object.keys(update).length === 0) return;
+  let hasUpdate = false;
+  for (const k in update) {
+    if (Object.prototype.hasOwnProperty.call(update, k)) {
+      hasUpdate = true;
+      break;
+    }
+  }
+  if (!hasUpdate) return;
   try {
     await db.update(leadsTable).set(update).where(eq(leadsTable.id, lead.id));
   } catch (err) {

@@ -46,8 +46,8 @@ const COMMON_PROVIDERS_FUZZY: Array<{ prefix: string; canonical: string; minLen:
 function findFuzzyProviderMatch(domain: string): string | null {
   const lastDot = domain.lastIndexOf(".");
   if (lastDot === -1) return null;
-  const prefix = domain.slice(0, lastDot);
-  const tld = domain.slice(lastDot);
+  const prefix = domain.substring(0, lastDot);
+  const tld = domain.substring(lastDot);
   if (tld !== ".com") return null;
   if (prefix.length < 3) return null;
   let best: { canonical: string; distance: number } | null = null;
@@ -101,13 +101,14 @@ export function validateEmail(email: string): EmailValidationResult {
     return { valid: false, errors };
   }
 
-  const parts = trimmed.split("@");
-  if (parts.length !== 2) {
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex === -1 || trimmed.indexOf("@", atIndex + 1) !== -1) {
     errors.push("INVALID_EMAIL_STRUCTURE");
     return { valid: false, errors };
   }
 
-  const [localPart, domain] = parts;
+  const localPart = trimmed.substring(0, atIndex);
+  const domain = trimmed.substring(atIndex + 1);
 
   if (localPart.length === 0 || localPart.length > 64) {
     errors.push("INVALID_LOCAL_PART");
@@ -132,10 +133,11 @@ export function validateEmail(email: string): EmailValidationResult {
     }
   }
 
-  for (const tld of MALFORMED_TLDS) {
-    if (trimmed.endsWith(tld)) {
+  for (let i = 0; i < MALFORMED_TLDS.length; i++) {
+    const tld = MALFORMED_TLDS[i];
+    if (trimmed.length >= tld.length && trimmed.lastIndexOf(tld) === trimmed.length - tld.length) {
       errors.push("MALFORMED_TLD");
-      const corrected = trimmed.slice(0, -tld.length) + ".com";
+      const corrected = trimmed.substring(0, trimmed.length - tld.length) + ".com";
       suggestion = corrected;
       break;
     }
