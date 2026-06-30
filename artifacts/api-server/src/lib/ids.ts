@@ -191,7 +191,14 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       details: threat.details,
       payload_sample: JSON.stringify({
         query: req.query,
-        body: typeof req.body === "object" ? Object.keys(req.body) : undefined,
+        body: (function(b) {
+          if (typeof b !== "object" || b === null) return undefined;
+          const ks = [];
+          for (const k in b) {
+            if (Object.prototype.hasOwnProperty.call(b, k)) ks.push(k);
+          }
+          return ks;
+        })(req.body),
         pattern: threat.pattern,
       }).substring(0, 2000),
       status: "new",

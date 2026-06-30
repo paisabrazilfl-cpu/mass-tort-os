@@ -249,7 +249,14 @@ export async function rebindLeadEncryptionAad(
       // remains intact and decrypt-side fallback still recovers it.
     }
   }
-  if (Object.keys(update).length === 0) return;
+  let hasUpdate = false;
+  for (const k in update) {
+    if (Object.prototype.hasOwnProperty.call(update, k)) {
+      hasUpdate = true;
+      break;
+    }
+  }
+  if (!hasUpdate) return;
   try {
     await db.update(leadsTable).set(update).where(eq(leadsTable.id, lead.id));
   } catch (err) {

@@ -33,9 +33,8 @@ export function maskEmail(value: unknown): unknown {
   if (typeof value !== "string" || value.length === 0) return value;
   const at = value.indexOf("@");
   if (at < 1) return "***";
-  const local = value.slice(0, at);
-  const domain = value.slice(at);
-  return `${local[0]}***${domain}`;
+  const domain = value.substring(at);
+  return `${value.substring(0, 1)}***${domain}`;
 }
 
 /** Mask phone: keep last 4 digits, mask the rest. "5555550199" → "***-***-0199" */
@@ -43,18 +42,37 @@ export function maskPhone(value: unknown): unknown {
   if (typeof value !== "string" || value.length === 0) return value;
   const digits = value.replace(/\D/g, "");
   if (digits.length === 0) return "***";
-  const last4 = digits.slice(-4);
+  const last4 = digits.substring(Math.max(0, digits.length - 4));
   return `***-***-${last4}`;
 }
 
 /** Mask a person's name: "John Doe" → "J*** D***". Empty input passes through. */
 export function maskName(value: unknown): unknown {
   if (typeof value !== "string" || value.trim().length === 0) return value;
-  return value
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => `${part[0]}***`)
-    .join(" ");
+
+  let result = "";
+  let start = 0;
+  while (start < value.length) {
+    // Find next whitespace
+    let nextSpace = -1;
+    for (let i = start; i < value.length; i++) {
+      if (value[i] === " " || value[i] === "\t" || value[i] === "\n" || value[i] === "\r") {
+        nextSpace = i;
+        break;
+      }
+    }
+
+    let end = nextSpace === -1 ? value.length : nextSpace;
+    const part = value.substring(start, end);
+    if (part) {
+      const masked = `${part.substring(0, 1)}***`;
+      result = result ? `${result} ${masked}` : masked;
+    }
+
+    if (nextSpace === -1) break;
+    start = nextSpace + 1;
+  }
+  return result;
 }
 
 /** Mask street address completely. City/state/zip stay (less identifying alone, needed for audit). */
@@ -161,9 +179,12 @@ function sanitizeValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sanitizeValue);
   if (typeof value !== "object") return value;
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    const handler = FIELD_MASKERS[k];
-    out[k] = handler ? handler(v) : sanitizeValue(v);
+  const obj = value as Record<string, unknown>;
+  for (const k in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) {
+      const handler = FIELD_MASKERS[k];
+      out[k] = handler ? handler(obj[k]) : sanitizeValue(obj[k]);
+    }
   }
   return out;
 }
