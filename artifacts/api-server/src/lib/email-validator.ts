@@ -46,8 +46,8 @@ const COMMON_PROVIDERS_FUZZY: Array<{ prefix: string; canonical: string; minLen:
 function findFuzzyProviderMatch(domain: string): string | null {
   const lastDot = domain.lastIndexOf(".");
   if (lastDot === -1) return null;
-  const prefix = domain.slice(0, lastDot);
-  const tld = domain.slice(lastDot);
+  const prefix = domain.substring(0, lastDot);
+  const tld = domain.substring(lastDot);
   if (tld !== ".com") return null;
   if (prefix.length < 3) return null;
   let best: { canonical: string; distance: number } | null = null;
@@ -56,7 +56,7 @@ function findFuzzyProviderMatch(domain: string): string | null {
     if (prefix === known) return null;
     // Anchor on the first character to avoid classifying real-but-similar
     // domains (ymail.com, email.com, cloud.com) as typos of gmail/icloud.
-    if (prefix[0] !== known[0]) continue;
+    if (prefix.charAt(0) !== known.charAt(0)) continue;
     const dist = levenshtein(prefix, known);
     const threshold = known.length <= 7 ? 3 : 4;
     if (dist === 0 || dist > threshold) continue;
@@ -101,13 +101,14 @@ export function validateEmail(email: string): EmailValidationResult {
     return { valid: false, errors };
   }
 
-  const parts = trimmed.split("@");
-  if (parts.length !== 2) {
+  const atIndex = trimmed.lastIndexOf("@");
+  if (atIndex === -1 || trimmed.indexOf("@") !== atIndex) {
     errors.push("INVALID_EMAIL_STRUCTURE");
     return { valid: false, errors };
   }
 
-  const [localPart, domain] = parts;
+  const localPart = trimmed.substring(0, atIndex);
+  const domain = trimmed.substring(atIndex + 1);
 
   if (localPart.length === 0 || localPart.length > 64) {
     errors.push("INVALID_LOCAL_PART");
@@ -117,7 +118,7 @@ export function validateEmail(email: string): EmailValidationResult {
     errors.push("INVALID_DOMAIN");
   }
 
-  if (!domain.includes(".")) {
+  if (domain.indexOf(".") === -1) {
     errors.push("MISSING_TLD");
   }
 
@@ -132,33 +133,30 @@ export function validateEmail(email: string): EmailValidationResult {
     }
   }
 
-  for (const tld of MALFORMED_TLDS) {
-    if (trimmed.endsWith(tld)) {
+  for (let i = 0; i < MALFORMED_TLDS.length; i++) {
+    const tld = MALFORMED_TLDS[i];
+    if (trimmed.length >= tld.length && trimmed.lastIndexOf(tld) === trimmed.length - tld.length) {
       errors.push("MALFORMED_TLD");
-      const corrected = trimmed.slice(0, -tld.length) + ".com";
+      const corrected = trimmed.substring(0, trimmed.length - tld.length) + ".com";
       suggestion = corrected;
       break;
     }
   }
 
-  if (DISPOSABLE_DOMAINS.includes(domain)) {
+  let isDisposable = false;
+  for (let i = 0; i < DISPOSABLE_DOMAINS.length; i++) {
+    if (domain === DISPOSABLE_DOMAINS[i]) {
+      isDisposable = true;
+      break;
+    }
+  }
+  if (isDisposable) {
     errors.push("DISPOSABLE_EMAIL");
   }
 
-  const suspiciousPatterns = [
-    /^test@/,
-    /^fake@/,
-    /^none@/,
-    /^noemail@/,
-    /^na@/,
-    /^asdf/,
-    /^aaa+@/,
-  ];
-  for (const pat of suspiciousPatterns) {
-    if (pat.test(trimmed)) {
-      errors.push("SUSPICIOUS_EMAIL_PATTERN");
-      break;
-    }
+  const SUSPICIOUS_RE = /^(?:test@|fake@|none@|noemail@|na@|asdf|aaa+@)/;
+  if (SUSPICIOUS_RE.test(trimmed)) {
+    errors.push("SUSPICIOUS_EMAIL_PATTERN");
   }
 
   const hardErrors = errors.filter((e) => !ADVISORY_CODES.has(e));

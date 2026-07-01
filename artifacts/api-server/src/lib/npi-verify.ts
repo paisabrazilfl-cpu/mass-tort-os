@@ -227,9 +227,21 @@ async function searchByNameLocation(
   const params = new URLSearchParams({ version: NPI_VERSION, limit: String(limit) });
 
   // Extract first/last from a free-text name if provided
-  const nameParts = (expected.name ?? "").trim().split(/\s+/).filter(Boolean);
-  if (nameParts.length >= 1) params.set("first_name", nameParts[0]);
-  if (nameParts.length >= 2) params.set("last_name", nameParts[nameParts.length - 1]);
+  const name = (expected.name ?? "").trim();
+  if (name) {
+    let first = "";
+    let last = "";
+    const firstSpace = name.indexOf(" ");
+    if (firstSpace === -1) {
+      first = name;
+    } else {
+      first = name.substring(0, firstSpace);
+      const lastSpace = name.lastIndexOf(" ");
+      last = name.substring(lastSpace + 1);
+    }
+    if (first) params.set("first_name", first);
+    if (last) params.set("last_name", last);
+  }
 
   if (expected.organization) params.set("organization_name", expected.organization);
   if (expected.city) params.set("city", expected.city);
@@ -251,9 +263,12 @@ function pickBestSearchResult(
 
   for (const r of results) {
     const basic = r.basic ?? {};
-    const name =
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
+    let name = basic.name;
+    if (!name) {
+      const first = basic.first_name || "";
+      const last = basic.last_name || "";
+      name = `${first} ${last}`.trim();
+    }
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
     const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
@@ -329,11 +344,15 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   // hospital systems often resolve to a corporate PO box hundreds of miles
   // from the actual practice, which would tank city scoring.
   const primary = pickPrimaryAddress(p.addresses);
+  let name = basic.name;
+  if (!name) {
+    const first = basic.first_name || "";
+    const last = basic.last_name || "";
+    name = `${first} ${last}`.trim();
+  }
   return {
     npi: String(p.number ?? ""),
-    name:
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim(),
+    name,
     organization_name: basic.organization_name ?? "",
     taxonomies: (p.taxonomies ?? []).map((t) => ({
       code: t.code ?? "",
