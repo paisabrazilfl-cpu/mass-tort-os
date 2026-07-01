@@ -118,7 +118,7 @@ export function validateEmail(email: string): EmailValidationResult {
     errors.push("INVALID_DOMAIN");
   }
 
-  if (!domain.includes(".")) {
+  if (domain.indexOf(".") === -1) {
     errors.push("MISSING_TLD");
   }
 

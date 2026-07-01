@@ -47,10 +47,19 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  let result = "";
+  let start = 0;
+  while (start < normalized.length) {
+    let end = normalized.indexOf(" ", start);
+    if (end === -1) end = normalized.length;
+    const token = normalized.substring(start, end);
+    if (token && !TITLE_TOKENS.has(token) && !CREDENTIAL_TOKENS.has(token)) {
+      if (result) result += " ";
+      result += token;
+    }
+    start = end + 1;
+  }
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
