@@ -214,7 +214,12 @@ export function decryptLeadFields(data: Record<string, any>, entityId?: string):
 }
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
-  return leads.map(l => decryptLeadFields(l, String(l.id)));
+  const result: Record<string, any>[] = [];
+  for (let i = 0; i < leads.length; i++) {
+    const l = leads[i];
+    result.push(decryptLeadFields(l, String(l.id)));
+  }
+  return result;
 }
 
 /**
@@ -242,6 +247,7 @@ export async function rebindLeadEncryptionAad(
   if (!lead || lead.id === undefined || lead.id === null) return;
   const id = String(lead.id);
   const update: Record<string, any> = {};
+  let hasUpdate = false;
   for (const field of ENCRYPTED_FIELDS) {
     const cur = lead[field];
     if (typeof cur !== "string" || cur.indexOf("enc:") !== 0) continue;
@@ -249,12 +255,13 @@ export async function rebindLeadEncryptionAad(
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
       update[field] = encrypt(plain, field, id);
+      hasUpdate = true;
     } catch {
       // Skip individual field on rebind failure — the original ciphertext
       // remains intact and decrypt-side fallback still recovers it.
     }
   }
-  if (Object.keys(update).length === 0) return;
+  if (!hasUpdate) return;
   try {
     await db.update(leadsTable).set(update).where(eq(leadsTable.id, lead.id));
   } catch (err) {

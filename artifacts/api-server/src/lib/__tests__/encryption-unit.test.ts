@@ -11,7 +11,7 @@ test("basic encryption and decryption", () => {
   const id = "lead_1";
 
   const ciphertext = encrypt(plaintext, field, id);
-  assert.ok(ciphertext.startsWith("enc:v1:1:"));
+  assert.ok(ciphertext.indexOf("enc:v1:1:") === 0);
 
   const decrypted = decrypt(ciphertext, field, id);
   assert.strictEqual(decrypted, plaintext);
@@ -48,7 +48,7 @@ test("lazy cloning in encryptLeadFields", () => {
   const dataWithEnc = { id: 2, notes: "some notes" };
   const result2 = encryptLeadFields(dataWithEnc, "2");
   assert.notStrictEqual(result2, dataWithEnc, "Should clone if field encrypted");
-  assert.ok(result2.notes.startsWith("enc:"));
+  assert.ok(result2.notes.indexOf("enc:") === 0);
 });
 
 test("lazy cloning in decryptLeadFields", () => {
