@@ -34,7 +34,7 @@ export function mintApiKey(): { plaintext: string; hash: string; prefix: string 
   const hash = crypto.createHash("sha256").update(plaintext).digest("hex");
   // First 12 chars of the random body — enough to disambiguate keys in the
   // admin UI without revealing the whole secret.
-  const prefix = `${API_KEY_PREFIX}${bytes.slice(0, 8)}…`;
+  const prefix = `${API_KEY_PREFIX}${bytes.substring(0, 8)}…`;
   return { plaintext, hash, prefix };
 }
 
@@ -43,7 +43,7 @@ export function hashApiKey(plaintext: string): string {
 }
 
 export function isApiKeyToken(token: string): boolean {
-  return token.startsWith(API_KEY_PREFIX);
+  return token.indexOf(API_KEY_PREFIX) === 0;
 }
 
 /**
@@ -110,15 +110,33 @@ export async function authenticateApiKey(plaintext: string): Promise<ApiKeyAuthR
  * already normalizes to the path within the mounted router).
  */
 export function checkScope(scopes: readonly string[], method: string, path: string): boolean {
-  if (scopes.includes("*")) return true;
-  const action = ["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase()) ? "read" : "write";
+  let hasWildcard = false;
+  for (let i = 0; i < scopes.length; i++) {
+    if (scopes[i] === "*") { hasWildcard = true; break; }
+  }
+  if (hasWildcard) return true;
+
+  const m = method.toUpperCase();
+  const action = (m === "GET" || m === "HEAD" || m === "OPTIONS") ? "read" : "write";
+
   // Strip leading slash, take first segment.
-  const segment = path.replace(/^\/+/, "").split("/")[0] ?? "";
+  const p = path.replace(/^\/+/, "");
+  const firstSlash = p.indexOf("/");
+  const segment = firstSlash === -1 ? p : p.substring(0, firstSlash);
+
   if (!segment) return false;
+
   // A `:write` scope implies `:read` on the same resource (a key that
   // can mutate can also observe).
-  if (action === "read" && scopes.includes(`${segment}:write`)) return true;
-  return scopes.includes(`${segment}:${action}`);
+  const writeScope = `${segment}:write`;
+  const actionScope = `${segment}:${action}`;
+
+  for (let i = 0; i < scopes.length; i++) {
+    if (action === "read" && scopes[i] === writeScope) return true;
+    if (scopes[i] === actionScope) return true;
+  }
+
+  return false;
 }
 
 /** Audit a single API-key request. Fire-and-forget — never throws. */

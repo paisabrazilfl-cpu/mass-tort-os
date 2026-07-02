@@ -606,7 +606,7 @@ export function isTokenVersionRevoked(decodedTv: number | undefined, currentDbTv
 // NODE_ENV === "development" AND no Authorization header is present.
 async function _authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
+  if (!authHeader || authHeader.indexOf("Bearer ") !== 0) {
     // Task #20: dev bypass is now OPT-IN via MTOS_DEV_LOGIN=1 even under
     // NODE_ENV=development. Without this flag, the dev login UI exercises
     // the real /auth/login + /auth/refresh JWT path, so MFA, lockout, and
@@ -625,7 +625,7 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
     return;
   }
 
-  const token = authHeader.slice(7);
+  const token = authHeader.substring(7);
 
   // Task #52 — API key bearer path. The `mtos_` prefix lets us
   // disambiguate cheaply without paying the JWT verify cost. API key
@@ -639,12 +639,20 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
       return;
     }
     if (!checkScope(apiKey.scopes, req.method, req.path)) {
+      const xff = req.headers["x-forwarded-for"];
+      const rawIp = Array.isArray(xff) ? xff[0] : xff;
+      let ip = req.socket.remoteAddress;
+      if (typeof rawIp === "string") {
+        const c = rawIp.indexOf(",");
+        ip = (c === -1 ? rawIp : rawIp.substring(0, c)).replace(/^\s+|\s+$/g, "");
+      }
+
       auditApiKeyRequest(
         apiKey.id,
         req.method,
         req.originalUrl,
         403,
-        (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
+        ip,
         req.headers["user-agent"],
       );
       auditDenial(req, "api_key_scope_denied", {
@@ -665,12 +673,20 @@ async function _authMiddleware(req: Request, res: Response, next: NextFunction):
     // finish so we capture the actual status code the route returned.
     (req as Request & { apiKey?: { id: number } }).apiKey = { id: apiKey.id };
     res.on("finish", () => {
+      const xff = req.headers["x-forwarded-for"];
+      const rawIp = Array.isArray(xff) ? xff[0] : xff;
+      let ip = req.socket.remoteAddress;
+      if (typeof rawIp === "string") {
+        const c = rawIp.indexOf(",");
+        ip = (c === -1 ? rawIp : rawIp.substring(0, c)).replace(/^\s+|\s+$/g, "");
+      }
+
       auditApiKeyRequest(
         apiKey.id,
         req.method,
         req.originalUrl,
         res.statusCode,
-        (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
+        ip,
         req.headers["user-agent"],
       );
     });
@@ -744,7 +760,15 @@ export function requireRole(...roles: UserRole[]) {
     throw new Error("requireRole called with no roles — refusing to mount a deny-all middleware");
   }
   const minRequired = Math.min(...roles.map(r => ROLE_HIERARCHY[r]));
-  const minLabel = (Object.keys(ROLE_HIERARCHY) as UserRole[]).find(r => ROLE_HIERARCHY[r] === minRequired) ?? roles[0];
+  let minLabel: UserRole = roles[0];
+  for (const r in ROLE_HIERARCHY) {
+    if (Object.prototype.hasOwnProperty.call(ROLE_HIERARCHY, r)) {
+      if (ROLE_HIERARCHY[r as UserRole] === minRequired) {
+        minLabel = r as UserRole;
+        break;
+      }
+    }
+  }
   return markGateMiddleware(function requireRole(req: Request, res: Response, next: NextFunction): void {
     const user = req.user;
     if (!user) {
@@ -808,7 +832,12 @@ function auditDenial(req: Request, reason: string, opts: AuditDenialOpts = {}): 
 
   const subject = userId !== null ? String(userId) : "anonymous";
   const xff = req.headers["x-forwarded-for"];
-  const ip = (Array.isArray(xff) ? xff[0] : xff)?.split(",")[0]?.trim() || req.socket.remoteAddress;
+  const rawIp = Array.isArray(xff) ? xff[0] : xff;
+  let ip = req.socket.remoteAddress;
+  if (typeof rawIp === "string") {
+    const c = rawIp.indexOf(",");
+    ip = (c === -1 ? rawIp : rawIp.substring(0, c)).replace(/^\s+|\s+$/g, "");
+  }
 
   auditLog("access_denied", subject, reason, {
     reason,
@@ -846,13 +875,21 @@ export function auditAction(action: string) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const user = req.user;
     if (user) {
+      const xff = req.headers["x-forwarded-for"];
+      const rawIp = Array.isArray(xff) ? xff[0] : xff;
+      let ip = req.socket.remoteAddress;
+      if (typeof rawIp === "string") {
+        const c = rawIp.indexOf(",");
+        ip = (c === -1 ? rawIp : rawIp.substring(0, c)).replace(/^\s+|\s+$/g, "");
+      }
+
       auditLog("user_action", String(user.id), action, {
         path: req.path,
         method: req.method,
         user_email: user.email,
         user_role: user.role,
       }, {
-        ip_address: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress,
+        ip_address: ip,
         user_agent: req.headers["user-agent"],
       }).catch(() => {});
     }
