@@ -41,7 +41,7 @@ function hasInternalCredentials(req: Request): boolean {
   if (typeof auth !== "string" || auth.toLowerCase().indexOf("bearer ") !== 0) {
     return false;
   }
-  const token = auth.substring(7).trim();
+  const token = auth.substring(7).replace(/^\s+|\s+$/g, "");
   if (!token) return false;
   // verifyToken returns null for any malformed/unsigned/expired token,
   // so spoofed Bearer headers fall back to anonymous-traffic limits.
@@ -50,10 +50,11 @@ function hasInternalCredentials(req: Request): boolean {
 
 function getClientIp(req: Request): string {
   const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string") {
-    const comma = forwarded.indexOf(",");
-    const ip = comma === -1 ? forwarded : forwarded.substring(0, comma);
-    return ip.trim();
+  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  if (typeof raw === "string") {
+    const comma = raw.indexOf(",");
+    const ip = comma === -1 ? raw : raw.substring(0, comma);
+    return ip.replace(/^\s+|\s+$/g, "");
   }
   return req.socket.remoteAddress || "unknown";
 }
@@ -151,7 +152,14 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       details: threat.details,
       payload_sample: JSON.stringify({
         query: req.query,
-        body: typeof req.body === "object" ? Object.keys(req.body) : undefined,
+        body: (function(b) {
+          if (!b || typeof b !== "object") return undefined;
+          const k = [];
+          for (const key in b) {
+            if (Object.prototype.hasOwnProperty.call(b, key)) k.push(key);
+          }
+          return k;
+        })(req.body),
         pattern: threat.pattern,
       }).substring(0, 2000),
       status: "new",
@@ -256,11 +264,11 @@ export function idsMiddleware() {
 // .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
 const janitor = setInterval(() => {
   const now = Date.now();
-  for (const [ip, entry] of ipRequestLog.entries()) {
+  ipRequestLog.forEach((entry, ip) => {
     if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
       ipRequestLog.delete(ip);
     }
-  }
+  });
 }, 60_000);
 if (typeof janitor.unref === "function") {
   janitor.unref();
