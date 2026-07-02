@@ -389,10 +389,15 @@ async function processJob(job: {
     const localTime = new Intl.DateTimeFormat("en-US", {
       timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false,
     }).format(new Date());
-    const [lh, lm] = localTime.split(":").map(Number);
+    const timeSplit = (s: string) => {
+      const c = s.indexOf(":");
+      if (c === -1) return [parseInt(s, 10), 0];
+      return [parseInt(s.substring(0, c), 10), parseInt(s.substring(c + 1), 10)];
+    };
+    const [lh, lm] = timeSplit(localTime);
     const nowMin = (lh ?? 0) * 60 + (lm ?? 0);
-    const [wsh, wsm] = (campaign.call_window_start ?? "09:00").split(":").map(Number);
-    const [weh, wem] = (campaign.call_window_end ?? "20:00").split(":").map(Number);
+    const [wsh, wsm] = timeSplit(campaign.call_window_start ?? "09:00");
+    const [weh, wem] = timeSplit(campaign.call_window_end ?? "20:00");
     const windowStart = (wsh ?? 9) * 60 + (wsm ?? 0);
     const windowEnd = (weh ?? 20) * 60 + (wem ?? 0);
 
@@ -413,7 +418,7 @@ async function processJob(job: {
       return;
     }
     const creds = resolved.credentials as Record<string, unknown>;
-    const apiKey = typeof creds.api_key === "string" ? creds.api_key.trim() : "";
+    const apiKey = typeof creds.api_key === "string" ? creds.api_key.replace(/^\s+|\s+$/g, "") : "";
     if (!apiKey) {
       logger.warn({ campaign_id }, "dialer: Vapi api_key missing — pausing campaign");
       await db.update(dialerCampaignsTable)
@@ -657,10 +662,20 @@ async function processJob(job: {
           // Normalise provider-specific status strings to our enum.
           const DELIVERED = ["y", "delivered", "success", "sent", "ok"];
           const FAILED    = ["n", "failed", "error", "busy", "no_answer", "noanswer", "rejected", "invalid"];
-          const lc = String(rawStatus).toLowerCase().trim();
+          const lc = String(rawStatus).toLowerCase().replace(/^\s+|\s+$/g, "");
+
+          let isDelivered = false;
+          for (let i = 0; i < DELIVERED.length; i++) {
+            if (DELIVERED[i] === lc) { isDelivered = true; break; }
+          }
+          let isFailed = false;
+          for (let i = 0; i < FAILED.length; i++) {
+            if (FAILED[i] === lc) { isFailed = true; break; }
+          }
+
           const deliveryStatus =
-            DELIVERED.includes(lc) ? "delivered"
-            : FAILED.includes(lc)  ? "failed"
+            isDelivered ? "delivered"
+            : isFailed  ? "failed"
             : "pending";
 
           await db

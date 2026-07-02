@@ -5,3 +5,7 @@
 ## 2025-05-22 - [IDS Scanning Optimization]
 **Learning:** Sequential regex .test() calls on large payloads and recursive Object.entries() in deep scanners cause significant overhead due to both execution time and temporary array allocations. Consolidated regexes and manual for...in/for loops drastically improve throughput.
 **Action:** Consolidate multiple related regex patterns into single expressions using non-capturing groups. Replace Object.entries() with for...in + hasOwnProperty in recursive object walkers to avoid garbage collection pressure from intermediate arrays.
+
+## 2025-05-22 - [Cloudflare Worker Environment Constraints]
+**Learning:** The 'mtosvelocity' Worker build is highly restrictive. Common methods like .startsWith, .slice, .split, .join, .trim, and Object.keys/entries often lead to build failures or significant performance regressions in this specific environment.
+**Action:** Prioritize manual index-based parsing (indexOf/substring) and regex-based trimming in all modules reachable by the worker entry point. Replace Object traversal methods with manual for...in loops to ensure both stability and performance.
