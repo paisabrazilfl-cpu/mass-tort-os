@@ -38,10 +38,10 @@ const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 // IDS classification decision. URL + query are scanned regardless.
 function hasInternalCredentials(req: Request): boolean {
   const auth = req.headers["authorization"];
-  if (typeof auth !== "string" || !auth.toLowerCase().startsWith("bearer ")) {
+  if (typeof auth !== "string" || auth.toLowerCase().indexOf("bearer ") !== 0) {
     return false;
   }
-  const token = auth.slice(7).trim();
+  const token = auth.substring(7).trim();
   if (!token) return false;
   // verifyToken returns null for any malformed/unsigned/expired token,
   // so spoofed Bearer headers fall back to anonymous-traffic limits.
@@ -153,7 +153,7 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
         query: req.query,
         body: typeof req.body === "object" ? Object.keys(req.body) : undefined,
         pattern: threat.pattern,
-      }).slice(0, 2000),
+      }).substring(0, 2000),
       status: "new",
       blocked: threat.severity === "critical",
     });
