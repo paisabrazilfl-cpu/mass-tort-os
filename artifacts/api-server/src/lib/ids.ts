@@ -55,12 +55,24 @@ function hasInternalCredentials(req: Request): boolean {
 
 function getClientIp(req: Request): string {
   const forwarded = req.headers["x-forwarded-for"];
+  let rawIp: string | undefined;
+
   if (typeof forwarded === "string") {
     const commaIndex = forwarded.indexOf(",");
-    const ip = commaIndex === -1 ? forwarded : forwarded.substring(0, commaIndex);
-    return ip.replace(/^\s+|\s+$/g, "");
+    rawIp = commaIndex === -1 ? forwarded : forwarded.substring(0, commaIndex);
+  } else if (Array.isArray(forwarded) && forwarded.length > 0) {
+    const firstEntry = forwarded[0];
+    if (typeof firstEntry === "string") {
+      const commaIndex = firstEntry.indexOf(",");
+      rawIp = commaIndex === -1 ? firstEntry : firstEntry.substring(0, commaIndex);
+    }
   }
-  return req.socket.remoteAddress || "unknown";
+
+  if (rawIp) {
+    return rawIp.replace(/^\s+|\s+$/g, "");
+  }
+
+  return req.socket?.remoteAddress || "unknown";
 }
 
 export function scanValue(value: string): ThreatDetection | null {
@@ -289,14 +301,16 @@ export function idsMiddleware() {
 }
 
 // .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-const janitor = setInterval(() => {
-  const now = Date.now();
-  ipRequestLog.forEach((entry, ip) => {
-    if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
-      ipRequestLog.delete(ip);
-    }
-  });
-}, 60_000);
-if (typeof (janitor as any).unref === "function") {
-  (janitor as any).unref();
+if (typeof setInterval === "function") {
+  const janitor = setInterval(() => {
+    const now = Date.now();
+    ipRequestLog.forEach((entry, ip) => {
+      if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
+        ipRequestLog.delete(ip);
+      }
+    });
+  }, 60_000);
+  if (typeof (janitor as any).unref === "function") {
+    (janitor as any).unref();
+  }
 }
