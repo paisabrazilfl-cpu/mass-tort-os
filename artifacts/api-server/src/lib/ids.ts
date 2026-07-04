@@ -18,6 +18,8 @@ const SQL_INJECTION_PATTERNS = [
   /(\bunion\b\s+\ball\b\s+\bselect\b)/i,
 ];
 
+const SQL_INJECTION_RE = new RegExp(SQL_INJECTION_PATTERNS.map(p => `(?:${p.source})`).join("|"), "i");
+
 const XSS_PATTERNS = [
   /<script[\s>]/i,
   /javascript\s*:/i,
@@ -31,6 +33,8 @@ const XSS_PATTERNS = [
   /<svg.*on\w+\s*=/i,
 ];
 
+const XSS_RE = new RegExp(XSS_PATTERNS.map(p => `(?:${p.source})`).join("|"), "i");
+
 const PATH_TRAVERSAL_PATTERNS = [
   /\.\.\//,
   /\.\.\\/, 
@@ -41,11 +45,15 @@ const PATH_TRAVERSAL_PATTERNS = [
   /\bboot\.ini\b/i,
 ];
 
+const PATH_TRAVERSAL_RE = new RegExp(PATH_TRAVERSAL_PATTERNS.map(p => `(?:${p.source})`).join("|"), "i");
+
 const COMMAND_INJECTION_PATTERNS = [
   /[;&|`$].*\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\b/i,
   /\$\{.*\}/,
   /\$\(.*\)/,
 ];
+
+const COMMAND_INJECTION_RE = new RegExp(COMMAND_INJECTION_PATTERNS.map(p => `(?:${p.source})`).join("|"), "i");
 
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
@@ -86,38 +94,55 @@ function getClientIp(req: Request): string {
     || "unknown";
 }
 
-function scanValue(value: string): ThreatDetection | null {
-  for (const pattern of SQL_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+export function scanValue(value: string): ThreatDetection | null {
+  if (SQL_INJECTION_RE.test(value)) {
+    for (const pattern of SQL_INJECTION_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of XSS_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+  if (XSS_RE.test(value)) {
+    for (const pattern of XSS_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of PATH_TRAVERSAL_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+  if (COMMAND_INJECTION_RE.test(value)) {
+    for (const pattern of COMMAND_INJECTION_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of COMMAND_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+  if (PATH_TRAVERSAL_RE.test(value)) {
+    for (const pattern of PATH_TRAVERSAL_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+      }
     }
   }
   return null;
 }
 
-function deepScan(obj: any, path = ""): ThreatDetection | null {
+export function deepScan(obj: any, path = ""): ThreatDetection | null {
   if (typeof obj === "string") {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i], `${path}.${i}`);
+        if (threat) return threat;
+      }
+    } else {
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          const threat = deepScan(obj[key], `${path}.${key}`);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;
@@ -178,7 +203,14 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       details: threat.details,
       payload_sample: JSON.stringify({
         query: req.query,
-        body: typeof req.body === "object" ? Object.keys(req.body) : undefined,
+        // Manual loop for Cloudflare Worker compatibility (avoids Object.keys())
+        body: typeof req.body === "object" ? ((): string[] => {
+          const keys: string[] = [];
+          for (const k in req.body) {
+            if (Object.prototype.hasOwnProperty.call(req.body, k)) keys.push(k);
+          }
+          return keys;
+        })() : undefined,
         pattern: threat.pattern,
       }).slice(0, 2000),
       status: "new",
