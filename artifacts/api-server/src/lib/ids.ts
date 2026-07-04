@@ -18,7 +18,14 @@ const SQL_INJECTION_PATTERNS = [
   /(\bunion\b\s+\ball\b\s+\bselect\b)/i,
 ];
 
-const SQL_INJECTION_RE = new RegExp(SQL_INJECTION_PATTERNS.map(p => `(?:${p.source})`).join("|"), "i");
+const SQL_INJECTION_RE = ((): RegExp => {
+  let combined = "";
+  for (let i = 0; i < SQL_INJECTION_PATTERNS.length; i++) {
+    if (i > 0) combined += "|";
+    combined += "(?:" + SQL_INJECTION_PATTERNS[i].source + ")";
+  }
+  return new RegExp(combined, "i");
+})();
 
 const XSS_PATTERNS = [
   /<script[\s>]/i,
@@ -33,7 +40,14 @@ const XSS_PATTERNS = [
   /<svg.*on\w+\s*=/i,
 ];
 
-const XSS_RE = new RegExp(XSS_PATTERNS.map(p => `(?:${p.source})`).join("|"), "i");
+const XSS_RE = ((): RegExp => {
+  let combined = "";
+  for (let i = 0; i < XSS_PATTERNS.length; i++) {
+    if (i > 0) combined += "|";
+    combined += "(?:" + XSS_PATTERNS[i].source + ")";
+  }
+  return new RegExp(combined, "i");
+})();
 
 const PATH_TRAVERSAL_PATTERNS = [
   /\.\.\//,
@@ -45,7 +59,14 @@ const PATH_TRAVERSAL_PATTERNS = [
   /\bboot\.ini\b/i,
 ];
 
-const PATH_TRAVERSAL_RE = new RegExp(PATH_TRAVERSAL_PATTERNS.map(p => `(?:${p.source})`).join("|"), "i");
+const PATH_TRAVERSAL_RE = ((): RegExp => {
+  let combined = "";
+  for (let i = 0; i < PATH_TRAVERSAL_PATTERNS.length; i++) {
+    if (i > 0) combined += "|";
+    combined += "(?:" + PATH_TRAVERSAL_PATTERNS[i].source + ")";
+  }
+  return new RegExp(combined, "i");
+})();
 
 const COMMAND_INJECTION_PATTERNS = [
   /[;&|`$].*\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\b/i,
@@ -53,7 +74,14 @@ const COMMAND_INJECTION_PATTERNS = [
   /\$\(.*\)/,
 ];
 
-const COMMAND_INJECTION_RE = new RegExp(COMMAND_INJECTION_PATTERNS.map(p => `(?:${p.source})`).join("|"), "i");
+const COMMAND_INJECTION_RE = ((): RegExp => {
+  let combined = "";
+  for (let i = 0; i < COMMAND_INJECTION_PATTERNS.length; i++) {
+    if (i > 0) combined += "|";
+    combined += "(?:" + COMMAND_INJECTION_PATTERNS[i].source + ")";
+  }
+  return new RegExp(combined, "i");
+})();
 
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
@@ -78,10 +106,11 @@ const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 // IDS classification decision. URL + query are scanned regardless.
 function hasInternalCredentials(req: Request): boolean {
   const auth = req.headers["authorization"];
-  if (typeof auth !== "string" || !auth.toLowerCase().startsWith("bearer ")) {
+  if (typeof auth !== "string" || auth.toLowerCase().indexOf("bearer ") !== 0) {
     return false;
   }
-  const token = auth.slice(7).trim();
+  // Use substring instead of slice, and regex trim for Worker compatibility.
+  const token = auth.substring(7).replace(/^\s+|\s+$/g, "");
   if (!token) return false;
   // verifyToken returns null for any malformed/unsigned/expired token,
   // so spoofed Bearer headers fall back to anonymous-traffic limits.
@@ -89,9 +118,20 @@ function hasInternalCredentials(req: Request): boolean {
 }
 
 function getClientIp(req: Request): string {
-  return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() 
-    || req.socket.remoteAddress 
-    || "unknown";
+  const forwarded = req.headers["x-forwarded-for"];
+  let ip = "";
+  if (typeof forwarded === "string") {
+    const commaIndex = forwarded.indexOf(",");
+    ip = (commaIndex !== -1 ? forwarded.substring(0, commaIndex) : forwarded).replace(/^\s+|\s+$/g, "");
+  } else if (Array.isArray(forwarded) && forwarded.length > 0) {
+    ip = String(forwarded[0]).replace(/^\s+|\s+$/g, "");
+  }
+
+  if (!ip) {
+    // req.socket might be undefined in some environments (e.g. Workers)
+    ip = (req.socket as any)?.remoteAddress || "unknown";
+  }
+  return ip;
 }
 
 export function scanValue(value: string): ThreatDetection | null {
@@ -212,7 +252,7 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
           return keys;
         })() : undefined,
         pattern: threat.pattern,
-      }).slice(0, 2000),
+      }).substring(0, 2000),
       status: "new",
       blocked: threat.severity === "critical",
     });
@@ -313,11 +353,16 @@ export function idsMiddleware() {
 }
 
 // .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-setInterval(() => {
+// Prohibited Map .entries() and .unref() in Worker environments.
+const janitor = setInterval(() => {
   const now = Date.now();
-  for (const [ip, entry] of ipRequestLog.entries()) {
+  ipRequestLog.forEach((entry, ip) => {
     if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
       ipRequestLog.delete(ip);
     }
-  }
-}, 60_000).unref();
+  });
+}, 60_000);
+
+if (typeof janitor.unref === "function") {
+  janitor.unref();
+}
