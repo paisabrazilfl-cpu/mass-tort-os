@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction } from "express";
+import { type Request, type Response, type NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
@@ -44,12 +44,42 @@ const COMMAND_INJECTION_PATTERNS = [
 ];
 
 // Pre-compiled aggregate regexes for O(1) "clean path" check.
-// Using literals to avoid Map/join/map during module initialization which
-// can trigger Cloudflare Worker CI build failures.
-const SQL_INJECTION_RE = /(?:(\b(union|select|insert|update|delete|drop|alter|create|exec|execute)\b.*\b(from|into|table|database|where)\b)|(['"]\s*(or|and)\s+['"]?\d+['"]?\s*=\s*['"]?\d+)|(--\s|\/\*|\*\/|;.*\b(drop|delete|update|insert)\b)|(\bwaitfor\b\s+\bdelay\b|\bsleep\s*\()|(\bunion\b\s+\ball\b\s+\bselect\b))/i;
-const XSS_RE = /(?:(<script[\s>])|(javascript\s*:)|(on(error|load|click|mouseover|focus|blur)\s*=)|(<iframe[\s>])|(<object[\s>])|(<embed[\s>])|(expression\s*\()|(eval\s*\()|(document\.(cookie|location|write))|(<svg.*on\w+\s*=))/i;
-const PATH_TRAVERSAL_RE = /(?:(\.\.\/)|(\.\.\\)|(%2e%2e)|(%252e%252e)|(\/etc\/(passwd|shadow|hosts))|(\/proc\/self)|(\bboot\.ini\b))/i;
-const COMMAND_INJECTION_RE = /(?:([;&|`$].*\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\b)|(\$\{.*\})|(\$\(.*\)))/i;
+// Using manual loops for generation to ensure 'mtosvelocity' CI stability.
+const SQL_INJECTION_RE = ((): RegExp => {
+  let s = "";
+  for (let i = 0; i < SQL_INJECTION_PATTERNS.length; i++) {
+    if (i > 0) s += "|";
+    s += "(?:" + SQL_INJECTION_PATTERNS[i].source + ")";
+  }
+  return new RegExp(s, "i");
+})();
+
+const XSS_RE = ((): RegExp => {
+  let s = "";
+  for (let i = 0; i < XSS_PATTERNS.length; i++) {
+    if (i > 0) s += "|";
+    s += "(?:" + XSS_PATTERNS[i].source + ")";
+  }
+  return new RegExp(s, "i");
+})();
+
+const PATH_TRAVERSAL_RE = ((): RegExp => {
+  let s = "";
+  for (let i = 0; i < PATH_TRAVERSAL_PATTERNS.length; i++) {
+    if (i > 0) s += "|";
+    s += "(?:" + PATH_TRAVERSAL_PATTERNS[i].source + ")";
+  }
+  return new RegExp(s, "i");
+})();
+
+const COMMAND_INJECTION_RE = ((): RegExp => {
+  let s = "";
+  for (let i = 0; i < COMMAND_INJECTION_PATTERNS.length; i++) {
+    if (i > 0) s += "|";
+    s += "(?:" + COMMAND_INJECTION_PATTERNS[i].source + ")";
+  }
+  return new RegExp(s, "i");
+})();
 
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
@@ -59,7 +89,7 @@ interface ThreatDetection {
 }
 
 // Plain object for the log to avoid Map.entries/forEach in Workers.
-const ipRequestLog: Record<string, { count: number; firstSeen: number; lastSeen: number }> = {};
+const ipRequestLog: { [ip: string]: { count: number; firstSeen: number; lastSeen: number } } = {};
 const IP_RATE_WINDOW = 60_000;
 const BRUTE_FORCE_THRESHOLD = 100;
 const BRUTE_FORCE_THRESHOLD_AUTH = 600;
@@ -69,6 +99,7 @@ function hasInternalCredentials(req: Request): boolean {
   if (typeof auth !== "string" || auth.toLowerCase().indexOf("bearer ") !== 0) {
     return false;
   }
+  // Use substring instead of slice, and regex trim for Worker compatibility.
   const token = auth.substring(7).replace(/^\s+|\s+$/g, "");
   if (!token) return false;
   return verifyToken(token) !== null;
@@ -84,6 +115,7 @@ function getClientIp(req: Request): string {
     ip = String(forwarded[0]).replace(/^\s+|\s+$/g, "");
   }
   if (!ip) {
+    // req.socket might be undefined in some environments
     ip = (req.socket as any)?.remoteAddress || "unknown";
   }
   return ip;
@@ -300,7 +332,7 @@ export function idsMiddleware() {
 }
 
 // Janitor for stale entries. Use globalThis for Worker/Edge safety.
-if (typeof globalThis.setInterval === "function") {
+if (typeof globalThis !== "undefined" && typeof globalThis.setInterval === "function") {
   const janitor = globalThis.setInterval(() => {
     const now = Date.now();
     for (const ip in ipRequestLog) {
@@ -315,3 +347,5 @@ if (typeof globalThis.setInterval === "function") {
     (janitor as any).unref();
   }
 }
+
+export const __test = { scanValue, deepScan };
