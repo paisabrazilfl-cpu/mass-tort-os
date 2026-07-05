@@ -10,7 +10,13 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity, similarityName } from "./string-similarity";
+import {
+  normalize,
+  normalizeNameFromNormalized,
+  similarity,
+  similarityName,
+  similarityPreNormalized,
+} from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
@@ -206,16 +212,30 @@ async function fetchNpi(params: URLSearchParams): Promise<NpiRegistryResult[]> {
 // "where do they actually work" matching. Falls back to MAILING, then any.
 function pickPrimaryAddress(addresses: NpiAddress[] | undefined): NpiAddress {
   const list = addresses ?? [];
-  return (
-    list.find((a) => a.address_purpose === "LOCATION") ??
-    list.find((a) => a.address_purpose === "MAILING") ??
-    list[0] ??
-    {}
-  );
+  if (list.length === 0) return {};
+
+  let location: NpiAddress | null = null;
+  let mailing: NpiAddress | null = null;
+
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (!a) continue;
+    if (a.address_purpose === "LOCATION") {
+      location = a;
+      break;
+    }
+    if (a.address_purpose === "MAILING" && !mailing) {
+      mailing = a;
+    }
+  }
+
+  return location || mailing || list[0] || {};
 }
 
 async function lookupByNpi(npi: string): Promise<NpiRegistryResult | null> {
-  const params = new URLSearchParams({ number: npi, version: NPI_VERSION });
+  const params = new URLSearchParams();
+  params.set("number", npi);
+  params.set("version", NPI_VERSION);
   const results = await fetchNpi(params);
   return results[0] ?? null;
 }
@@ -224,14 +244,33 @@ async function searchByNameLocation(
   expected: ExpectedProvider,
   limit = 20,
 ): Promise<NpiRegistryResult[]> {
-  const params = new URLSearchParams({ version: NPI_VERSION, limit: String(limit) });
+  const params = new URLSearchParams();
+  params.set("version", NPI_VERSION);
+  params.set("limit", String(limit));
 
-  // Extract first/last from a free-text name if provided
-  const nameParts = (expected.name ?? "").trim().split(/\s+/).filter(Boolean);
+  // Extract first/last from a free-text name if provided. Manual tokenization
+  // avoids split() and filter() for Cloudflare Worker compatibility.
+  const rawName = (expected.name ?? "").replace(/^\s+|\s+$/g, "");
+  const nameParts: string[] = [];
+  if (rawName) {
+    let start = 0;
+    const re = /\s+/g;
+    let match;
+    while ((match = re.exec(rawName)) !== null) {
+      const part = rawName.substring(start, match.index);
+      if (part) nameParts.push(part);
+      start = re.lastIndex;
+    }
+    const lastPart = rawName.substring(start);
+    if (lastPart) nameParts.push(lastPart);
+  }
+
   if (nameParts.length >= 1) params.set("first_name", nameParts[0]);
-  if (nameParts.length >= 2) params.set("last_name", nameParts[nameParts.length - 1]);
+  if (nameParts.length >= 2)
+    params.set("last_name", nameParts[nameParts.length - 1]);
 
-  if (expected.organization) params.set("organization_name", expected.organization);
+  if (expected.organization)
+    params.set("organization_name", expected.organization);
   if (expected.city) params.set("city", expected.city);
   if (expected.state) params.set("state", expected.state);
 
@@ -244,30 +283,78 @@ function pickBestSearchResult(
 ): { best: NpiRegistryResult; score: number } | null {
   let best: NpiRegistryResult | null = null;
   let bestScore = -1;
-  const expName = expected.name ?? "";
-  const expOrg = expected.organization ?? "";
-  const expCity = expected.city ?? "";
-  const expState = expected.state ?? "";
 
-  for (const r of results) {
+  // Pre-normalize expected fields once to avoid redundant O(N) work in the loop.
+  const normExpName = normalize(expected.name);
+  const normExpNameStripped = normalizeNameFromNormalized(normExpName);
+  const normExpOrg = normalize(expected.organization);
+  const normExpCity = normalize(expected.city);
+  const normExpState = normalize(expected.state);
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (!r) continue;
     const basic = r.basic ?? {};
+    // Optimized name construction avoids filter/join array allocations.
+    // Replacement for .trim() for Worker compatibility.
     const name =
       basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
+      `${basic.first_name || ""} ${basic.last_name || ""}`.replace(
+        /^\s+|\s+$/g,
+        "",
+      );
     const org = basic.organization_name ?? "";
+
+    const normName = normalize(name);
+    const normOrg = normalize(org);
+
+    // Manual expansion of similarityName to use pre-normalized values.
+    const nameScore1Raw = similarityPreNormalized(normExpName, normName);
+    const nameScore1 =
+      nameScore1Raw >= 0.98
+        ? nameScore1Raw
+        : Math.max(
+            nameScore1Raw,
+            similarityPreNormalized(
+              normExpNameStripped,
+              normalizeNameFromNormalized(normName),
+            ),
+          );
+
+    const nameScore2Raw = similarityPreNormalized(normExpName, normOrg);
+    const nameScore2 =
+      nameScore2Raw >= 0.98
+        ? nameScore2Raw
+        : Math.max(
+            nameScore2Raw,
+            similarityPreNormalized(
+              normExpNameStripped,
+              normalizeNameFromNormalized(normOrg),
+            ),
+          );
+
+    const nameScore = Math.max(nameScore1, nameScore2);
+    const orgScore = similarityPreNormalized(normExpOrg, normOrg);
+
     const primaryAddr = pickPrimaryAddress(r.addresses);
-    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
-    const orgScore = similarity(expOrg, org);
-    const cityScore = similarity(expCity, primaryAddr.city ?? "");
+    const normCity = normalize(primaryAddr.city);
+    const cityScore = similarityPreNormalized(normExpCity, normCity);
+
+    const normState = normalize(primaryAddr.state);
     const stateScore =
-      normalize(expState) === normalize(primaryAddr.state ?? "")
+      normExpState === normState
         ? 1.0
-        : similarity(expState, primaryAddr.state ?? "");
+        : similarityPreNormalized(normExpState, normState);
+
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
-    const score = 0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
+    const score =
+      0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
+
     if (score > bestScore) {
       bestScore = score;
       best = r;
+      // Early exit for perfect match
+      if (bestScore >= 1.0) break;
     }
   }
 
@@ -281,31 +368,79 @@ function pickBestSearchResult(
 function specialtyAcceptedTerms(expectedSpecialty: string): string[] {
   const base = normalize(expectedSpecialty);
   if (!base) return [];
+
   const aliases = SPECIALTY_ALIASES[base] ?? [];
-  const all = [base, ...aliases].map((t) => normalize(t)).filter(Boolean);
-  return Array.from(new Set(all));
+  const rawTerms: string[] = [base];
+  for (let i = 0; i < aliases.length; i++) {
+    const normAlias = normalize(aliases[i]);
+    if (normAlias) rawTerms.push(normAlias);
+  }
+
+  // Manual unique filter to avoid Set/Array.from for Worker compatibility
+  const unique: string[] = [];
+  const seen: Record<string, boolean> = {};
+  for (let i = 0; i < rawTerms.length; i++) {
+    const t = rawTerms[i];
+    if (t && !seen[t]) {
+      unique.push(t);
+      seen[t] = true;
+    }
+  }
+  return unique;
 }
 
 function providerTaxonomyMatches(
   provider: NpiRegistryResult,
   expectedSpecialty: string,
-): { matched: boolean; matched_taxonomies: Array<{ code: string; desc: string; primary: boolean }>; all_descs: string[] } {
+): {
+  matched: boolean;
+  matched_taxonomies: Array<{ code: string; desc: string; primary: boolean }>;
+  all_descs: string[];
+} {
   const terms = specialtyAcceptedTerms(expectedSpecialty);
   const taxonomies = provider.taxonomies ?? [];
-  const matchedTaxonomies: Array<{ code: string; desc: string; primary: boolean }> = [];
+  const matchedTaxonomies: Array<{
+    code: string;
+    desc: string;
+    primary: boolean;
+  }> = [];
+
   if (terms.length > 0) {
-    for (const t of taxonomies) {
+    for (let i = 0; i < taxonomies.length; i++) {
+      const t = taxonomies[i];
       const desc = t.desc ?? "";
       if (!desc) continue;
       const descNorm = normalize(desc);
-      // Substring match either direction so "family medicine" matches
-      // "Family Medicine - Sports Medicine Physician" and so on.
-      if (terms.some((term) => descNorm.includes(term) || term.includes(descNorm))) {
-        matchedTaxonomies.push({ code: t.code ?? "", desc, primary: !!t.primary });
+
+      // Substring match either direction. Manual loop avoids some()
+      let isMatch = false;
+      for (let j = 0; j < terms.length; j++) {
+        const term = terms[j];
+        if (
+          descNorm.indexOf(term) !== -1 ||
+          (term && term.indexOf(descNorm) !== -1)
+        ) {
+          isMatch = true;
+          break;
+        }
+      }
+
+      if (isMatch) {
+        matchedTaxonomies.push({
+          code: t.code ?? "",
+          desc,
+          primary: !!t.primary,
+        });
       }
     }
   }
-  const allDescs = taxonomies.map((t) => t.desc ?? "").filter(Boolean);
+
+  const allDescs: string[] = [];
+  for (let i = 0; i < taxonomies.length; i++) {
+    const d = taxonomies[i].desc;
+    if (d) allDescs.push(d);
+  }
+
   return {
     matched: matchedTaxonomies.length > 0,
     matched_taxonomies: matchedTaxonomies,
@@ -329,17 +464,28 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   // hospital systems often resolve to a corporate PO box hundreds of miles
   // from the actual practice, which would tank city scoring.
   const primary = pickPrimaryAddress(p.addresses);
+
+  const taxonomies: Array<{ code: string; desc: string; primary: boolean }> = [];
+  const rawTaxonomies = p.taxonomies ?? [];
+  for (let i = 0; i < rawTaxonomies.length; i++) {
+    const t = rawTaxonomies[i];
+    taxonomies.push({
+      code: t.code ?? "",
+      desc: t.desc ?? "",
+      primary: !!t.primary,
+    });
+  }
+
   return {
     npi: String(p.number ?? ""),
     name:
       basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim(),
+      `${basic.first_name || ""} ${basic.last_name || ""}`.replace(
+        /^\s+|\s+$/g,
+        "",
+      ),
     organization_name: basic.organization_name ?? "",
-    taxonomies: (p.taxonomies ?? []).map((t) => ({
-      code: t.code ?? "",
-      desc: t.desc ?? "",
-      primary: !!t.primary,
-    })),
+    taxonomies,
     address: {
       address_1: primary.address_1 ?? "",
       city: primary.city ?? "",
