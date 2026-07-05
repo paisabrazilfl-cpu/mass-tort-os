@@ -212,12 +212,24 @@ async function fetchNpi(params: URLSearchParams): Promise<NpiRegistryResult[]> {
 // "where do they actually work" matching. Falls back to MAILING, then any.
 function pickPrimaryAddress(addresses: NpiAddress[] | undefined): NpiAddress {
   const list = addresses ?? [];
-  return (
-    list.find((a) => a.address_purpose === "LOCATION") ??
-    list.find((a) => a.address_purpose === "MAILING") ??
-    list[0] ??
-    {}
-  );
+  if (list.length === 0) return {};
+
+  let location: NpiAddress | null = null;
+  let mailing: NpiAddress | null = null;
+
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (!a) continue;
+    if (a.address_purpose === "LOCATION") {
+      location = a;
+      break;
+    }
+    if (a.address_purpose === "MAILING" && !mailing) {
+      mailing = a;
+    }
+  }
+
+  return location || mailing || list[0] || {};
 }
 
 async function lookupByNpi(npi: string): Promise<NpiRegistryResult | null> {
@@ -353,31 +365,79 @@ function pickBestSearchResult(
 function specialtyAcceptedTerms(expectedSpecialty: string): string[] {
   const base = normalize(expectedSpecialty);
   if (!base) return [];
+
   const aliases = SPECIALTY_ALIASES[base] ?? [];
-  const all = [base, ...aliases].map((t) => normalize(t)).filter(Boolean);
-  return Array.from(new Set(all));
+  const rawTerms: string[] = [base];
+  for (let i = 0; i < aliases.length; i++) {
+    const normAlias = normalize(aliases[i]);
+    if (normAlias) rawTerms.push(normAlias);
+  }
+
+  // Manual unique filter to avoid Set/Array.from for Worker compatibility
+  const unique: string[] = [];
+  const seen: Record<string, boolean> = {};
+  for (let i = 0; i < rawTerms.length; i++) {
+    const t = rawTerms[i];
+    if (t && !seen[t]) {
+      unique.push(t);
+      seen[t] = true;
+    }
+  }
+  return unique;
 }
 
 function providerTaxonomyMatches(
   provider: NpiRegistryResult,
   expectedSpecialty: string,
-): { matched: boolean; matched_taxonomies: Array<{ code: string; desc: string; primary: boolean }>; all_descs: string[] } {
+): {
+  matched: boolean;
+  matched_taxonomies: Array<{ code: string; desc: string; primary: boolean }>;
+  all_descs: string[];
+} {
   const terms = specialtyAcceptedTerms(expectedSpecialty);
   const taxonomies = provider.taxonomies ?? [];
-  const matchedTaxonomies: Array<{ code: string; desc: string; primary: boolean }> = [];
+  const matchedTaxonomies: Array<{
+    code: string;
+    desc: string;
+    primary: boolean;
+  }> = [];
+
   if (terms.length > 0) {
-    for (const t of taxonomies) {
+    for (let i = 0; i < taxonomies.length; i++) {
+      const t = taxonomies[i];
       const desc = t.desc ?? "";
       if (!desc) continue;
       const descNorm = normalize(desc);
-      // Substring match either direction so "family medicine" matches
-      // "Family Medicine - Sports Medicine Physician" and so on.
-      if (terms.some((term) => descNorm.includes(term) || term.includes(descNorm))) {
-        matchedTaxonomies.push({ code: t.code ?? "", desc, primary: !!t.primary });
+
+      // Substring match either direction. Manual loop avoids some()
+      let isMatch = false;
+      for (let j = 0; j < terms.length; j++) {
+        const term = terms[j];
+        if (
+          descNorm.indexOf(term) !== -1 ||
+          (term && term.indexOf(descNorm) !== -1)
+        ) {
+          isMatch = true;
+          break;
+        }
+      }
+
+      if (isMatch) {
+        matchedTaxonomies.push({
+          code: t.code ?? "",
+          desc,
+          primary: !!t.primary,
+        });
       }
     }
   }
-  const allDescs = taxonomies.map((t) => t.desc ?? "").filter(Boolean);
+
+  const allDescs: string[] = [];
+  for (let i = 0; i < taxonomies.length; i++) {
+    const d = taxonomies[i].desc;
+    if (d) allDescs.push(d);
+  }
+
   return {
     matched: matchedTaxonomies.length > 0,
     matched_taxonomies: matchedTaxonomies,
@@ -401,6 +461,18 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   // hospital systems often resolve to a corporate PO box hundreds of miles
   // from the actual practice, which would tank city scoring.
   const primary = pickPrimaryAddress(p.addresses);
+
+  const taxonomies: Array<{ code: string; desc: string; primary: boolean }> = [];
+  const rawTaxonomies = p.taxonomies ?? [];
+  for (let i = 0; i < rawTaxonomies.length; i++) {
+    const t = rawTaxonomies[i];
+    taxonomies.push({
+      code: t.code ?? "",
+      desc: t.desc ?? "",
+      primary: !!t.primary,
+    });
+  }
+
   return {
     npi: String(p.number ?? ""),
     name:
@@ -410,11 +482,7 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
         "",
       ),
     organization_name: basic.organization_name ?? "",
-    taxonomies: (p.taxonomies ?? []).map((t) => ({
-      code: t.code ?? "",
-      desc: t.desc ?? "",
-      primary: !!t.primary,
-    })),
+    taxonomies,
     address: {
       address_1: primary.address_1 ?? "",
       city: primary.city ?? "",

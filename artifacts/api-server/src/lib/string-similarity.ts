@@ -16,30 +16,38 @@ export function normalize(s: string | null | undefined): string {
 // similarity. "Dr. John Smith MD" and "John Smith" are the same person; the
 // raw normalize() above would penalize them ~40%. Used by name comparisons
 // in npi-verify so "Dr. Micah Edwin, MD" matches "Micah Edwin" cleanly.
-const TITLE_TOKENS = new Set(["dr", "doctor", "mr", "mrs", "ms", "miss"]);
-const CREDENTIAL_TOKENS = new Set([
-  "md",
-  "do",
-  "pa",
-  "np",
-  "rn",
-  "lpn",
-  "pharmd",
-  "dds",
-  "dmd",
-  "phd",
-  "psyd",
-  "msw",
-  "lcsw",
-  "facp",
-  "facs",
-  "esq",
-  "jr",
-  "sr",
-  "ii",
-  "iii",
-  "iv",
-]);
+// Using plain objects for Cloudflare Worker compatibility (Set.has can fail).
+const TITLE_TOKENS: Record<string, boolean> = {
+  dr: true,
+  doctor: true,
+  mr: true,
+  mrs: true,
+  ms: true,
+  miss: true,
+};
+const CREDENTIAL_TOKENS: Record<string, boolean> = {
+  md: true,
+  do: true,
+  pa: true,
+  np: true,
+  rn: true,
+  lpn: true,
+  pharmd: true,
+  dds: true,
+  dmd: true,
+  phd: true,
+  psyd: true,
+  msw: true,
+  lcsw: true,
+  facp: true,
+  facs: true,
+  esq: true,
+  jr: true,
+  sr: true,
+  ii: true,
+  iii: true,
+  iv: true,
+};
 
 /**
  * Optimized name normalization that skips redundant regex processing when
@@ -49,7 +57,7 @@ export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
   // Fast path for single-token names to bypass manual tokenization loop.
   if (normalized.indexOf(" ") === -1) {
-    return TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized)
+    return TITLE_TOKENS[normalized] || CREDENTIAL_TOKENS[normalized]
       ? ""
       : normalized;
   }
@@ -63,7 +71,7 @@ export function normalizeNameFromNormalized(normalized: string): string {
     const end = nextSpace === -1 ? normalized.length : nextSpace;
     const token = normalized.substring(start, end);
 
-    if (token && !TITLE_TOKENS.has(token) && !CREDENTIAL_TOKENS.has(token)) {
+    if (token && !TITLE_TOKENS[token] && !CREDENTIAL_TOKENS[token]) {
       if (result.length > 0) result += " ";
       result += token;
     }
@@ -108,11 +116,14 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
+  // Ensure b is the shorter string to minimize memory usage and auxiliary array size.
+  // Avoid destructuring for Worker compatibility.
   let s1 = a;
   let s2 = b;
   if (s1.length < s2.length) {
-    [s1, s2] = [s2, s1];
+    const tmp = s1;
+    s1 = s2;
+    s2 = tmp;
   }
 
   const alen = s1.length;
