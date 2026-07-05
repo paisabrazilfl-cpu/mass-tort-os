@@ -233,7 +233,9 @@ function pickPrimaryAddress(addresses: NpiAddress[] | undefined): NpiAddress {
 }
 
 async function lookupByNpi(npi: string): Promise<NpiRegistryResult | null> {
-  const params = new URLSearchParams({ number: npi, version: NPI_VERSION });
+  const params = new URLSearchParams();
+  params.set("number", npi);
+  params.set("version", NPI_VERSION);
   const results = await fetchNpi(params);
   return results[0] ?? null;
 }
@@ -242,10 +244,9 @@ async function searchByNameLocation(
   expected: ExpectedProvider,
   limit = 20,
 ): Promise<NpiRegistryResult[]> {
-  const params = new URLSearchParams({
-    version: NPI_VERSION,
-    limit: String(limit),
-  });
+  const params = new URLSearchParams();
+  params.set("version", NPI_VERSION);
+  params.set("limit", String(limit));
 
   // Extract first/last from a free-text name if provided. Manual tokenization
   // avoids split() and filter() for Cloudflare Worker compatibility.
@@ -290,7 +291,9 @@ function pickBestSearchResult(
   const normExpCity = normalize(expected.city);
   const normExpState = normalize(expected.state);
 
-  for (const r of results) {
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (!r) continue;
     const basic = r.basic ?? {};
     // Optimized name construction avoids filter/join array allocations.
     // Replacement for .trim() for Worker compatibility.
