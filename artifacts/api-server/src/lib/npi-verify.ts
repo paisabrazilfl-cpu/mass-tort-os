@@ -230,14 +230,34 @@ async function searchByNameLocation(
   expected: ExpectedProvider,
   limit = 20,
 ): Promise<NpiRegistryResult[]> {
-  const params = new URLSearchParams({ version: NPI_VERSION, limit: String(limit) });
+  const params = new URLSearchParams({
+    version: NPI_VERSION,
+    limit: String(limit),
+  });
 
-  // Extract first/last from a free-text name if provided
-  const nameParts = (expected.name ?? "").trim().split(/\s+/).filter(Boolean);
+  // Extract first/last from a free-text name if provided. Manual tokenization
+  // avoids split() and filter() for Cloudflare Worker compatibility.
+  const rawName = (expected.name ?? "").replace(/^\s+|\s+$/g, "");
+  const nameParts: string[] = [];
+  if (rawName) {
+    let start = 0;
+    const re = /\s+/g;
+    let match;
+    while ((match = re.exec(rawName)) !== null) {
+      const part = rawName.substring(start, match.index);
+      if (part) nameParts.push(part);
+      start = re.lastIndex;
+    }
+    const lastPart = rawName.substring(start);
+    if (lastPart) nameParts.push(lastPart);
+  }
+
   if (nameParts.length >= 1) params.set("first_name", nameParts[0]);
-  if (nameParts.length >= 2) params.set("last_name", nameParts[nameParts.length - 1]);
+  if (nameParts.length >= 2)
+    params.set("last_name", nameParts[nameParts.length - 1]);
 
-  if (expected.organization) params.set("organization_name", expected.organization);
+  if (expected.organization)
+    params.set("organization_name", expected.organization);
   if (expected.city) params.set("city", expected.city);
   if (expected.state) params.set("state", expected.state);
 
@@ -261,8 +281,13 @@ function pickBestSearchResult(
   for (const r of results) {
     const basic = r.basic ?? {};
     // Optimized name construction avoids filter/join array allocations.
+    // Replacement for .trim() for Worker compatibility.
     const name =
-      basic.name ?? `${basic.first_name || ""} ${basic.last_name || ""}`.trim();
+      basic.name ??
+      `${basic.first_name || ""} ${basic.last_name || ""}`.replace(
+        /^\s+|\s+$/g,
+        "",
+      );
     const org = basic.organization_name ?? "";
 
     const normName = normalize(name);
@@ -379,7 +404,11 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   return {
     npi: String(p.number ?? ""),
     name:
-      basic.name ?? `${basic.first_name || ""} ${basic.last_name || ""}`.trim(),
+      basic.name ??
+      `${basic.first_name || ""} ${basic.last_name || ""}`.replace(
+        /^\s+|\s+$/g,
+        "",
+      ),
     organization_name: basic.organization_name ?? "",
     taxonomies: (p.taxonomies ?? []).map((t) => ({
       code: t.code ?? "",

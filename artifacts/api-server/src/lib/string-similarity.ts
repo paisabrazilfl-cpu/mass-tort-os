@@ -9,7 +9,7 @@ export function normalize(s: string | null | undefined): string {
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
-    .trim();
+    .replace(/^\s+|\s+$/g, "");
 }
 
 // Title and credential tokens that should NOT contribute to person-name
@@ -47,16 +47,33 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  // Fast path for single-token names to bypass split/filter/join.
+  // Fast path for single-token names to bypass manual tokenization loop.
   if (normalized.indexOf(" ") === -1) {
     return TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized)
       ? ""
       : normalized;
   }
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+
+  // Worker-safe manual tokenization avoids split() and join()
+  let result = "";
+  let start = 0;
+  let nextSpace = normalized.indexOf(" ");
+
+  while (true) {
+    const end = nextSpace === -1 ? normalized.length : nextSpace;
+    const token = normalized.substring(start, end);
+
+    if (token && !TITLE_TOKENS.has(token) && !CREDENTIAL_TOKENS.has(token)) {
+      if (result.length > 0) result += " ";
+      result += token;
+    }
+
+    if (nextSpace === -1) break;
+    start = nextSpace + 1;
+    nextSpace = normalized.indexOf(" ", start);
+  }
+
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
