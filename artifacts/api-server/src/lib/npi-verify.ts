@@ -10,7 +10,13 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity, similarityName } from "./string-similarity";
+import {
+  normalize,
+  normalizeNameFromNormalized,
+  similarity,
+  similarityName,
+  similarityPreNormalized,
+} from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
@@ -244,30 +250,71 @@ function pickBestSearchResult(
 ): { best: NpiRegistryResult; score: number } | null {
   let best: NpiRegistryResult | null = null;
   let bestScore = -1;
-  const expName = expected.name ?? "";
-  const expOrg = expected.organization ?? "";
-  const expCity = expected.city ?? "";
-  const expState = expected.state ?? "";
+
+  // Pre-normalize expected fields once to avoid redundant O(N) work in the loop.
+  const normExpName = normalize(expected.name);
+  const normExpNameStripped = normalizeNameFromNormalized(normExpName);
+  const normExpOrg = normalize(expected.organization);
+  const normExpCity = normalize(expected.city);
+  const normExpState = normalize(expected.state);
 
   for (const r of results) {
     const basic = r.basic ?? {};
+    // Optimized name construction avoids filter/join array allocations.
     const name =
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
+      basic.name ?? `${basic.first_name || ""} ${basic.last_name || ""}`.trim();
     const org = basic.organization_name ?? "";
+
+    const normName = normalize(name);
+    const normOrg = normalize(org);
+
+    // Manual expansion of similarityName to use pre-normalized values.
+    const nameScore1Raw = similarityPreNormalized(normExpName, normName);
+    const nameScore1 =
+      nameScore1Raw >= 0.98
+        ? nameScore1Raw
+        : Math.max(
+            nameScore1Raw,
+            similarityPreNormalized(
+              normExpNameStripped,
+              normalizeNameFromNormalized(normName),
+            ),
+          );
+
+    const nameScore2Raw = similarityPreNormalized(normExpName, normOrg);
+    const nameScore2 =
+      nameScore2Raw >= 0.98
+        ? nameScore2Raw
+        : Math.max(
+            nameScore2Raw,
+            similarityPreNormalized(
+              normExpNameStripped,
+              normalizeNameFromNormalized(normOrg),
+            ),
+          );
+
+    const nameScore = Math.max(nameScore1, nameScore2);
+    const orgScore = similarityPreNormalized(normExpOrg, normOrg);
+
     const primaryAddr = pickPrimaryAddress(r.addresses);
-    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
-    const orgScore = similarity(expOrg, org);
-    const cityScore = similarity(expCity, primaryAddr.city ?? "");
+    const normCity = normalize(primaryAddr.city);
+    const cityScore = similarityPreNormalized(normExpCity, normCity);
+
+    const normState = normalize(primaryAddr.state);
     const stateScore =
-      normalize(expState) === normalize(primaryAddr.state ?? "")
+      normExpState === normState
         ? 1.0
-        : similarity(expState, primaryAddr.state ?? "");
+        : similarityPreNormalized(normExpState, normState);
+
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
-    const score = 0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
+    const score =
+      0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
+
     if (score > bestScore) {
       bestScore = score;
       best = r;
+      // Early exit for perfect match
+      if (bestScore >= 1.0) break;
     }
   }
 
@@ -332,8 +379,7 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   return {
     npi: String(p.number ?? ""),
     name:
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim(),
+      basic.name ?? `${basic.first_name || ""} ${basic.last_name || ""}`.trim(),
     organization_name: basic.organization_name ?? "",
     taxonomies: (p.taxonomies ?? []).map((t) => ({
       code: t.code ?? "",

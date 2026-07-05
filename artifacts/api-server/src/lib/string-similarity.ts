@@ -47,6 +47,12 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path for single-token names to bypass split/filter/join.
+  if (normalized.indexOf(" ") === -1) {
+    return TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized)
+      ? ""
+      : normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
