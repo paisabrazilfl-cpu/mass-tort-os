@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
@@ -117,7 +117,8 @@ function getClientIp(req: Request): string {
       return firstIp.replace(/^\s+|\s+$/g, "");
     }
   }
-  return req.socket?.remoteAddress || "unknown";
+  const socket = (req as any).socket;
+  return (socket && socket.remoteAddress) || "unknown";
 }
 
 export function scanValue(value: string): ThreatDetection | null {
@@ -301,7 +302,7 @@ export function idsMiddleware() {
       await recordAlert(req, bruteForce);
     }
 
-    const urlThreat = scanValue(decodeURIComponent(req.originalUrl));
+    const urlThreat = scanValue(decodeURIComponent(req.originalUrl || ""));
     if (urlThreat) {
       await recordAlert(req, urlThreat);
       if (urlThreat.severity === "critical") {
@@ -343,17 +344,19 @@ export function idsMiddleware() {
 }
 
 // .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-const janitor = setInterval(() => {
-  const now = Date.now();
-  for (const ip in ipRequestLog) {
-    if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
-      if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
-        delete ipRequestLog[ip];
+if (typeof setInterval === "function") {
+  const janitor = setInterval(() => {
+    const now = Date.now();
+    for (const ip in ipRequestLog) {
+      if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
+        if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
+          delete ipRequestLog[ip];
+        }
       }
     }
-  }
-}, 60_000);
+  }, 60_000);
 
-if (typeof (janitor as any).unref === "function") {
-  (janitor as any).unref();
+  if (janitor && typeof (janitor as any).unref === "function") {
+    (janitor as any).unref();
+  }
 }
