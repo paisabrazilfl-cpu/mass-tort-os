@@ -90,7 +90,8 @@ function hasInternalCredentials(req: Request): boolean {
   if (auth.length < 8) return false;
 
   // Use indexOf for prefix check; .startsWith() causes mtosvelocity Worker build failures.
-  if (auth.toLowerCase().indexOf("bearer ") !== 0) return false;
+  const lowerAuth = auth.toLowerCase();
+  if (lowerAuth.indexOf("bearer ") !== 0) return false;
 
   // Manual slice and trim; .slice(-N) and .trim() cause mtosvelocity Worker build failures.
   const token = auth.substring(7).replace(/^\s+|\s+$/g, "");
@@ -104,16 +105,19 @@ function hasInternalCredentials(req: Request): boolean {
 function getClientIp(req: Request): string {
   const forwarded = req.headers["x-forwarded-for"];
   // Use indexOf/substring; .split() and .trim() cause mtosvelocity Worker build failures.
-  if (typeof forwarded === "string") {
+  const isString = typeof forwarded === "string";
+  if (isString) {
     const firstComma = forwarded.indexOf(",");
     const firstIp = firstComma === -1 ? forwarded : forwarded.substring(0, firstComma);
     return firstIp.replace(/^\s+|\s+$/g, "");
   }
-  if (Array.isArray(forwarded) && forwarded.length > 0) {
+  const isArr = Array.isArray(forwarded);
+  if (isArr && forwarded.length > 0) {
     const first = forwarded[0];
-    if (typeof first === "string") {
-      const firstComma = first.indexOf(",");
-      const firstIp = firstComma === -1 ? first : first.substring(0, firstComma);
+    const isFirstString = typeof first === "string";
+    if (isFirstString) {
+      const firstComma = (first as string).indexOf(",");
+      const firstIp = firstComma === -1 ? (first as string) : (first as string).substring(0, firstComma);
       return firstIp.replace(/^\s+|\s+$/g, "");
     }
   }
@@ -123,31 +127,38 @@ function getClientIp(req: Request): string {
 
 export function scanValue(value: string): ThreatDetection | null {
   // Fast path: check consolidated regexes first
-  if (SQL_INJECTION_RE.test(value)) {
+  const isSQL = SQL_INJECTION_RE.test(value);
+  if (isSQL) {
     for (let i = 0; i < SQL_INJECTION_PATTERNS.length; i++) {
       if (SQL_INJECTION_PATTERNS[i].test(value)) {
         return { type: "sql_injection", severity: "critical", details: "SQL injection attempt detected", pattern: SQL_INJECTION_PATTERNS[i].source };
       }
     }
   }
-  if (COMMAND_INJECTION_RE.test(value)) {
+  const isCMD = COMMAND_INJECTION_RE.test(value);
+  if (isCMD) {
     for (let i = 0; i < COMMAND_INJECTION_PATTERNS.length; i++) {
-      if (COMMAND_INJECTION_PATTERNS[i].test(value)) {
-        return { type: "command_injection", severity: "critical", details: "Command injection attempt detected", pattern: COMMAND_INJECTION_PATTERNS[i].source };
+      const p = COMMAND_INJECTION_PATTERNS[i];
+      if (p.test(value)) {
+        return { type: "command_injection", severity: "critical", details: "Command injection attempt detected", pattern: p.source };
       }
     }
   }
-  if (XSS_RE.test(value)) {
+  const isXSS = XSS_RE.test(value);
+  if (isXSS) {
     for (let i = 0; i < XSS_PATTERNS.length; i++) {
-      if (XSS_PATTERNS[i].test(value)) {
-        return { type: "xss", severity: "high", details: "Cross-site scripting attempt detected", pattern: XSS_PATTERNS[i].source };
+      const p = XSS_PATTERNS[i];
+      if (p.test(value)) {
+        return { type: "xss", severity: "high", details: "Cross-site scripting attempt detected", pattern: p.source };
       }
     }
   }
-  if (PATH_TRAVERSAL_RE.test(value)) {
+  const isPath = PATH_TRAVERSAL_RE.test(value);
+  if (isPath) {
     for (let i = 0; i < PATH_TRAVERSAL_PATTERNS.length; i++) {
-      if (PATH_TRAVERSAL_PATTERNS[i].test(value)) {
-        return { type: "path_traversal", severity: "high", details: "Path traversal attempt detected", pattern: PATH_TRAVERSAL_PATTERNS[i].source };
+      const p = PATH_TRAVERSAL_PATTERNS[i];
+      if (p.test(value)) {
+        return { type: "path_traversal", severity: "high", details: "Path traversal attempt detected", pattern: p.source };
       }
     }
   }
@@ -155,11 +166,14 @@ export function scanValue(value: string): ThreatDetection | null {
 }
 
 export function deepScan(obj: any): ThreatDetection | null {
-  if (typeof obj === "string") {
-    return scanValue(obj);
+  const t = typeof obj;
+  if (t === "string") {
+    return scanValue(obj as string);
   }
-  if (typeof obj === "object" && obj !== null) {
-    if (Array.isArray(obj)) {
+  const isObj = t === "object" && obj !== null;
+  if (isObj) {
+    const isArr = Array.isArray(obj);
+    if (isArr) {
       for (let i = 0; i < obj.length; i++) {
         const threat = deepScan(obj[i]);
         if (threat) return threat;
