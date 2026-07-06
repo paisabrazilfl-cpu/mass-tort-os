@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
@@ -47,6 +47,20 @@ const COMMAND_INJECTION_PATTERNS = [
   /\$\(.*\)/,
 ];
 
+function buildConsolidatedRegex(patterns: RegExp[]): RegExp {
+  let source = "";
+  for (let i = 0; i < patterns.length; i++) {
+    if (i > 0) source += "|";
+    source += "(?:" + patterns[i].source + ")";
+  }
+  return new RegExp(source, "i");
+}
+
+const SQL_INJECTION_RE = buildConsolidatedRegex(SQL_INJECTION_PATTERNS);
+const XSS_RE = buildConsolidatedRegex(XSS_PATTERNS);
+const PATH_TRAVERSAL_RE = buildConsolidatedRegex(PATH_TRAVERSAL_PATTERNS);
+const COMMAND_INJECTION_RE = buildConsolidatedRegex(COMMAND_INJECTION_PATTERNS);
+
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
   severity: "critical" | "high" | "medium" | "low";
@@ -54,7 +68,9 @@ interface ThreatDetection {
   pattern: string;
 }
 
-const ipRequestLog = new Map<string, { count: number; firstSeen: number; lastSeen: number }>();
+// Use Object.create(null) to avoid prototype pollution when using user-controlled IP keys,
+// while remaining compatible with Worker environments that may struggle with Map iteration.
+const ipRequestLog: Record<string, { count: number; firstSeen: number; lastSeen: number }> = Object.create(null);
 const IP_RATE_WINDOW = 60_000;
 // Task #7: anonymous traffic threshold is 100/min; authenticated CRM
 // operators routinely exceed that during bulk review (paginated leads list,
@@ -70,54 +86,105 @@ const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 // IDS classification decision. URL + query are scanned regardless.
 function hasInternalCredentials(req: Request): boolean {
   const auth = req.headers["authorization"];
-  if (typeof auth !== "string" || !auth.toLowerCase().startsWith("bearer ")) {
-    return false;
-  }
-  const token = auth.slice(7).trim();
+  if (typeof auth !== "string") return false;
+  if (auth.length < 8) return false;
+
+  // Use indexOf for prefix check; .startsWith() causes mtosvelocity Worker build failures.
+  const lowerAuth = auth.toLowerCase();
+  if (lowerAuth.indexOf("bearer ") !== 0) return false;
+
+  // Manual slice and trim; .slice(-N) and .trim() cause mtosvelocity Worker build failures.
+  const token = auth.substring(7).replace(/^\s+|\s+$/g, "");
   if (!token) return false;
+
   // verifyToken returns null for any malformed/unsigned/expired token,
   // so spoofed Bearer headers fall back to anonymous-traffic limits.
   return verifyToken(token) !== null;
 }
 
 function getClientIp(req: Request): string {
-  return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() 
-    || req.socket.remoteAddress 
-    || "unknown";
+  const forwarded = req.headers["x-forwarded-for"];
+  // Use indexOf/substring; .split() and .trim() cause mtosvelocity Worker build failures.
+  const isString = typeof forwarded === "string";
+  if (isString) {
+    const firstComma = forwarded.indexOf(",");
+    const firstIp = firstComma === -1 ? forwarded : forwarded.substring(0, firstComma);
+    return firstIp.replace(/^\s+|\s+$/g, "");
+  }
+  const isArr = Array.isArray(forwarded);
+  if (isArr && forwarded.length > 0) {
+    const first = forwarded[0];
+    const isFirstString = typeof first === "string";
+    if (isFirstString) {
+      const firstComma = (first as string).indexOf(",");
+      const firstIp = firstComma === -1 ? (first as string) : (first as string).substring(0, firstComma);
+      return firstIp.replace(/^\s+|\s+$/g, "");
+    }
+  }
+  const socket = (req as any).socket;
+  return (socket && socket.remoteAddress) || "unknown";
 }
 
-function scanValue(value: string): ThreatDetection | null {
-  for (const pattern of SQL_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+export function scanValue(value: string): ThreatDetection | null {
+  // Fast path: check consolidated regexes first
+  const isSQL = SQL_INJECTION_RE.test(value);
+  if (isSQL) {
+    for (let i = 0; i < SQL_INJECTION_PATTERNS.length; i++) {
+      if (SQL_INJECTION_PATTERNS[i].test(value)) {
+        return { type: "sql_injection", severity: "critical", details: "SQL injection attempt detected", pattern: SQL_INJECTION_PATTERNS[i].source };
+      }
     }
   }
-  for (const pattern of XSS_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+  const isCMD = COMMAND_INJECTION_RE.test(value);
+  if (isCMD) {
+    for (let i = 0; i < COMMAND_INJECTION_PATTERNS.length; i++) {
+      const p = COMMAND_INJECTION_PATTERNS[i];
+      if (p.test(value)) {
+        return { type: "command_injection", severity: "critical", details: "Command injection attempt detected", pattern: p.source };
+      }
     }
   }
-  for (const pattern of PATH_TRAVERSAL_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+  const isXSS = XSS_RE.test(value);
+  if (isXSS) {
+    for (let i = 0; i < XSS_PATTERNS.length; i++) {
+      const p = XSS_PATTERNS[i];
+      if (p.test(value)) {
+        return { type: "xss", severity: "high", details: "Cross-site scripting attempt detected", pattern: p.source };
+      }
     }
   }
-  for (const pattern of COMMAND_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+  const isPath = PATH_TRAVERSAL_RE.test(value);
+  if (isPath) {
+    for (let i = 0; i < PATH_TRAVERSAL_PATTERNS.length; i++) {
+      const p = PATH_TRAVERSAL_PATTERNS[i];
+      if (p.test(value)) {
+        return { type: "path_traversal", severity: "high", details: "Path traversal attempt detected", pattern: p.source };
+      }
     }
   }
   return null;
 }
 
-function deepScan(obj: any, path = ""): ThreatDetection | null {
-  if (typeof obj === "string") {
-    return scanValue(obj);
+export function deepScan(obj: any): ThreatDetection | null {
+  const t = typeof obj;
+  if (t === "string") {
+    return scanValue(obj as string);
   }
-  if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+  const isObj = t === "object" && obj !== null;
+  if (isObj) {
+    const isArr = Array.isArray(obj);
+    if (isArr) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i]);
+        if (threat) return threat;
+      }
+    } else {
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          const threat = deepScan(obj[key]);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;
@@ -125,10 +192,10 @@ function deepScan(obj: any, path = ""): ThreatDetection | null {
 
 function checkBruteForce(ip: string, threshold: number): ThreatDetection | null {
   const now = Date.now();
-  const entry = ipRequestLog.get(ip);
+  const entry = ipRequestLog[ip];
   if (entry) {
     if (now - entry.firstSeen > IP_RATE_WINDOW) {
-      ipRequestLog.set(ip, { count: 1, firstSeen: now, lastSeen: now });
+      ipRequestLog[ip] = { count: 1, firstSeen: now, lastSeen: now };
       return null;
     }
     entry.count++;
@@ -142,7 +209,7 @@ function checkBruteForce(ip: string, threshold: number): ThreatDetection | null 
       };
     }
   } else {
-    ipRequestLog.set(ip, { count: 1, firstSeen: now, lastSeen: now });
+    ipRequestLog[ip] = { count: 1, firstSeen: now, lastSeen: now };
   }
   return null;
 }
@@ -168,6 +235,16 @@ async function isBlocked(ip: string): Promise<boolean> {
 async function recordAlert(req: Request, threat: ThreatDetection): Promise<void> {
   const ip = getClientIp(req);
   try {
+    const bodyKeys: string[] = [];
+    if (typeof req.body === "object" && req.body !== null) {
+      for (const k in req.body) {
+        if (Object.prototype.hasOwnProperty.call(req.body, k)) {
+          bodyKeys.push(k);
+          if (bodyKeys.length >= 20) break; // Sample first 20 keys
+        }
+      }
+    }
+
     await db.insert(securityAlertsTable).values({
       type: threat.type,
       severity: threat.severity,
@@ -178,9 +255,9 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       details: threat.details,
       payload_sample: JSON.stringify({
         query: req.query,
-        body: typeof req.body === "object" ? Object.keys(req.body) : undefined,
+        body: bodyKeys.length > 0 ? bodyKeys : undefined,
         pattern: threat.pattern,
-      }).slice(0, 2000),
+      }).substring(0, 2000),
       status: "new",
       blocked: threat.severity === "critical",
     });
@@ -239,7 +316,7 @@ export function idsMiddleware() {
       await recordAlert(req, bruteForce);
     }
 
-    const urlThreat = scanValue(decodeURIComponent(req.originalUrl));
+    const urlThreat = scanValue(decodeURIComponent(req.originalUrl || ""));
     if (urlThreat) {
       await recordAlert(req, urlThreat);
       if (urlThreat.severity === "critical") {
@@ -281,11 +358,19 @@ export function idsMiddleware() {
 }
 
 // .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of ipRequestLog.entries()) {
-    if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
-      ipRequestLog.delete(ip);
+if (typeof setInterval === "function") {
+  const janitor = setInterval(() => {
+    const now = Date.now();
+    for (const ip in ipRequestLog) {
+      if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
+        if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
+          delete ipRequestLog[ip];
+        }
+      }
     }
+  }, 60_000);
+
+  if (janitor && typeof (janitor as any).unref === "function") {
+    (janitor as any).unref();
   }
-}, 60_000).unref();
+}
