@@ -54,7 +54,7 @@ const COMMAND_INJECTION_PATTERNS = [
 function buildConsolidatedRegex(patterns: RegExp[]): RegExp {
   let source = "(?:";
   for (let i = 0; i < patterns.length; i++) {
-    source += (i > 0 ? "|" : "") + "(" + patterns[i].source + ")";
+    source += (i > 0 ? "|" : "") + "(?:" + patterns[i].source + ")";
   }
   source += ")";
   return new RegExp(source, "i");
@@ -110,7 +110,7 @@ function getClientIp(req: Request): string {
   }
 
   return (ip ? ip.replace(/^\s+|\s+$/g, "") : undefined)
-    || (req.socket ? req.socket.remoteAddress : undefined)
+    || (req.socket?.remoteAddress)
     || "unknown";
 }
 

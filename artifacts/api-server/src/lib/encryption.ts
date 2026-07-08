@@ -73,9 +73,7 @@ export function isKeyConfigured(version: number): boolean {
 
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
-  const parts = [fieldName];
-  if (entityId) parts.push(entityId);
-  return Buffer.from(parts.join(":"), "utf8");
+  return Buffer.from(entityId ? fieldName + ":" + entityId : fieldName, "utf8");
 }
 
 export function encrypt(plaintext: string, fieldName?: string, entityId?: string): string {
@@ -121,18 +119,22 @@ function tryDecryptWithAAD(
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+  if (ciphertext.indexOf("enc:v") === 0) {
+    const secondColon = ciphertext.indexOf(":", 4);
+    const thirdColon = ciphertext.indexOf(":", secondColon + 1);
+
+    keyVersion = parseInt(ciphertext.substring(5, secondColon), 10) || 1;
+    hasAADFlag = parseInt(ciphertext.substring(secondColon + 1, thirdColon), 10) || 0;
+    // Format: "enc:v{version}:{hasAADFlag}:{payload}"
+    // The payload starts immediately after the 3rd colon.
+    payload = ciphertext.substring(thirdColon + 1);
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
@@ -148,8 +150,8 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   }
   candidates.push(undefined);                             // fallback: no AAD
 
-  for (const aad of candidates) {
-    const result = tryDecryptWithAAD(payload, keyVersion, aad);
+  for (let i = 0; i < candidates.length; i++) {
+    const result = tryDecryptWithAAD(payload, keyVersion, candidates[i]);
     if (result !== null) return result;
   }
 
@@ -177,12 +179,18 @@ export const ENCRYPTED_FIELDS = [
 ] as const;
 
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
-  const result = { ...data };
-  for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
+  let result = data;
+  let hasChanges = false;
+
+  for (let i = 0; i < ENCRYPTED_FIELDS.length; i++) {
+    const field = ENCRYPTED_FIELDS[i];
+    const value = data[field];
+    if (typeof value === "string" && value.indexOf("enc:") !== 0) {
+      if (!hasChanges) {
+        result = { ...data };
+        hasChanges = true;
       }
+      result[field] = encrypt(value, field, entityId);
     }
   }
   return result;
@@ -190,17 +198,30 @@ export function encryptLeadFields(data: Record<string, any>, entityId?: string):
 
 export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   if (!data) return data;
-  const result = { ...data };
-  for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
+  let result = data;
+  let hasChanges = false;
+
+  for (let i = 0; i < ENCRYPTED_FIELDS.length; i++) {
+    const field = ENCRYPTED_FIELDS[i];
+    const value = data[field];
+    if (typeof value === "string" && value.indexOf("enc:") === 0) {
+      if (!hasChanges) {
+        result = { ...data };
+        hasChanges = true;
+      }
+      result[field] = decrypt(value, field, entityId);
     }
   }
   return result;
 }
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
-  return leads.map(l => decryptLeadFields(l, String(l.id)));
+  const results = [];
+  for (let i = 0; i < leads.length; i++) {
+    const l = leads[i];
+    results.push(decryptLeadFields(l, String(l.id)));
+  }
+  return results;
 }
 
 /**
@@ -228,19 +249,22 @@ export async function rebindLeadEncryptionAad(
   if (!lead || lead.id === undefined || lead.id === null) return;
   const id = String(lead.id);
   const update: Record<string, any> = {};
-  for (const field of ENCRYPTED_FIELDS) {
+  let hasUpdate = false;
+  for (let i = 0; i < ENCRYPTED_FIELDS.length; i++) {
+    const field = ENCRYPTED_FIELDS[i];
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (typeof cur !== "string" || cur.indexOf("enc:") !== 0) continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
       update[field] = encrypt(plain, field, id);
+      hasUpdate = true;
     } catch {
       // Skip individual field on rebind failure — the original ciphertext
       // remains intact and decrypt-side fallback still recovers it.
     }
   }
-  if (Object.keys(update).length === 0) return;
+  if (!hasUpdate) return;
   try {
     await db.update(leadsTable).set(update).where(eq(leadsTable.id, lead.id));
   } catch (err) {
