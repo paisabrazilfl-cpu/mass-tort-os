@@ -10,13 +10,60 @@ import { verifyToken } from "./rbac";
 // and produced false-positive auto-blocks. Patterns below now require
 // canonical injection markers (quote+operator+quote, comment terminator,
 // or `union all select`) that cannot occur in normal English prose.
-const SQL_INJECTION_RE = /(?:(\b(union|select|insert|update|delete|drop|alter|create|exec|execute)\b.*\b(from|into|table|database|where)\b)|(['"]\s*(or|and)\s+['"]?\d+['"]?\s*=\s*['"]?\d+)|(--\s|\/\*|\*\/|;.*\b(drop|delete|update|insert)\b)|(\bwaitfor\b\s+\bdelay\b|\bsleep\s*\()|(\bunion\b\s+\ball\b\s+\bselect\b))/i;
+const SQL_INJECTION_PATTERNS = [
+  /(\b(union|select|insert|update|delete|drop|alter|create|exec|execute)\b.*\b(from|into|table|database|where)\b)/i,
+  /['"]\s*(or|and)\s+['"]?\d+['"]?\s*=\s*['"]?\d+/i,
+  /(--\s|\/\*|\*\/|;.*\b(drop|delete|update|insert)\b)/i,
+  /(\bwaitfor\b\s+\bdelay\b|\bsleep\s*\()/i,
+  /(\bunion\b\s+\ball\b\s+\bselect\b)/i,
+];
 
-const XSS_RE = /(?:(<script[\s>])|(javascript\s*:)|(on(error|load|click|mouseover|focus|blur)\s*=)|(<iframe[\s>])|(<object[\s>])|(<embed[\s>])|(expression\s*\()|(eval\s*\()|(document\.(cookie|location|write))|(<svg.*on\w+\s*=))/i;
+const XSS_PATTERNS = [
+  /<script[\s>]/i,
+  /javascript\s*:/i,
+  /on(error|load|click|mouseover|focus|blur)\s*=/i,
+  /<iframe[\s>]/i,
+  /<object[\s>]/i,
+  /<embed[\s>]/i,
+  /expression\s*\(/i,
+  /eval\s*\(/i,
+  /document\.(cookie|location|write)/i,
+  /<svg.*on\w+\s*=/i,
+];
 
-const PATH_TRAVERSAL_RE = /(?:(\.\.\/)|(\.\.\\)|(%2e%2e)|(%252e%252e)|(\/etc\/(passwd|shadow|hosts))|(\/proc\/self)|(\bboot\.ini\b))/i;
+const PATH_TRAVERSAL_PATTERNS = [
+  /\.\.\//,
+  /\.\.\\/,
+  /%2e%2e/i,
+  /%252e%252e/i,
+  /\/etc\/(passwd|shadow|hosts)/i,
+  /\/proc\/self/i,
+  /\bboot\.ini\b/i,
+];
 
-const COMMAND_INJECTION_RE = /(?:([;&|`$].*\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\b)|(\$\{.*\})|(\$\(.*\)))/i;
+const COMMAND_INJECTION_PATTERNS = [
+  /[;&|`$].*\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\b/i,
+  /\$\{.*\}/,
+  /\$\(.*\)/,
+];
+
+/**
+ * Worker-compatible regex consolidation. Combines individual patterns into
+ * a single OR-joined regex to minimize .test() overhead per string.
+ */
+function buildConsolidatedRegex(patterns: RegExp[]): RegExp {
+  let source = "(?:";
+  for (let i = 0; i < patterns.length; i++) {
+    source += (i > 0 ? "|" : "") + "(" + patterns[i].source + ")";
+  }
+  source += ")";
+  return new RegExp(source, "i");
+}
+
+const SQL_INJECTION_RE = buildConsolidatedRegex(SQL_INJECTION_PATTERNS);
+const XSS_RE = buildConsolidatedRegex(XSS_PATTERNS);
+const PATH_TRAVERSAL_RE = buildConsolidatedRegex(PATH_TRAVERSAL_PATTERNS);
+const COMMAND_INJECTION_RE = buildConsolidatedRegex(COMMAND_INJECTION_PATTERNS);
 
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
