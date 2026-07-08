@@ -46,12 +46,17 @@ const COMMON_PROVIDERS_FUZZY: Array<{ prefix: string; canonical: string; minLen:
 function findFuzzyProviderMatch(domain: string): string | null {
   const lastDot = domain.lastIndexOf(".");
   if (lastDot === -1) return null;
-  const prefix = domain.slice(0, lastDot);
-  const tld = domain.slice(lastDot);
+  const prefix = domain.substring(0, lastDot);
+  const tld = domain.substring(lastDot);
   if (tld !== ".com") return null;
   if (prefix.length < 3) return null;
   let best: { canonical: string; distance: number } | null = null;
-  for (const { prefix: known, canonical, minLen } of COMMON_PROVIDERS_FUZZY) {
+  for (let i = 0; i < COMMON_PROVIDERS_FUZZY.length; i++) {
+    const item = COMMON_PROVIDERS_FUZZY[i];
+    const known = item.prefix;
+    const canonical = item.canonical;
+    const minLen = item.minLen;
+
     if (prefix.length < minLen) continue;
     if (prefix === known) return null;
     // Anchor on the first character to avoid classifying real-but-similar
@@ -84,7 +89,20 @@ export interface EmailValidationResult {
 // renders the codes verbatim, but they are excluded from the `valid` boolean
 // so callers (e.g. the form-submission pipeline) do not reject leads on a
 // suggested-correction signal.
-const ADVISORY_CODES = new Set(["TYPO_DOMAIN_DETECTED", "LIKELY_TYPO_DOMAIN"]);
+const ADVISORY_CODES: Record<string, boolean> = {
+  TYPO_DOMAIN_DETECTED: true,
+  LIKELY_TYPO_DOMAIN: true,
+};
+
+const SUSPICIOUS_PATTERNS = [
+  /^test@/,
+  /^fake@/,
+  /^none@/,
+  /^noemail@/,
+  /^na@/,
+  /^asdf/,
+  /^aaa+@/,
+];
 
 export function validateEmail(email: string): EmailValidationResult {
   const errors: string[] = [];
@@ -94,20 +112,21 @@ export function validateEmail(email: string): EmailValidationResult {
     return { valid: false, errors: ["MISSING_EMAIL"] };
   }
 
-  const trimmed = email.trim().toLowerCase();
+  const trimmed = email.replace(/^\s+|\s+$/g, "").toLowerCase();
 
   if (!RFC_EMAIL_REGEX.test(trimmed)) {
     errors.push("INVALID_RFC_FORMAT");
     return { valid: false, errors };
   }
 
-  const parts = trimmed.split("@");
-  if (parts.length !== 2) {
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex === -1 || trimmed.indexOf("@", atIndex + 1) !== -1) {
     errors.push("INVALID_EMAIL_STRUCTURE");
     return { valid: false, errors };
   }
 
-  const [localPart, domain] = parts;
+  const localPart = trimmed.substring(0, atIndex);
+  const domain = trimmed.substring(atIndex + 1);
 
   if (localPart.length === 0 || localPart.length > 64) {
     errors.push("INVALID_LOCAL_PART");
@@ -117,7 +136,7 @@ export function validateEmail(email: string): EmailValidationResult {
     errors.push("INVALID_DOMAIN");
   }
 
-  if (!domain.includes(".")) {
+  if (domain.indexOf(".") === -1) {
     errors.push("MISSING_TLD");
   }
 
@@ -132,38 +151,39 @@ export function validateEmail(email: string): EmailValidationResult {
     }
   }
 
-  for (const tld of MALFORMED_TLDS) {
-    if (trimmed.endsWith(tld)) {
+  for (let i = 0; i < MALFORMED_TLDS.length; i++) {
+    const tld = MALFORMED_TLDS[i];
+    if (trimmed.lastIndexOf(tld) === trimmed.length - tld.length && trimmed.length >= tld.length) {
       errors.push("MALFORMED_TLD");
-      const corrected = trimmed.slice(0, -tld.length) + ".com";
-      suggestion = corrected;
+      suggestion = trimmed.substring(0, trimmed.length - tld.length) + ".com";
       break;
     }
   }
 
-  if (DISPOSABLE_DOMAINS.includes(domain)) {
-    errors.push("DISPOSABLE_EMAIL");
+  for (let i = 0; i < DISPOSABLE_DOMAINS.length; i++) {
+    if (domain === DISPOSABLE_DOMAINS[i]) {
+      errors.push("DISPOSABLE_EMAIL");
+      break;
+    }
   }
 
-  const suspiciousPatterns = [
-    /^test@/,
-    /^fake@/,
-    /^none@/,
-    /^noemail@/,
-    /^na@/,
-    /^asdf/,
-    /^aaa+@/,
-  ];
-  for (const pat of suspiciousPatterns) {
-    if (pat.test(trimmed)) {
+  for (let i = 0; i < SUSPICIOUS_PATTERNS.length; i++) {
+    if (SUSPICIOUS_PATTERNS[i].test(trimmed)) {
       errors.push("SUSPICIOUS_EMAIL_PATTERN");
       break;
     }
   }
 
-  const hardErrors = errors.filter((e) => !ADVISORY_CODES.has(e));
+  let hasHardError = false;
+  for (let i = 0; i < errors.length; i++) {
+    if (!ADVISORY_CODES[errors[i]]) {
+      hasHardError = true;
+      break;
+    }
+  }
+
   return {
-    valid: hardErrors.length === 0,
+    valid: !hasHardError,
     errors,
     suggestion,
   };
