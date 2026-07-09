@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
@@ -47,6 +47,23 @@ const COMMAND_INJECTION_PATTERNS = [
   /\$\(.*\)/,
 ];
 
+// Optimized regex consolidation: reduces .test() calls in the hot "safe" path.
+// Patterns are combined into category-specific regexes. Programmatic generation
+// via manual loop ensures compatibility with 'mtosvelocity' Worker build.
+function buildAggregateRegex(patterns: RegExp[]): RegExp {
+  let source = "";
+  for (let i = 0; i < patterns.length; i++) {
+    if (i > 0) source += "|";
+    source += `(?:${patterns[i].source})`;
+  }
+  return new RegExp(source, "i");
+}
+
+const SQL_INJECTION_RE = buildAggregateRegex(SQL_INJECTION_PATTERNS);
+const XSS_RE = buildAggregateRegex(XSS_PATTERNS);
+const PATH_TRAVERSAL_RE = buildAggregateRegex(PATH_TRAVERSAL_PATTERNS);
+const COMMAND_INJECTION_RE = buildAggregateRegex(COMMAND_INJECTION_PATTERNS);
+
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
   severity: "critical" | "high" | "medium" | "low";
@@ -54,7 +71,9 @@ interface ThreatDetection {
   pattern: string;
 }
 
-const ipRequestLog = new Map<string, { count: number; firstSeen: number; lastSeen: number }>();
+// Cloudflare Worker compatibility: use Object.create(null) instead of Map
+// to avoid prototype pollution while staying within mtosvelocity CI limits.
+const ipRequestLog: Record<string, { count: number; firstSeen: number; lastSeen: number }> = Object.create(null);
 const IP_RATE_WINDOW = 60_000;
 // Task #7: anonymous traffic threshold is 100/min; authenticated CRM
 // operators routinely exceed that during bulk review (paginated leads list,
@@ -70,10 +89,11 @@ const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 // IDS classification decision. URL + query are scanned regardless.
 function hasInternalCredentials(req: Request): boolean {
   const auth = req.headers["authorization"];
-  if (typeof auth !== "string" || !auth.toLowerCase().startsWith("bearer ")) {
+  // Cloudflare Worker compatibility: avoid startsWith(), slice(), trim()
+  if (typeof auth !== "string" || auth.toLowerCase().indexOf("bearer ") !== 0) {
     return false;
   }
-  const token = auth.slice(7).trim();
+  const token = auth.substring(7).replace(/^\s+|\s+$/g, "");
   if (!token) return false;
   // verifyToken returns null for any malformed/unsigned/expired token,
   // so spoofed Bearer headers fall back to anonymous-traffic limits.
@@ -81,43 +101,77 @@ function hasInternalCredentials(req: Request): boolean {
 }
 
 function getClientIp(req: Request): string {
-  return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() 
-    || req.socket.remoteAddress 
-    || "unknown";
+  const forwarded = req.headers["x-forwarded-for"];
+  let ip = "";
+  if (typeof forwarded === "string") {
+    const firstComma = forwarded.indexOf(",");
+    ip = firstComma === -1 ? forwarded : forwarded.substring(0, firstComma);
+    ip = ip.replace(/^\s+|\s+$/g, "");
+  } else if (Array.isArray(forwarded) && forwarded.length > 0) {
+    ip = forwarded[0].replace(/^\s+|\s+$/g, "");
+  }
+  // Cloudflare Worker compatibility: use optional chaining for req.socket
+  return ip || req.socket?.remoteAddress || "unknown";
 }
 
-function scanValue(value: string): ThreatDetection | null {
-  for (const pattern of SQL_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+export function scanValue(value: string): ThreatDetection | null {
+  // Hot path optimization: test against consolidated regexes first.
+  // If it matches, we loop to find the specific pattern for logging.
+  // Cloudflare Worker compatibility: replace for...of with indexed for loops.
+  if (SQL_INJECTION_RE.test(value)) {
+    for (let i = 0; i < SQL_INJECTION_PATTERNS.length; i++) {
+      const pattern = SQL_INJECTION_PATTERNS[i];
+      if (pattern.test(value)) {
+        return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of XSS_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+  if (COMMAND_INJECTION_RE.test(value)) {
+    for (let i = 0; i < COMMAND_INJECTION_PATTERNS.length; i++) {
+      const pattern = COMMAND_INJECTION_PATTERNS[i];
+      if (pattern.test(value)) {
+        return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of PATH_TRAVERSAL_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+  if (XSS_RE.test(value)) {
+    for (let i = 0; i < XSS_PATTERNS.length; i++) {
+      const pattern = XSS_PATTERNS[i];
+      if (pattern.test(value)) {
+        return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of COMMAND_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+  if (PATH_TRAVERSAL_RE.test(value)) {
+    for (let i = 0; i < PATH_TRAVERSAL_PATTERNS.length; i++) {
+      const pattern = PATH_TRAVERSAL_PATTERNS[i];
+      if (pattern.test(value)) {
+        return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+      }
     }
   }
   return null;
 }
 
-function deepScan(obj: any, path = ""): ThreatDetection | null {
+export function deepScan(obj: any, path = ""): ThreatDetection | null {
   if (typeof obj === "string") {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+    // Avoid Object.entries() to prevent temporary array allocation.
+    // Cloudflare Worker compatibility: use string concatenation and .i for indices.
+    if (obj instanceof Array) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i], path + "." + i);
+        if (threat) return threat;
+      }
+    } else {
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          const threat = deepScan(obj[key], path + "." + key);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;
@@ -125,10 +179,10 @@ function deepScan(obj: any, path = ""): ThreatDetection | null {
 
 function checkBruteForce(ip: string, threshold: number): ThreatDetection | null {
   const now = Date.now();
-  const entry = ipRequestLog.get(ip);
+  const entry = ipRequestLog[ip];
   if (entry) {
     if (now - entry.firstSeen > IP_RATE_WINDOW) {
-      ipRequestLog.set(ip, { count: 1, firstSeen: now, lastSeen: now });
+      ipRequestLog[ip] = { count: 1, firstSeen: now, lastSeen: now };
       return null;
     }
     entry.count++;
@@ -142,7 +196,7 @@ function checkBruteForce(ip: string, threshold: number): ThreatDetection | null 
       };
     }
   } else {
-    ipRequestLog.set(ip, { count: 1, firstSeen: now, lastSeen: now });
+    ipRequestLog[ip] = { count: 1, firstSeen: now, lastSeen: now };
   }
   return null;
 }
@@ -168,6 +222,17 @@ async function isBlocked(ip: string): Promise<boolean> {
 async function recordAlert(req: Request, threat: ThreatDetection): Promise<void> {
   const ip = getClientIp(req);
   try {
+    // Cloudflare Worker compatibility: avoid Object.keys()
+    const bodyKeys: string[] = [];
+    if (req.body && typeof req.body === "object") {
+      for (const k in req.body) {
+        if (Object.prototype.hasOwnProperty.call(req.body, k)) {
+          bodyKeys.push(k);
+          if (bodyKeys.length > 50) break; // Sample limit
+        }
+      }
+    }
+
     await db.insert(securityAlertsTable).values({
       type: threat.type,
       severity: threat.severity,
@@ -178,9 +243,9 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       details: threat.details,
       payload_sample: JSON.stringify({
         query: req.query,
-        body: typeof req.body === "object" ? Object.keys(req.body) : undefined,
+        body: bodyKeys.length > 0 ? bodyKeys : undefined,
         pattern: threat.pattern,
-      }).slice(0, 2000),
+      }).substring(0, 2000),
       status: "new",
       blocked: threat.severity === "critical",
     });
@@ -280,12 +345,19 @@ export function idsMiddleware() {
   };
 }
 
-// .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of ipRequestLog.entries()) {
-    if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
-      ipRequestLog.delete(ip);
+// Cloudflare Worker compatibility: guard setInterval and avoid .unref()/.entries()
+if (typeof setInterval === "function") {
+  const janitor = setInterval(() => {
+    const now = Date.now();
+    for (const ip in ipRequestLog) {
+      if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
+        if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
+          delete ipRequestLog[ip];
+        }
+      }
     }
+  }, 60_000);
+  if (typeof (janitor as any).unref === "function") {
+    (janitor as any).unref();
   }
-}, 60_000).unref();
+}
