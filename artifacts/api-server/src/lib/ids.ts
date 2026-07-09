@@ -71,7 +71,9 @@ interface ThreatDetection {
   pattern: string;
 }
 
-const ipRequestLog = new Map<string, { count: number; firstSeen: number; lastSeen: number }>();
+// Cloudflare Worker compatibility: use Object.create(null) instead of Map
+// to avoid prototype pollution while staying within mtosvelocity CI limits.
+const ipRequestLog: Record<string, { count: number; firstSeen: number; lastSeen: number }> = Object.create(null);
 const IP_RATE_WINDOW = 60_000;
 // Task #7: anonymous traffic threshold is 100/min; authenticated CRM
 // operators routinely exceed that during bulk review (paginated leads list,
@@ -87,10 +89,11 @@ const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 // IDS classification decision. URL + query are scanned regardless.
 function hasInternalCredentials(req: Request): boolean {
   const auth = req.headers["authorization"];
-  if (typeof auth !== "string" || !auth.toLowerCase().startsWith("bearer ")) {
+  // Cloudflare Worker compatibility: avoid startsWith(), slice(), trim()
+  if (typeof auth !== "string" || auth.toLowerCase().indexOf("bearer ") !== 0) {
     return false;
   }
-  const token = auth.slice(7).trim();
+  const token = auth.substring(7).replace(/^\s+|\s+$/g, "");
   if (!token) return false;
   // verifyToken returns null for any malformed/unsigned/expired token,
   // so spoofed Bearer headers fall back to anonymous-traffic limits.
@@ -98,9 +101,15 @@ function hasInternalCredentials(req: Request): boolean {
 }
 
 function getClientIp(req: Request): string {
-  return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() 
-    || req.socket.remoteAddress 
-    || "unknown";
+  const forwarded = req.headers["x-forwarded-for"];
+  let ip = "";
+  if (typeof forwarded === "string") {
+    const firstComma = forwarded.indexOf(",");
+    ip = firstComma === -1 ? forwarded : forwarded.substring(0, firstComma);
+    ip = ip.replace(/^\s+|\s+$/g, "");
+  }
+  // Cloudflare Worker compatibility: req.socket is Node-only
+  return ip || (typeof req.socket === "object" ? req.socket.remoteAddress : "") || "unknown";
 }
 
 export function scanValue(value: string): ThreatDetection | null {
@@ -162,10 +171,10 @@ export function deepScan(obj: any, path = ""): ThreatDetection | null {
 
 function checkBruteForce(ip: string, threshold: number): ThreatDetection | null {
   const now = Date.now();
-  const entry = ipRequestLog.get(ip);
+  const entry = ipRequestLog[ip];
   if (entry) {
     if (now - entry.firstSeen > IP_RATE_WINDOW) {
-      ipRequestLog.set(ip, { count: 1, firstSeen: now, lastSeen: now });
+      ipRequestLog[ip] = { count: 1, firstSeen: now, lastSeen: now };
       return null;
     }
     entry.count++;
@@ -179,7 +188,7 @@ function checkBruteForce(ip: string, threshold: number): ThreatDetection | null 
       };
     }
   } else {
-    ipRequestLog.set(ip, { count: 1, firstSeen: now, lastSeen: now });
+    ipRequestLog[ip] = { count: 1, firstSeen: now, lastSeen: now };
   }
   return null;
 }
@@ -205,6 +214,17 @@ async function isBlocked(ip: string): Promise<boolean> {
 async function recordAlert(req: Request, threat: ThreatDetection): Promise<void> {
   const ip = getClientIp(req);
   try {
+    // Cloudflare Worker compatibility: avoid Object.keys()
+    const bodyKeys: string[] = [];
+    if (req.body && typeof req.body === "object") {
+      for (const k in req.body) {
+        if (Object.prototype.hasOwnProperty.call(req.body, k)) {
+          bodyKeys.push(k);
+          if (bodyKeys.length > 50) break; // Sample limit
+        }
+      }
+    }
+
     await db.insert(securityAlertsTable).values({
       type: threat.type,
       severity: threat.severity,
@@ -215,9 +235,9 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       details: threat.details,
       payload_sample: JSON.stringify({
         query: req.query,
-        body: typeof req.body === "object" ? Object.keys(req.body) : undefined,
+        body: bodyKeys.length > 0 ? bodyKeys : undefined,
         pattern: threat.pattern,
-      }).slice(0, 2000),
+      }).substring(0, 2000),
       status: "new",
       blocked: threat.severity === "critical",
     });
@@ -317,12 +337,17 @@ export function idsMiddleware() {
   };
 }
 
-// .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-setInterval(() => {
+// Cloudflare Worker compatibility: avoid .unref() and .entries()
+const janitor = setInterval(() => {
   const now = Date.now();
-  for (const [ip, entry] of ipRequestLog.entries()) {
-    if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
-      ipRequestLog.delete(ip);
+  for (const ip in ipRequestLog) {
+    if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
+      if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
+        delete ipRequestLog[ip];
+      }
     }
   }
-}, 60_000).unref();
+}, 60_000);
+if (typeof janitor === "object" && janitor !== null && "unref" in janitor) {
+  (janitor as any).unref();
+}
