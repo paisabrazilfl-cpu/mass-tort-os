@@ -107,37 +107,44 @@ function getClientIp(req: Request): string {
     const firstComma = forwarded.indexOf(",");
     ip = firstComma === -1 ? forwarded : forwarded.substring(0, firstComma);
     ip = ip.replace(/^\s+|\s+$/g, "");
+  } else if (Array.isArray(forwarded) && forwarded.length > 0) {
+    ip = forwarded[0].replace(/^\s+|\s+$/g, "");
   }
-  // Cloudflare Worker compatibility: req.socket is Node-only
-  return ip || (typeof req.socket === "object" ? req.socket.remoteAddress : "") || "unknown";
+  // Cloudflare Worker compatibility: use optional chaining for req.socket
+  return ip || req.socket?.remoteAddress || "unknown";
 }
 
 export function scanValue(value: string): ThreatDetection | null {
   // Hot path optimization: test against consolidated regexes first.
   // If it matches, we loop to find the specific pattern for logging.
+  // Cloudflare Worker compatibility: replace for...of with indexed for loops.
   if (SQL_INJECTION_RE.test(value)) {
-    for (const pattern of SQL_INJECTION_PATTERNS) {
+    for (let i = 0; i < SQL_INJECTION_PATTERNS.length; i++) {
+      const pattern = SQL_INJECTION_PATTERNS[i];
       if (pattern.test(value)) {
         return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
       }
     }
   }
   if (COMMAND_INJECTION_RE.test(value)) {
-    for (const pattern of COMMAND_INJECTION_PATTERNS) {
+    for (let i = 0; i < COMMAND_INJECTION_PATTERNS.length; i++) {
+      const pattern = COMMAND_INJECTION_PATTERNS[i];
       if (pattern.test(value)) {
         return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
       }
     }
   }
   if (XSS_RE.test(value)) {
-    for (const pattern of XSS_PATTERNS) {
+    for (let i = 0; i < XSS_PATTERNS.length; i++) {
+      const pattern = XSS_PATTERNS[i];
       if (pattern.test(value)) {
         return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
       }
     }
   }
   if (PATH_TRAVERSAL_RE.test(value)) {
-    for (const pattern of PATH_TRAVERSAL_PATTERNS) {
+    for (let i = 0; i < PATH_TRAVERSAL_PATTERNS.length; i++) {
+      const pattern = PATH_TRAVERSAL_PATTERNS[i];
       if (pattern.test(value)) {
         return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
       }
@@ -348,6 +355,6 @@ const janitor = setInterval(() => {
     }
   }
 }, 60_000);
-if (typeof janitor === "object" && janitor !== null && "unref" in janitor) {
+if (typeof (janitor as any).unref === "function") {
   (janitor as any).unref();
 }
