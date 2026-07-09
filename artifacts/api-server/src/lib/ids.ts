@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
@@ -158,16 +158,17 @@ export function deepScan(obj: any, path = ""): ThreatDetection | null {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    // Avoid Object.entries() to prevent temporary array allocation
-    if (Array.isArray(obj)) {
+    // Avoid Object.entries() to prevent temporary array allocation.
+    // Cloudflare Worker compatibility: use string concatenation and .i for indices.
+    if (obj instanceof Array) {
       for (let i = 0; i < obj.length; i++) {
-        const threat = deepScan(obj[i], path ? `${path}.${i}` : `${i}`);
+        const threat = deepScan(obj[i], path + "." + i);
         if (threat) return threat;
       }
     } else {
       for (const key in obj) {
         if (Object.prototype.hasOwnProperty.call(obj, key)) {
-          const threat = deepScan(obj[key], path ? `${path}.${key}` : key);
+          const threat = deepScan(obj[key], path + "." + key);
           if (threat) return threat;
         }
       }
@@ -344,17 +345,19 @@ export function idsMiddleware() {
   };
 }
 
-// Cloudflare Worker compatibility: avoid .unref() and .entries()
-const janitor = setInterval(() => {
-  const now = Date.now();
-  for (const ip in ipRequestLog) {
-    if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
-      if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
-        delete ipRequestLog[ip];
+// Cloudflare Worker compatibility: guard setInterval and avoid .unref()/.entries()
+if (typeof setInterval === "function") {
+  const janitor = setInterval(() => {
+    const now = Date.now();
+    for (const ip in ipRequestLog) {
+      if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
+        if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
+          delete ipRequestLog[ip];
+        }
       }
     }
+  }, 60_000);
+  if (typeof (janitor as any).unref === "function") {
+    (janitor as any).unref();
   }
-}, 60_000);
-if (typeof (janitor as any).unref === "function") {
-  (janitor as any).unref();
 }
