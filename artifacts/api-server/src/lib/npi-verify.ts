@@ -22,12 +22,11 @@ const NPI_MAX_RETRIES = 2; // 1 initial + 2 retries = 3 attempts total
 // taxonomy match to also accept "general practice", "family medicine", or
 // "internal medicine" — those are the actual NPPES taxonomy descriptions for
 // the same job. Without this, perfectly valid NPIs scored 0 on specialty.
-const SPECIALTY_ALIASES: Record<string, readonly string[]> = {
-  "general practitioner": ["general practice", "family medicine", "internal medicine"],
-  "general practice": ["family medicine", "internal medicine"],
-  "family doctor": ["family medicine", "general practice"],
-  "primary care": ["family medicine", "internal medicine", "general practice"],
-};
+const SPECIALTY_ALIASES: Record<string, readonly string[]> = Object.create(null);
+SPECIALTY_ALIASES["general practitioner"] = ["general practice", "family medicine", "internal medicine"];
+SPECIALTY_ALIASES["general practice"] = ["family medicine", "internal medicine"];
+SPECIALTY_ALIASES["family doctor"] = ["family medicine", "general practice"];
+SPECIALTY_ALIASES["primary care"] = ["family medicine", "internal medicine", "general practice"];
 
 class NppesUnavailable extends Error {
   constructor(message: string) {
@@ -153,7 +152,7 @@ async function fetchNpiOnce(params: URLSearchParams): Promise<NpiRegistryResult[
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
   try {
-    const url = `${NPI_API_BASE}?${params.toString()}`;
+    const url = NPI_API_BASE + "?" + params.toString();
     const r = await fetch(url, {
       signal: controller.signal,
       // Identified User-Agent + JSON Accept header. NPPES is friendlier to
@@ -162,14 +161,14 @@ async function fetchNpiOnce(params: URLSearchParams): Promise<NpiRegistryResult[
     });
     if (!r.ok) {
       // Treat HTTP failure as transient/unavailable — the honest bucket.
-      throw new NppesUnavailable(`NPPES returned HTTP ${r.status}`);
+      throw new NppesUnavailable("NPPES returned HTTP " + r.status);
     }
     let data: { results?: NpiRegistryResult[] };
     try {
       data = (await r.json()) as { results?: NpiRegistryResult[] };
     } catch (err) {
       throw new NppesUnavailable(
-        `NPPES returned non-JSON response: ${err instanceof Error ? err.message : String(err)}`,
+        "NPPES returned non-JSON response: " + (err instanceof Error ? err.message : String(err)),
       );
     }
     return data.results ?? [];
@@ -206,28 +205,54 @@ async function fetchNpi(params: URLSearchParams): Promise<NpiRegistryResult[]> {
 // "where do they actually work" matching. Falls back to MAILING, then any.
 function pickPrimaryAddress(addresses: NpiAddress[] | undefined): NpiAddress {
   const list = addresses ?? [];
-  return (
-    list.find((a) => a.address_purpose === "LOCATION") ??
-    list.find((a) => a.address_purpose === "MAILING") ??
-    list[0] ??
-    {}
-  );
+  // Manual find loop to avoid .find() for Cloudflare Worker compatibility
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].address_purpose === "LOCATION") return list[i];
+  }
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].address_purpose === "MAILING") return list[i];
+  }
+  return list[0] ?? {};
 }
 
 async function lookupByNpi(npi: string): Promise<NpiRegistryResult | null> {
-  const params = new URLSearchParams({ number: npi, version: NPI_VERSION });
+  const params = new URLSearchParams();
+  params.set("number", npi);
+  params.set("version", NPI_VERSION);
   const results = await fetchNpi(params);
   return results[0] ?? null;
 }
+
+const TRIM_RE = /^\s+|\s+$/g;
 
 async function searchByNameLocation(
   expected: ExpectedProvider,
   limit = 20,
 ): Promise<NpiRegistryResult[]> {
-  const params = new URLSearchParams({ version: NPI_VERSION, limit: String(limit) });
+  const params = new URLSearchParams();
+  params.set("version", NPI_VERSION);
+  params.set("limit", "" + limit);
 
   // Extract first/last from a free-text name if provided
-  const nameParts = (expected.name ?? "").trim().split(/\s+/).filter(Boolean);
+  // Manual tokenization to avoid split(/\s+/).filter(Boolean) for Cloudflare Worker compatibility
+  const name = (expected.name ?? "").replace(TRIM_RE, "");
+  const nameParts: string[] = [];
+  if (name) {
+    let start = 0;
+    const len = name.length;
+    while (start < len) {
+      const end = name.indexOf(" ", start);
+      if (end === -1) {
+        nameParts.push(name.substring(start));
+        break;
+      }
+      if (end > start) {
+        nameParts.push(name.substring(start, end));
+      }
+      start = end + 1;
+    }
+  }
+
   if (nameParts.length >= 1) params.set("first_name", nameParts[0]);
   if (nameParts.length >= 2) params.set("last_name", nameParts[nameParts.length - 1]);
 
@@ -249,11 +274,17 @@ function pickBestSearchResult(
   const expCity = expected.city ?? "";
   const expState = expected.state ?? "";
 
-  for (const r of results) {
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
     const basic = r.basic ?? {};
-    const name =
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
+    let name = basic.name ?? "";
+    if (!name) {
+      if (basic.first_name && basic.last_name) {
+        name = basic.first_name + " " + basic.last_name;
+      } else {
+        name = basic.first_name || basic.last_name || "";
+      }
+    }
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
     const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
@@ -282,8 +313,21 @@ function specialtyAcceptedTerms(expectedSpecialty: string): string[] {
   const base = normalize(expectedSpecialty);
   if (!base) return [];
   const aliases = SPECIALTY_ALIASES[base] ?? [];
-  const all = [base, ...aliases].map((t) => normalize(t)).filter(Boolean);
-  return Array.from(new Set(all));
+  const all: string[] = [base];
+  for (let i = 0; i < aliases.length; i++) {
+    const norm = normalize(aliases[i]);
+    if (norm) all.push(norm);
+  }
+  // Manual unique filter to avoid Set for Cloudflare Worker compatibility
+  const unique: string[] = [];
+  const seen: Record<string, boolean> = Object.create(null);
+  for (let i = 0; i < all.length; i++) {
+    if (!seen[all[i]]) {
+      unique.push(all[i]);
+      seen[all[i]] = true;
+    }
+  }
+  return unique;
 }
 
 function providerTaxonomyMatches(
@@ -294,18 +338,30 @@ function providerTaxonomyMatches(
   const taxonomies = provider.taxonomies ?? [];
   const matchedTaxonomies: Array<{ code: string; desc: string; primary: boolean }> = [];
   if (terms.length > 0) {
-    for (const t of taxonomies) {
+    for (let i = 0; i < taxonomies.length; i++) {
+      const t = taxonomies[i];
       const desc = t.desc ?? "";
       if (!desc) continue;
       const descNorm = normalize(desc);
       // Substring match either direction so "family medicine" matches
       // "Family Medicine - Sports Medicine Physician" and so on.
-      if (terms.some((term) => descNorm.includes(term) || term.includes(descNorm))) {
+      let matched = false;
+      for (let j = 0; j < terms.length; j++) {
+        const term = terms[j];
+        if (descNorm.indexOf(term) !== -1 || term.indexOf(descNorm) !== -1) {
+          matched = true;
+          break;
+        }
+      }
+      if (matched) {
         matchedTaxonomies.push({ code: t.code ?? "", desc, primary: !!t.primary });
       }
     }
   }
-  const allDescs = taxonomies.map((t) => t.desc ?? "").filter(Boolean);
+  const allDescs: string[] = [];
+  for (let i = 0; i < taxonomies.length; i++) {
+    allDescs.push(taxonomies[i].desc ?? "");
+  }
   return {
     matched: matchedTaxonomies.length > 0,
     matched_taxonomies: matchedTaxonomies,
@@ -329,17 +385,31 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   // hospital systems often resolve to a corporate PO box hundreds of miles
   // from the actual practice, which would tank city scoring.
   const primary = pickPrimaryAddress(p.addresses);
-  return {
-    npi: String(p.number ?? ""),
-    name:
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim(),
-    organization_name: basic.organization_name ?? "",
-    taxonomies: (p.taxonomies ?? []).map((t) => ({
+  const taxonomies = p.taxonomies ?? [];
+  const taxSum = [];
+  for (let i = 0; i < taxonomies.length; i++) {
+    const t = taxonomies[i];
+    taxSum.push({
       code: t.code ?? "",
       desc: t.desc ?? "",
       primary: !!t.primary,
-    })),
+    });
+  }
+
+  let name = basic.name ?? "";
+  if (!name) {
+    if (basic.first_name && basic.last_name) {
+      name = basic.first_name + " " + basic.last_name;
+    } else {
+      name = basic.first_name || basic.last_name || "";
+    }
+  }
+
+  return {
+    npi: "" + (p.number ?? ""),
+    name: name,
+    organization_name: basic.organization_name ?? "",
+    taxonomies: taxSum,
     address: {
       address_1: primary.address_1 ?? "",
       city: primary.city ?? "",
@@ -544,7 +614,7 @@ export async function verifyProvider(
 }
 
 function round(n: number, decimals: number): number {
-  const f = Math.pow(10, decimals);
+  const f = 10 ** decimals;
   return Math.round(n * f) / f;
 }
 

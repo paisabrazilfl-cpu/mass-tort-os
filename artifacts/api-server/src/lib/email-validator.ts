@@ -1,6 +1,7 @@
 import { levenshtein } from "./string-similarity";
 
-const TYPO_DOMAINS: Record<string, string> = {
+const TYPO_DOMAINS: Record<string, string> = Object.create(null);
+const typoMap: Record<string, string> = {
   "gnail.com": "gmail.com",
   "gmial.com": "gmail.com",
   "gmai.com": "gmail.com",
@@ -31,6 +32,9 @@ const TYPO_DOMAINS: Record<string, string> = {
   "outlook.con": "outlook.com",
   "outlook.vom": "outlook.com",
 };
+for (const key in typoMap) {
+  TYPO_DOMAINS[key] = typoMap[key];
+}
 
 const MALFORMED_TLDS = [".vom", ".con", ".cmo", ".coom", ".comm", ".cim", ".ocm", ".cm"];
 
@@ -46,12 +50,13 @@ const COMMON_PROVIDERS_FUZZY: Array<{ prefix: string; canonical: string; minLen:
 function findFuzzyProviderMatch(domain: string): string | null {
   const lastDot = domain.lastIndexOf(".");
   if (lastDot === -1) return null;
-  const prefix = domain.slice(0, lastDot);
-  const tld = domain.slice(lastDot);
+  const prefix = domain.substring(0, lastDot);
+  const tld = domain.substring(lastDot);
   if (tld !== ".com") return null;
   if (prefix.length < 3) return null;
   let best: { canonical: string; distance: number } | null = null;
-  for (const { prefix: known, canonical, minLen } of COMMON_PROVIDERS_FUZZY) {
+  for (let i = 0; i < COMMON_PROVIDERS_FUZZY.length; i++) {
+    const { prefix: known, canonical, minLen } = COMMON_PROVIDERS_FUZZY[i];
     if (prefix.length < minLen) continue;
     if (prefix === known) return null;
     // Anchor on the first character to avoid classifying real-but-similar
@@ -67,11 +72,15 @@ function findFuzzyProviderMatch(domain: string): string | null {
 
 const RFC_EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
 
-const DISPOSABLE_DOMAINS = [
+const DISPOSABLE_DOMAINS: Record<string, boolean> = Object.create(null);
+const disposableList = [
   "tempmail.com", "throwaway.email", "guerrillamail.com", "mailinator.com",
   "yopmail.com", "sharklasers.com", "trashmail.com", "10minutemail.com",
   "fakeinbox.com", "dispostable.com", "maildrop.cc", "guerrillamailblock.com",
 ];
+for (let i = 0; i < disposableList.length; i++) {
+  DISPOSABLE_DOMAINS[disposableList[i]] = true;
+}
 
 export interface EmailValidationResult {
   valid: boolean;
@@ -84,7 +93,21 @@ export interface EmailValidationResult {
 // renders the codes verbatim, but they are excluded from the `valid` boolean
 // so callers (e.g. the form-submission pipeline) do not reject leads on a
 // suggested-correction signal.
-const ADVISORY_CODES = new Set(["TYPO_DOMAIN_DETECTED", "LIKELY_TYPO_DOMAIN"]);
+const ADVISORY_CODES: Record<string, boolean> = Object.create(null);
+ADVISORY_CODES["TYPO_DOMAIN_DETECTED"] = true;
+ADVISORY_CODES["LIKELY_TYPO_DOMAIN"] = true;
+
+const SUSPICIOUS_PATTERNS = [
+  /^test@/,
+  /^fake@/,
+  /^none@/,
+  /^noemail@/,
+  /^na@/,
+  /^asdf/,
+  /^aaa+@/,
+];
+
+const TRIM_RE = /^\s+|\s+$/g;
 
 export function validateEmail(email: string): EmailValidationResult {
   const errors: string[] = [];
@@ -94,20 +117,21 @@ export function validateEmail(email: string): EmailValidationResult {
     return { valid: false, errors: ["MISSING_EMAIL"] };
   }
 
-  const trimmed = email.trim().toLowerCase();
+  const trimmed = email.replace(TRIM_RE, "").toLowerCase();
 
   if (!RFC_EMAIL_REGEX.test(trimmed)) {
     errors.push("INVALID_RFC_FORMAT");
     return { valid: false, errors };
   }
 
-  const parts = trimmed.split("@");
-  if (parts.length !== 2) {
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex === -1 || trimmed.lastIndexOf("@") !== atIndex) {
     errors.push("INVALID_EMAIL_STRUCTURE");
     return { valid: false, errors };
   }
 
-  const [localPart, domain] = parts;
+  const localPart = trimmed.substring(0, atIndex);
+  const domain = trimmed.substring(atIndex + 1);
 
   if (localPart.length === 0 || localPart.length > 64) {
     errors.push("INVALID_LOCAL_PART");
@@ -117,53 +141,52 @@ export function validateEmail(email: string): EmailValidationResult {
     errors.push("INVALID_DOMAIN");
   }
 
-  if (!domain.includes(".")) {
+  if (domain.indexOf(".") === -1) {
     errors.push("MISSING_TLD");
   }
 
   if (TYPO_DOMAINS[domain]) {
     errors.push("TYPO_DOMAIN_DETECTED");
-    suggestion = `${localPart}@${TYPO_DOMAINS[domain]}`;
+    suggestion = localPart + "@" + TYPO_DOMAINS[domain];
   } else {
     const fuzzyMatch = findFuzzyProviderMatch(domain);
     if (fuzzyMatch) {
       errors.push("LIKELY_TYPO_DOMAIN");
-      suggestion = `${localPart}@${fuzzyMatch}`;
+      suggestion = localPart + "@" + fuzzyMatch;
     }
   }
 
-  for (const tld of MALFORMED_TLDS) {
-    if (trimmed.endsWith(tld)) {
+  for (let i = 0; i < MALFORMED_TLDS.length; i++) {
+    const tld = MALFORMED_TLDS[i];
+    const tldIdx = trimmed.lastIndexOf(tld);
+    if (tldIdx !== -1 && tldIdx === (trimmed.length - tld.length) && trimmed.length >= tld.length) {
       errors.push("MALFORMED_TLD");
-      const corrected = trimmed.slice(0, -tld.length) + ".com";
+      const corrected = trimmed.substring(0, trimmed.length - tld.length) + ".com";
       suggestion = corrected;
       break;
     }
   }
 
-  if (DISPOSABLE_DOMAINS.includes(domain)) {
+  if (DISPOSABLE_DOMAINS[domain]) {
     errors.push("DISPOSABLE_EMAIL");
   }
 
-  const suspiciousPatterns = [
-    /^test@/,
-    /^fake@/,
-    /^none@/,
-    /^noemail@/,
-    /^na@/,
-    /^asdf/,
-    /^aaa+@/,
-  ];
-  for (const pat of suspiciousPatterns) {
-    if (pat.test(trimmed)) {
+  for (let i = 0; i < SUSPICIOUS_PATTERNS.length; i++) {
+    if (SUSPICIOUS_PATTERNS[i].test(trimmed)) {
       errors.push("SUSPICIOUS_EMAIL_PATTERN");
       break;
     }
   }
 
-  const hardErrors = errors.filter((e) => !ADVISORY_CODES.has(e));
+  const finalErrors: string[] = [];
+  for (let i = 0; i < errors.length; i++) {
+    if (!ADVISORY_CODES[errors[i]]) {
+      finalErrors.push(errors[i]);
+    }
+  }
+
   return {
-    valid: hardErrors.length === 0,
+    valid: finalErrors.length === 0,
     errors,
     suggestion,
   };
