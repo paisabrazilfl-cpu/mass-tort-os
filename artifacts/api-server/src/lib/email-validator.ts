@@ -1,6 +1,7 @@
 import { levenshtein } from "./string-similarity";
 
-const TYPO_DOMAINS: Record<string, string> = {
+const TYPO_DOMAINS: Record<string, string> = Object.create(null);
+const typoMap: Record<string, string> = {
   "gnail.com": "gmail.com",
   "gmial.com": "gmail.com",
   "gmai.com": "gmail.com",
@@ -31,6 +32,9 @@ const TYPO_DOMAINS: Record<string, string> = {
   "outlook.con": "outlook.com",
   "outlook.vom": "outlook.com",
 };
+for (const key in typoMap) {
+  TYPO_DOMAINS[key] = typoMap[key];
+}
 
 const MALFORMED_TLDS = [".vom", ".con", ".cmo", ".coom", ".comm", ".cim", ".ocm", ".cm"];
 
@@ -68,7 +72,7 @@ function findFuzzyProviderMatch(domain: string): string | null {
 
 const RFC_EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
 
-const DISPOSABLE_DOMAINS: Record<string, boolean> = {};
+const DISPOSABLE_DOMAINS: Record<string, boolean> = Object.create(null);
 const disposableList = [
   "tempmail.com", "throwaway.email", "guerrillamail.com", "mailinator.com",
   "yopmail.com", "sharklasers.com", "trashmail.com", "10minutemail.com",
@@ -89,10 +93,9 @@ export interface EmailValidationResult {
 // renders the codes verbatim, but they are excluded from the `valid` boolean
 // so callers (e.g. the form-submission pipeline) do not reject leads on a
 // suggested-correction signal.
-const ADVISORY_CODES: Record<string, boolean> = {
-  "TYPO_DOMAIN_DETECTED": true,
-  "LIKELY_TYPO_DOMAIN": true,
-};
+const ADVISORY_CODES: Record<string, boolean> = Object.create(null);
+ADVISORY_CODES["TYPO_DOMAIN_DETECTED"] = true;
+ADVISORY_CODES["LIKELY_TYPO_DOMAIN"] = true;
 
 const SUSPICIOUS_PATTERNS = [
   /^test@/,

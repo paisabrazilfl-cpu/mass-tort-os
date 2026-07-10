@@ -22,12 +22,11 @@ const NPI_MAX_RETRIES = 2; // 1 initial + 2 retries = 3 attempts total
 // taxonomy match to also accept "general practice", "family medicine", or
 // "internal medicine" — those are the actual NPPES taxonomy descriptions for
 // the same job. Without this, perfectly valid NPIs scored 0 on specialty.
-const SPECIALTY_ALIASES: Record<string, readonly string[]> = {
-  "general practitioner": ["general practice", "family medicine", "internal medicine"],
-  "general practice": ["family medicine", "internal medicine"],
-  "family doctor": ["family medicine", "general practice"],
-  "primary care": ["family medicine", "internal medicine", "general practice"],
-};
+const SPECIALTY_ALIASES: Record<string, readonly string[]> = Object.create(null);
+SPECIALTY_ALIASES["general practitioner"] = ["general practice", "family medicine", "internal medicine"];
+SPECIALTY_ALIASES["general practice"] = ["family medicine", "internal medicine"];
+SPECIALTY_ALIASES["family doctor"] = ["family medicine", "general practice"];
+SPECIALTY_ALIASES["primary care"] = ["family medicine", "internal medicine", "general practice"];
 
 class NppesUnavailable extends Error {
   constructor(message: string) {
@@ -321,7 +320,7 @@ function specialtyAcceptedTerms(expectedSpecialty: string): string[] {
   }
   // Manual unique filter to avoid Set for Cloudflare Worker compatibility
   const unique: string[] = [];
-  const seen: Record<string, boolean> = {};
+  const seen: Record<string, boolean> = Object.create(null);
   for (let i = 0; i < all.length; i++) {
     if (!seen[all[i]]) {
       unique.push(all[i]);

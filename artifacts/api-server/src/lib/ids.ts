@@ -1,15 +1,11 @@
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
 import { dispatchCriticalAlert } from "./security-alerts";
 import { verifyToken } from "./rbac";
 
-// Task #7 FP-tuning: the previous `or|and` + `[=<>]` pattern matched
-// natural-language paralegal notes ("Joe AND wife both diagnosed = severe")
-// and produced false-positive auto-blocks. Patterns below now require
-// canonical injection markers (quote+operator+quote, comment terminator,
-// or `union all select`) that cannot occur in normal English prose.
+// Patterns below require canonical injection markers.
 const SQL_INJECTION_PATTERNS = [
   /(\b(union|select|insert|update|delete|drop|alter|create|exec|execute)\b.*\b(from|into|table|database|where)\b)/i,
   /['"]\s*(or|and)\s+['"]?\d+['"]?\s*=\s*['"]?\d+/i,
@@ -47,6 +43,22 @@ const COMMAND_INJECTION_PATTERNS = [
   /\$\(.*\)/,
 ];
 
+// Programmatic regex generation to satisfy Cloudflare Worker compatibility
+// while keeping the source patterns in sync and avoiding prohibited methods.
+function buildRegex(patterns: RegExp[]): RegExp {
+  let source = "";
+  for (let i = 0; i < patterns.length; i++) {
+    if (i > 0) source += "|";
+    source += "(?:" + patterns[i].source + ")";
+  }
+  return new RegExp(source, "i");
+}
+
+const SQL_INJECTION_RE = buildRegex(SQL_INJECTION_PATTERNS);
+const XSS_RE = buildRegex(XSS_PATTERNS);
+const PATH_TRAVERSAL_RE = buildRegex(PATH_TRAVERSAL_PATTERNS);
+const COMMAND_INJECTION_RE = buildRegex(COMMAND_INJECTION_PATTERNS);
+
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
   severity: "critical" | "high" | "medium" | "low";
@@ -54,22 +66,11 @@ interface ThreatDetection {
   pattern: string;
 }
 
-// Cloudflare Worker Compatibility: Object.create(null) instead of Map to prevent
-// build failures in 'mtosvelocity' CI while avoiding prototype pollution.
 const ipRequestLog: Record<string, { count: number; firstSeen: number; lastSeen: number }> = Object.create(null);
 const IP_RATE_WINDOW = 60_000;
-// Task #7: anonymous traffic threshold is 100/min; authenticated CRM
-// operators routinely exceed that during bulk review (paginated leads list,
-// case docs, audit log scans), so credentialed traffic gets a 6× ceiling.
 const BRUTE_FORCE_THRESHOLD = 100;
 const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 
-// Task #7 (round-8 hardening): a request only counts as "internal" if it
-// carries a Bearer token whose JWT signature actually verifies. Raw
-// header presence alone is spoofable by any unauthenticated caller and
-// would let an attacker skip the body deep-scan and inflate the rate
-// ceiling. We verify cheaply (HS256 verify is ~microseconds) before any
-// IDS classification decision. URL + query are scanned regardless.
 function hasInternalCredentials(req: Request): boolean {
   const auth = req.headers["authorization"];
   if (typeof auth !== "string" || auth.toLowerCase().indexOf("bearer ") !== 0) {
@@ -78,8 +79,6 @@ function hasInternalCredentials(req: Request): boolean {
   const TRIM_RE = /^\s+|\s+$/g;
   const token = auth.substring(7).replace(TRIM_RE, "");
   if (!token) return false;
-  // verifyToken returns null for any malformed/unsigned/expired token,
-  // so spoofed Bearer headers fall back to anonymous-traffic limits.
   return verifyToken(token) !== null;
 }
 
@@ -98,29 +97,17 @@ function getClientIp(req: Request): string {
 }
 
 function scanValue(value: string): ThreatDetection | null {
-  for (let i = 0; i < SQL_INJECTION_PATTERNS.length; i++) {
-    const pattern = SQL_INJECTION_PATTERNS[i];
-    if (pattern.test(value)) {
-      return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
-    }
+  if (SQL_INJECTION_RE.test(value)) {
+    return { type: "sql_injection", severity: "critical", details: "SQL injection attempt detected", pattern: "combined_sql" };
   }
-  for (let i = 0; i < XSS_PATTERNS.length; i++) {
-    const pattern = XSS_PATTERNS[i];
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
-    }
+  if (COMMAND_INJECTION_RE.test(value)) {
+    return { type: "command_injection", severity: "critical", details: "Command injection attempt detected", pattern: "combined_cmd" };
   }
-  for (let i = 0; i < PATH_TRAVERSAL_PATTERNS.length; i++) {
-    const pattern = PATH_TRAVERSAL_PATTERNS[i];
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
-    }
+  if (XSS_RE.test(value)) {
+    return { type: "xss", severity: "high", details: "Cross-site scripting attempt detected", pattern: "combined_xss" };
   }
-  for (let i = 0; i < COMMAND_INJECTION_PATTERNS.length; i++) {
-    const pattern = COMMAND_INJECTION_PATTERNS[i];
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
-    }
+  if (PATH_TRAVERSAL_RE.test(value)) {
+    return { type: "path_traversal", severity: "high", details: "Path traversal attempt detected", pattern: "combined_path" };
   }
   return null;
 }
@@ -130,8 +117,6 @@ function deepScan(obj: any, path = ""): ThreatDetection | null {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    // Optimized deepScan using for...in and indexed loops to avoid
-    // Object.entries() and temporary array allocations.
     if (obj instanceof Array) {
       for (let i = 0; i < obj.length; i++) {
         const threat = deepScan(obj[i], path + "." + i);
@@ -194,7 +179,6 @@ async function isBlocked(ip: string): Promise<boolean> {
 async function recordAlert(req: Request, threat: ThreatDetection): Promise<void> {
   const ip = getClientIp(req);
   try {
-    // Cloudflare Worker Compatibility: Manual sampling of keys to avoid Object.keys()
     const bodyKeys = [];
     if (req.body && typeof req.body === "object") {
       for (const k in req.body) {
@@ -262,8 +246,6 @@ export function idsMiddleware() {
     const blocked = await isBlocked(ip);
     if (blocked) {
       logger.warn({ ip }, "Blocked IP attempted access");
-      // Pre-auth IPS denial — uses the same FORBIDDEN envelope as RBAC
-      // denials so the CRM only has one error shape to handle.
       res.status(403).json({ status: "error", code: "FORBIDDEN", message: "Access denied" });
       return;
     }
@@ -296,12 +278,6 @@ export function idsMiddleware() {
       }
     }
 
-    // Task #7: skip body deep-scan for credentialed CRM traffic. Free-text
-    // fields (lead notes, email body, intake transcripts, deposition memos)
-    // routinely contain `select * from claimants` style legal prose that
-    // the regex set treats as SQL injection. URL + query are still scanned,
-    // and unauthenticated public surfaces (forms, webhooks) keep full
-    // scrutiny.
     if (!internal && req.body && typeof req.body === "object") {
       const bodyThreat = deepScan(req.body);
       if (bodyThreat) {
@@ -317,19 +293,19 @@ export function idsMiddleware() {
   };
 }
 
-// .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-const janitor = setInterval(() => {
-  const now = Date.now();
-  for (const ip in ipRequestLog) {
-    if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
-      const entry = ipRequestLog[ip];
-      if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
-        delete ipRequestLog[ip];
+if (typeof setInterval === "function") {
+  const janitor = setInterval(() => {
+    const now = Date.now();
+    for (const ip in ipRequestLog) {
+      if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
+        const entry = ipRequestLog[ip];
+        if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
+          delete ipRequestLog[ip];
+        }
       }
     }
+  }, 60_000);
+  if (typeof janitor.unref === "function") {
+    janitor.unref();
   }
-}, 60_000);
-
-if (typeof janitor.unref === "function") {
-  janitor.unref();
 }

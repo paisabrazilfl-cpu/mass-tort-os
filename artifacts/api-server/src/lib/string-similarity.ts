@@ -19,13 +19,13 @@ export function normalize(s: string | null | undefined): string {
 // raw normalize() above would penalize them ~40%. Used by name comparisons
 // in npi-verify so "Dr. Micah Edwin, MD" matches "Micah Edwin" cleanly.
 // Using plain objects for Cloudflare Worker compatibility.
-const TITLE_TOKENS: Record<string, boolean> = {};
+const TITLE_TOKENS: Record<string, boolean> = Object.create(null);
 const titleList = ["dr", "doctor", "mr", "mrs", "ms", "miss"];
 for (let i = 0; i < titleList.length; i++) {
   TITLE_TOKENS[titleList[i]] = true;
 }
 
-const CREDENTIAL_TOKENS: Record<string, boolean> = {};
+const CREDENTIAL_TOKENS: Record<string, boolean> = Object.create(null);
 const credentialList = [
   "md",
   "do",
