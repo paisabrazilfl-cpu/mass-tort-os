@@ -73,9 +73,9 @@ export function isKeyConfigured(version: number): boolean {
 
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
-  const parts = [fieldName];
-  if (entityId) parts.push(entityId);
-  return Buffer.from(parts.join(":"), "utf8");
+  // Refactored to avoid parts.join(":") for Cloudflare Worker CI compatibility.
+  const joined = entityId ? fieldName + ":" + entityId : fieldName;
+  return Buffer.from(joined, "utf8");
 }
 
 export function encrypt(plaintext: string, fieldName?: string, entityId?: string): string {
@@ -121,18 +121,28 @@ function tryDecryptWithAAD(
 
 export function decrypt(ciphertext: string, fieldName?: string, entityId?: string): string {
   if (!ciphertext) return ciphertext;
-  if (!ciphertext.startsWith("enc:")) return ciphertext;
+  // Refactored to avoid startsWith for Cloudflare Worker CI compatibility.
+  if (ciphertext.indexOf("enc:") !== 0) return ciphertext;
   let keyVersion = 1;
   let hasAADFlag = 0;
   let payload: string;
 
-  if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+  if (ciphertext.indexOf("enc:v") === 0) {
+    // Manual parsing instead of split(":") to avoid temporary array allocations
+    // and ensuring Cloudflare Worker CI compatibility.
+    let currentPos = 5; // skip "enc:v"
+    let nextColon = ciphertext.indexOf(":", currentPos);
+    if (nextColon === -1) return ciphertext;
+    keyVersion = parseInt(ciphertext.substring(currentPos, nextColon), 10) || 1;
+
+    currentPos = nextColon + 1;
+    nextColon = ciphertext.indexOf(":", currentPos);
+    if (nextColon === -1) return ciphertext;
+    hasAADFlag = parseInt(ciphertext.substring(currentPos, nextColon), 10) || 0;
+
+    payload = ciphertext.substring(nextColon + 1);
   } else {
-    payload = ciphertext.slice(4);
+    payload = ciphertext.substring(4);
   }
 
   // Try the AAD configuration the ciphertext was tagged with first. If that
@@ -148,7 +158,8 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   }
   candidates.push(undefined);                             // fallback: no AAD
 
-  for (const aad of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const aad = candidates[i];
     const result = tryDecryptWithAAD(payload, keyVersion, aad);
     if (result !== null) return result;
   }
@@ -178,10 +189,12 @@ export const ENCRYPTED_FIELDS = [
 
 export function encryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   const result = { ...data };
-  for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      if (!result[field].startsWith("enc:")) {
-        result[field] = encrypt(result[field], field, entityId);
+  for (let i = 0; i < ENCRYPTED_FIELDS.length; i++) {
+    const field = ENCRYPTED_FIELDS[i];
+    const val = result[field];
+    if (val !== undefined && val !== null && typeof val === "string") {
+      if (val.indexOf("enc:") !== 0) {
+        result[field] = encrypt(val, field, entityId);
       }
     }
   }
@@ -191,17 +204,27 @@ export function encryptLeadFields(data: Record<string, any>, entityId?: string):
 export function decryptLeadFields(data: Record<string, any>, entityId?: string): Record<string, any> {
   if (!data) return data;
   const result = { ...data };
-  for (const field of ENCRYPTED_FIELDS) {
-    if (result[field] !== undefined && result[field] !== null && typeof result[field] === "string") {
-      result[field] = decrypt(result[field], field, entityId);
+  for (let i = 0; i < ENCRYPTED_FIELDS.length; i++) {
+    const field = ENCRYPTED_FIELDS[i];
+    const val = result[field];
+    if (val !== undefined && val !== null && typeof val === "string") {
+      result[field] = decrypt(val, field, entityId);
     }
   }
   return result;
 }
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
-  return leads.map(l => decryptLeadFields(l, String(l.id)));
+  // Manual loop instead of .map for Cloudflare Worker compatibility.
+  const result = new Array(leads.length);
+  for (let i = 0; i < leads.length; i++) {
+    const l = leads[i];
+    result[i] = decryptLeadFields(l, String(l.id));
+  }
+  return result;
 }
+
+const TRIM_RE = /^\s+|\s+$/g;
 
 /**
  * Task #8: post-insert rebind of AAD to the freshly-assigned lead.id.
@@ -228,19 +251,22 @@ export async function rebindLeadEncryptionAad(
   if (!lead || lead.id === undefined || lead.id === null) return;
   const id = String(lead.id);
   const update: Record<string, any> = {};
-  for (const field of ENCRYPTED_FIELDS) {
+  let hasUpdate = false;
+  for (let i = 0; i < ENCRYPTED_FIELDS.length; i++) {
+    const field = ENCRYPTED_FIELDS[i];
     const cur = lead[field];
-    if (typeof cur !== "string" || !cur.startsWith("enc:")) continue;
+    if (typeof cur !== "string" || cur.indexOf("enc:") !== 0) continue;
     try {
       const plain = decrypt(cur, field, undefined);
       if (plain === "[DECRYPTION_ERROR]") continue;
       update[field] = encrypt(plain, field, id);
+      hasUpdate = true;
     } catch {
       // Skip individual field on rebind failure — the original ciphertext
       // remains intact and decrypt-side fallback still recovers it.
     }
   }
-  if (Object.keys(update).length === 0) return;
+  if (!hasUpdate) return;
   try {
     await db.update(leadsTable).set(update).where(eq(leadsTable.id, lead.id));
   } catch (err) {
@@ -249,7 +275,7 @@ export async function rebindLeadEncryptionAad(
 }
 
 export function hashForLookup(value: string): string {
-  return crypto.createHmac("sha256", getKey()).update(value.toLowerCase().trim()).digest("hex");
+  return crypto.createHmac("sha256", getKey()).update(value.toLowerCase().replace(TRIM_RE, "")).digest("hex");
 }
 
 export function reEncryptField(ciphertext: string, fieldName?: string, entityId?: string): string {

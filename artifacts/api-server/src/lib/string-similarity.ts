@@ -19,13 +19,13 @@ export function normalize(s: string | null | undefined): string {
 // raw normalize() above would penalize them ~40%. Used by name comparisons
 // in npi-verify so "Dr. Micah Edwin, MD" matches "Micah Edwin" cleanly.
 // Using plain objects for Cloudflare Worker compatibility.
-const TITLE_TOKENS: Record<string, boolean> = Object.create(null);
+const TITLE_TOKENS: Record<string, boolean> = {};
 const titleList = ["dr", "doctor", "mr", "mrs", "ms", "miss"];
 for (let i = 0; i < titleList.length; i++) {
   TITLE_TOKENS[titleList[i]] = true;
 }
 
-const CREDENTIAL_TOKENS: Record<string, boolean> = Object.create(null);
+const CREDENTIAL_TOKENS: Record<string, boolean> = {};
 const credentialList = [
   "md",
   "do",
@@ -118,6 +118,7 @@ export function similarityName(
 
 /**
  * Optimized Levenshtein distance with prefix and suffix skipping.
+ * Refactored to avoid Int32Array and use indexed loops for Worker compatibility.
  */
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
@@ -159,7 +160,8 @@ export function levenshtein(a: string, b: string): number {
     maxLen = alen;
   }
 
-  const row = new Int32Array(minLen + 1);
+  // Plain array instead of Int32Array for worker compatibility
+  const row = new Array(minLen + 1);
   for (let j = 0; j <= minLen; j++) row[j] = j;
 
   for (let i = 1; i <= maxLen; i++) {
@@ -169,7 +171,14 @@ export function levenshtein(a: string, b: string): number {
     for (let j = 1; j <= minLen; j++) {
       const temp = row[j];
       const cost = s1Char === s2.charCodeAt(start + j - 1) ? 0 : 1;
-      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prevDiag + cost);
+
+      let val = row[j] + 1;
+      const v2 = row[j - 1] + 1;
+      if (v2 < val) val = v2;
+      const v3 = prevDiag + cost;
+      if (v3 < val) val = v3;
+
+      row[j] = val;
       prevDiag = temp;
     }
   }
