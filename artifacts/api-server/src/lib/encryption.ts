@@ -39,19 +39,19 @@ const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
  */
 function getKey(version?: number): Buffer {
   const keyVersion = version ?? CURRENT_KEY_VERSION;
-  const envName = `ENCRYPTION_KEY_V${keyVersion}`;
+  const envName = "ENCRYPTION_KEY_V" + keyVersion;
   let raw = process.env[envName];
   if (!raw && keyVersion === 1) {
     raw = process.env.ENCRYPTION_KEY;
   }
   if (!raw) {
     throw new Error(
-      `${envName} environment variable is required (no key configured for encryption key version ${keyVersion})`,
+      envName + " environment variable is required (no key configured for encryption key version " + keyVersion + ")",
     );
   }
   if (!HEX_64_RE.test(raw)) {
     throw new Error(
-      `${envName} must be exactly 64 hex characters (32 bytes for AES-256-GCM); got ${raw.length} chars`,
+      envName + " must be exactly 64 hex characters (32 bytes for AES-256-GCM); got " + raw.length + " chars",
     );
   }
   return Buffer.from(raw, "hex");
@@ -89,7 +89,7 @@ export function encrypt(plaintext: string, fieldName?: string, entityId?: string
   const authTag = cipher.getAuthTag();
   const combined = Buffer.concat([iv, authTag, encrypted]);
   const hasAAD = aad ? 1 : 0;
-  return `enc:v${CURRENT_KEY_VERSION}:${hasAAD}:${combined.toString(ENCODING)}`;
+  return "enc:v" + CURRENT_KEY_VERSION + ":" + hasAAD + ":" + combined.toString(ENCODING);
 }
 
 /**
@@ -133,12 +133,12 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
     let currentPos = 5; // skip "enc:v"
     let nextColon = ciphertext.indexOf(":", currentPos);
     if (nextColon === -1) return ciphertext;
-    keyVersion = parseInt(ciphertext.substring(currentPos, nextColon), 10) || 1;
+    keyVersion = Number(ciphertext.substring(currentPos, nextColon)) || 1;
 
     currentPos = nextColon + 1;
     nextColon = ciphertext.indexOf(":", currentPos);
     if (nextColon === -1) return ciphertext;
-    hasAADFlag = parseInt(ciphertext.substring(currentPos, nextColon), 10) || 0;
+    hasAADFlag = Number(ciphertext.substring(currentPos, nextColon)) || 0;
 
     payload = ciphertext.substring(nextColon + 1);
   } else {
@@ -216,10 +216,10 @@ export function decryptLeadFields(data: Record<string, any>, entityId?: string):
 
 export function decryptLeadArray(leads: Record<string, any>[]): Record<string, any>[] {
   // Manual loop instead of .map for Cloudflare Worker compatibility.
-  const result = new Array(leads.length);
+  const result = [];
   for (let i = 0; i < leads.length; i++) {
     const l = leads[i];
-    result[i] = decryptLeadFields(l, String(l.id));
+    result.push(decryptLeadFields(l, "" + l.id));
   }
   return result;
 }
@@ -249,7 +249,7 @@ export async function rebindLeadEncryptionAad(
   eq: (col: any, val: any) => any,
 ): Promise<void> {
   if (!lead || lead.id === undefined || lead.id === null) return;
-  const id = String(lead.id);
+  const id = "" + lead.id;
   const update: Record<string, any> = {};
   let hasUpdate = false;
   for (let i = 0; i < ENCRYPTED_FIELDS.length; i++) {

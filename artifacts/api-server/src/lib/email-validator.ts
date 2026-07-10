@@ -155,7 +155,8 @@ export function validateEmail(email: string): EmailValidationResult {
 
   for (let i = 0; i < MALFORMED_TLDS.length; i++) {
     const tld = MALFORMED_TLDS[i];
-    if (trimmed.lastIndexOf(tld) === trimmed.length - tld.length && trimmed.length >= tld.length) {
+    const tldIdx = trimmed.lastIndexOf(tld);
+    if (tldIdx !== -1 && tldIdx === (trimmed.length - tld.length) && trimmed.length >= tld.length) {
       errors.push("MALFORMED_TLD");
       const corrected = trimmed.substring(0, trimmed.length - tld.length) + ".com";
       suggestion = corrected;

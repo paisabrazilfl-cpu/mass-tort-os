@@ -232,7 +232,7 @@ async function searchByNameLocation(
 ): Promise<NpiRegistryResult[]> {
   const params = new URLSearchParams();
   params.set("version", NPI_VERSION);
-  params.set("limit", String(limit));
+  params.set("limit", "" + limit);
 
   // Extract first/last from a free-text name if provided
   // Manual tokenization to avoid split(/\s+/).filter(Boolean) for Cloudflare Worker compatibility
@@ -359,9 +359,9 @@ function providerTaxonomyMatches(
       }
     }
   }
-  const allDescs: string[] = new Array(taxonomies.length);
+  const allDescs: string[] = [];
   for (let i = 0; i < taxonomies.length; i++) {
-    allDescs[i] = taxonomies[i].desc ?? "";
+    allDescs.push(taxonomies[i].desc ?? "");
   }
   return {
     matched: matchedTaxonomies.length > 0,
@@ -387,14 +387,14 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   // from the actual practice, which would tank city scoring.
   const primary = pickPrimaryAddress(p.addresses);
   const taxonomies = p.taxonomies ?? [];
-  const taxSum = new Array(taxonomies.length);
+  const taxSum = [];
   for (let i = 0; i < taxonomies.length; i++) {
     const t = taxonomies[i];
-    taxSum[i] = {
+    taxSum.push({
       code: t.code ?? "",
       desc: t.desc ?? "",
       primary: !!t.primary,
-    };
+    });
   }
 
   let name = basic.name ?? "";
@@ -407,7 +407,7 @@ function summarizeProvider(p: NpiRegistryResult): ProviderSummary {
   }
 
   return {
-    npi: String(p.number ?? ""),
+    npi: "" + (p.number ?? ""),
     name: name,
     organization_name: basic.organization_name ?? "",
     taxonomies: taxSum,
@@ -615,7 +615,7 @@ export async function verifyProvider(
 }
 
 function round(n: number, decimals: number): number {
-  const f = Math.pow(10, decimals);
+  const f = 10 ** decimals;
   return Math.round(n * f) / f;
 }
 

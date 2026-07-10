@@ -161,7 +161,7 @@ export function levenshtein(a: string, b: string): number {
   }
 
   // Plain array instead of Int32Array for worker compatibility
-  const row = new Array(minLen + 1);
+  const row = [];
   for (let j = 0; j <= minLen; j++) row[j] = j;
 
   for (let i = 1; i <= maxLen; i++) {
