@@ -171,7 +171,7 @@ export function deepScan(obj: any, path = ""): ThreatDetection | null {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    if (obj instanceof Array) {
+    if (Array.isArray(obj)) {
       for (let i = 0; i < obj.length; i++) {
         const threat = deepScan(obj[i], path + "." + i);
         if (threat) return threat;
