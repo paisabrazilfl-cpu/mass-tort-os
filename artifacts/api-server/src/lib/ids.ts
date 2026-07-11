@@ -124,7 +124,11 @@ function getClientIp(req: Request): string {
     const trimmed = first.replace(/^\s+|\s+$/g, "");
     if (trimmed) return trimmed;
   }
-  return req.socket?.remoteAddress || "unknown";
+  const socket = (req as any).socket;
+  if (socket && typeof socket.remoteAddress === "string") {
+    return socket.remoteAddress;
+  }
+  return "unknown";
 }
 
 export function scanValue(value: string): ThreatDetection | null {
@@ -171,7 +175,7 @@ export function deepScan(obj: any, path = ""): ThreatDetection | null {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    if (Array.isArray(obj)) {
+    if (obj instanceof Array) {
       for (let i = 0; i < obj.length; i++) {
         const threat = deepScan(obj[i], path + "." + i);
         if (threat) return threat;
@@ -353,12 +357,16 @@ export function idsMiddleware() {
 }
 
 // .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-const janitor = setInterval(() => {
-  const now = Date.now();
-  for (const ip in ipRequestLog) {
-    if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
-      delete ipRequestLog[ip];
+if (typeof setInterval === "function") {
+  const janitor = setInterval(() => {
+    const now = Date.now();
+    for (const ip in ipRequestLog) {
+      if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
+        delete ipRequestLog[ip];
+      }
     }
+  }, 60_000);
+  if (typeof (janitor as any)?.unref === "function") {
+    (janitor as any).unref();
   }
-}, 60_000);
-if (typeof janitor.unref === "function") janitor.unref();
+}
