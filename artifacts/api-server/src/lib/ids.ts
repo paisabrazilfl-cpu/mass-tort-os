@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
@@ -128,7 +128,11 @@ function getClientIp(req: Request): string {
   if (ip) return ip.replace(/^\s+|\s+$/g, "");
 
   // Guard Node-specific API for Worker compatibility
-  return (typeof req.socket?.remoteAddress === "string" ? req.socket.remoteAddress : "") || "unknown";
+  if (typeof req.socket === 'object' && req.socket !== null && typeof req.socket.remoteAddress === 'string') {
+    return req.socket.remoteAddress;
+  }
+
+  return "unknown";
 }
 
 /** @internal - exported for unit testing and benchmarking */
@@ -303,7 +307,8 @@ export function idsMiddleware() {
       await recordAlert(req, bruteForce);
     }
 
-    const urlThreat = scanValue(decodeURIComponent(req.originalUrl));
+    const url = typeof req.originalUrl === 'string' ? req.originalUrl : "";
+    const urlThreat = scanValue(decodeURIComponent(url));
     if (urlThreat) {
       await recordAlert(req, urlThreat);
       if (urlThreat.severity === "critical") {
@@ -338,8 +343,8 @@ export function idsMiddleware() {
   };
 }
 
-// .unref() guard for Worker compatibility
-const janitor = setInterval(() => {
+// Guard module-level side effects for Worker compatibility
+const janitor = typeof setInterval === "function" ? setInterval(() => {
   const now = Date.now();
   for (const ip in ipRequestLog) {
     if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
@@ -348,8 +353,8 @@ const janitor = setInterval(() => {
       }
     }
   }
-}, 60_000);
+}, 60_000) : null;
 
-if (typeof (janitor as any).unref === "function") {
+if (janitor && typeof (janitor as any).unref === "function") {
   (janitor as any).unref();
 }
