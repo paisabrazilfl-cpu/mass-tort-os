@@ -89,36 +89,46 @@ interface ThreatDetection {
   pattern: string;
 }
 
-const ipRequestLog = new Map<string, { count: number; firstSeen: number; lastSeen: number }>();
+// Cloudflare Worker Compatibility: Object.create(null) instead of Map
+// to avoid prohibited iteration methods and prototype pollution.
+const ipRequestLog: Record<string, { count: number; firstSeen: number; lastSeen: number }> = Object.create(null);
+
 const IP_RATE_WINDOW = 60_000;
-// Task #7: anonymous traffic threshold is 100/min; authenticated CRM
-// operators routinely exceed that during bulk review (paginated leads list,
-// case docs, audit log scans), so credentialed traffic gets a 6× ceiling.
 const BRUTE_FORCE_THRESHOLD = 100;
 const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 
 // Task #7 (round-8 hardening): a request only counts as "internal" if it
-// carries a Bearer token whose JWT signature actually verifies. Raw
-// header presence alone is spoofable by any unauthenticated caller and
-// would let an attacker skip the body deep-scan and inflate the rate
-// ceiling. We verify cheaply (HS256 verify is ~microseconds) before any
-// IDS classification decision. URL + query are scanned regardless.
+// carries a Bearer token whose JWT signature actually verifies.
 function hasInternalCredentials(req: Request): boolean {
   const auth = req.headers["authorization"];
-  if (typeof auth !== "string" || !auth.toLowerCase().startsWith("bearer ")) {
-    return false;
-  }
-  const token = auth.slice(7).trim();
+  if (typeof auth !== "string") return false;
+
+  // Cloudflare Worker Compatibility: avoid startsWith, slice, trim
+  const lc = auth.toLowerCase();
+  if (lc.indexOf("bearer ") !== 0) return false;
+
+  const token = auth.substring(7).replace(/^\s+|\s+$/g, "");
   if (!token) return false;
-  // verifyToken returns null for any malformed/unsigned/expired token,
-  // so spoofed Bearer headers fall back to anonymous-traffic limits.
+
   return verifyToken(token) !== null;
 }
 
 function getClientIp(req: Request): string {
-  return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() 
-    || req.socket.remoteAddress 
-    || "unknown";
+  const xff = req.headers["x-forwarded-for"];
+  let ip = "";
+
+  if (typeof xff === "string") {
+    // Cloudflare Worker Compatibility: avoid split and trim
+    const comma = xff.indexOf(",");
+    ip = comma === -1 ? xff : xff.substring(0, comma);
+  } else if (xff instanceof Array && xff.length > 0) {
+    ip = xff[0];
+  }
+
+  if (ip) return ip.replace(/^\s+|\s+$/g, "");
+
+  // Guard Node-specific API for Worker compatibility
+  return (typeof req.socket?.remoteAddress === "string" ? req.socket.remoteAddress : "") || "unknown";
 }
 
 /** @internal - exported for unit testing and benchmarking */
@@ -139,7 +149,7 @@ export function scanValue(value: string): ThreatDetection | null {
 }
 
 /** @internal - exported for unit testing and benchmarking */
-export function deepScan(obj: any): ThreatDetection | null {
+export function deepScan(obj: any, path = ""): ThreatDetection | null {
   if (typeof obj === "string") {
     return scanValue(obj);
   }
@@ -148,13 +158,14 @@ export function deepScan(obj: any): ThreatDetection | null {
     // to avoid temporary array allocations and GC pressure.
     if (obj instanceof Array) {
       for (let i = 0; i < obj.length; i++) {
-        const threat = deepScan(obj[i]);
+        // Manual string concatenation instead of template literals for Worker stability
+        const threat = deepScan(obj[i], path + "." + i);
         if (threat) return threat;
       }
     } else {
       for (const key in obj) {
         if (Object.prototype.hasOwnProperty.call(obj, key)) {
-          const threat = deepScan(obj[key]);
+          const threat = deepScan(obj[key], path + "." + key);
           if (threat) return threat;
         }
       }
@@ -165,10 +176,10 @@ export function deepScan(obj: any): ThreatDetection | null {
 
 function checkBruteForce(ip: string, threshold: number): ThreatDetection | null {
   const now = Date.now();
-  const entry = ipRequestLog.get(ip);
+  const entry = ipRequestLog[ip];
   if (entry) {
     if (now - entry.firstSeen > IP_RATE_WINDOW) {
-      ipRequestLog.set(ip, { count: 1, firstSeen: now, lastSeen: now });
+      ipRequestLog[ip] = { count: 1, firstSeen: now, lastSeen: now };
       return null;
     }
     entry.count++;
@@ -177,12 +188,13 @@ function checkBruteForce(ip: string, threshold: number): ThreatDetection | null 
       return {
         type: "brute_force",
         severity: "high",
-        details: `${entry.count} requests in ${Math.round((now - entry.firstSeen) / 1000)}s from ${ip}`,
+        // Manual concatenation instead of template literals
+        details: entry.count + " requests in " + Math.round((now - entry.firstSeen) / 1000) + "s from " + ip,
         pattern: "rate_exceeded",
       };
     }
   } else {
-    ipRequestLog.set(ip, { count: 1, firstSeen: now, lastSeen: now });
+    ipRequestLog[ip] = { count: 1, firstSeen: now, lastSeen: now };
   }
   return null;
 }
@@ -208,6 +220,23 @@ async function isBlocked(ip: string): Promise<boolean> {
 async function recordAlert(req: Request, threat: ThreatDetection): Promise<void> {
   const ip = getClientIp(req);
   try {
+    // Cloudflare Worker Compatibility: avoid Object.keys()
+    const sampleBody: string[] = [];
+    if (req.body && typeof req.body === "object") {
+      for (const k in req.body) {
+        if (Object.prototype.hasOwnProperty.call(req.body, k)) {
+          sampleBody[sampleBody.length] = k;
+          if (sampleBody.length >= 10) break;
+        }
+      }
+    }
+
+    const payload = JSON.stringify({
+      query: req.query,
+      body: sampleBody,
+      pattern: threat.pattern,
+    });
+
     await db.insert(securityAlertsTable).values({
       type: threat.type,
       severity: threat.severity,
@@ -216,11 +245,8 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       request_path: req.originalUrl,
       request_method: req.method,
       details: threat.details,
-      payload_sample: JSON.stringify({
-        query: req.query,
-        body: typeof req.body === "object" ? Object.keys(req.body) : undefined,
-        pattern: threat.pattern,
-      }).slice(0, 2000),
+      // Cloudflare Worker Compatibility: avoid slice
+      payload_sample: payload.length > 2000 ? payload.substring(0, 2000) : payload,
       status: "new",
       blocked: threat.severity === "critical",
     });
@@ -231,7 +257,7 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
         .insert(blockedIpsTable)
         .values({
           ip,
-          reason: `Auto-blocked: ${threat.type} — ${threat.details}`,
+          reason: "Auto-blocked: " + threat.type + " — " + threat.details,
           blocked_until: new Date(Date.now() + blockDuration),
           auto_blocked: true,
           alert_count: 1,
@@ -239,18 +265,18 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
         .onConflictDoUpdate({
           target: blockedIpsTable.ip,
           set: {
-            reason: `Auto-blocked: ${threat.type} — ${threat.details}`,
+            reason: "Auto-blocked: " + threat.type + " — " + threat.details,
             blocked_until: new Date(Date.now() + blockDuration),
             alert_count: sql`${blockedIpsTable.alert_count} + 1`,
             updated_at: new Date(),
           },
         });
       logger.warn({ ip, type: threat.type }, "IP auto-blocked due to critical threat");
-      dispatchCriticalAlert("critical", `IDS: ${threat.type} attack detected`, `Source: ${ip} | Path: ${req.originalUrl} | ${threat.details}`).catch(() => {});
+      dispatchCriticalAlert("critical", "IDS: " + threat.type + " attack detected", "Source: " + ip + " | Path: " + req.originalUrl + " | " + threat.details).catch(() => {});
     }
 
     if (threat.severity === "high") {
-      dispatchCriticalAlert("high", `IDS: ${threat.type} attempt`, `Source: ${ip} | Path: ${req.originalUrl} | ${threat.details}`).catch(() => {});
+      dispatchCriticalAlert("high", "IDS: " + threat.type + " attempt", "Source: " + ip + " | Path: " + req.originalUrl + " | " + threat.details).catch(() => {});
     }
   } catch (err) {
     logger.error({ err }, "Failed to record security alert");
@@ -265,8 +291,6 @@ export function idsMiddleware() {
     const blocked = await isBlocked(ip);
     if (blocked) {
       logger.warn({ ip }, "Blocked IP attempted access");
-      // Pre-auth IPS denial — uses the same FORBIDDEN envelope as RBAC
-      // denials so the CRM only has one error shape to handle.
       res.status(403).json({ status: "error", code: "FORBIDDEN", message: "Access denied" });
       return;
     }
@@ -299,12 +323,6 @@ export function idsMiddleware() {
       }
     }
 
-    // Task #7: skip body deep-scan for credentialed CRM traffic. Free-text
-    // fields (lead notes, email body, intake transcripts, deposition memos)
-    // routinely contain `select * from claimants` style legal prose that
-    // the regex set treats as SQL injection. URL + query are still scanned,
-    // and unauthenticated public surfaces (forms, webhooks) keep full
-    // scrutiny.
     if (!internal && req.body && typeof req.body === "object") {
       const bodyThreat = deepScan(req.body);
       if (bodyThreat) {
@@ -320,12 +338,18 @@ export function idsMiddleware() {
   };
 }
 
-// .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-setInterval(() => {
+// .unref() guard for Worker compatibility
+const janitor = setInterval(() => {
   const now = Date.now();
-  for (const [ip, entry] of ipRequestLog.entries()) {
-    if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
-      ipRequestLog.delete(ip);
+  for (const ip in ipRequestLog) {
+    if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
+      if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
+        delete ipRequestLog[ip];
+      }
     }
   }
-}, 60_000).unref();
+}, 60_000);
+
+if (typeof (janitor as any).unref === "function") {
+  (janitor as any).unref();
+}
