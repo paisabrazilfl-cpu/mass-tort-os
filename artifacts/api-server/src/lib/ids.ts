@@ -47,6 +47,41 @@ const COMMAND_INJECTION_PATTERNS = [
   /\$\(.*\)/,
 ];
 
+// Task #7 (optimization): pre-compile consolidated regexes to avoid looping
+// over individual patterns for every string. Manual loop for construction
+// ensures compatibility with the 'mtosvelocity' Worker build.
+const SQL_INJECTION_RE = (function() {
+  let p = "";
+  for (let i = 0; i < SQL_INJECTION_PATTERNS.length; i++) {
+    p += (i > 0 ? "|" : "") + "(?:" + SQL_INJECTION_PATTERNS[i].source + ")";
+  }
+  return new RegExp(p, "i");
+})();
+
+const XSS_RE = (function() {
+  let p = "";
+  for (let i = 0; i < XSS_PATTERNS.length; i++) {
+    p += (i > 0 ? "|" : "") + "(?:" + XSS_PATTERNS[i].source + ")";
+  }
+  return new RegExp(p, "i");
+})();
+
+const PATH_TRAVERSAL_RE = (function() {
+  let p = "";
+  for (let i = 0; i < PATH_TRAVERSAL_PATTERNS.length; i++) {
+    p += (i > 0 ? "|" : "") + "(?:" + PATH_TRAVERSAL_PATTERNS[i].source + ")";
+  }
+  return new RegExp(p, "i");
+})();
+
+const COMMAND_INJECTION_RE = (function() {
+  let p = "";
+  for (let i = 0; i < COMMAND_INJECTION_PATTERNS.length; i++) {
+    p += (i > 0 ? "|" : "") + "(?:" + COMMAND_INJECTION_PATTERNS[i].source + ")";
+  }
+  return new RegExp(p, "i");
+})();
+
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
   severity: "critical" | "high" | "medium" | "low";
@@ -86,38 +121,43 @@ function getClientIp(req: Request): string {
     || "unknown";
 }
 
-function scanValue(value: string): ThreatDetection | null {
-  for (const pattern of SQL_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
-    }
+/** @internal - exported for unit testing and benchmarking */
+export function scanValue(value: string): ThreatDetection | null {
+  if (SQL_INJECTION_RE.test(value)) {
+    return { type: "sql_injection", severity: "critical", details: "SQL injection attempt detected", pattern: "SQL_INJECTION_CONSOLIDATED" };
   }
-  for (const pattern of XSS_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
-    }
+  if (XSS_RE.test(value)) {
+    return { type: "xss", severity: "high", details: "Cross-site scripting attempt detected", pattern: "XSS_CONSOLIDATED" };
   }
-  for (const pattern of PATH_TRAVERSAL_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
-    }
+  if (PATH_TRAVERSAL_RE.test(value)) {
+    return { type: "path_traversal", severity: "high", details: "Path traversal attempt detected", pattern: "PATH_TRAVERSAL_CONSOLIDATED" };
   }
-  for (const pattern of COMMAND_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
-    }
+  if (COMMAND_INJECTION_RE.test(value)) {
+    return { type: "command_injection", severity: "critical", details: "Command injection attempt detected", pattern: "COMMAND_INJECTION_CONSOLIDATED" };
   }
   return null;
 }
 
-function deepScan(obj: any, path = ""): ThreatDetection | null {
+/** @internal - exported for unit testing and benchmarking */
+export function deepScan(obj: any): ThreatDetection | null {
   if (typeof obj === "string") {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+    // Task #7 (optimization): replace Object.entries() with manual loops
+    // to avoid temporary array allocations and GC pressure.
+    if (obj instanceof Array) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i]);
+        if (threat) return threat;
+      }
+    } else {
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          const threat = deepScan(obj[key]);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;
