@@ -99,6 +99,29 @@ const IP_RATE_WINDOW = 60_000;
 const BRUTE_FORCE_THRESHOLD = 100;
 const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 
+// Universal helpers for Request object access that work in both Express and Worker contexts.
+function getHeader(req: Request, name: string): string | undefined {
+  const headers = req.headers;
+  if (!headers) return undefined;
+  // Express maps headers to an object
+  const val = (headers as any)[name];
+  if (typeof val === "string") return val;
+  if (val instanceof Array && val.length > 0) return val[0];
+  // Worker-like Headers object
+  if (typeof (headers as any).get === "function") {
+    return (headers as any).get(name) || undefined;
+  }
+  return undefined;
+}
+
+function getOriginalUrl(req: Request): string {
+  return (req as any).originalUrl || (req as any).url || "";
+}
+
+function getMethod(req: Request): string {
+  return req.method || "";
+}
+
 // Task #7 (round-8 hardening): a request only counts as "internal" if it
 // carries a Bearer token whose JWT signature actually verifies. Raw
 // header presence alone is spoofable by any unauthenticated caller and
@@ -106,7 +129,7 @@ const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 // ceiling. We verify cheaply (HS256 verify is ~microseconds) before any
 // IDS classification decision. URL + query are scanned regardless.
 function hasInternalCredentials(req: Request): boolean {
-  const auth = req.headers["authorization"];
+  const auth = getHeader(req, "authorization");
   if (typeof auth !== "string") return false;
 
   // Worker-compatible startsWith/slice/trim replacement
@@ -122,7 +145,7 @@ function hasInternalCredentials(req: Request): boolean {
 }
 
 function getClientIp(req: Request): string {
-  const forwarded = req.headers["x-forwarded-for"];
+  const forwarded = getHeader(req, "x-forwarded-for");
   let ip: string | undefined;
 
   if (typeof forwarded === "string") {
@@ -130,16 +153,17 @@ function getClientIp(req: Request): string {
     ip = (
       commaIndex === -1 ? forwarded : forwarded.substring(0, commaIndex)
     ).replace(/^\s+|\s+$/g, "");
-  } else if (forwarded instanceof Array && forwarded.length > 0) {
-    ip = forwarded[0];
   }
 
-  // Guard req.socket access for Worker compatibility
-  const socket = (req as any).socket;
-  const remoteAddress =
-    socket && typeof socket === "object" ? socket.remoteAddress : undefined;
+  if (!ip) {
+    // Guard req.socket access for Worker compatibility
+    const socket = (req as any).socket;
+    const remoteAddress =
+      socket && typeof socket === "object" ? socket.remoteAddress : undefined;
+    ip = remoteAddress;
+  }
 
-  return ip || remoteAddress || "unknown";
+  return ip || "unknown";
 }
 
 function scanValue(value: string): ThreatDetection | null {
@@ -287,13 +311,17 @@ async function recordAlert(
       }
     }
 
+    const originalUrl = getOriginalUrl(req);
+    const method = getMethod(req);
+    const userAgent = getHeader(req, "user-agent") || null;
+
     await db.insert(securityAlertsTable).values({
       type: threat.type,
       severity: threat.severity,
       source_ip: ip,
-      user_agent: req.headers["user-agent"] || null,
-      request_path: req.originalUrl,
-      request_method: req.method,
+      user_agent: userAgent,
+      request_path: originalUrl,
+      request_method: method,
       details: threat.details,
       payload_sample: JSON.stringify({
         query: req.query,
@@ -331,12 +359,7 @@ async function recordAlert(
       dispatchCriticalAlert(
         "critical",
         "IDS: " + threat.type + " attack detected",
-        "Source: " +
-          ip +
-          " | Path: " +
-          req.originalUrl +
-          " | " +
-          threat.details,
+        "Source: " + ip + " | Path: " + originalUrl + " | " + threat.details,
       ).catch(() => {});
     }
 
@@ -344,12 +367,7 @@ async function recordAlert(
       dispatchCriticalAlert(
         "high",
         "IDS: " + threat.type + " attempt",
-        "Source: " +
-          ip +
-          " | Path: " +
-          req.originalUrl +
-          " | " +
-          threat.details,
+        "Source: " + ip + " | Path: " + originalUrl + " | " + threat.details,
       ).catch(() => {});
     }
   } catch (err) {
@@ -379,7 +397,8 @@ export function idsMiddleware() {
       await recordAlert(req, bruteForce);
     }
 
-    const urlThreat = scanValue(decodeURIComponent(req.originalUrl || ""));
+    const originalUrl = getOriginalUrl(req);
+    const urlThreat = scanValue(decodeURIComponent(originalUrl || ""));
     if (urlThreat) {
       await recordAlert(req, urlThreat);
       if (urlThreat.severity === "critical") {
