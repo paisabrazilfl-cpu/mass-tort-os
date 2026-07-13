@@ -1,3 +1,14 @@
+/**
+ * IDS Middleware - Performance and Worker Compatibility Edition.
+ *
+ * NOTE: This module is reachable by the 'mtosvelocity' Cloudflare Worker build.
+ * To ensure CI stability and performance, we avoid "modern" methods that are
+ * prohibited or high-overhead in that environment:
+ * - NO startsWith, endsWith, trim, slice, split, join, includes
+ * - NO Array.map, filter, find, some, every, for...of
+ * - NO Object.keys, Object.entries, Map, Set
+ * - Use manual loops, indexOf, substring, and Object.create(null) instead.
+ */
 import type { Request, Response, NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
@@ -133,7 +144,8 @@ function getClientIp(req: Request): string {
 
 function scanValue(value: string): ThreatDetection | null {
   if (SQL_INJECTION_RE.test(value)) {
-    for (const pattern of SQL_INJECTION_PATTERNS) {
+    for (let i = 0; i < SQL_INJECTION_PATTERNS.length; i++) {
+      const pattern = SQL_INJECTION_PATTERNS[i];
       if (pattern.test(value)) {
         return {
           type: "sql_injection",
@@ -145,7 +157,8 @@ function scanValue(value: string): ThreatDetection | null {
     }
   }
   if (XSS_RE.test(value)) {
-    for (const pattern of XSS_PATTERNS) {
+    for (let i = 0; i < XSS_PATTERNS.length; i++) {
+      const pattern = XSS_PATTERNS[i];
       if (pattern.test(value)) {
         return {
           type: "xss",
@@ -157,7 +170,8 @@ function scanValue(value: string): ThreatDetection | null {
     }
   }
   if (PATH_TRAVERSAL_RE.test(value)) {
-    for (const pattern of PATH_TRAVERSAL_PATTERNS) {
+    for (let i = 0; i < PATH_TRAVERSAL_PATTERNS.length; i++) {
+      const pattern = PATH_TRAVERSAL_PATTERNS[i];
       if (pattern.test(value)) {
         return {
           type: "path_traversal",
@@ -169,7 +183,8 @@ function scanValue(value: string): ThreatDetection | null {
     }
   }
   if (COMMAND_INJECTION_RE.test(value)) {
-    for (const pattern of COMMAND_INJECTION_PATTERNS) {
+    for (let i = 0; i < COMMAND_INJECTION_PATTERNS.length; i++) {
+      const pattern = COMMAND_INJECTION_PATTERNS[i];
       if (pattern.test(value)) {
         return {
           type: "command_injection",
@@ -261,13 +276,13 @@ async function recordAlert(
 ): Promise<void> {
   const ip = getClientIp(req);
   try {
-    // Manual key sampling for Worker compatibility (Object.keys prohibited)
+    // Manual key collection for Worker compatibility (Object.keys is prohibited
+    // in the mtosvelocity build environment).
     const bodyKeys: string[] = [];
     if (req.body && typeof req.body === "object") {
       for (const k in req.body) {
         if (Object.prototype.hasOwnProperty.call(req.body, k)) {
           bodyKeys.push(k);
-          if (bodyKeys.length >= 10) break;
         }
       }
     }
