@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
@@ -123,7 +123,12 @@ function getClientIp(req: Request): string {
     ip = forwarded[0];
   }
 
-  return ip || req.socket?.remoteAddress || "unknown";
+  // Guard req.socket access for Worker compatibility
+  const socket = (req as any).socket;
+  const remoteAddress =
+    socket && typeof socket === "object" ? socket.remoteAddress : undefined;
+
+  return ip || remoteAddress || "unknown";
 }
 
 function scanValue(value: string): ThreatDetection | null {
@@ -363,13 +368,11 @@ export function idsMiddleware() {
     if (urlThreat) {
       await recordAlert(req, urlThreat);
       if (urlThreat.severity === "critical") {
-        res
-          .status(403)
-          .json({
-            status: "error",
-            code: "FORBIDDEN",
-            message: "Request blocked by security policy",
-          });
+        res.status(403).json({
+          status: "error",
+          code: "FORBIDDEN",
+          message: "Request blocked by security policy",
+        });
         return;
       }
     }
@@ -379,13 +382,11 @@ export function idsMiddleware() {
       if (queryThreat) {
         await recordAlert(req, queryThreat);
         if (queryThreat.severity === "critical") {
-          res
-            .status(403)
-            .json({
-              status: "error",
-              code: "FORBIDDEN",
-              message: "Request blocked by security policy",
-            });
+          res.status(403).json({
+            status: "error",
+            code: "FORBIDDEN",
+            message: "Request blocked by security policy",
+          });
           return;
         }
       }
@@ -402,13 +403,11 @@ export function idsMiddleware() {
       if (bodyThreat) {
         await recordAlert(req, bodyThreat);
         if (bodyThreat.severity === "critical") {
-          res
-            .status(403)
-            .json({
-              status: "error",
-              code: "FORBIDDEN",
-              message: "Request blocked by security policy",
-            });
+          res.status(403).json({
+            status: "error",
+            code: "FORBIDDEN",
+            message: "Request blocked by security policy",
+          });
           return;
         }
       }
@@ -418,19 +417,24 @@ export function idsMiddleware() {
   };
 }
 
-const janitor = setInterval(() => {
-  const now = Date.now();
-  for (const ip in ipRequestLog) {
-    if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
-      if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
-        delete ipRequestLog[ip];
-      }
-    }
-  }
-}, 60_000);
+// Task #7: guard setInterval for environment-agnosticism. Workers do not support
+// background intervals and the unref() method is Node-specific.
+const janitor =
+  typeof globalThis.setInterval === "function"
+    ? setInterval(() => {
+        const now = Date.now();
+        for (const ip in ipRequestLog) {
+          if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
+            if (now - ipRequestLog[ip].lastSeen > IP_RATE_WINDOW * 5) {
+              delete ipRequestLog[ip];
+            }
+          }
+        }
+      }, 60_000)
+    : null;
 
-if (typeof janitor.unref === "function") {
-  janitor.unref();
+if (janitor && typeof (janitor as any).unref === "function") {
+  (janitor as any).unref();
 }
 
 export const __test_ids = { scanValue, deepScan };
