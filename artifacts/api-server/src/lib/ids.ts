@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { db, securityAlertsTable, blockedIpsTable } from "@workspace/db";
 import { eq, gte, sql, and } from "drizzle-orm";
 import { logger } from "./logger";
@@ -85,9 +85,25 @@ const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 // would let an attacker skip the body deep-scan and inflate the rate
 // ceiling. We verify cheaply (HS256 verify is ~microseconds) before any
 // IDS classification decision. URL + query are scanned regardless.
+// Environment-agnostic request property access helpers.
+function getHeader(req: any, name: string): string | null {
+  const headers = req.headers;
+  if (!headers) return null;
+  const val = typeof headers.get === "function" ? headers.get(name) : headers[name.toLowerCase()];
+  return typeof val === "string" ? val : null;
+}
+
+function getMethod(req: any): string {
+  return req.method || "GET";
+}
+
+function getUrl(req: any): string {
+  return req.originalUrl || req.url || "";
+}
+
 function hasInternalCredentials(req: Request): boolean {
-  const auth = req.headers["authorization"];
-  if (typeof auth !== "string" || auth.toLowerCase().indexOf("bearer ") !== 0) {
+  const auth = getHeader(req, "authorization");
+  if (!auth || auth.toLowerCase().indexOf("bearer ") !== 0) {
     return false;
   }
   const token = auth.substring(7).replace(/^\s+|\s+$/g, "");
@@ -98,13 +114,15 @@ function hasInternalCredentials(req: Request): boolean {
 }
 
 function getClientIp(req: Request): string {
-  const xff = req.headers["x-forwarded-for"] as string;
+  const xff = getHeader(req, "x-forwarded-for");
   if (xff) {
     const commaIndex = xff.indexOf(",");
     const ip = commaIndex === -1 ? xff : xff.substring(0, commaIndex);
     return ip.replace(/^\s+|\s+$/g, "");
   }
-  return req.socket.remoteAddress || "unknown";
+  // Safe access for Cloudflare Worker environment where req.socket is absent.
+  const socket = (req as any).socket;
+  return (socket && socket.remoteAddress) || "unknown";
 }
 
 export function scanValue(value: string): ThreatDetection | null {
@@ -218,9 +236,9 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       type: threat.type,
       severity: threat.severity,
       source_ip: ip,
-      user_agent: req.headers["user-agent"] || null,
-      request_path: req.originalUrl,
-      request_method: req.method,
+      user_agent: getHeader(req, "user-agent"),
+      request_path: getUrl(req),
+      request_method: getMethod(req),
       details: threat.details,
       payload_sample: JSON.stringify({
         query: req.query,
@@ -294,7 +312,8 @@ export function idsMiddleware() {
       await recordAlert(req, bruteForce);
     }
 
-    const urlThreat = scanValue(decodeURIComponent(req.originalUrl));
+    const rawUrl = getUrl(req);
+    const urlThreat = rawUrl ? scanValue(decodeURIComponent(rawUrl)) : null;
     if (urlThreat) {
       await recordAlert(req, urlThreat);
       if (urlThreat.severity === "critical") {
@@ -336,16 +355,18 @@ export function idsMiddleware() {
 }
 
 // .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-const janitor = setInterval(() => {
-  const now = Date.now();
-  for (const ip in ipRequestLog) {
-    const entry = ipRequestLog[ip];
-    if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
-      delete ipRequestLog[ip];
+if (typeof globalThis.setInterval === "function") {
+  const janitor = setInterval(() => {
+    const now = Date.now();
+    for (const ip in ipRequestLog) {
+      const entry = ipRequestLog[ip];
+      if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
+        delete ipRequestLog[ip];
+      }
     }
-  }
-}, 60_000);
+  }, 60_000);
 
-if (typeof janitor.unref === "function") {
-  janitor.unref();
+  if (janitor && typeof janitor.unref === "function") {
+    janitor.unref();
+  }
 }
