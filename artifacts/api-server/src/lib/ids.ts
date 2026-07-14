@@ -45,7 +45,7 @@ const PATH_TRAVERSAL_SOURCES = [
 ];
 
 const COMMAND_INJECTION_SOURCES = [
-  "[;&|`$].*\\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\\b",
+  "[;&|\\x60$].*\\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\\b",
   "\\$\\{.*\\}",
   "\\$\\(.*\\)",
 ];
@@ -250,21 +250,23 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       request_path: getUrl(req),
       request_method: getMethod(req),
       details: threat.details,
-      payload_sample: JSON.stringify({
-        query: req.query,
-        body: (function() {
-          if (typeof req.body !== "object" || req.body === null) return undefined;
-          const keys = [];
+      payload_sample: (function() {
+        const bodyKeys = [];
+        if (typeof req.body === "object" && req.body !== null) {
           let count = 0;
           for (const k in req.body) {
             if (Object.prototype.hasOwnProperty.call(req.body, k)) {
-              keys[count++] = k;
+              bodyKeys[count++] = k;
             }
           }
-          return keys;
-        })(),
-        pattern: threat.pattern,
-      }).substring(0, 2000),
+        }
+        const sample = JSON.stringify({
+          query: req.query,
+          body: bodyKeys,
+          pattern: threat.pattern,
+        });
+        return sample.substring(0, 2000);
+      })(),
       status: "new",
       blocked: threat.severity === "critical",
     });
@@ -286,7 +288,7 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
           set: {
             reason: reason,
             blocked_until: new Date(Date.now() + blockDuration),
-            alert_count: sql.raw(blockedIpsTable.alert_count.name + " + 1"),
+            alert_count: sql.raw('"alert_count" + 1'),
             updated_at: new Date(),
           },
         });
