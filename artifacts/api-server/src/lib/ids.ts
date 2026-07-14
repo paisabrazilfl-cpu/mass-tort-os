@@ -64,6 +64,20 @@ const XSS_RE = buildAggregateRegex(XSS_SOURCES);
 const PATH_TRAVERSAL_RE = buildAggregateRegex(PATH_TRAVERSAL_SOURCES);
 const COMMAND_INJECTION_RE = buildAggregateRegex(COMMAND_INJECTION_SOURCES);
 
+// Pre-compile individual regexes to avoid re-compilation in the slow-path.
+function compileIndividual(sources: string[]): RegExp[] {
+  const res: RegExp[] = [];
+  for (let i = 0; i < sources.length; i++) {
+    res[i] = new RegExp(sources[i], "i");
+  }
+  return res;
+}
+
+const SQL_INJECTION_RES = compileIndividual(SQL_INJECTION_SOURCES);
+const XSS_RES = compileIndividual(XSS_SOURCES);
+const PATH_TRAVERSAL_RES = compileIndividual(PATH_TRAVERSAL_SOURCES);
+const COMMAND_INJECTION_RES = compileIndividual(COMMAND_INJECTION_SOURCES);
+
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
   severity: "critical" | "high" | "medium" | "low";
@@ -129,34 +143,30 @@ export function scanValue(value: string): ThreatDetection | null {
   // Fast-path: check aggregated regexes first.
   // Prioritize critical threats (SQL and Command Injection) over high threats (XSS and Path Traversal).
   if (SQL_INJECTION_RE.test(value)) {
-    for (let i = 0; i < SQL_INJECTION_SOURCES.length; i++) {
-      const re = new RegExp(SQL_INJECTION_SOURCES[i], "i");
-      if (re.test(value)) {
-        return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: SQL_INJECTION_SOURCES[i] };
+    for (let i = 0; i < SQL_INJECTION_RES.length; i++) {
+      if (SQL_INJECTION_RES[i].test(value)) {
+        return { type: "sql_injection", severity: "critical", details: "SQL injection attempt detected", pattern: SQL_INJECTION_SOURCES[i] };
       }
     }
   }
   if (COMMAND_INJECTION_RE.test(value)) {
-    for (let i = 0; i < COMMAND_INJECTION_SOURCES.length; i++) {
-      const re = new RegExp(COMMAND_INJECTION_SOURCES[i], "i");
-      if (re.test(value)) {
-        return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: COMMAND_INJECTION_SOURCES[i] };
+    for (let i = 0; i < COMMAND_INJECTION_RES.length; i++) {
+      if (COMMAND_INJECTION_RES[i].test(value)) {
+        return { type: "command_injection", severity: "critical", details: "Command injection attempt detected", pattern: COMMAND_INJECTION_SOURCES[i] };
       }
     }
   }
   if (XSS_RE.test(value)) {
-    for (let i = 0; i < XSS_SOURCES.length; i++) {
-      const re = new RegExp(XSS_SOURCES[i], "i");
-      if (re.test(value)) {
-        return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: XSS_SOURCES[i] };
+    for (let i = 0; i < XSS_RES.length; i++) {
+      if (XSS_RES[i].test(value)) {
+        return { type: "xss", severity: "high", details: "Cross-site scripting attempt detected", pattern: XSS_SOURCES[i] };
       }
     }
   }
   if (PATH_TRAVERSAL_RE.test(value)) {
-    for (let i = 0; i < PATH_TRAVERSAL_SOURCES.length; i++) {
-      const re = new RegExp(PATH_TRAVERSAL_SOURCES[i], "i");
-      if (re.test(value)) {
-        return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: PATH_TRAVERSAL_SOURCES[i] };
+    for (let i = 0; i < PATH_TRAVERSAL_RES.length; i++) {
+      if (PATH_TRAVERSAL_RES[i].test(value)) {
+        return { type: "path_traversal", severity: "high", details: "Path traversal attempt detected", pattern: PATH_TRAVERSAL_SOURCES[i] };
       }
     }
   }
@@ -245,9 +255,10 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
         body: (function() {
           if (typeof req.body !== "object" || req.body === null) return undefined;
           const keys = [];
+          let count = 0;
           for (const k in req.body) {
             if (Object.prototype.hasOwnProperty.call(req.body, k)) {
-              keys.push(k);
+              keys[count++] = k;
             }
           }
           return keys;
@@ -260,11 +271,12 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
 
     if (threat.severity === "critical") {
       const blockDuration = 24 * 60 * 60 * 1000;
+      const reason = "Auto-blocked: " + threat.type + " — " + threat.details;
       await db
         .insert(blockedIpsTable)
         .values({
           ip,
-          reason: `Auto-blocked: ${threat.type} — ${threat.details}`,
+          reason: reason,
           blocked_until: new Date(Date.now() + blockDuration),
           auto_blocked: true,
           alert_count: 1,
@@ -272,18 +284,26 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
         .onConflictDoUpdate({
           target: blockedIpsTable.ip,
           set: {
-            reason: `Auto-blocked: ${threat.type} — ${threat.details}`,
+            reason: reason,
             blocked_until: new Date(Date.now() + blockDuration),
-            alert_count: sql`${blockedIpsTable.alert_count} + 1`,
+            alert_count: sql.raw(blockedIpsTable.alert_count.name + " + 1"),
             updated_at: new Date(),
           },
         });
       logger.warn({ ip, type: threat.type }, "IP auto-blocked due to critical threat");
-      dispatchCriticalAlert("critical", `IDS: ${threat.type} attack detected`, `Source: ${ip} | Path: ${req.originalUrl} | ${threat.details}`).catch(() => {});
+      dispatchCriticalAlert(
+        "critical",
+        "IDS: " + threat.type + " attack detected",
+        "Source: " + ip + " | Path: " + getUrl(req) + " | " + threat.details
+      ).catch(() => {});
     }
 
     if (threat.severity === "high") {
-      dispatchCriticalAlert("high", `IDS: ${threat.type} attempt`, `Source: ${ip} | Path: ${req.originalUrl} | ${threat.details}`).catch(() => {});
+      dispatchCriticalAlert(
+        "high",
+        "IDS: " + threat.type + " attempt",
+        "Source: " + ip + " | Path: " + getUrl(req) + " | " + threat.details
+      ).catch(() => {});
     }
   } catch (err) {
     logger.error({ err }, "Failed to record security alert");
