@@ -10,42 +10,59 @@ import { verifyToken } from "./rbac";
 // and produced false-positive auto-blocks. Patterns below now require
 // canonical injection markers (quote+operator+quote, comment terminator,
 // or `union all select`) that cannot occur in normal English prose.
-const SQL_INJECTION_PATTERNS = [
-  /(\b(union|select|insert|update|delete|drop|alter|create|exec|execute)\b.*\b(from|into|table|database|where)\b)/i,
-  /['"]\s*(or|and)\s+['"]?\d+['"]?\s*=\s*['"]?\d+/i,
-  /(--\s|\/\*|\*\/|;.*\b(drop|delete|update|insert)\b)/i,
-  /(\bwaitfor\b\s+\bdelay\b|\bsleep\s*\()/i,
-  /(\bunion\b\s+\ball\b\s+\bselect\b)/i,
+// Task #7 FP-tuning: Use string arrays for patterns to avoid Worker build-time
+// parsing issues with large RegExp literals. Consolidated aggregate regexes
+// are built via manual loops to avoid prohibited array methods like .map().join().
+const SQL_INJECTION_SOURCES = [
+  "(\\b(union|select|insert|update|delete|drop|alter|create|exec|execute)\\b.*\\b(from|into|table|database|where)\\b)",
+  "['\"]\\s*(or|and)\\s+['\"]?\\d+['\"]?\\s*=\\s*['\"]?\\d+",
+  "(--\\s|\\/\\*|\\*\\/|;.*\\b(drop|delete|update|insert)\\b)",
+  "(\\bwaitfor\\b\\s+\\bdelay\\b|\\bsleep\\s*\\()",
+  "(\\bunion\\b\\s+\\ball\\b\\s+\\bselect\\b)",
 ];
 
-const XSS_PATTERNS = [
-  /<script[\s>]/i,
-  /javascript\s*:/i,
-  /on(error|load|click|mouseover|focus|blur)\s*=/i,
-  /<iframe[\s>]/i,
-  /<object[\s>]/i,
-  /<embed[\s>]/i,
-  /expression\s*\(/i,
-  /eval\s*\(/i,
-  /document\.(cookie|location|write)/i,
-  /<svg.*on\w+\s*=/i,
+const XSS_SOURCES = [
+  "<script[\\s>]",
+  "javascript\\s*:",
+  "on(error|load|click|mouseover|focus|blur)\\s*=",
+  "<iframe[\\s>]",
+  "<object[\\s>]",
+  "<embed[\\s>]",
+  "expression\\s*\\(",
+  "eval\\s*\\(",
+  "document\\.(cookie|location|write)",
+  "<svg.*on\\w+\\s*=",
 ];
 
-const PATH_TRAVERSAL_PATTERNS = [
-  /\.\.\//,
-  /\.\.\\/, 
-  /%2e%2e/i,
-  /%252e%252e/i,
-  /\/etc\/(passwd|shadow|hosts)/i,
-  /\/proc\/self/i,
-  /\bboot\.ini\b/i,
+const PATH_TRAVERSAL_SOURCES = [
+  "\\.\\.\\/",
+  "\\.\\.\\\\",
+  "%2e%2e",
+  "%252e%252e",
+  "\\/etc\\/(passwd|shadow|hosts)",
+  "\\/proc\\/self",
+  "\\bboot\\.ini\\b",
 ];
 
-const COMMAND_INJECTION_PATTERNS = [
-  /[;&|`$].*\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\b/i,
-  /\$\{.*\}/,
-  /\$\(.*\)/,
+const COMMAND_INJECTION_SOURCES = [
+  "[;&|`$].*\\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\\b",
+  "\\$\\{.*\\}",
+  "\\$\\(.*\\)",
 ];
+
+function buildAggregateRegex(sources: string[]): RegExp {
+  let combined = "";
+  for (let i = 0; i < sources.length; i++) {
+    if (i > 0) combined += "|";
+    combined += "(?:" + sources[i] + ")";
+  }
+  return new RegExp(combined, "i");
+}
+
+const SQL_INJECTION_RE = buildAggregateRegex(SQL_INJECTION_SOURCES);
+const XSS_RE = buildAggregateRegex(XSS_SOURCES);
+const PATH_TRAVERSAL_RE = buildAggregateRegex(PATH_TRAVERSAL_SOURCES);
+const COMMAND_INJECTION_RE = buildAggregateRegex(COMMAND_INJECTION_SOURCES);
 
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
@@ -54,7 +71,7 @@ interface ThreatDetection {
   pattern: string;
 }
 
-const ipRequestLog = new Map<string, { count: number; firstSeen: number; lastSeen: number }>();
+const ipRequestLog: Record<string, { count: number; firstSeen: number; lastSeen: number }> = Object.create(null);
 const IP_RATE_WINDOW = 60_000;
 // Task #7: anonymous traffic threshold is 100/min; authenticated CRM
 // operators routinely exceed that during bulk review (paginated leads list,
@@ -70,10 +87,10 @@ const BRUTE_FORCE_THRESHOLD_AUTH = 600;
 // IDS classification decision. URL + query are scanned regardless.
 function hasInternalCredentials(req: Request): boolean {
   const auth = req.headers["authorization"];
-  if (typeof auth !== "string" || !auth.toLowerCase().startsWith("bearer ")) {
+  if (typeof auth !== "string" || auth.toLowerCase().indexOf("bearer ") !== 0) {
     return false;
   }
-  const token = auth.slice(7).trim();
+  const token = auth.substring(7).replace(/^\s+|\s+$/g, "");
   if (!token) return false;
   // verifyToken returns null for any malformed/unsigned/expired token,
   // so spoofed Bearer headers fall back to anonymous-traffic limits.
@@ -81,43 +98,72 @@ function hasInternalCredentials(req: Request): boolean {
 }
 
 function getClientIp(req: Request): string {
-  return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() 
-    || req.socket.remoteAddress 
-    || "unknown";
+  const xff = req.headers["x-forwarded-for"] as string;
+  if (xff) {
+    const commaIndex = xff.indexOf(",");
+    const ip = commaIndex === -1 ? xff : xff.substring(0, commaIndex);
+    return ip.replace(/^\s+|\s+$/g, "");
+  }
+  return req.socket.remoteAddress || "unknown";
 }
 
-function scanValue(value: string): ThreatDetection | null {
-  for (const pattern of SQL_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+export function scanValue(value: string): ThreatDetection | null {
+  // Fast-path: check aggregated regexes first.
+  // Prioritize critical threats (SQL and Command Injection) over high threats (XSS and Path Traversal).
+  if (SQL_INJECTION_RE.test(value)) {
+    for (let i = 0; i < SQL_INJECTION_SOURCES.length; i++) {
+      const re = new RegExp(SQL_INJECTION_SOURCES[i], "i");
+      if (re.test(value)) {
+        return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: SQL_INJECTION_SOURCES[i] };
+      }
     }
   }
-  for (const pattern of XSS_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+  if (COMMAND_INJECTION_RE.test(value)) {
+    for (let i = 0; i < COMMAND_INJECTION_SOURCES.length; i++) {
+      const re = new RegExp(COMMAND_INJECTION_SOURCES[i], "i");
+      if (re.test(value)) {
+        return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: COMMAND_INJECTION_SOURCES[i] };
+      }
     }
   }
-  for (const pattern of PATH_TRAVERSAL_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+  if (XSS_RE.test(value)) {
+    for (let i = 0; i < XSS_SOURCES.length; i++) {
+      const re = new RegExp(XSS_SOURCES[i], "i");
+      if (re.test(value)) {
+        return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: XSS_SOURCES[i] };
+      }
     }
   }
-  for (const pattern of COMMAND_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+  if (PATH_TRAVERSAL_RE.test(value)) {
+    for (let i = 0; i < PATH_TRAVERSAL_SOURCES.length; i++) {
+      const re = new RegExp(PATH_TRAVERSAL_SOURCES[i], "i");
+      if (re.test(value)) {
+        return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: PATH_TRAVERSAL_SOURCES[i] };
+      }
     }
   }
   return null;
 }
 
-function deepScan(obj: any, path = ""): ThreatDetection | null {
+export function deepScan(obj: any, path = ""): ThreatDetection | null {
   if (typeof obj === "string") {
     return scanValue(obj);
   }
+  // Use for...in and manual array checks for Worker compatibility and to avoid
+  // temporary array allocations from Object.entries().
   if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+    if (obj instanceof Array) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i], path + "." + i);
+        if (threat) return threat;
+      }
+    } else {
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          const threat = deepScan(obj[key], path + "." + key);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;
@@ -125,10 +171,10 @@ function deepScan(obj: any, path = ""): ThreatDetection | null {
 
 function checkBruteForce(ip: string, threshold: number): ThreatDetection | null {
   const now = Date.now();
-  const entry = ipRequestLog.get(ip);
+  const entry = ipRequestLog[ip];
   if (entry) {
     if (now - entry.firstSeen > IP_RATE_WINDOW) {
-      ipRequestLog.set(ip, { count: 1, firstSeen: now, lastSeen: now });
+      ipRequestLog[ip] = { count: 1, firstSeen: now, lastSeen: now };
       return null;
     }
     entry.count++;
@@ -137,12 +183,12 @@ function checkBruteForce(ip: string, threshold: number): ThreatDetection | null 
       return {
         type: "brute_force",
         severity: "high",
-        details: `${entry.count} requests in ${Math.round((now - entry.firstSeen) / 1000)}s from ${ip}`,
+        details: entry.count + " requests in " + Math.round((now - entry.firstSeen) / 1000) + "s from " + ip,
         pattern: "rate_exceeded",
       };
     }
   } else {
-    ipRequestLog.set(ip, { count: 1, firstSeen: now, lastSeen: now });
+    ipRequestLog[ip] = { count: 1, firstSeen: now, lastSeen: now };
   }
   return null;
 }
@@ -178,9 +224,18 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       details: threat.details,
       payload_sample: JSON.stringify({
         query: req.query,
-        body: typeof req.body === "object" ? Object.keys(req.body) : undefined,
+        body: (function() {
+          if (typeof req.body !== "object" || req.body === null) return undefined;
+          const keys = [];
+          for (const k in req.body) {
+            if (Object.prototype.hasOwnProperty.call(req.body, k)) {
+              keys.push(k);
+            }
+          }
+          return keys;
+        })(),
         pattern: threat.pattern,
-      }).slice(0, 2000),
+      }).substring(0, 2000),
       status: "new",
       blocked: threat.severity === "critical",
     });
@@ -281,11 +336,16 @@ export function idsMiddleware() {
 }
 
 // .unref() so this janitor never blocks process shutdown (test runs, SIGTERM).
-setInterval(() => {
+const janitor = setInterval(() => {
   const now = Date.now();
-  for (const [ip, entry] of ipRequestLog.entries()) {
+  for (const ip in ipRequestLog) {
+    const entry = ipRequestLog[ip];
     if (now - entry.lastSeen > IP_RATE_WINDOW * 5) {
-      ipRequestLog.delete(ip);
+      delete ipRequestLog[ip];
     }
   }
-}, 60_000).unref();
+}, 60_000);
+
+if (typeof janitor.unref === "function") {
+  janitor.unref();
+}
