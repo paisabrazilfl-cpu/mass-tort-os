@@ -9,15 +9,18 @@ export function normalize(s: string | null | undefined): string {
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
-    .trim();
+    .replace(/^\s+|\s+$/g, ""); // Manual trim for Worker compatibility
 }
 
 // Title and credential tokens that should NOT contribute to person-name
 // similarity. "Dr. John Smith MD" and "John Smith" are the same person; the
 // raw normalize() above would penalize them ~40%. Used by name comparisons
 // in npi-verify so "Dr. Micah Edwin, MD" matches "Micah Edwin" cleanly.
-const TITLE_TOKENS = new Set(["dr", "doctor", "mr", "mrs", "ms", "miss"]);
-const CREDENTIAL_TOKENS = new Set([
+const TITLE_TOKENS: Record<string, boolean> = Object.create(null);
+["dr", "doctor", "mr", "mrs", "ms", "miss"].forEach((t) => (TITLE_TOKENS[t] = true));
+
+const CREDENTIAL_TOKENS: Record<string, boolean> = Object.create(null);
+[
   "md",
   "do",
   "pa",
@@ -39,18 +42,38 @@ const CREDENTIAL_TOKENS = new Set([
   "ii",
   "iii",
   "iv",
-]);
+].forEach((t) => (CREDENTIAL_TOKENS[t] = true));
 
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
+ *
+ * Manual tokenization loop avoids .split()/.filter()/.join() array allocations
+ * and ensures compatibility with restricted Worker environments.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+
+  let result = "";
+  let start = 0;
+  let pos = 0;
+  const len = normalized.length;
+
+  while (pos <= len) {
+    if (pos === len || normalized[pos] === " ") {
+      if (pos > start) {
+        const token = normalized.substring(start, pos);
+        if (!TITLE_TOKENS[token] && !CREDENTIAL_TOKENS[token]) {
+          if (result.length > 0) result += " ";
+          result += token;
+        }
+      }
+      start = pos + 1;
+    }
+    pos++;
+  }
+
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -85,34 +108,61 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
-  let s1 = a;
-  let s2 = b;
-  if (s1.length < s2.length) {
-    [s1, s2] = [s2, s1];
+  // Prefix skipping
+  let start = 0;
+  const aLen = a.length;
+  const bLen = b.length;
+  while (start < aLen && start < bLen && a.charCodeAt(start) === b.charCodeAt(start)) {
+    start++;
   }
 
-  const alen = s1.length;
-  const blen = s2.length;
-  const row = new Int32Array(blen + 1);
+  // Suffix skipping
+  let aEnd = aLen - 1;
+  let bEnd = bLen - 1;
+  while (aEnd >= start && bEnd >= start && a.charCodeAt(aEnd) === b.charCodeAt(bEnd)) {
+    aEnd--;
+    bEnd--;
+  }
 
-  for (let j = 0; j <= blen; j++) row[j] = j;
+  if (start > aEnd) return bEnd - start + 1;
+  if (start > bEnd) return aEnd - start + 1;
 
-  for (let i = 1; i <= alen; i++) {
-    let prevDiag = row[0]; // (i-1, j-1)
+  const s1Len = aEnd - start + 1;
+  const s2Len = bEnd - start + 1;
+
+  // Ensure s2 is the shorter string
+  let s1 = a;
+  let s2 = b;
+  let s1Start = start;
+  let s2Start = start;
+  let n = s1Len;
+  let m = s2Len;
+
+  if (n < m) {
+    [s1, s2] = [b, a];
+    [s1Start, s2Start] = [s2Start, s1Start];
+    [n, m] = [m, n];
+  }
+
+  const row = new Int32Array(m + 1);
+  for (let j = 0; j <= m; j++) row[j] = j;
+
+  for (let i = 1; i <= n; i++) {
+    let prevDiag = row[0];
     row[0] = i;
-    for (let j = 1; j <= blen; j++) {
-      const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+    const char1 = s1.charCodeAt(s1Start + i - 1);
+    for (let j = 1; j <= m; j++) {
+      const temp = row[j];
+      const cost = char1 === s2.charCodeAt(s2Start + j - 1) ? 0 : 1;
       row[j] = Math.min(
-        row[j] + 1, // (i-1, j) + 1
-        row[j - 1] + 1, // (i, j-1) + 1
-        prevDiag + cost, // (i-1, j-1) + cost
+        row[j] + 1,
+        row[j - 1] + 1,
+        prevDiag + cost,
       );
       prevDiag = temp;
     }
   }
-  return row[blen];
+  return row[m];
 }
 
 /**
