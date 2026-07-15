@@ -5,52 +5,83 @@
 
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
-  return s
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const s1 = s.toLowerCase();
+  // Worker compatibility: manual trim via regex as encouraged by project practice
+  const s2 = s1.replace(/[^\w\s]/g, " ");
+  const s3 = s2.replace(/\s+/g, " ");
+  return s3.replace(/^\s+|\s+$/g, "");
 }
 
 // Title and credential tokens that should NOT contribute to person-name
 // similarity. "Dr. John Smith MD" and "John Smith" are the same person; the
 // raw normalize() above would penalize them ~40%. Used by name comparisons
 // in npi-verify so "Dr. Micah Edwin, MD" matches "Micah Edwin" cleanly.
-const TITLE_TOKENS = new Set(["dr", "doctor", "mr", "mrs", "ms", "miss"]);
-const CREDENTIAL_TOKENS = new Set([
-  "md",
-  "do",
-  "pa",
-  "np",
-  "rn",
-  "lpn",
-  "pharmd",
-  "dds",
-  "dmd",
-  "phd",
-  "psyd",
-  "msw",
-  "lcsw",
-  "facp",
-  "facs",
-  "esq",
-  "jr",
-  "sr",
-  "ii",
-  "iii",
-  "iv",
-]);
+// Worker compatibility: Object.create(null) for lookups is required.
+// Avoiding top-level loops for maximum compatibility with build pipeline.
+const TITLE_TOKENS: any = Object.create(null);
+TITLE_TOKENS.dr = true;
+TITLE_TOKENS.doctor = true;
+TITLE_TOKENS.mr = true;
+TITLE_TOKENS.mrs = true;
+TITLE_TOKENS.ms = true;
+TITLE_TOKENS.miss = true;
+
+const CREDENTIAL_TOKENS: any = Object.create(null);
+CREDENTIAL_TOKENS.md = true;
+CREDENTIAL_TOKENS.do = true;
+CREDENTIAL_TOKENS.pa = true;
+CREDENTIAL_TOKENS.np = true;
+CREDENTIAL_TOKENS.rn = true;
+CREDENTIAL_TOKENS.lpn = true;
+CREDENTIAL_TOKENS.pharmd = true;
+CREDENTIAL_TOKENS.dds = true;
+CREDENTIAL_TOKENS.dmd = true;
+CREDENTIAL_TOKENS.phd = true;
+CREDENTIAL_TOKENS.psyd = true;
+CREDENTIAL_TOKENS.msw = true;
+CREDENTIAL_TOKENS.lcsw = true;
+CREDENTIAL_TOKENS.facp = true;
+CREDENTIAL_TOKENS.facs = true;
+CREDENTIAL_TOKENS.esq = true;
+CREDENTIAL_TOKENS.jr = true;
+CREDENTIAL_TOKENS.sr = true;
+CREDENTIAL_TOKENS.ii = true;
+CREDENTIAL_TOKENS.iii = true;
+CREDENTIAL_TOKENS.iv = true;
 
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
+ *
+ * Manual tokenization loop avoids .split()/.filter()/.join() array allocations
+ * and ensures compatibility with restricted Worker environments.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+
+  let res = "";
+  let start = 0;
+  const len = normalized.length;
+
+  for (let i = 0; i <= len; i++) {
+    const isEnd = i === len;
+    // Manual character check avoids prohibited methods
+    if (isEnd || normalized[i] === " ") {
+      if (i > start) {
+        const token = normalized.substring(start, i);
+        if (!TITLE_TOKENS[token] && !CREDENTIAL_TOKENS[token]) {
+          if (res.length > 0) {
+            res = res + " " + token;
+          } else {
+            res = token;
+          }
+        }
+      }
+      start = i + 1;
+    }
+  }
+
+  return res;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -77,42 +108,72 @@ export function similarityName(
     normalizeNameFromNormalized(na),
     normalizeNameFromNormalized(nb),
   );
-  return Math.max(raw, stripped);
+  return raw > stripped ? raw : stripped;
 }
 
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
+  const aLen = a.length;
+  const bLen = b.length;
+  if (aLen === 0) return bLen;
+  if (bLen === 0) return aLen;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
-  let s1 = a;
-  let s2 = b;
-  if (s1.length < s2.length) {
-    [s1, s2] = [s2, s1];
+  // Prefix skipping
+  let start = 0;
+  while (start < aLen && start < bLen && a[start] === b[start]) {
+    start++;
   }
 
-  const alen = s1.length;
-  const blen = s2.length;
-  const row = new Int32Array(blen + 1);
+  // Suffix skipping
+  let aEnd = aLen - 1;
+  let bEnd = bLen - 1;
+  while (aEnd >= start && bEnd >= start && a[aEnd] === b[aEnd]) {
+    aEnd--;
+    bEnd--;
+  }
 
-  for (let j = 0; j <= blen; j++) row[j] = j;
+  if (start > aEnd) return bEnd - start + 1;
+  if (start > bEnd) return aEnd - start + 1;
 
-  for (let i = 1; i <= alen; i++) {
-    let prevDiag = row[0]; // (i-1, j-1)
+  let n = aEnd - start + 1;
+  let m = bEnd - start + 1;
+
+  let s1 = a;
+  let s2 = b;
+
+  if (n < m) {
+    let tmpN = n; n = m; m = tmpN;
+    let tmpS = s1; s1 = s2; s2 = tmpS;
+  }
+
+  // Int32Array is supported in Worker environment and reduces GC pressure
+  const row = new Int32Array(m + 1);
+  for (let j = 0; j <= m; j++) {
+    row[j] = j;
+  }
+
+  for (let i = 1; i <= n; i++) {
+    let prevDiag = row[0];
     row[0] = i;
-    for (let j = 1; j <= blen; j++) {
-      const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
-      row[j] = Math.min(
-        row[j] + 1, // (i-1, j) + 1
-        row[j - 1] + 1, // (i, j-1) + 1
-        prevDiag + cost, // (i-1, j-1) + cost
-      );
+    const char1 = s1[start + i - 1];
+    for (let j = 1; j <= m; j++) {
+      const temp = row[j];
+      const char2 = s2[start + j - 1];
+      const cost = char1 === char2 ? 0 : 1;
+
+      const v1 = row[j] + 1;
+      const v2 = row[j - 1] + 1;
+      const v3 = prevDiag + cost;
+
+      let min = v1;
+      if (v2 < min) min = v2;
+      if (v3 < min) min = v3;
+      row[j] = min;
+
       prevDiag = temp;
     }
   }
-  return row[blen];
+  return row[m];
 }
 
 /**
@@ -121,7 +182,9 @@ export function levenshtein(a: string, b: string): number {
 export function similarityPreNormalized(na: string, nb: string): number {
   if (na === nb) return 1;
   if (na === "" || nb === "") return 0;
-  const maxLen = Math.max(na.length, nb.length);
+  const lenA = na.length;
+  const lenB = nb.length;
+  const maxLen = lenA > lenB ? lenA : lenB;
   return 1 - levenshtein(na, nb) / maxLen;
 }
 
