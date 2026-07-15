@@ -17,10 +17,13 @@ export function normalize(s: string | null | undefined): string {
 // raw normalize() above would penalize them ~40%. Used by name comparisons
 // in npi-verify so "Dr. Micah Edwin, MD" matches "Micah Edwin" cleanly.
 const TITLE_TOKENS: Record<string, boolean> = Object.create(null);
-["dr", "doctor", "mr", "mrs", "ms", "miss"].forEach((t) => (TITLE_TOKENS[t] = true));
+const TITLES = ["dr", "doctor", "mr", "mrs", "ms", "miss"];
+for (let i = 0; i < TITLES.length; i++) {
+  TITLE_TOKENS[TITLES[i]] = true;
+}
 
 const CREDENTIAL_TOKENS: Record<string, boolean> = Object.create(null);
-[
+const CREDENTIALS = [
   "md",
   "do",
   "pa",
@@ -42,7 +45,10 @@ const CREDENTIAL_TOKENS: Record<string, boolean> = Object.create(null);
   "ii",
   "iii",
   "iv",
-].forEach((t) => (CREDENTIAL_TOKENS[t] = true));
+];
+for (let i = 0; i < CREDENTIALS.length; i++) {
+  CREDENTIAL_TOKENS[CREDENTIALS[i]] = true;
+}
 
 /**
  * Optimized name normalization that skips redundant regex processing when
@@ -60,7 +66,8 @@ export function normalizeNameFromNormalized(normalized: string): string {
   const len = normalized.length;
 
   while (pos <= len) {
-    if (pos === len || normalized[pos] === " ") {
+    // Manual space check avoids .split()
+    if (pos === len || normalized.charCodeAt(pos) === 32) {
       if (pos > start) {
         const token = normalized.substring(start, pos);
         if (!TITLE_TOKENS[token] && !CREDENTIAL_TOKENS[token]) {
@@ -130,7 +137,7 @@ export function levenshtein(a: string, b: string): number {
   const s1Len = aEnd - start + 1;
   const s2Len = bEnd - start + 1;
 
-  // Ensure s2 is the shorter string
+  // Ensure s2 is the shorter string. Use manual swaps for maximum compatibility.
   let s1 = a;
   let s2 = b;
   let s1Start = start;
@@ -139,9 +146,12 @@ export function levenshtein(a: string, b: string): number {
   let m = s2Len;
 
   if (n < m) {
-    [s1, s2] = [b, a];
-    [s1Start, s2Start] = [s2Start, s1Start];
-    [n, m] = [m, n];
+    s1 = b;
+    s2 = a;
+    s1Start = start;
+    s2Start = start;
+    n = s2Len;
+    m = s1Len;
   }
 
   const row = new Int32Array(m + 1);
