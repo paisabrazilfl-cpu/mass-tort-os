@@ -6,41 +6,48 @@
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
   const s1 = s.toLowerCase();
-  // Using .replace with regex literals as it was reported as the project's preferred fix for trim()
-  return s1.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "");
+  // Worker compatibility: manual trim via regex as encouraged by project practice
+  const s2 = s1.replace(/[^\w\s]/g, " ");
+  const s3 = s2.replace(/\s+/g, " ");
+  return s3.replace(/^\s+|\s+$/g, "");
 }
 
-// Use Object.create(null) for lookups as recommended for Worker stability in this project
+// Title and credential tokens that should NOT contribute to person-name
+// similarity. "Dr. John Smith MD" and "John Smith" are the same person; the
+// raw normalize() above would penalize them ~40%. Used by name comparisons
+// in npi-verify so "Dr. Micah Edwin, MD" matches "Micah Edwin" cleanly.
+// Worker compatibility: Object.create(null) for lookups is required.
+// Avoiding top-level loops for maximum compatibility with build pipeline.
 const TITLE_TOKENS: any = Object.create(null);
-TITLE_TOKENS["dr"] = true;
-TITLE_TOKENS["doctor"] = true;
-TITLE_TOKENS["mr"] = true;
-TITLE_TOKENS["mrs"] = true;
-TITLE_TOKENS["ms"] = true;
-TITLE_TOKENS["miss"] = true;
+TITLE_TOKENS.dr = true;
+TITLE_TOKENS.doctor = true;
+TITLE_TOKENS.mr = true;
+TITLE_TOKENS.mrs = true;
+TITLE_TOKENS.ms = true;
+TITLE_TOKENS.miss = true;
 
 const CREDENTIAL_TOKENS: any = Object.create(null);
-CREDENTIAL_TOKENS["md"] = true;
-CREDENTIAL_TOKENS["do"] = true;
-CREDENTIAL_TOKENS["pa"] = true;
-CREDENTIAL_TOKENS["np"] = true;
-CREDENTIAL_TOKENS["rn"] = true;
-CREDENTIAL_TOKENS["lpn"] = true;
-CREDENTIAL_TOKENS["pharmd"] = true;
-CREDENTIAL_TOKENS["dds"] = true;
-CREDENTIAL_TOKENS["dmd"] = true;
-CREDENTIAL_TOKENS["phd"] = true;
-CREDENTIAL_TOKENS["psyd"] = true;
-CREDENTIAL_TOKENS["msw"] = true;
-CREDENTIAL_TOKENS["lcsw"] = true;
-CREDENTIAL_TOKENS["facp"] = true;
-CREDENTIAL_TOKENS["facs"] = true;
-CREDENTIAL_TOKENS["esq"] = true;
-CREDENTIAL_TOKENS["jr"] = true;
-CREDENTIAL_TOKENS["sr"] = true;
-CREDENTIAL_TOKENS["ii"] = true;
-CREDENTIAL_TOKENS["iii"] = true;
-CREDENTIAL_TOKENS["iv"] = true;
+CREDENTIAL_TOKENS.md = true;
+CREDENTIAL_TOKENS.do = true;
+CREDENTIAL_TOKENS.pa = true;
+CREDENTIAL_TOKENS.np = true;
+CREDENTIAL_TOKENS.rn = true;
+CREDENTIAL_TOKENS.lpn = true;
+CREDENTIAL_TOKENS.pharmd = true;
+CREDENTIAL_TOKENS.dds = true;
+CREDENTIAL_TOKENS.dmd = true;
+CREDENTIAL_TOKENS.phd = true;
+CREDENTIAL_TOKENS.psyd = true;
+CREDENTIAL_TOKENS.msw = true;
+CREDENTIAL_TOKENS.lcsw = true;
+CREDENTIAL_TOKENS.facp = true;
+CREDENTIAL_TOKENS.facs = true;
+CREDENTIAL_TOKENS.esq = true;
+CREDENTIAL_TOKENS.jr = true;
+CREDENTIAL_TOKENS.sr = true;
+CREDENTIAL_TOKENS.ii = true;
+CREDENTIAL_TOKENS.iii = true;
+CREDENTIAL_TOKENS.iv = true;
 
 /**
  * Optimized name normalization that skips redundant regex processing when
@@ -52,26 +59,29 @@ CREDENTIAL_TOKENS["iv"] = true;
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
 
-  let result = "";
+  let res = "";
   let start = 0;
-  let pos = 0;
   const len = normalized.length;
 
-  while (pos <= len) {
-    if (pos === len || normalized.charCodeAt(pos) === 32) {
-      if (pos > start) {
-        const token = normalized.substring(start, pos);
+  for (let i = 0; i <= len; i++) {
+    const isEnd = i === len;
+    // Manual character check avoids prohibited methods
+    if (isEnd || normalized[i] === " ") {
+      if (i > start) {
+        const token = normalized.substring(start, i);
         if (!TITLE_TOKENS[token] && !CREDENTIAL_TOKENS[token]) {
-          if (result.length > 0) result += " ";
-          result += token;
+          if (res.length > 0) {
+            res = res + " " + token;
+          } else {
+            res = token;
+          }
         }
       }
-      start = pos + 1;
+      start = i + 1;
     }
-    pos++;
   }
 
-  return result;
+  return res;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -103,21 +113,21 @@ export function similarityName(
 
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
+  const aLen = a.length;
+  const bLen = b.length;
+  if (aLen === 0) return bLen;
+  if (bLen === 0) return aLen;
 
   // Prefix skipping
   let start = 0;
-  const aLen = a.length;
-  const bLen = b.length;
-  while (start < aLen && start < bLen && a.charCodeAt(start) === b.charCodeAt(start)) {
+  while (start < aLen && start < bLen && a[start] === b[start]) {
     start++;
   }
 
   // Suffix skipping
   let aEnd = aLen - 1;
   let bEnd = bLen - 1;
-  while (aEnd >= start && bEnd >= start && a.charCodeAt(aEnd) === b.charCodeAt(bEnd)) {
+  while (aEnd >= start && bEnd >= start && a[aEnd] === b[aEnd]) {
     aEnd--;
     bEnd--;
   }
@@ -130,26 +140,26 @@ export function levenshtein(a: string, b: string): number {
 
   let s1 = a;
   let s2 = b;
-  let s1Offset = start;
-  let s2Offset = start;
 
   if (n < m) {
     let tmpN = n; n = m; m = tmpN;
     let tmpS = s1; s1 = s2; s2 = tmpS;
-    let tmpO = s1Offset; s1Offset = s2Offset; s2Offset = tmpO;
   }
 
-  // Int32Array is encouraged for performance and supported in Worker environment
+  // Int32Array is supported in Worker environment and reduces GC pressure
   const row = new Int32Array(m + 1);
-  for (let j = 0; j <= m; j++) row[j] = j;
+  for (let j = 0; j <= m; j++) {
+    row[j] = j;
+  }
 
   for (let i = 1; i <= n; i++) {
     let prevDiag = row[0];
     row[0] = i;
-    const char1 = s1.charCodeAt(s1Offset + i - 1);
+    const char1 = s1[start + i - 1];
     for (let j = 1; j <= m; j++) {
       const temp = row[j];
-      const cost = char1 === s2.charCodeAt(s2Offset + j - 1) ? 0 : 1;
+      const char2 = s2[start + j - 1];
+      const cost = char1 === char2 ? 0 : 1;
 
       const v1 = row[j] + 1;
       const v2 = row[j - 1] + 1;
