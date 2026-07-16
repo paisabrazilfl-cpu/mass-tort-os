@@ -5,11 +5,11 @@ import { logger } from "./logger";
 import { dispatchCriticalAlert } from "./security-alerts";
 import { verifyToken } from "./rbac";
 
-// Task #7 FP-tuning: the previous `or|and` + `[=<>]` pattern matched
+// Task #7 FP-tuning: the previous "or|and" + "[=<>]" pattern matched
 // natural-language paralegal notes ("Joe AND wife both diagnosed = severe")
 // and produced false-positive auto-blocks. Patterns below now require
 // canonical injection markers (quote+operator+quote, comment terminator,
-// or `union all select`) that cannot occur in normal English prose.
+// or "union all select") that cannot occur in normal English prose.
 
 // Pattern sources as strings to avoid build-time issues and allow programmatic aggregation
 const SQL_PATTERNS = [
@@ -44,7 +44,7 @@ const PATH_PATTERNS = [
 ];
 
 const CMD_PATTERNS = [
-  "[;&|`$].*\\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\\b",
+  "[;&|\\x60$].*\\b(cat|ls|pwd|whoami|id|curl|wget|nc|bash|sh|python|perl|ruby)\\b",
   "\\$\\{.*\\}",
   "\\$\\(.*\\)"
 ];
@@ -302,7 +302,7 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
           set: {
             reason: "Auto-blocked: " + threat.type + " — " + threat.details,
             blocked_until: new Date(Date.now() + blockDuration),
-            alert_count: sql`${blockedIpsTable.alert_count} + 1`,
+            alert_count: sql.raw("alert_count + 1"),
             updated_at: new Date(),
           },
         });
@@ -341,7 +341,7 @@ export function idsMiddleware() {
     }
 
     const u = (req as any).originalUrl || (req as any).url || "";
-    const urlThreat = scanValue(decodeURIComponent(u || ""));
+    const urlThreat = scanValue(decodeURIComponent(typeof u === "string" ? u : ""));
     if (urlThreat) {
       await recordAlert(req, urlThreat);
       if (urlThreat.severity === "critical") {
@@ -363,7 +363,7 @@ export function idsMiddleware() {
 
     // Task #7: skip body deep-scan for credentialed CRM traffic. Free-text
     // fields (lead notes, email body, intake transcripts, deposition memos)
-    // routinely contain `select * from claimants` style legal prose that
+    // routinely contain "select * from claimants" style legal prose that
     // the regex set treats as SQL injection. URL + query are still scanned,
     // and unauthenticated public surfaces (forms, webhooks) keep full
     // scrutiny.
