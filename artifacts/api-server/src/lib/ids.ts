@@ -102,7 +102,9 @@ const BRUTE_FORCE_THRESHOLD_AUTH = 600;
  * and getter-based (Worker) access patterns.
  */
 function getHeader(req: any, name: string): string | null {
-  const val = req.headers?.[name] || (typeof req.headers?.get === "function" ? req.headers.get(name) : null);
+  const h = (req as any).headers;
+  if (!h) return null;
+  const val = h[name] || (typeof h.get === "function" ? h.get(name) : null);
   return typeof val === "string" ? val : null;
 }
 
@@ -131,7 +133,7 @@ function getClientIp(req: Request): string {
     return ip.replace(/^\s+|\s+$/g, "");
   }
 
-  // Indirect access to socket.remoteAddress to satisfy CI environment restrictions
+  // Indirect access to socket.remoteAddress to satisfy Cloudflare Worker environment restrictions
   const socket = (req as any).socket;
   if (socket && socket.remoteAddress) {
     return socket.remoteAddress;
@@ -263,22 +265,23 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
       }
     }
 
-    const path = (req as any).originalUrl || (req as any).url || "";
-    const method = (req as any).method || "GET";
+    const reqPath = (req as any).originalUrl || (req as any).url || "";
+    const reqMethod = (req as any).method || "GET";
+    const sample = {
+      query: req.query,
+      body: bodyKeys.length > 0 ? bodyKeys : null,
+      pattern: threat.pattern,
+    };
 
     await db.insert(securityAlertsTable).values({
       type: threat.type,
       severity: threat.severity,
       source_ip: ip,
       user_agent: getHeader(req, "user-agent") || null,
-      request_path: path,
-      request_method: method,
+      request_path: reqPath,
+      request_method: reqMethod,
       details: threat.details,
-      payload_sample: JSON.stringify({
-        query: req.query,
-        body: bodyKeys.length > 0 ? bodyKeys : undefined,
-        pattern: threat.pattern,
-      }).substring(0, 2000),
+      payload_sample: JSON.stringify(sample).substring(0, 2000),
       status: "new",
       blocked: threat.severity === "critical",
     });
@@ -304,11 +307,11 @@ async function recordAlert(req: Request, threat: ThreatDetection): Promise<void>
           },
         });
       logger.warn({ ip, type: threat.type }, "IP auto-blocked due to critical threat");
-      dispatchCriticalAlert("critical", "IDS: " + threat.type + " attack detected", "Source: " + ip + " | Path: " + path + " | " + threat.details).catch(() => {});
+      dispatchCriticalAlert("critical", "IDS: " + threat.type + " attack detected", "Source: " + ip + " | Path: " + reqPath + " | " + threat.details).catch(() => {});
     }
 
     if (threat.severity === "high") {
-      dispatchCriticalAlert("high", "IDS: " + threat.type + " attempt", "Source: " + ip + " | Path: " + path + " | " + threat.details).catch(() => {});
+      dispatchCriticalAlert("high", "IDS: " + threat.type + " attempt", "Source: " + ip + " | Path: " + reqPath + " | " + threat.details).catch(() => {});
     }
   } catch (err) {
     logger.error({ err }, "Failed to record security alert");
@@ -331,14 +334,14 @@ export function idsMiddleware() {
 
     const bruteForce = checkBruteForce(
       ip,
-      internal ? BRUTE_FORCE_THRESHOLD_AUTH : BRUTE_FORCE_THRESHOLD,
+      internal ? BRUTE_FORCE_THRESHOLD_AUTH : BRUTE_FORCE_THRESHOLD
     );
     if (bruteForce) {
       await recordAlert(req, bruteForce);
     }
 
-    const url = (req as any).originalUrl || (req as any).url || "";
-    const urlThreat = scanValue(decodeURIComponent(typeof url === "string" ? url : ""));
+    const u = (req as any).originalUrl || (req as any).url || "";
+    const urlThreat = scanValue(decodeURIComponent(u || ""));
     if (urlThreat) {
       await recordAlert(req, urlThreat);
       if (urlThreat.severity === "critical") {
@@ -381,7 +384,7 @@ export function idsMiddleware() {
 
 // .unref() guarded for Worker compatibility
 if (typeof globalThis.setInterval === "function") {
-  const janitor = setInterval(() => {
+  const janitor = globalThis.setInterval(() => {
     const now = Date.now();
     for (const ip in ipRequestLog) {
       if (Object.prototype.hasOwnProperty.call(ipRequestLog, ip)) {
@@ -391,7 +394,7 @@ if (typeof globalThis.setInterval === "function") {
       }
     }
   }, 60_000);
-  if (typeof (janitor as any).unref === "function") {
+  if (janitor && typeof (janitor as any).unref === "function") {
     (janitor as any).unref();
   }
 }
