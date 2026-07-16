@@ -234,7 +234,7 @@ function checkBruteForce(ip: string, threshold: number): ThreatDetection | null 
 
 async function isBlocked(ip: string): Promise<boolean> {
   try {
-    const [blocked] = await db
+    const results = await db
       .select()
       .from(blockedIpsTable)
       .where(
@@ -244,7 +244,7 @@ async function isBlocked(ip: string): Promise<boolean> {
         )
       )
       .limit(1);
-    return !!blocked;
+    return results.length > 0;
   } catch {
     return false;
   }
@@ -338,7 +338,7 @@ export function idsMiddleware() {
     }
 
     const url = (req as any).originalUrl || (req as any).url || "";
-    const urlThreat = scanValue(decodeURIComponent(url));
+    const urlThreat = scanValue(decodeURIComponent(typeof url === "string" ? url : ""));
     if (urlThreat) {
       await recordAlert(req, urlThreat);
       if (urlThreat.severity === "critical") {
