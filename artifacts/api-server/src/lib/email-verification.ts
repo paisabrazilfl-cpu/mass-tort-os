@@ -189,10 +189,12 @@ export async function sendVerificationEmail(
     // intentionally do NOT log the plaintext link here either — same
     // credential-leak concern as the success path.
     let errMessage = "Unknown error";
-    if (err && typeof err === "object" && "message" in err) {
-      errMessage = String(err.message);
-    } else if (err) {
-      errMessage = String(err);
+    if (err) {
+      if (typeof err === "object" && (err as any).message !== undefined) {
+        errMessage = String((err as any).message);
+      } else {
+        errMessage = String(err);
+      }
     }
     if (errMessage.includes("Failed query") || errMessage.includes(plaintextToken)) {
       errMessage = "Database query failed (details omitted for security)";
