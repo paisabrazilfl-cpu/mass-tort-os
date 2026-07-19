@@ -47,10 +47,26 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  const spaceIdx = normalized.indexOf(" ");
+  if (spaceIdx === -1) {
+    if (TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized)) {
+      return "";
+    }
+    return normalized;
+  }
   const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  let changed = false;
+  const filtered: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (TITLE_TOKENS.has(t) || CREDENTIAL_TOKENS.has(t)) {
+      changed = true;
+    } else {
+      filtered.push(t);
+    }
+  }
+  if (!changed) return normalized;
+  return filtered.join(" ");
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -73,10 +89,14 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
@@ -85,25 +105,52 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
-  let s1 = a;
-  let s2 = b;
+  const alenTotal = a.length;
+  const blenTotal = b.length;
+
+  // Determine common prefix length
+  let start = 0;
+  const maxPrefixLen = Math.min(alenTotal, blenTotal);
+  while (start < maxPrefixLen && a.charCodeAt(start) === b.charCodeAt(start)) {
+    start++;
+  }
+
+  // Determine common suffix length
+  let end1 = alenTotal - 1;
+  let end2 = blenTotal - 1;
+  while (end1 >= start && end2 >= start && a.charCodeAt(end1) === b.charCodeAt(end2)) {
+    end1--;
+    end2--;
+  }
+
+  const alen = end1 - start + 1;
+  const blen = end2 - start + 1;
+
+  if (alen === 0) return blen;
+  if (blen === 0) return alen;
+
+  // Ensure s2 is the shorter string
+  let s1 = a.slice(start, end1 + 1);
+  let s2 = b.slice(start, end2 + 1);
   if (s1.length < s2.length) {
     [s1, s2] = [s2, s1];
   }
 
-  const alen = s1.length;
-  const blen = s2.length;
-  const row = new Int32Array(blen + 1);
+  const activeAlen = s1.length;
+  const activeBlen = s2.length;
+  const row = new Int32Array(activeBlen + 1);
 
-  for (let j = 0; j <= blen; j++) row[j] = j;
+  for (let j = 0; j <= activeBlen; j++) {
+    row[j] = j;
+  }
 
-  for (let i = 1; i <= alen; i++) {
+  for (let i = 1; i <= activeAlen; i++) {
     let prevDiag = row[0]; // (i-1, j-1)
     row[0] = i;
-    for (let j = 1; j <= blen; j++) {
+    const charCode1 = s1.charCodeAt(i - 1);
+    for (let j = 1; j <= activeBlen; j++) {
       const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+      const cost = charCode1 === s2.charCodeAt(j - 1) ? 0 : 1;
       row[j] = Math.min(
         row[j] + 1, // (i-1, j) + 1
         row[j - 1] + 1, // (i, j-1) + 1
@@ -112,7 +159,7 @@ export function levenshtein(a: string, b: string): number {
       prevDiag = temp;
     }
   }
-  return row[blen];
+  return row[activeBlen];
 }
 
 /**
