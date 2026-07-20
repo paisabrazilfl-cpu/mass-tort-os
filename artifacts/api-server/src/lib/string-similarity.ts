@@ -85,15 +85,51 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
-  let s1 = a;
-  let s2 = b;
-  if (s1.length < s2.length) {
-    [s1, s2] = [s2, s1];
+  // Skip common prefixes to reduce DP matrix size
+  let start = 0;
+  const minLen = Math.min(a.length, b.length);
+  while (start < minLen && a.charCodeAt(start) === b.charCodeAt(start)) {
+    start++;
   }
 
-  const alen = s1.length;
-  const blen = s2.length;
+  if (start === minLen) {
+    return Math.abs(a.length - b.length);
+  }
+
+  // Skip common suffixes from the right, ensuring no overlap with the prefix
+  let end1 = a.length - 1;
+  let end2 = b.length - 1;
+  while (
+    end1 >= start &&
+    end2 >= start &&
+    a.charCodeAt(end1) === b.charCodeAt(end2)
+  ) {
+    end1--;
+    end2--;
+  }
+
+  if (end1 < start) {
+    return end2 - start + 1;
+  }
+  if (end2 < start) {
+    return end1 - start + 1;
+  }
+
+  // Slice only the diverging substrings if there was actually prefix or suffix skipping
+  const s1 =
+    start === 0 && end1 === a.length - 1 ? a : a.slice(start, end1 + 1);
+  const s2 =
+    start === 0 && end2 === b.length - 1 ? b : b.slice(start, end2 + 1);
+
+  // Ensure shorter string is mapped to row array to minimize auxiliary memory allocation
+  let shorter = s1;
+  let longer = s2;
+  if (shorter.length > longer.length) {
+    [shorter, longer] = [longer, shorter];
+  }
+
+  const alen = longer.length;
+  const blen = shorter.length;
   const row = new Int32Array(blen + 1);
 
   for (let j = 0; j <= blen; j++) row[j] = j;
@@ -103,7 +139,8 @@ export function levenshtein(a: string, b: string): number {
     row[0] = i;
     for (let j = 1; j <= blen; j++) {
       const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+      const cost =
+        longer.charCodeAt(i - 1) === shorter.charCodeAt(j - 1) ? 0 : 1;
       row[j] = Math.min(
         row[j] + 1, // (i-1, j) + 1
         row[j - 1] + 1, // (i, j-1) + 1
@@ -129,6 +166,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
