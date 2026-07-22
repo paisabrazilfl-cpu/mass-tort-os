@@ -47,6 +47,13 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: single-word tokens can bypass split, filter, and join allocations.
+  if (normalized.indexOf(" ") === -1) {
+    if (TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized)) {
+      return "";
+    }
+    return normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -85,9 +92,39 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
-  let s1 = a;
-  let s2 = b;
+  let start = 0;
+  let end1 = a.length - 1;
+  let end2 = b.length - 1;
+
+  // Fast-path prefix trimming: skip characters from the start that are identical
+  while (start <= end1 && start <= end2 && a.charCodeAt(start) === b.charCodeAt(start)) {
+    start++;
+  }
+
+  // Fast-path suffix trimming: skip characters from the end that are identical
+  while (end1 >= start && end2 >= start && a.charCodeAt(end1) === b.charCodeAt(end2)) {
+    end1--;
+    end2--;
+  }
+
+  const len1 = end1 - start + 1;
+  const len2 = end2 - start + 1;
+
+  if (len1 === 0) return len2;
+  if (len2 === 0) return len1;
+
+  // Isolate the diverging substring slices. Bypassed if no margins are found to avoid allocation.
+  let s1: string;
+  let s2: string;
+  if (start > 0 || end1 < a.length - 1 || end2 < b.length - 1) {
+    s1 = a.slice(start, end1 + 1);
+    s2 = b.slice(start, end2 + 1);
+  } else {
+    s1 = a;
+    s2 = b;
+  }
+
+  // Ensure s2 is the shorter string to minimize DP row size and cache misses
   if (s1.length < s2.length) {
     [s1, s2] = [s2, s1];
   }
@@ -99,15 +136,15 @@ export function levenshtein(a: string, b: string): number {
   for (let j = 0; j <= blen; j++) row[j] = j;
 
   for (let i = 1; i <= alen; i++) {
-    let prevDiag = row[0]; // (i-1, j-1)
+    let prevDiag = row[0]; // Stores (i-1, j-1)
     row[0] = i;
     for (let j = 1; j <= blen; j++) {
-      const temp = row[j]; // (i-1, j)
+      const temp = row[j]; // Stores (i-1, j)
       const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
       row[j] = Math.min(
-        row[j] + 1, // (i-1, j) + 1
-        row[j - 1] + 1, // (i, j-1) + 1
-        prevDiag + cost, // (i-1, j-1) + cost
+        row[j] + 1,      // Deletion: (i-1, j) + 1
+        row[j - 1] + 1,  // Insertion: (i, j-1) + 1
+        prevDiag + cost, // Substitution: (i-1, j-1) + cost
       );
       prevDiag = temp;
     }
