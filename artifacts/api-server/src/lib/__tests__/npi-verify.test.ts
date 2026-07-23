@@ -48,6 +48,32 @@ describe("string-similarity: normalizeName + similarityName", () => {
     const stripped = similarityName("Micah Edwin", "Micah Edwin");
     assert.equal(stripped, raw);
   });
+
+  test("similarityName handles non-identical name inputs without credentials correctly (fast path)", () => {
+    const raw = similarity("John Smith", "Jon Smith");
+    const stripped = similarityName("John Smith", "Jon Smith");
+    // Should be exactly the same score since there are no credentials to strip
+    assert.equal(stripped, raw);
+    assert.ok(stripped > 0.8);
+  });
+
+  test("similarityName handles only one name having credentials correctly (slow path)", () => {
+    const raw = similarity("Dr. John Smith", "Jon Smith");
+    const stripped = similarityName("Dr. John Smith", "Jon Smith");
+    // "Dr. John Smith" stripped is "john smith"
+    // similarityName("Dr. John Smith", "Jon Smith") matches "john smith" against "jon smith"
+    const expectedStripped = similarity("John Smith", "Jon Smith");
+    assert.ok(stripped > raw, `stripped (${stripped}) should beat raw (${raw})`);
+    assert.equal(stripped, expectedStripped);
+  });
+
+  test("similarityName handles both names having credentials correctly (slow path)", () => {
+    const raw = similarity("Dr. John Smith, MD", "Dr. Jon Smith, DO");
+    const stripped = similarityName("Dr. John Smith, MD", "Dr. Jon Smith, DO");
+    const expectedStripped = similarity("John Smith", "Jon Smith");
+    assert.ok(stripped > raw, `stripped (${stripped}) should beat raw (${raw})`);
+    assert.equal(stripped, expectedStripped);
+  });
 });
 
 describe("npi-verify: pickBestSearchResult prefers practice LOCATION", () => {

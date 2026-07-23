@@ -3,6 +3,9 @@ import { levenshtein, similarity, similarityName, normalize, normalizeName } fro
 const a = "Dr. Micah Edwin, MD";
 const b = "Micah Edwin";
 
+const c = "Micah Edwin";
+const d = "Micah B Edwin";
+
 const iterations = 100000;
 
 console.log(`Running benchmarks with ${iterations} iterations...`);
@@ -32,6 +35,10 @@ benchmark("similarity", () => {
   similarity(a, b);
 });
 
-benchmark("similarityName", () => {
+benchmark("similarityName (with credentials/titles)", () => {
   similarityName(a, b);
+});
+
+benchmark("similarityName (without credentials/titles)", () => {
+  similarityName(c, d);
 });
