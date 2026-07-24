@@ -3,6 +3,10 @@ import { levenshtein, similarity, similarityName, normalize, normalizeName } fro
 const a = "Dr. Micah Edwin, MD";
 const b = "Micah Edwin";
 
+// Clean name pair without title or credential tokens to demonstrate the fast path
+const aClean = "Micah Edwin";
+const bClean = "John Doe";
+
 const iterations = 100000;
 
 console.log(`Running benchmarks with ${iterations} iterations...`);
@@ -16,7 +20,7 @@ function benchmark(name: string, fn: () => void) {
   console.log(`${name}: ${(end - start).toFixed(4)}ms (total), ${((end - start) / iterations).toFixed(6)}ms (avg)`);
 }
 
-benchmark("levenshtein", () => {
+benchmark("levenshtein (with titles)", () => {
   levenshtein(a, b);
 });
 
@@ -24,14 +28,22 @@ benchmark("normalize", () => {
   normalize(a);
 });
 
-benchmark("normalizeName", () => {
+benchmark("normalizeName (with titles)", () => {
   normalizeName(a);
 });
 
-benchmark("similarity", () => {
+benchmark("normalizeName (clean - fast-path)", () => {
+  normalizeName(aClean);
+});
+
+benchmark("similarity (with titles)", () => {
   similarity(a, b);
 });
 
-benchmark("similarityName", () => {
+benchmark("similarityName (with titles)", () => {
   similarityName(a, b);
+});
+
+benchmark("similarityName (clean - fast-path)", () => {
+  similarityName(aClean, bClean);
 });
