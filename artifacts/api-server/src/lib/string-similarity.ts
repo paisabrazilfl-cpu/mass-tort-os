@@ -47,6 +47,10 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast-path: single-word tokens completely bypass split, filter, and join logic
+  if (normalized.indexOf(" ") === -1) {
+    return TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized) ? "" : normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +77,16 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // Fast-path: If stripping titles/credentials did not change either string,
+  // we can completely skip computing the secondary similarity/Levenshtein distance.
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
