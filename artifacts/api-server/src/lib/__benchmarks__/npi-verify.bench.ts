@@ -13,7 +13,8 @@ const results = Array.from({ length: 20 }, (_, idx) => ({
   basic: {
     first_name: idx === 12 ? "Micah" : "John",
     last_name: idx === 12 ? "Edwin" : `Smith${idx}`,
-    organization_name: idx === 12 ? "Family Medicine Group" : `Other Group ${idx}`,
+    organization_name:
+      idx === 12 ? "Family Medicine Group" : `Other Group ${idx}`,
   },
   addresses: [
     {
@@ -26,11 +27,15 @@ const results = Array.from({ length: 20 }, (_, idx) => ({
 
 const iterations = 5000;
 
-console.log(`Running NPI pickBestSearchResult benchmark with ${iterations} iterations...`);
+console.log(
+  `Running NPI pickBestSearchResult benchmark with ${iterations} iterations...`,
+);
 
 const start = performance.now();
 for (let i = 0; i < iterations; i++) {
   __test.pickBestSearchResult(results, expected);
 }
 const end = performance.now();
-console.log(`pickBestSearchResult: ${(end - start).toFixed(4)}ms (total), ${((end - start) / iterations).toFixed(6)}ms (avg)`);
+console.log(
+  `pickBestSearchResult: ${(end - start).toFixed(4)}ms (total), ${((end - start) / iterations).toFixed(6)}ms (avg)`,
+);
