@@ -5,8 +5,13 @@
 
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
-  return s
-    .toLowerCase()
+  const lower = s.toLowerCase();
+  // Fast path: avoid expensive regex replacements and trimming if the
+  // string is already a sequence of words separated by single spaces.
+  if (/^\w+(?: \w+)*$/.test(lower)) {
+    return lower;
+  }
+  return lower
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -60,16 +65,11 @@ export function normalizeName(s: string | null | undefined): string {
   return normalizeNameFromNormalized(normalize(s));
 }
 
-// Convenience: similarity that also tries the title-stripped variant and
-// returns whichever is HIGHER. Strictly additive — can never lower a
-// previously-passing score; existing thresholds keep their meaning.
-export function similarityName(
-  a: string | null | undefined,
-  b: string | null | undefined,
-): number {
-  const na = normalize(a);
-  const nb = normalize(b);
-
+/**
+ * Internal helper: similarity that also tries the title-stripped variant and
+ * returns whichever is HIGHER on strings that are already normalized.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
@@ -78,6 +78,16 @@ export function similarityName(
     normalizeNameFromNormalized(nb),
   );
   return Math.max(raw, stripped);
+}
+
+// Convenience: similarity that also tries the title-stripped variant and
+// returns whichever is HIGHER. Strictly additive — can never lower a
+// previously-passing score; existing thresholds keep their meaning.
+export function similarityName(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  return similarityNamePreNormalized(normalize(a), normalize(b));
 }
 
 export function levenshtein(a: string, b: string): number {
@@ -129,6 +139,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
