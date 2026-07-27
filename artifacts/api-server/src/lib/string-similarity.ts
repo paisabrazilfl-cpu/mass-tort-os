@@ -3,13 +3,8 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
-const FAST_NORMALIZABLE_RE = /^[a-zA-Z0-9_]+(?: [a-zA-Z0-9_]+)*$/;
-
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
-  if (FAST_NORMALIZABLE_RE.test(s)) {
-    return s.toLowerCase();
-  }
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -52,13 +47,6 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const spaceIdx = normalized.indexOf(" ");
-  if (spaceIdx === -1) {
-    if (TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized)) {
-      return "";
-    }
-    return normalized;
-  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
