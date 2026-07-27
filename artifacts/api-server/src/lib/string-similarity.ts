@@ -3,8 +3,13 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+const FAST_NORMALIZABLE_RE = /^[a-zA-Z0-9_]+(?: [a-zA-Z0-9_]+)*$/;
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  if (FAST_NORMALIZABLE_RE.test(s)) {
+    return s.toLowerCase();
+  }
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -47,6 +52,13 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  const spaceIdx = normalized.indexOf(" ");
+  if (spaceIdx === -1) {
+    if (TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized)) {
+      return "";
+    }
+    return normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -60,6 +72,26 @@ export function normalizeName(s: string | null | undefined): string {
   return normalizeNameFromNormalized(normalize(s));
 }
 
+/**
+ * Convenience: similarity that also tries the title-stripped variant on already-normalized strings.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
+  const raw = similarityPreNormalized(na, nb);
+  if (raw >= 0.98) return raw; // Early return for near-perfect matches
+
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // Fast-path: if neither name contains title/credential tokens, the stripped strings
+  // will be identical to the pre-normalized strings. We can skip the second Levenshtein calculation!
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
+  return Math.max(raw, stripped);
+}
+
 // Convenience: similarity that also tries the title-stripped variant and
 // returns whichever is HIGHER. Strictly additive — can never lower a
 // previously-passing score; existing thresholds keep their meaning.
@@ -67,17 +99,7 @@ export function similarityName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
-  const na = normalize(a);
-  const nb = normalize(b);
-
-  const raw = similarityPreNormalized(na, nb);
-  if (raw >= 0.98) return raw; // Early return for near-perfect matches
-
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
-  return Math.max(raw, stripped);
+  return similarityNamePreNormalized(normalize(a), normalize(b));
 }
 
 export function levenshtein(a: string, b: string): number {
@@ -85,9 +107,30 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
-  let s1 = a;
-  let s2 = b;
+  let start = 0;
+  const minLen = Math.min(a.length, b.length);
+  while (start < minLen && a.charCodeAt(start) === b.charCodeAt(start)) {
+    start++;
+  }
+
+  let end1 = a.length - 1;
+  let end2 = b.length - 1;
+  while (
+    end1 >= start &&
+    end2 >= start &&
+    a.charCodeAt(end1) === b.charCodeAt(end2)
+  ) {
+    end1--;
+    end2--;
+  }
+
+  if (end1 < start) return end2 - start + 1;
+  if (end2 < start) return end1 - start + 1;
+
+  // Slice only if we actually skipped prefixes or suffixes
+  let s1 = start > 0 || end1 < a.length - 1 ? a.slice(start, end1 + 1) : a;
+  let s2 = start > 0 || end2 < b.length - 1 ? b.slice(start, end2 + 1) : b;
+
   if (s1.length < s2.length) {
     [s1, s2] = [s2, s1];
   }
@@ -129,6 +172,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
