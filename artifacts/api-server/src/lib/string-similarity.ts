@@ -5,8 +5,13 @@
 
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
-  return s
-    .toLowerCase()
+  const lower = s.toLowerCase();
+  // Fast path: if the lowercased string consists only of alphanumeric/underscore words
+  // separated by single spaces, we can bypass the expensive regex replacements and trim.
+  if (/^\w+(?: \w+)*$/.test(lower)) {
+    return lower;
+  }
+  return lower
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -47,6 +52,12 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: for single-word tokens, avoid split, filter, and join allocations
+  if (normalized.indexOf(" ") === -1) {
+    return TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized)
+      ? ""
+      : normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -60,6 +71,26 @@ export function normalizeName(s: string | null | undefined): string {
   return normalizeNameFromNormalized(normalize(s));
 }
 
+/**
+ * Internal helper: similarity that also tries the title-stripped variant and
+ * returns whichever is HIGHER, operating on pre-normalized strings.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
+  const raw = similarityPreNormalized(na, nb);
+  if (raw >= 0.98) return raw; // Early return for near-perfect matches
+
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // If stripping changed absolutely nothing for both strings, bypass redundant Levenshtein
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
+  return Math.max(raw, stripped);
+}
+
 // Convenience: similarity that also tries the title-stripped variant and
 // returns whichever is HIGHER. Strictly additive — can never lower a
 // previously-passing score; existing thresholds keep their meaning.
@@ -69,15 +100,7 @@ export function similarityName(
 ): number {
   const na = normalize(a);
   const nb = normalize(b);
-
-  const raw = similarityPreNormalized(na, nb);
-  if (raw >= 0.98) return raw; // Early return for near-perfect matches
-
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
-  return Math.max(raw, stripped);
+  return similarityNamePreNormalized(na, nb);
 }
 
 export function levenshtein(a: string, b: string): number {
@@ -129,6 +152,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
