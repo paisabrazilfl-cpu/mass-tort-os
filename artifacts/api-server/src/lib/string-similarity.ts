@@ -5,6 +5,10 @@
 
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  // Fast path: if the string is already clean lowercase alphanumeric/underscore words separated by single spaces
+  if (/^[a-z0-9_]+(?: [a-z0-9_]+)*$/.test(s)) {
+    return s;
+  }
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -47,6 +51,10 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: if there are no spaces (single word), check token sets directly
+  if (normalized.indexOf(" ") === -1) {
+    return TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized) ? "" : normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +81,15 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // Fast path: if no title or credential tokens were stripped, the similarity is unchanged
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
