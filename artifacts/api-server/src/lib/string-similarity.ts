@@ -4,7 +4,7 @@
 // and a punctuation-stripping normalizer used before comparison.
 
 export function normalize(s: string | null | undefined): string {
-  if (!s) return "";
+  if (typeof s !== "string" || !s) return "";
   // Fast path: if the string is already clean lowercase alphanumeric/underscore words separated by single spaces
   if (/^[a-z0-9_]+(?: [a-z0-9_]+)*$/.test(s)) {
     return s;
