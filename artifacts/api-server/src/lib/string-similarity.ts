@@ -3,8 +3,33 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+function isNormalized(s: string): boolean {
+  if (s.length === 0) return false;
+  if (s.charCodeAt(0) === 32 || s.charCodeAt(s.length - 1) === 32) return false;
+  let lastWasSpace = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 97 && c <= 122) {
+      lastWasSpace = false;
+    } else if (c >= 48 && c <= 57) {
+      lastWasSpace = false;
+    } else if (c === 95) {
+      lastWasSpace = false;
+    } else if (c === 32) {
+      if (lastWasSpace) return false;
+      lastWasSpace = true;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  if (isNormalized(s)) {
+    return s;
+  }
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -47,6 +72,12 @@ const CREDENTIAL_TOKENS = new Set([
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  if (normalized.indexOf(" ") === -1) {
+    if (TITLE_TOKENS.has(normalized) || CREDENTIAL_TOKENS.has(normalized)) {
+      return "";
+    }
+    return normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +104,13 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
@@ -85,9 +119,45 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
+  let start = 0;
+  const len1 = a.length;
+  const len2 = b.length;
+
+  // Skip common prefix
+  while (
+    start < len1 &&
+    start < len2 &&
+    a.charCodeAt(start) === b.charCodeAt(start)
+  ) {
+    start++;
+  }
+
+  // Skip common suffix
+  let end1 = len1 - 1;
+  let end2 = len2 - 1;
+  while (
+    end1 >= start &&
+    end2 >= start &&
+    a.charCodeAt(end1) === b.charCodeAt(end2)
+  ) {
+    end1--;
+    end2--;
+  }
+
+  // If one of the strings is completely consumed
+  const subLen1 = end1 - start + 1;
+  const subLen2 = end2 - start + 1;
+  if (subLen1 <= 0) return subLen2;
+  if (subLen2 <= 0) return subLen1;
+
   let s1 = a;
   let s2 = b;
+  if (start > 0 || end1 < len1 - 1 || end2 < len2 - 1) {
+    s1 = a.slice(start, end1 + 1);
+    s2 = b.slice(start, end2 + 1);
+  }
+
+  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
   if (s1.length < s2.length) {
     [s1, s2] = [s2, s1];
   }
@@ -129,6 +199,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
