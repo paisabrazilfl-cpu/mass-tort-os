@@ -3,11 +3,31 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
-const ALREADY_NORMALIZED_RE = /^[a-z0-9_]+(?: [a-z0-9_]+)*$/;
+function isNormalized(s: string): boolean {
+  if (s.length === 0) return false;
+  if (s.charCodeAt(0) === 32 || s.charCodeAt(s.length - 1) === 32) return false;
+  let lastWasSpace = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 97 && c <= 122) {
+      lastWasSpace = false;
+    } else if (c >= 48 && c <= 57) {
+      lastWasSpace = false;
+    } else if (c === 95) {
+      lastWasSpace = false;
+    } else if (c === 32) {
+      if (lastWasSpace) return false;
+      lastWasSpace = true;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
 
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
-  if (ALREADY_NORMALIZED_RE.test(s)) {
+  if (isNormalized(s)) {
     return s;
   }
   return s
@@ -104,14 +124,22 @@ export function levenshtein(a: string, b: string): number {
   const len2 = b.length;
 
   // Skip common prefix
-  while (start < len1 && start < len2 && a.charCodeAt(start) === b.charCodeAt(start)) {
+  while (
+    start < len1 &&
+    start < len2 &&
+    a.charCodeAt(start) === b.charCodeAt(start)
+  ) {
     start++;
   }
 
   // Skip common suffix
   let end1 = len1 - 1;
   let end2 = len2 - 1;
-  while (end1 >= start && end2 >= start && a.charCodeAt(end1) === b.charCodeAt(end2)) {
+  while (
+    end1 >= start &&
+    end2 >= start &&
+    a.charCodeAt(end1) === b.charCodeAt(end2)
+  ) {
     end1--;
     end2--;
   }
@@ -171,6 +199,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
