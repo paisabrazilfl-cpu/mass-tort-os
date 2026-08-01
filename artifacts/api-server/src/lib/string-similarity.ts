@@ -72,10 +72,9 @@ const CREDENTIAL_TOKENS = new Set([
 
 // Optimized pattern matching to check if a pre-normalized string contains any title or credential tokens.
 // Since the input is already lowercased and stripped of special characters, we can check word boundaries
-// extremely quickly. Constructing dynamically from TITLE_TOKENS and CREDENTIAL_TOKENS prevents drift.
-const TITLE_CREDENTIAL_RE = new RegExp(
-  `\\b(?:${Array.from(new Set([...TITLE_TOKENS, ...CREDENTIAL_TOKENS])).join("|")})\\b`
-);
+// extremely quickly and statically. This pre-compiled regex literal is fully compatible with the Cloudflare Worker
+// static analyzer and has zero runtime overhead during module load.
+const TITLE_CREDENTIAL_RE = /\b(?:dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/;
 
 /**
  * Optimized name normalization that skips redundant regex processing when
