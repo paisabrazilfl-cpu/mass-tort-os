@@ -1,4 +1,10 @@
-import { levenshtein, similarity, similarityName, normalize, normalizeName } from "../string-similarity";
+import {
+  levenshtein,
+  similarity,
+  similarityName,
+  normalize,
+  normalizeName,
+} from "../string-similarity";
 
 const a = "Dr. Micah Edwin, MD";
 const b = "Micah Edwin";
@@ -16,7 +22,9 @@ function benchmark(name: string, fn: () => void) {
     fn();
   }
   const end = performance.now();
-  console.log(`${name}: ${(end - start).toFixed(4)}ms (total), ${((end - start) / iterations).toFixed(6)}ms (avg)`);
+  console.log(
+    `${name}: ${(end - start).toFixed(4)}ms (total), ${((end - start) / iterations).toFixed(6)}ms (avg)`,
+  );
 }
 
 console.log("\n--- Inputs with title/credentials (dr / md) ---");

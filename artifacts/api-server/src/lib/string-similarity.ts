@@ -15,11 +15,14 @@ function isNormalized(s: string): boolean {
     // [a-z]
     if (c >= 97 && c <= 122) {
       lastWasSpace = false;
-    } else if (c >= 48 && c <= 57) { // [0-9]
+    } else if (c >= 48 && c <= 57) {
+      // [0-9]
       lastWasSpace = false;
-    } else if (c === 95) { // [_]
+    } else if (c === 95) {
+      // [_]
       lastWasSpace = false;
-    } else if (c === 32) { // [ ]
+    } else if (c === 32) {
+      // [ ]
       if (lastWasSpace) return false;
       lastWasSpace = true;
     } else {
@@ -74,7 +77,8 @@ const CREDENTIAL_TOKENS = new Set([
 // Since the input is already lowercased and stripped of special characters, we can check word boundaries
 // extremely quickly and statically. This pre-compiled regex literal is fully compatible with the Cloudflare Worker
 // static analyzer and has zero runtime overhead during module load.
-const TITLE_CREDENTIAL_RE = /\b(?:dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/;
+const TITLE_CREDENTIAL_RE =
+  /\b(?:dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/;
 
 /**
  * Optimized name normalization that skips redundant regex processing when
@@ -178,6 +182,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
