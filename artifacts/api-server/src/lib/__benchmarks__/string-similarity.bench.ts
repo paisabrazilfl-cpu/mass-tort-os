@@ -1,7 +1,16 @@
-import { levenshtein, similarity, similarityName, normalize, normalizeName } from "../string-similarity";
+import {
+  levenshtein,
+  similarity,
+  similarityName,
+  normalize,
+  normalizeName,
+} from "../string-similarity";
 
 const a = "Dr. Micah Edwin, MD";
 const b = "Micah Edwin";
+
+const cleanA = "micah edwin";
+const cleanB = "micah edwin";
 
 const iterations = 100000;
 
@@ -13,9 +22,12 @@ function benchmark(name: string, fn: () => void) {
     fn();
   }
   const end = performance.now();
-  console.log(`${name}: ${(end - start).toFixed(4)}ms (total), ${((end - start) / iterations).toFixed(6)}ms (avg)`);
+  console.log(
+    `${name}: ${(end - start).toFixed(4)}ms (total), ${((end - start) / iterations).toFixed(6)}ms (avg)`,
+  );
 }
 
+console.log("\n--- Inputs with title/credentials (dr / md) ---");
 benchmark("levenshtein", () => {
   levenshtein(a, b);
 });
@@ -34,4 +46,17 @@ benchmark("similarity", () => {
 
 benchmark("similarityName", () => {
   similarityName(a, b);
+});
+
+console.log("\n--- Already clean/normalized inputs ---");
+benchmark("normalize (clean)", () => {
+  normalize(cleanA);
+});
+
+benchmark("normalizeName (clean)", () => {
+  normalizeName(cleanA);
+});
+
+benchmark("similarityName (clean)", () => {
+  similarityName(cleanA, cleanB);
 });
