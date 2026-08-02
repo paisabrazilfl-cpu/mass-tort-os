@@ -4,26 +4,7 @@
 // and a punctuation-stripping normalizer used before comparison.
 
 function isNormalized(s: string): boolean {
-  const len = s.length;
-  if (len === 0) return true;
-  if (s.charCodeAt(0) === 32 || s.charCodeAt(len - 1) === 32) return false;
-  let lastWasSpace = false;
-  for (let i = 0; i < len; i++) {
-    const code = s.charCodeAt(i);
-    if (code === 32) { // space
-      if (lastWasSpace) return false;
-      lastWasSpace = true;
-    } else if (
-      (code >= 97 && code <= 122) || // a-z
-      (code >= 48 && code <= 57) ||  // 0-9
-      code === 95                    // _
-    ) {
-      lastWasSpace = false;
-    } else {
-      return false;
-    }
-  }
-  return true;
+  return s === "" || /^[a-z0-9_]+(?: [a-z0-9_]+)*$/.test(s);
 }
 
 export function normalize(s: string | null | undefined): string {
@@ -66,10 +47,8 @@ const CREDENTIAL_TOKENS = new Set([
 ]);
 
 // Combined Title and Credential Regex to avoid split/filter allocations when no tokens are present.
-const TITLE_CREDENTIAL_RE = new RegExp(
-  `\\b(?:${Array.from(new Set([...TITLE_TOKENS, ...CREDENTIAL_TOKENS])).join("|")})\\b`,
-  "i"
-);
+// Pre-compiled as a static RegExp literal for maximum performance and environment compatibility.
+const TITLE_CREDENTIAL_RE = /\b(?:dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/i;
 
 /**
  * Optimized name normalization that skips redundant regex processing when
