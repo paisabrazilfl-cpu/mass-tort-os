@@ -3,8 +3,32 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+function isNormalized(s: string): boolean {
+  const len = s.length;
+  if (len === 0) return true;
+  if (s.charCodeAt(0) === 32 || s.charCodeAt(len - 1) === 32) return false;
+  let lastWasSpace = false;
+  for (let i = 0; i < len; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 32) { // space
+      if (lastWasSpace) return false;
+      lastWasSpace = true;
+    } else if (
+      (code >= 97 && code <= 122) || // a-z
+      (code >= 48 && code <= 57) ||  // 0-9
+      code === 95                    // _
+    ) {
+      lastWasSpace = false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  if (isNormalized(s)) return s;
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -41,12 +65,19 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+// Combined Title and Credential Regex to avoid split/filter allocations when no tokens are present.
+const TITLE_CREDENTIAL_RE = new RegExp(
+  `\\b(?:${Array.from(new Set([...TITLE_TOKENS, ...CREDENTIAL_TOKENS])).join("|")})\\b`,
+  "i"
+);
+
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) return normalized;
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +104,15 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // If no title/credential tokens were present, we can bypass calculating Levenshtein a second time.
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
@@ -85,15 +121,42 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
-  let s1 = a;
-  let s2 = b;
-  if (s1.length < s2.length) {
-    [s1, s2] = [s2, s1];
+  // Prefix/suffix skipping: identify common prefix
+  let start = 0;
+  const maxLen = Math.min(a.length, b.length);
+  while (start < maxLen && a.charCodeAt(start) === b.charCodeAt(start)) {
+    start++;
   }
 
-  const alen = s1.length;
-  const blen = s2.length;
+  // Identify common suffix
+  let end1 = a.length - 1;
+  let end2 = b.length - 1;
+  while (end1 >= start && end2 >= start && a.charCodeAt(end1) === b.charCodeAt(end2)) {
+    end1--;
+    end2--;
+  }
+
+  const len1 = end1 - start + 1;
+  const len2 = end2 - start + 1;
+
+  if (len1 <= 0) return len2;
+  if (len2 <= 0) return len1;
+
+  // Ensure s2 is the shorter remaining substring to minimize row array allocation size
+  let s1 = a;
+  let s2 = b;
+  let alen = len1;
+  let blen = len2;
+  let offset1 = start;
+  let offset2 = start;
+
+  if (alen < blen) {
+    s1 = b;
+    s2 = a;
+    [alen, blen] = [blen, alen];
+    [offset1, offset2] = [offset2, offset1];
+  }
+
   const row = new Int32Array(blen + 1);
 
   for (let j = 0; j <= blen; j++) row[j] = j;
@@ -101,9 +164,10 @@ export function levenshtein(a: string, b: string): number {
   for (let i = 1; i <= alen; i++) {
     let prevDiag = row[0]; // (i-1, j-1)
     row[0] = i;
+    const charCode1 = s1.charCodeAt(offset1 + i - 1);
     for (let j = 1; j <= blen; j++) {
       const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+      const cost = charCode1 === s2.charCodeAt(offset2 + j - 1) ? 0 : 1;
       row[j] = Math.min(
         row[j] + 1, // (i-1, j) + 1
         row[j - 1] + 1, // (i, j-1) + 1
