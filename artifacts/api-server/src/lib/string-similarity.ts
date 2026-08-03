@@ -3,8 +3,37 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+/**
+ * Fast-path check to see if a string is already normalized (lowercase alphanumeric with single spaces).
+ * Bypasses expensive RegExp replacements and string trimming/allocation.
+ */
+function isAlreadyNormalized(s: string): boolean {
+  if (s.length === 0) return true;
+  // No leading or trailing spaces
+  if (s.charCodeAt(0) === 32 || s.charCodeAt(s.length - 1) === 32) return false;
+
+  let lastWasSpace = false;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 32) {
+      if (lastWasSpace) return false; // consecutive spaces
+      lastWasSpace = true;
+    } else if (
+      (code >= 97 && code <= 122) || // a-z
+      (code >= 48 && code <= 57) || // 0-9
+      code === 95 // _
+    ) {
+      lastWasSpace = false;
+    } else {
+      return false; // contains uppercase, punctuation, etc.
+    }
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  if (isAlreadyNormalized(s)) return s;
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -41,12 +70,22 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+// Compile a single regular expression using word boundaries to test for title/credential tokens
+const TITLE_CREDENTIAL_RE = new RegExp(
+  `\\b(?:${[...TITLE_TOKENS, ...CREDENTIAL_TOKENS].join("|")})\\b`,
+  "i",
+);
+
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast-path: Skip split/filter/join if no titles/credentials exist (saves GC & CPU)
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) {
+    return normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +112,16 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // Fast-path: If neither name has credentials or titles to strip,
+  // we bypass the second Levenshtein calculation completely.
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
@@ -85,9 +130,44 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
+  // Prefix and suffix skipping: isolate the DP matrix to only the diverging substring slices
+  let start = 0;
+  const len1 = a.length;
+  const len2 = b.length;
+
+  while (
+    start < len1 &&
+    start < len2 &&
+    a.charCodeAt(start) === b.charCodeAt(start)
+  ) {
+    start++;
+  }
+
+  let end1 = len1 - 1;
+  let end2 = len2 - 1;
+
+  while (
+    end1 >= start &&
+    end2 >= start &&
+    a.charCodeAt(end1) === b.charCodeAt(end2)
+  ) {
+    end1--;
+    end2--;
+  }
+
+  // If we fully matched one of the strings:
+  if (start > end1) return end2 - start + 1;
+  if (start > end2) return end1 - start + 1;
+
   let s1 = a;
   let s2 = b;
+  // Bypasses slicing if no common margins are found, avoiding redundant allocations
+  if (start > 0 || end1 < len1 - 1 || end2 < len2 - 1) {
+    s1 = a.slice(start, end1 + 1);
+    s2 = b.slice(start, end2 + 1);
+  }
+
+  // Ensure s2 is the shorter string to minimize memory usage and auxiliary array size
   if (s1.length < s2.length) {
     [s1, s2] = [s2, s1];
   }
@@ -129,6 +209,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
