@@ -17,6 +17,7 @@ import {
   normalizeName,
   similarity,
   similarityName,
+  levenshtein,
 } from "../string-similarity.js";
 import { __test, verifyProvider } from "../npi-verify.js";
 
@@ -38,7 +39,10 @@ describe("string-similarity: normalizeName + similarityName", () => {
     // takes max of raw and stripped so it can only go UP.
     const raw = similarity("Dr. Micah B. Edwin, MD", "Micah B Edwin");
     const stripped = similarityName("Dr. Micah B. Edwin, MD", "Micah B Edwin");
-    assert.ok(stripped > raw, `stripped (${stripped}) should beat raw (${raw})`);
+    assert.ok(
+      stripped > raw,
+      `stripped (${stripped}) should beat raw (${raw})`,
+    );
     assert.equal(stripped, 1);
   });
 
@@ -47,6 +51,29 @@ describe("string-similarity: normalizeName + similarityName", () => {
     const raw = similarity("Micah Edwin", "Micah Edwin");
     const stripped = similarityName("Micah Edwin", "Micah Edwin");
     assert.equal(stripped, raw);
+  });
+
+  test("levenshtein correctly handles exact match", () => {
+    assert.equal(levenshtein("hello", "hello"), 0);
+  });
+
+  test("levenshtein prefix/suffix skipping handles overlapping patterns", () => {
+    // Prefix "hello " and suffix " world" should be completely skipped.
+    // Distance between "hello beautiful world" and "hello ugly world" is distance between "beautiful" and "ugly"
+    // "beautiful" vs "ugly" -> 8 edits
+    assert.equal(levenshtein("hello beautiful world", "hello ugly world"), 8);
+  });
+
+  test("levenshtein works with empty strings", () => {
+    assert.equal(levenshtein("", "test"), 4);
+    assert.equal(levenshtein("test", ""), 4);
+    assert.equal(levenshtein("", ""), 0);
+  });
+
+  test("normalize preserves already clean strings and avoids allocations", () => {
+    assert.equal(normalize("already_clean_string"), "already_clean_string");
+    assert.equal(normalize("multiple words"), "multiple words");
+    assert.equal(normalize(""), "");
   });
 });
 
@@ -85,18 +112,26 @@ describe("npi-verify: providerTaxonomyMatches with specialty aliases", () => {
   test("'general practitioner' matches NPPES 'Family Medicine'", () => {
     const tax = __test.providerTaxonomyMatches(
       {
-        taxonomies: [{ code: "207Q00000X", desc: "Family Medicine", primary: true }],
+        taxonomies: [
+          { code: "207Q00000X", desc: "Family Medicine", primary: true },
+        ],
       },
       "general practitioner",
     );
-    assert.equal(tax.matched, true, "alias should have matched Family Medicine");
+    assert.equal(
+      tax.matched,
+      true,
+      "alias should have matched Family Medicine",
+    );
     assert.equal(tax.matched_taxonomies[0]?.desc, "Family Medicine");
   });
 
   test("'general practitioner' matches NPPES 'Internal Medicine'", () => {
     const tax = __test.providerTaxonomyMatches(
       {
-        taxonomies: [{ code: "207R00000X", desc: "Internal Medicine", primary: true }],
+        taxonomies: [
+          { code: "207R00000X", desc: "Internal Medicine", primary: true },
+        ],
       },
       "general practitioner",
     );
@@ -106,7 +141,9 @@ describe("npi-verify: providerTaxonomyMatches with specialty aliases", () => {
   test("unrelated specialty does NOT match via aliases", () => {
     const tax = __test.providerTaxonomyMatches(
       {
-        taxonomies: [{ code: "207W00000X", desc: "Ophthalmology", primary: true }],
+        taxonomies: [
+          { code: "207W00000X", desc: "Ophthalmology", primary: true },
+        ],
       },
       "general practitioner",
     );
@@ -135,7 +172,11 @@ describe("npi-verify: VerifyProviderStatus three-way honest verdict", () => {
     }) as typeof fetch;
     try {
       const result = await verifyProvider({
-        expected: { name: "Micah Edwin", city: "Lauderdale Lakes", state: "FL" },
+        expected: {
+          name: "Micah Edwin",
+          city: "Lauderdale Lakes",
+          state: "FL",
+        },
       });
       assert.equal(
         result.status,

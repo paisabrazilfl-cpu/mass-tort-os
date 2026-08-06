@@ -3,8 +3,34 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+function isNormalized(s: string): boolean {
+  const len = s.length;
+  if (len === 0) return true;
+  // No leading or trailing spaces allowed
+  if (s.charCodeAt(0) === 32 || s.charCodeAt(len - 1) === 32) return false;
+
+  let lastWasSpace = false;
+  for (let i = 0; i < len; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 32) {
+      if (lastWasSpace) return false;
+      lastWasSpace = true;
+    } else if (
+      (code >= 97 && code <= 122) || // a-z
+      (code >= 48 && code <= 57) || // 0-9
+      code === 95 // _
+    ) {
+      lastWasSpace = false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  if (isNormalized(s)) return s;
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -41,12 +67,18 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+// A compiled regular expression using word boundaries for matching any of
+// the known title/credential tokens. Helps fast-path name comparisons.
+const TITLE_CREDENTIAL_RE =
+  /\b(dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/;
+
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) return normalized;
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -85,25 +117,57 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
-  let s1 = a;
-  let s2 = b;
-  if (s1.length < s2.length) {
-    [s1, s2] = [s2, s1];
+  const lenA = a.length;
+  const lenB = b.length;
+
+  let start = 0;
+  while (
+    start < lenA &&
+    start < lenB &&
+    a.charCodeAt(start) === b.charCodeAt(start)
+  ) {
+    start++;
   }
 
-  const alen = s1.length;
-  const blen = s2.length;
-  const row = new Int32Array(blen + 1);
+  let endA = lenA - 1;
+  let endB = lenB - 1;
+  while (
+    endA >= start &&
+    endB >= start &&
+    a.charCodeAt(endA) === b.charCodeAt(endB)
+  ) {
+    endA--;
+    endB--;
+  }
 
-  for (let j = 0; j <= blen; j++) row[j] = j;
+  const alen = endA - start + 1;
+  const blen = endB - start + 1;
 
-  for (let i = 1; i <= alen; i++) {
+  if (alen === 0) return blen;
+  if (blen === 0) return alen;
+
+  // Ensure blen is the shorter remaining length to minimize memory usage and auxiliary array size
+  let s1 = a;
+  let s2 = b;
+  let s1Len = alen;
+  let s2Len = blen;
+  if (s1Len < s2Len) {
+    s1 = b;
+    s2 = a;
+    s1Len = blen;
+    s2Len = alen;
+  }
+
+  const row = new Int32Array(s2Len + 1);
+  for (let j = 0; j <= s2Len; j++) row[j] = j;
+
+  for (let i = 1; i <= s1Len; i++) {
     let prevDiag = row[0]; // (i-1, j-1)
     row[0] = i;
-    for (let j = 1; j <= blen; j++) {
+    const charS1 = s1.charCodeAt(start + i - 1);
+    for (let j = 1; j <= s2Len; j++) {
       const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+      const cost = charS1 === s2.charCodeAt(start + j - 1) ? 0 : 1;
       row[j] = Math.min(
         row[j] + 1, // (i-1, j) + 1
         row[j - 1] + 1, // (i, j-1) + 1
@@ -112,7 +176,7 @@ export function levenshtein(a: string, b: string): number {
       prevDiag = temp;
     }
   }
-  return row[blen];
+  return row[s2Len];
 }
 
 /**
@@ -129,6 +193,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
