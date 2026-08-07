@@ -67,9 +67,13 @@ export function similarityName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
-  const na = normalize(a);
-  const nb = normalize(b);
+  return similarityNamePreNormalized(normalize(a), normalize(b));
+}
 
+/**
+ * 0..1 name-similarity ratio between two ALREADY normalized strings.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
