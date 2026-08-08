@@ -23,8 +23,8 @@ function isNormalized(s: string): boolean {
       prevSpace = true;
     } else if (
       (code >= 97 && code <= 122) || // a-z
-      (code >= 48 && code <= 57) ||  // 0-9
-      code === 95                   // _
+      (code >= 48 && code <= 57) || // 0-9
+      code === 95 // _
     ) {
       prevSpace = false;
     } else {
@@ -76,7 +76,7 @@ const CREDENTIAL_TOKENS = new Set([
 // Dynamically compile a RegExp covering all TITLE_TOKENS and CREDENTIAL_TOKENS as whole words.
 const TITLE_CREDENTIAL_RE = new RegExp(
   `\\b(?:${[...TITLE_TOKENS, ...CREDENTIAL_TOKENS].join("|")})\\b`,
-  "i"
+  "i",
 );
 
 /**
@@ -136,14 +136,22 @@ export function levenshtein(a: string, b: string): number {
 
   // Track common prefix
   let start = 0;
-  while (start < len1 && start < len2 && a.charCodeAt(start) === b.charCodeAt(start)) {
+  while (
+    start < len1 &&
+    start < len2 &&
+    a.charCodeAt(start) === b.charCodeAt(start)
+  ) {
     start++;
   }
 
   // Track common suffix
   let end1 = len1 - 1;
   let end2 = len2 - 1;
-  while (end1 >= start && end2 >= start && a.charCodeAt(end1) === b.charCodeAt(end2)) {
+  while (
+    end1 >= start &&
+    end2 >= start &&
+    a.charCodeAt(end1) === b.charCodeAt(end2)
+  ) {
     end1--;
     end2--;
   }
@@ -202,6 +210,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
