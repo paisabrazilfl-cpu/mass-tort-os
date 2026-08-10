@@ -3,8 +3,41 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+function isNormalized(s: string): boolean {
+  const len = s.length;
+  if (len === 0) return true;
+  // Cannot start or end with a space
+  if (s.charCodeAt(0) === 32 || s.charCodeAt(len - 1) === 32) return false;
+
+  for (let i = 0; i < len; i++) {
+    const code = s.charCodeAt(i);
+    // Lowercase a-z
+    if (code >= 97 && code <= 122) {
+      continue;
+    }
+    // Digits 0-9
+    if (code >= 48 && code <= 57) {
+      continue;
+    }
+    // Underscore _ is matched by \w
+    if (code === 95) {
+      continue;
+    }
+    // Space
+    if (code === 32) {
+      // No consecutive spaces (we already checked start and end, so we can check if previous is space)
+      if (s.charCodeAt(i - 1) === 32) return false;
+      continue;
+    }
+    // Any other character is not normalized
+    return false;
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  if (isNormalized(s)) return s;
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -41,12 +74,18 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+// Combined case-insensitive regex compiled once for title and credential word boundaries to skip splits
+const TITLE_CREDENTIAL_RE = /\b(dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/i;
+
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) {
+    return normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -60,6 +99,28 @@ export function normalizeName(s: string | null | undefined): string {
   return normalizeNameFromNormalized(normalize(s));
 }
 
+/**
+ * Optimized similarityName on ALREADY normalized strings.
+ * Skips redundant name normalizations, and skips the second Levenshtein calculation
+ * entirely if neither name contains any title/credential tokens.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
+  const raw = similarityPreNormalized(na, nb);
+  if (raw >= 0.98) return raw; // Early return for near-perfect matches
+
+  // Check if either string has any title/credential tokens.
+  // If neither does, stripped variant is identical to raw, so Math.max(raw, raw) is raw.
+  if (!TITLE_CREDENTIAL_RE.test(na) && !TITLE_CREDENTIAL_RE.test(nb)) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(
+    normalizeNameFromNormalized(na),
+    normalizeNameFromNormalized(nb),
+  );
+  return Math.max(raw, stripped);
+}
+
 // Convenience: similarity that also tries the title-stripped variant and
 // returns whichever is HIGHER. Strictly additive — can never lower a
 // previously-passing score; existing thresholds keep their meaning.
@@ -67,17 +128,7 @@ export function similarityName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
-  const na = normalize(a);
-  const nb = normalize(b);
-
-  const raw = similarityPreNormalized(na, nb);
-  if (raw >= 0.98) return raw; // Early return for near-perfect matches
-
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
-  return Math.max(raw, stripped);
+  return similarityNamePreNormalized(normalize(a), normalize(b));
 }
 
 export function levenshtein(a: string, b: string): number {

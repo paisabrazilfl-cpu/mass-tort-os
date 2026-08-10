@@ -3,6 +3,9 @@ import { levenshtein, similarity, similarityName, normalize, normalizeName } fro
 const a = "Dr. Micah Edwin, MD";
 const b = "Micah Edwin";
 
+const cleanA = "micah edwin";
+const cleanB = "micah edwin";
+
 const iterations = 100000;
 
 console.log(`Running benchmarks with ${iterations} iterations...`);
@@ -20,18 +23,34 @@ benchmark("levenshtein", () => {
   levenshtein(a, b);
 });
 
-benchmark("normalize", () => {
+benchmark("normalize (unclean)", () => {
   normalize(a);
 });
 
-benchmark("normalizeName", () => {
+benchmark("normalize (already clean/normalized)", () => {
+  normalize(cleanA);
+});
+
+benchmark("normalizeName (unclean)", () => {
   normalizeName(a);
 });
 
-benchmark("similarity", () => {
+benchmark("normalizeName (already clean/normalized)", () => {
+  normalizeName(cleanA);
+});
+
+benchmark("similarity (unclean)", () => {
   similarity(a, b);
 });
 
-benchmark("similarityName", () => {
+benchmark("similarity (already clean/normalized)", () => {
+  similarity(cleanA, cleanB);
+});
+
+benchmark("similarityName (unclean)", () => {
   similarityName(a, b);
+});
+
+benchmark("similarityName (already clean/normalized)", () => {
+  similarityName(cleanA, cleanB);
 });
