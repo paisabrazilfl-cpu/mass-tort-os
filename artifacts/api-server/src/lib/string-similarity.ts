@@ -3,8 +3,28 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+function isNormalized(s: string): boolean {
+  if (s.length === 0) return true;
+  if (s[0] === " " || s[s.length - 1] === " ") return false;
+  let lastWasSpace = false;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    // lowercase letters (97-122) or digits (48-57)
+    if ((code >= 97 && code <= 122) || (code >= 48 && code <= 57)) {
+      lastWasSpace = false;
+    } else if (code === 32) { // space
+      if (lastWasSpace) return false;
+      lastWasSpace = true;
+    } else {
+      return false; // contains uppercase, punctuation, etc.
+    }
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  if (isNormalized(s)) return s;
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -48,6 +68,15 @@ const CREDENTIAL_TOKENS = new Set([
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
   const tokens = normalized.split(" ");
+  let changed = false;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (TITLE_TOKENS.has(t) || CREDENTIAL_TOKENS.has(t)) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) return normalized;
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
     .join(" ");
@@ -60,6 +89,31 @@ export function normalizeName(s: string | null | undefined): string {
   return normalizeNameFromNormalized(normalize(s));
 }
 
+/**
+ * Internal helper: similarityName for already-normalized strings.
+ * Bypasses redundant normalization and avoids redundant Levenshtein computation
+ * when no title/credential tokens were present.
+ */
+export function similarityNamePreNormalized(
+  na: string,
+  nb: string,
+): number {
+  const raw = similarityPreNormalized(na, nb);
+  if (raw >= 0.98) return raw; // Early return for near-perfect matches
+
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // If neither name has credentials/titles, they strip to the same strings,
+  // meaning stripped similarity will be identical to raw. Skip the redundant Levenshtein.
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
+  return Math.max(raw, stripped);
+}
+
 // Convenience: similarity that also tries the title-stripped variant and
 // returns whichever is HIGHER. Strictly additive — can never lower a
 // previously-passing score; existing thresholds keep their meaning.
@@ -67,17 +121,7 @@ export function similarityName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
-  const na = normalize(a);
-  const nb = normalize(b);
-
-  const raw = similarityPreNormalized(na, nb);
-  if (raw >= 0.98) return raw; // Early return for near-perfect matches
-
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
-  return Math.max(raw, stripped);
+  return similarityNamePreNormalized(normalize(a), normalize(b));
 }
 
 export function levenshtein(a: string, b: string): number {
