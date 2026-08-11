@@ -1,3 +1,7 @@
 ## 2025-05-15 - [String Similarity Optimization]
 **Learning:** Redundant normalization in fuzzy matching functions (calling `normalize()` multiple times on the same input) is a significant bottleneck. Standard `Array<number>` for Levenshtein distance creates GC pressure and is slower than `Int32Array`. String swapping ensures the auxiliary array is as small as possible.
 **Action:** Use `Int32Array` and single-vector DP approach for Levenshtein. Always reuse normalized strings instead of re-normalizing in wrapper functions. Add early returns for near-exact matches to skip expensive fuzzy logic.
+
+## 2025-05-16 - [String Normalization & Name Similarity Fast Paths]
+**Learning:** On clean, title-free, or already normalized strings, performing full regular expression replacements and repeating expensive Levenshtein DP arrays results in substantial CPU and memory overhead. Checking for clean/normalized states with simple loops and checking if title/credential tokens actually exist in names allows skipping redundant allocations and redundant Levenshtein calculations entirely.
+**Action:** Always implement quick fast-path loops for common inputs (e.g., lowercase alphanumeric strings). Guard heavy $O(N \times M)$ algorithms (like Levenshtein) by ensuring the inputs actually differ under transformations (like name credential stripping) before performing redundant checks. Hoist expected value normalization out of search candidate loops to achieve massive performance gains in search operations.
