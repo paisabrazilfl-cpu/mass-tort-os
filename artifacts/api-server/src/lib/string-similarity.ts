@@ -125,6 +125,25 @@ export function similarityPreNormalized(na: string, nb: string): number {
   return 1 - levenshtein(na, nb) / maxLen;
 }
 
+/**
+ * Highly optimized helper that takes pre-normalized and pre-stripped strings
+ * to completely bypass redundant name normalization and credential stripping.
+ */
+export function similarityNamePreNormalizedWithStripped(
+  na: string,
+  nb: string,
+  naStripped: string,
+): number {
+  const raw = similarityPreNormalized(na, nb);
+  if (raw >= 0.98) return raw; // Early return for near-perfect matches
+
+  const stripped = similarityPreNormalized(
+    naStripped,
+    normalizeNameFromNormalized(nb),
+  );
+  return Math.max(raw, stripped);
+}
+
 // 0..1 similarity ratio after normalization. 1.0 = identical, 0.0 = totally different.
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use

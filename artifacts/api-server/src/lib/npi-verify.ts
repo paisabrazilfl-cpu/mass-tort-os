@@ -10,7 +10,14 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity, similarityName } from "./string-similarity";
+import {
+  normalize,
+  similarity,
+  similarityName,
+  similarityPreNormalized,
+  similarityNamePreNormalizedWithStripped,
+  normalizeNameFromNormalized,
+} from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
@@ -249,6 +256,13 @@ function pickBestSearchResult(
   const expCity = expected.city ?? "";
   const expState = expected.state ?? "";
 
+  // Hoist normalizations of loop-invariant expected values outside the loop
+  const expNameNorm = normalize(expName);
+  const expNameStripped = normalizeNameFromNormalized(expNameNorm);
+  const expOrgNorm = normalize(expOrg);
+  const expCityNorm = normalize(expCity);
+  const expStateNorm = normalize(expState);
+
   for (const r of results) {
     const basic = r.basic ?? {};
     const name =
@@ -256,13 +270,23 @@ function pickBestSearchResult(
       [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
-    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
-    const orgScore = similarity(expOrg, org);
-    const cityScore = similarity(expCity, primaryAddr.city ?? "");
+
+    const nameNorm = normalize(name);
+    const orgNorm = normalize(org);
+
+    // Use highly optimized pre-normalized and pre-stripped helpers
+    const nameScore = Math.max(
+      similarityNamePreNormalizedWithStripped(expNameNorm, nameNorm, expNameStripped),
+      similarityNamePreNormalizedWithStripped(expNameNorm, orgNorm, expNameStripped)
+    );
+    const orgScore = similarityPreNormalized(expOrgNorm, orgNorm);
+    const cityScore = similarityPreNormalized(expCityNorm, normalize(primaryAddr.city ?? ""));
+    const stateNorm = normalize(primaryAddr.state ?? "");
     const stateScore =
-      normalize(expState) === normalize(primaryAddr.state ?? "")
+      expStateNorm === stateNorm
         ? 1.0
-        : similarity(expState, primaryAddr.state ?? "");
+        : similarityPreNormalized(expStateNorm, stateNorm);
+
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
     const score = 0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
     if (score > bestScore) {
