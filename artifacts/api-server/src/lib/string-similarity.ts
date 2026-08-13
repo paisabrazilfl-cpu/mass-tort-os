@@ -5,6 +5,8 @@
 
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  // Fast path for strings that are already clean lowercase alphanumeric with single spaces
+  if (/^[a-z0-9]+(?: [a-z0-9]+)*$/.test(s)) return s;
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -41,12 +43,19 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+// Pre-compiled RegExp for quick word-boundary checking of title/credential tokens
+const TITLE_CREDENTIAL_RE = new RegExp(
+  `\\b(?:${[...TITLE_TOKENS, ...CREDENTIAL_TOKENS].join("|")})\\b`,
+);
+
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: skip split-filter-join if the normalized string contains no title/credential tokens
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) return normalized;
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +82,37 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+  // Fast path: if neither string has titles/credentials, the stripped similarity
+  // is identical to the raw similarity we already calculated.
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
+  return Math.max(raw, stripped);
+}
+
+/**
+ * 0..1 similarity ratio between two ALREADY normalized and ALREADY stripped strings.
+ */
+export function similarityNamePreNormalizedAndStripped(
+  na: string,
+  strippedA: string,
+  nb: string,
+  strippedB: string,
+): number {
+  const raw = similarityPreNormalized(na, nb);
+  if (raw >= 0.98) return raw; // Early return for near-perfect matches
+
+  // Fast path: if neither string has titles/credentials, the stripped similarity
+  // is identical to the raw similarity we already calculated.
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
@@ -129,6 +165,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }

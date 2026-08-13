@@ -10,7 +10,14 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity, similarityName } from "./string-similarity";
+import {
+  normalize,
+  similarity,
+  similarityName,
+  similarityNamePreNormalizedAndStripped,
+  similarityPreNormalized,
+  normalizeNameFromNormalized,
+} from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
@@ -23,7 +30,11 @@ const NPI_MAX_RETRIES = 2; // 1 initial + 2 retries = 3 attempts total
 // "internal medicine" — those are the actual NPPES taxonomy descriptions for
 // the same job. Without this, perfectly valid NPIs scored 0 on specialty.
 const SPECIALTY_ALIASES: Record<string, readonly string[]> = {
-  "general practitioner": ["general practice", "family medicine", "internal medicine"],
+  "general practitioner": [
+    "general practice",
+    "family medicine",
+    "internal medicine",
+  ],
   "general practice": ["family medicine", "internal medicine"],
   "family doctor": ["family medicine", "general practice"],
   "primary care": ["family medicine", "internal medicine", "general practice"],
@@ -114,10 +125,31 @@ export interface VerifyProviderResult {
   provider: ProviderSummary | null;
   status: VerifyProviderStatus;
   checks: {
-    npi_lookup?: { found: boolean; npi?: string; message?: string; error?: string };
-    search?: { found: boolean; candidates_returned?: number; best_score?: number; message?: string; error?: string };
-    name?: { expected: string; provider: string; score: number; match: boolean };
-    organization?: { expected: string; provider: string; score: number; match: boolean };
+    npi_lookup?: {
+      found: boolean;
+      npi?: string;
+      message?: string;
+      error?: string;
+    };
+    search?: {
+      found: boolean;
+      candidates_returned?: number;
+      best_score?: number;
+      message?: string;
+      error?: string;
+    };
+    name?: {
+      expected: string;
+      provider: string;
+      score: number;
+      match: boolean;
+    };
+    organization?: {
+      expected: string;
+      provider: string;
+      score: number;
+      match: boolean;
+    };
     location?: {
       expected_city: string;
       provider_city: string;
@@ -149,7 +181,9 @@ export interface VerifyProviderResult {
   candidates_returned?: number;
 }
 
-async function fetchNpiOnce(params: URLSearchParams): Promise<NpiRegistryResult[]> {
+async function fetchNpiOnce(
+  params: URLSearchParams,
+): Promise<NpiRegistryResult[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
   try {
@@ -176,7 +210,9 @@ async function fetchNpiOnce(params: URLSearchParams): Promise<NpiRegistryResult[
   } catch (err) {
     if (err instanceof NppesUnavailable) throw err;
     // AbortError, network errors, etc. — wrap.
-    throw new NppesUnavailable(err instanceof Error ? err.message : String(err));
+    throw new NppesUnavailable(
+      err instanceof Error ? err.message : String(err),
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -224,14 +260,19 @@ async function searchByNameLocation(
   expected: ExpectedProvider,
   limit = 20,
 ): Promise<NpiRegistryResult[]> {
-  const params = new URLSearchParams({ version: NPI_VERSION, limit: String(limit) });
+  const params = new URLSearchParams({
+    version: NPI_VERSION,
+    limit: String(limit),
+  });
 
   // Extract first/last from a free-text name if provided
   const nameParts = (expected.name ?? "").trim().split(/\s+/).filter(Boolean);
   if (nameParts.length >= 1) params.set("first_name", nameParts[0]);
-  if (nameParts.length >= 2) params.set("last_name", nameParts[nameParts.length - 1]);
+  if (nameParts.length >= 2)
+    params.set("last_name", nameParts[nameParts.length - 1]);
 
-  if (expected.organization) params.set("organization_name", expected.organization);
+  if (expected.organization)
+    params.set("organization_name", expected.organization);
   if (expected.city) params.set("city", expected.city);
   if (expected.state) params.set("state", expected.state);
 
@@ -249,6 +290,13 @@ function pickBestSearchResult(
   const expCity = expected.city ?? "";
   const expState = expected.state ?? "";
 
+  // Hoist loop-invariant expected-value normalizations out of the search results loop
+  const normExpName = normalize(expName);
+  const strippedExpName = normalizeNameFromNormalized(normExpName);
+  const normExpOrg = normalize(expOrg);
+  const normExpCity = normalize(expCity);
+  const normExpState = normalize(expState);
+
   for (const r of results) {
     const basic = r.basic ?? {};
     const name =
@@ -256,18 +304,52 @@ function pickBestSearchResult(
       [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
-    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
-    const orgScore = similarity(expOrg, org);
-    const cityScore = similarity(expCity, primaryAddr.city ?? "");
+
+    // Normalize candidate names and organizations
+    const normName = normalize(name);
+    const strippedName = normalizeNameFromNormalized(normName);
+    const normOrg = normalize(org);
+    const strippedOrg = normalizeNameFromNormalized(normOrg);
+
+    // Compute nameScore using the fast pre-normalized-and-stripped similarity helper
+    const nameScore = Math.max(
+      similarityNamePreNormalizedAndStripped(
+        normExpName,
+        strippedExpName,
+        normName,
+        strippedName,
+      ),
+      similarityNamePreNormalizedAndStripped(
+        normExpName,
+        strippedExpName,
+        normOrg,
+        strippedOrg,
+      ),
+    );
+
+    const orgScore = similarityPreNormalized(normExpOrg, normOrg);
+    const cityScore = similarityPreNormalized(
+      normExpCity,
+      normalize(primaryAddr.city ?? ""),
+    );
+
+    const normProvState = normalize(primaryAddr.state ?? "");
     const stateScore =
-      normalize(expState) === normalize(primaryAddr.state ?? "")
+      normExpState === normProvState
         ? 1.0
-        : similarity(expState, primaryAddr.state ?? "");
+        : similarityPreNormalized(normExpState, normProvState);
+
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
-    const score = 0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
+    const score =
+      0.5 * Math.max(nameScore, orgScore) +
+      0.25 * cityScore +
+      0.25 * stateScore;
     if (score > bestScore) {
       bestScore = score;
       best = r;
+      if (score >= 1.0) {
+        break; // Early exit on perfect match!
+      }
     }
   }
 
@@ -289,10 +371,18 @@ function specialtyAcceptedTerms(expectedSpecialty: string): string[] {
 function providerTaxonomyMatches(
   provider: NpiRegistryResult,
   expectedSpecialty: string,
-): { matched: boolean; matched_taxonomies: Array<{ code: string; desc: string; primary: boolean }>; all_descs: string[] } {
+): {
+  matched: boolean;
+  matched_taxonomies: Array<{ code: string; desc: string; primary: boolean }>;
+  all_descs: string[];
+} {
   const terms = specialtyAcceptedTerms(expectedSpecialty);
   const taxonomies = provider.taxonomies ?? [];
-  const matchedTaxonomies: Array<{ code: string; desc: string; primary: boolean }> = [];
+  const matchedTaxonomies: Array<{
+    code: string;
+    desc: string;
+    primary: boolean;
+  }> = [];
   if (terms.length > 0) {
     for (const t of taxonomies) {
       const desc = t.desc ?? "";
@@ -300,8 +390,14 @@ function providerTaxonomyMatches(
       const descNorm = normalize(desc);
       // Substring match either direction so "family medicine" matches
       // "Family Medicine - Sports Medicine Physician" and so on.
-      if (terms.some((term) => descNorm.includes(term) || term.includes(descNorm))) {
-        matchedTaxonomies.push({ code: t.code ?? "", desc, primary: !!t.primary });
+      if (
+        terms.some((term) => descNorm.includes(term) || term.includes(descNorm))
+      ) {
+        matchedTaxonomies.push({
+          code: t.code ?? "",
+          desc,
+          primary: !!t.primary,
+        });
       }
     }
   }
@@ -404,13 +500,19 @@ export async function verifyProvider(
   if (input.npi) {
     if (!/^\d{10}$/.test(input.npi)) {
       result.method = "npi";
-      result.checks.npi_lookup = { found: false, error: "NPI must be a 10-digit number" };
+      result.checks.npi_lookup = {
+        found: false,
+        error: "NPI must be a 10-digit number",
+      };
     } else {
       try {
         const found = await lookupByNpi(input.npi);
         result.method = "npi";
         if (!found) {
-          result.checks.npi_lookup = { found: false, message: "NPI not found in registry" };
+          result.checks.npi_lookup = {
+            found: false,
+            message: "NPI not found in registry",
+          };
         } else {
           result.checks.npi_lookup = { found: true, npi: input.npi };
           provider = found;
@@ -418,7 +520,10 @@ export async function verifyProvider(
       } catch (err) {
         result.method = "npi";
         if (err instanceof NppesUnavailable) nppesReachable = false;
-        result.checks.npi_lookup = { found: false, error: (err as Error).message };
+        result.checks.npi_lookup = {
+          found: false,
+          error: (err as Error).message,
+        };
       }
     }
   }
@@ -428,7 +533,10 @@ export async function verifyProvider(
     try {
       const results = await searchByNameLocation(expected);
       if (results.length === 0) {
-        result.checks.search = { found: false, message: "No matching records from NPPES search" };
+        result.checks.search = {
+          found: false,
+          message: "No matching records from NPPES search",
+        };
       } else {
         const picked = pickBestSearchResult(results, expected);
         if (picked) {
@@ -488,7 +596,9 @@ export async function verifyProvider(
   const provState = result.provider.address.state;
   const cityCheck = compareStringsField(provCity, expected.city, 0.85);
   const stateExact = normalize(provState) === normalize(expected.state ?? "");
-  const stateScore = stateExact ? 1.0 : similarity(provState, expected.state ?? "");
+  const stateScore = stateExact
+    ? 1.0
+    : similarity(provState, expected.state ?? "");
   result.checks.location = {
     expected_city: expected.city ?? "",
     provider_city: provCity,
@@ -512,12 +622,14 @@ export async function verifyProvider(
   const identityScore = Math.max(nameCheck.score, orgCheck.score);
   const locationScore = 0.5 * cityCheck.score + 0.5 * stateScore;
   const specialtyScore = tax.matched ? 1.0 : 0.0;
-  const confidence = 0.35 * identityScore + 0.25 * locationScore + 0.4 * specialtyScore;
+  const confidence =
+    0.35 * identityScore + 0.25 * locationScore + 0.4 * specialtyScore;
   result.confidence = round(confidence, 3);
 
   // Decision thresholds (mirror Python reference exactly)
   const identityOk = identityScore >= 0.7;
-  const locationOk = cityCheck.score >= 0.8 && (stateExact || stateScore >= 0.9);
+  const locationOk =
+    cityCheck.score >= 0.8 && (stateExact || stateScore >= 0.9);
   const specialtyOk = tax.matched;
 
   // Threshold reporting MUST mirror the actual gate at `locationOk` above —
@@ -550,6 +662,11 @@ function round(n: number, decimals: number): number {
 
 // Test-only re-exports so unit tests can hit the internals without going through
 // the live HTTP layer. Not intended for production callers.
-export const __test = { pickBestSearchResult, providerTaxonomyMatches, compareStringsField, summarizeProvider };
+export const __test = {
+  pickBestSearchResult,
+  providerTaxonomyMatches,
+  compareStringsField,
+  summarizeProvider,
+};
 
 logger.debug({ module: "npi-verify" }, "loaded");
