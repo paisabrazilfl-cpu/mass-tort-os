@@ -10,7 +10,14 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity, similarityName } from "./string-similarity";
+import {
+  normalize,
+  similarity,
+  similarityName,
+  similarityNamePreNormalizedAndStripped,
+  similarityPreNormalized,
+  normalizeNameFromNormalized,
+} from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
@@ -249,6 +256,13 @@ function pickBestSearchResult(
   const expCity = expected.city ?? "";
   const expState = expected.state ?? "";
 
+  // Hoist loop-invariant expected-value normalizations out of the search results loop
+  const normExpName = normalize(expName);
+  const strippedExpName = normalizeNameFromNormalized(normExpName);
+  const normExpOrg = normalize(expOrg);
+  const normExpCity = normalize(expCity);
+  const normExpState = normalize(expState);
+
   for (const r of results) {
     const basic = r.basic ?? {};
     const name =
@@ -256,18 +270,36 @@ function pickBestSearchResult(
       [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
-    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
-    const orgScore = similarity(expOrg, org);
-    const cityScore = similarity(expCity, primaryAddr.city ?? "");
+
+    // Normalize candidate names and organizations
+    const normName = normalize(name);
+    const strippedName = normalizeNameFromNormalized(normName);
+    const normOrg = normalize(org);
+    const strippedOrg = normalizeNameFromNormalized(normOrg);
+
+    // Compute nameScore using the fast pre-normalized-and-stripped similarity helper
+    const nameScore = Math.max(
+      similarityNamePreNormalizedAndStripped(normExpName, strippedExpName, normName, strippedName),
+      similarityNamePreNormalizedAndStripped(normExpName, strippedExpName, normOrg, strippedOrg)
+    );
+
+    const orgScore = similarityPreNormalized(normExpOrg, normOrg);
+    const cityScore = similarityPreNormalized(normExpCity, normalize(primaryAddr.city ?? ""));
+
+    const normProvState = normalize(primaryAddr.state ?? "");
     const stateScore =
-      normalize(expState) === normalize(primaryAddr.state ?? "")
+      normExpState === normProvState
         ? 1.0
-        : similarity(expState, primaryAddr.state ?? "");
+        : similarityPreNormalized(normExpState, normProvState);
+
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
     const score = 0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
     if (score > bestScore) {
       bestScore = score;
       best = r;
+      if (score >= 1.0) {
+        break; // Early exit on perfect match!
+      }
     }
   }
 
