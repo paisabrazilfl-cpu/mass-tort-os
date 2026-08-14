@@ -3,8 +3,31 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+function isNormalized(s: string): boolean {
+  if (s.length === 0) return true;
+  if (s[0] === " " || s[s.length - 1] === " ") return false;
+  let lastWasSpace = false;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 32) {
+      if (lastWasSpace) return false;
+      lastWasSpace = true;
+    } else if (
+      (code >= 97 && code <= 122) || // a-z
+      (code >= 48 && code <= 57) || // 0-9
+      code === 95 // _
+    ) {
+      lastWasSpace = false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  if (isNormalized(s)) return s;
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -41,12 +64,20 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+const TITLE_CREDENTIAL_RE = new RegExp(
+  `\\b(?:${[...TITLE_TOKENS, ...CREDENTIAL_TOKENS].join("|")})\\b`,
+  "i",
+);
+
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) {
+    return normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +104,13 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
@@ -129,6 +163,9 @@ export function similarityPreNormalized(na: string, nb: string): number {
 // `1 - distance / max(len)` is the standard ratio derivation; produces equivalent
 // decisions to Python's difflib.SequenceMatcher.ratio() at the thresholds we use
 // here (>=0.7 identity, >=0.8 city, etc.).
-export function similarity(a: string | null | undefined, b: string | null | undefined): number {
+export function similarity(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
   return similarityPreNormalized(normalize(a), normalize(b));
 }
