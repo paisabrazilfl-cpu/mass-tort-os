@@ -3,11 +3,40 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+// Fast-path scanner to check if input string is clean alphanumeric with single spaces.
+// Returns: 2 = already lowercase clean, 1 = clean but needs lowercasing, -1 = needs full regex
+function checkCleanAlphaSpace(s: string): number {
+  if (s.length === 0) return 0;
+  if (s.charCodeAt(0) <= 32 || s.charCodeAt(s.length - 1) <= 32) return -1;
+  let hasUpper = false;
+  let prevSpace = false;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 32) {
+      if (prevSpace) return -1;
+      prevSpace = true;
+    } else if (code >= 97 && code <= 122) { // a-z
+      prevSpace = false;
+    } else if (code >= 65 && code <= 90) { // A-Z
+      hasUpper = true;
+      prevSpace = false;
+    } else if ((code >= 48 && code <= 57) || code === 95) { // 0-9, _
+      prevSpace = false;
+    } else {
+      return -1; // Has punctuation / non-word chars
+    }
+  }
+  return hasUpper ? 1 : 2;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  const status = checkCleanAlphaSpace(s);
+  if (status === 2) return s;
+  if (status === 1) return s.toLowerCase();
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
+    .replace(/[^\w\s]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -41,12 +70,17 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+const ALL_TOKENS = Array.from(TITLE_TOKENS).concat(Array.from(CREDENTIAL_TOKENS));
+const TITLE_CREDENTIAL_RE = new RegExp(`\\b(?:${ALL_TOKENS.join("|")})\\b`);
+
 /**
- * Optimized name normalization that skips redundant regex processing when
- * the input is already pre-normalized.
+ * Optimized name normalization that skips redundant regex and array processing when
+ * the input is already pre-normalized and contains no title/credential tokens.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: if no title or credential tokens exist, return as-is
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) return normalized;
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +107,16 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // Fast path: if neither input string contained title/credential tokens,
+  // stripped similarity is identical to raw similarity, so bypass duplicate Levenshtein
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
