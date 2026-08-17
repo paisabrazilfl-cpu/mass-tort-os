@@ -5,10 +5,10 @@
 
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  // Single regex pass replacing contiguous non-word chars with a space, then trimming
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\w]+/g, " ")
     .trim();
 }
 
@@ -41,12 +41,20 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+// Pre-compiled RegExp matching any title or credential token as a whole word.
+// Used to fast-path normalizeNameFromNormalized without array allocations.
+const TITLE_CREDENTIAL_RE = /\b(?:dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/i;
+
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: if no title/credential token is present, avoid split/filter/join allocations
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) {
+    return normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -60,6 +68,38 @@ export function normalizeName(s: string | null | undefined): string {
   return normalizeNameFromNormalized(normalize(s));
 }
 
+/**
+ * Similarity for pre-normalized inputs where stripped versions are pre-calculated.
+ * Allows caller loops to hoist expected-value title/credential stripping.
+ */
+export function similarityNamePreNormalizedWithStripped(
+  na: string,
+  strippedA: string,
+  nb: string,
+  strippedB?: string,
+): number {
+  const raw = similarityPreNormalized(na, nb);
+  if (raw >= 0.98) return raw; // Early return for near-perfect matches
+
+  const sb = strippedB ?? normalizeNameFromNormalized(nb);
+  // Fast-path: if neither string contained title/credential tokens, stripped score is identical to raw
+  if (strippedA === na && sb === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, sb);
+  return Math.max(raw, stripped);
+}
+
+/**
+ * Similarity for pre-normalized inputs.
+ */
+export function similarityNamePreNormalized(na: string, nb: string): number {
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+  return similarityNamePreNormalizedWithStripped(na, strippedA, nb, strippedB);
+}
+
 // Convenience: similarity that also tries the title-stripped variant and
 // returns whichever is HIGHER. Strictly additive — can never lower a
 // previously-passing score; existing thresholds keep their meaning.
@@ -69,15 +109,7 @@ export function similarityName(
 ): number {
   const na = normalize(a);
   const nb = normalize(b);
-
-  const raw = similarityPreNormalized(na, nb);
-  if (raw >= 0.98) return raw; // Early return for near-perfect matches
-
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
-  return Math.max(raw, stripped);
+  return similarityNamePreNormalized(na, nb);
 }
 
 export function levenshtein(a: string, b: string): number {
