@@ -5,10 +5,37 @@
 
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+
+  // Fast path for clean strings: already lowercase alphanumeric/space with single spaces
+  let clean = true;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    // lowercase a-z (97-122), 0-9 (48-57), underscore (95)
+    if (
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      code === 95
+    ) {
+      continue;
+    } else if (code === 32) {
+      // no leading space, no trailing space, no double space
+      if (i === 0 || s.charCodeAt(i - 1) === 32) {
+        clean = false;
+        break;
+      }
+    } else {
+      clean = false;
+      break;
+    }
+  }
+  if (clean && s.length > 0 && s.charCodeAt(s.length - 1) !== 32) {
+    return s;
+  }
+
+  // Single-pass replacement: replace contiguous sequences of non-word chars with a space
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\w]+/g, " ")
     .trim();
 }
 
@@ -41,12 +68,21 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+// Pre-compiled regex to test if a pre-normalized string contains any title or credential tokens
+const TITLE_CREDENTIAL_RE = new RegExp(
+  `\\b(?:${[...TITLE_TOKENS, ...CREDENTIAL_TOKENS].join("|")})\\b`,
+);
+
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: if no title or credential tokens exist, return normalized string without split/filter/join allocations
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) {
+    return normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +109,15 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // Fast path: if neither string contained title/credential tokens to strip, skip redundant Levenshtein calculation
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
@@ -85,25 +126,55 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
-  let s1 = a;
-  let s2 = b;
-  if (s1.length < s2.length) {
-    [s1, s2] = [s2, s1];
+  let start = 0;
+  let aEnd = a.length;
+  let bEnd = b.length;
+
+  // Fast path: skip common prefix characters
+  while (start < aEnd && start < bEnd && a.charCodeAt(start) === b.charCodeAt(start)) {
+    start++;
   }
 
-  const alen = s1.length;
-  const blen = s2.length;
-  const row = new Int32Array(blen + 1);
+  // Fast path: skip common suffix characters
+  while (aEnd > start && bEnd > start && a.charCodeAt(aEnd - 1) === b.charCodeAt(bEnd - 1)) {
+    aEnd--;
+    bEnd--;
+  }
 
-  for (let j = 0; j <= blen; j++) row[j] = j;
+  const alen = aEnd - start;
+  const blen = bEnd - start;
 
-  for (let i = 1; i <= alen; i++) {
+  if (alen === 0) return blen;
+  if (blen === 0) return alen;
+
+  // Ensure b-slice (s2) is the shorter string to minimize auxiliary array size
+  let s1 = a;
+  let s1Start = start;
+  let s1Len = alen;
+  let s2 = b;
+  let s2Start = start;
+  let s2Len = blen;
+
+  if (s1Len < s2Len) {
+    s1 = b;
+    s1Start = start;
+    s1Len = blen;
+    s2 = a;
+    s2Start = start;
+    s2Len = alen;
+  }
+
+  const row = new Int32Array(s2Len + 1);
+
+  for (let j = 0; j <= s2Len; j++) row[j] = j;
+
+  for (let i = 1; i <= s1Len; i++) {
     let prevDiag = row[0]; // (i-1, j-1)
     row[0] = i;
-    for (let j = 1; j <= blen; j++) {
+    const charCode1 = s1.charCodeAt(s1Start + i - 1);
+    for (let j = 1; j <= s2Len; j++) {
       const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+      const cost = charCode1 === s2.charCodeAt(s2Start + j - 1) ? 0 : 1;
       row[j] = Math.min(
         row[j] + 1, // (i-1, j) + 1
         row[j - 1] + 1, // (i, j-1) + 1
@@ -112,7 +183,7 @@ export function levenshtein(a: string, b: string): number {
       prevDiag = temp;
     }
   }
-  return row[blen];
+  return row[s2Len];
 }
 
 /**
