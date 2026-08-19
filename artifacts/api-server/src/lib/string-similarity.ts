@@ -41,12 +41,23 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+// Precompiled regex matching any title or credential token as a whole word boundary.
+// Used to bypass expensive split/filter/join allocations when a pre-normalized string
+// contains no title or credential tokens.
+const TITLE_CREDENTIAL_RE = new RegExp(
+  `\\b(?:${Array.from(TITLE_TOKENS).concat(Array.from(CREDENTIAL_TOKENS)).join("|")})\\b`,
+);
+
 /**
  * Optimized name normalization that skips redundant regex processing when
- * the input is already pre-normalized.
+ * the input is already pre-normalized, and uses a fast regex check to bypass
+ * token array allocations if no title or credential tokens exist.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: if no title or credential tokens are present in the string, return as-is
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) return normalized;
+
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
