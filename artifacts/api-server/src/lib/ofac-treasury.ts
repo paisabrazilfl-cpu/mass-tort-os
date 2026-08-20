@@ -47,6 +47,10 @@ interface SdnEntry {
   type: string;
   programs: string[];
   akas: string[];
+  /** Pre-tokenized set of normalized tokens for primary name (cached for performance) */
+  _nameTokens?: Set<string>;
+  /** Pre-tokenized sets of normalized tokens for each aka (cached for performance) */
+  _akaTokens?: Set<string>[];
 }
 
 interface SdnSnapshot {
@@ -75,6 +79,11 @@ function normalize(s: string): string {
     .replace(/[.,;()\[\]"']/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function tokenizeName(s: string): Set<string> {
+  const norm = normalize(s);
+  return new Set(norm ? norm.split(" ") : []);
 }
 
 // Treasury CSV uses an unusual quoting style: fields are quoted with double
@@ -157,12 +166,15 @@ async function fetchSnapshot(): Promise<SdnSnapshot> {
     const type = cols[2]?.trim() ?? "";
     const program = cols[3]?.trim() ?? "";
     if (!id || !name) continue;
+    const akas = akaIndex.get(id) ?? [];
     entries.push({
       sdn_id: id,
       name,
       type,
       programs: program ? program.split(/\s*;\s*/).filter(Boolean) : [],
-      akas: akaIndex.get(id) ?? [],
+      akas,
+      _nameTokens: tokenizeName(name),
+      _akaTokens: akas.map(tokenizeName),
     });
   }
 
@@ -250,25 +262,19 @@ export async function matchTreasurySdn(person: {
       note: `Treasury SDN list unavailable: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const wholeWord = (haystack: string, needle: string): boolean => {
-    // Whole-word match against tokenized haystack — defends against the
-    // pathological case where someone named "Al" matches every Al-prefixed
-    // SDN entry (e.g. "Albert", "Aleksandr").
-    const tokens = new Set(haystack.split(" "));
-    return tokens.has(needle);
-  };
   const matches: TreasurySdnMatchOutcome["matches"] = [];
   for (const e of snap.entries) {
-    const primary = normalize(e.name);
-    if (wholeWord(primary, first) && wholeWord(primary, last)) {
+    const nameTokens = (e._nameTokens ??= tokenizeName(e.name));
+    if (nameTokens.has(first) && nameTokens.has(last)) {
       matches.push({ sdn_id: e.sdn_id, name: e.name, programs: e.programs, matched_via: "name" });
       if (matches.length >= 5) break;
       continue;
     }
-    for (const aka of e.akas) {
-      const norm = normalize(aka);
-      if (wholeWord(norm, first) && wholeWord(norm, last)) {
-        matches.push({ sdn_id: e.sdn_id, name: aka, programs: e.programs, matched_via: "aka" });
+    const akaTokensList = (e._akaTokens ??= e.akas.map(tokenizeName));
+    for (let i = 0; i < e.akas.length; i++) {
+      const akaTokens = akaTokensList[i];
+      if (akaTokens.has(first) && akaTokens.has(last)) {
+        matches.push({ sdn_id: e.sdn_id, name: e.akas[i], programs: e.programs, matched_via: "aka" });
         break;
       }
     }
