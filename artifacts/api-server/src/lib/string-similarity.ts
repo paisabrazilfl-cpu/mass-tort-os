@@ -3,12 +3,39 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+function isNormalized(s: string): boolean {
+  const len = s.length;
+  if (len === 0) return true;
+  if (s.charCodeAt(0) === 32 || s.charCodeAt(len - 1) === 32) return false;
+
+  let prevIsSpace = false;
+  for (let i = 0; i < len; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 32) {
+      if (prevIsSpace) return false;
+      prevIsSpace = true;
+    } else {
+      prevIsSpace = false;
+      if (
+        !(code >= 97 && code <= 122) &&
+        !(code >= 48 && code <= 57) &&
+        code !== 95
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  // Fast path: return immediately if string is already clean & normalized
+  if (isNormalized(s)) return s;
+
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\w]+/g, " ")
     .trim();
 }
 
