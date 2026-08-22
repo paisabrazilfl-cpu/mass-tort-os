@@ -1,4 +1,5 @@
-import { __test, NpiRegistryResult, ExpectedProvider } from "../npi-verify";
+import { __test } from "../npi-verify";
+import type { NpiRegistryResult, ExpectedProvider } from "../npi-verify";
 
 const { pickBestSearchResult } = __test;
 
