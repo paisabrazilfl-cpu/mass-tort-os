@@ -10,7 +10,14 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity, similarityName } from "./string-similarity";
+import {
+  normalize,
+  normalizeNameFromNormalized,
+  similarity,
+  similarityName,
+  similarityNamePreNormalizedWithStripped,
+  similarityPreNormalized,
+} from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
@@ -242,12 +249,21 @@ function pickBestSearchResult(
   results: NpiRegistryResult[],
   expected: ExpectedProvider,
 ): { best: NpiRegistryResult; score: number } | null {
+  if (results.length === 0) return null;
+
   let best: NpiRegistryResult | null = null;
   let bestScore = -1;
   const expName = expected.name ?? "";
   const expOrg = expected.organization ?? "";
   const expCity = expected.city ?? "";
   const expState = expected.state ?? "";
+
+  // Hoist loop-invariant expected-value normalizations out of the search results loop
+  const normExpName = normalize(expName);
+  const strippedExpName = normalizeNameFromNormalized(normExpName);
+  const normExpOrg = normalize(expOrg);
+  const normExpCity = normalize(expCity);
+  const normExpState = normalize(expState);
 
   for (const r of results) {
     const basic = r.basic ?? {};
@@ -256,18 +272,29 @@ function pickBestSearchResult(
       [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
-    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
-    const orgScore = similarity(expOrg, org);
-    const cityScore = similarity(expCity, primaryAddr.city ?? "");
+
+    const normName = normalize(name);
+    const normOrg = normalize(org);
+    const normCity = normalize(primaryAddr.city ?? "");
+    const normState = normalize(primaryAddr.state ?? "");
+
+    const nameScore = Math.max(
+      similarityNamePreNormalizedWithStripped(normExpName, strippedExpName, normName),
+      similarityNamePreNormalizedWithStripped(normExpName, strippedExpName, normOrg),
+    );
+    const orgScore = similarityPreNormalized(normExpOrg, normOrg);
+    const cityScore = similarityPreNormalized(normExpCity, normCity);
     const stateScore =
-      normalize(expState) === normalize(primaryAddr.state ?? "")
+      normExpState === normState
         ? 1.0
-        : similarity(expState, primaryAddr.state ?? "");
+        : similarityPreNormalized(normExpState, normState);
+
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
     const score = 0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
     if (score > bestScore) {
       bestScore = score;
       best = r;
+      if (bestScore >= 1.0) break; // Maximum possible score reached
     }
   }
 
@@ -282,7 +309,8 @@ function specialtyAcceptedTerms(expectedSpecialty: string): string[] {
   const base = normalize(expectedSpecialty);
   if (!base) return [];
   const aliases = SPECIALTY_ALIASES[base] ?? [];
-  const all = [base, ...aliases].map((t) => normalize(t)).filter(Boolean);
+  // `base` and registered `aliases` are already clean normalized strings; avoid redundant re-normalization
+  const all = [base, ...aliases];
   return Array.from(new Set(all));
 }
 
