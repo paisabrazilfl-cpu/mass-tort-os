@@ -69,7 +69,7 @@ interface NpiBasic {
   enumeration_date?: string;
 }
 
-interface NpiRegistryResult {
+export interface NpiRegistryResult {
   number?: number | string;
   enumeration_type?: string;
   basic?: NpiBasic;
