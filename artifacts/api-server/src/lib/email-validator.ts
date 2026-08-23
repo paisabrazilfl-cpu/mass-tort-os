@@ -32,7 +32,7 @@ const TYPO_DOMAINS: Record<string, string> = {
   "outlook.vom": "outlook.com",
 };
 
-const MALFORMED_TLDS = [".vom", ".con", ".cmo", ".coom", ".comm", ".cim", ".ocm", ".cm"];
+const MALFORMED_TLD_RE = /\.(vom|con|cmo|coom|comm|cim|ocm|cm)$/;
 
 const COMMON_PROVIDERS_FUZZY: Array<{ prefix: string; canonical: string; minLen: number }> = [
   { prefix: "gmail", canonical: "gmail.com", minLen: 5 },
@@ -67,11 +67,16 @@ function findFuzzyProviderMatch(domain: string): string | null {
 
 const RFC_EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
 
-const DISPOSABLE_DOMAINS = [
+// O(1) set lookup for disposable domain checks
+const DISPOSABLE_DOMAINS = new Set([
   "tempmail.com", "throwaway.email", "guerrillamail.com", "mailinator.com",
   "yopmail.com", "sharklasers.com", "trashmail.com", "10minutemail.com",
   "fakeinbox.com", "dispostable.com", "maildrop.cc", "guerrillamailblock.com",
-];
+]);
+
+// Precompiled regex for suspicious patterns hoisted out of function scope
+// to eliminate array and RegExp allocations per function call.
+const SUSPICIOUS_PATTERNS_RE = /^(?:test@|fake@|none@|noemail@|na@|asdf|aaa+@)/;
 
 export interface EmailValidationResult {
   valid: boolean;
@@ -101,13 +106,19 @@ export function validateEmail(email: string): EmailValidationResult {
     return { valid: false, errors };
   }
 
-  const parts = trimmed.split("@");
-  if (parts.length !== 2) {
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex === -1) {
     errors.push("INVALID_EMAIL_STRUCTURE");
     return { valid: false, errors };
   }
 
-  const [localPart, domain] = parts;
+  const localPart = trimmed.slice(0, atIndex);
+  const domain = trimmed.slice(atIndex + 1);
+
+  if (domain.includes("@")) {
+    errors.push("INVALID_EMAIL_STRUCTURE");
+    return { valid: false, errors };
+  }
 
   if (localPart.length === 0 || localPart.length > 64) {
     errors.push("INVALID_LOCAL_PART");
@@ -121,9 +132,10 @@ export function validateEmail(email: string): EmailValidationResult {
     errors.push("MISSING_TLD");
   }
 
-  if (TYPO_DOMAINS[domain]) {
+  const typo = TYPO_DOMAINS[domain];
+  if (typo) {
     errors.push("TYPO_DOMAIN_DETECTED");
-    suggestion = `${localPart}@${TYPO_DOMAINS[domain]}`;
+    suggestion = `${localPart}@${typo}`;
   } else {
     const fuzzyMatch = findFuzzyProviderMatch(domain);
     if (fuzzyMatch) {
@@ -132,38 +144,23 @@ export function validateEmail(email: string): EmailValidationResult {
     }
   }
 
-  for (const tld of MALFORMED_TLDS) {
-    if (trimmed.endsWith(tld)) {
-      errors.push("MALFORMED_TLD");
-      const corrected = trimmed.slice(0, -tld.length) + ".com";
-      suggestion = corrected;
-      break;
-    }
+  const malformedMatch = trimmed.match(MALFORMED_TLD_RE);
+  if (malformedMatch) {
+    errors.push("MALFORMED_TLD");
+    suggestion = trimmed.slice(0, -malformedMatch[0].length) + ".com";
   }
 
-  if (DISPOSABLE_DOMAINS.includes(domain)) {
+  if (DISPOSABLE_DOMAINS.has(domain)) {
     errors.push("DISPOSABLE_EMAIL");
   }
 
-  const suspiciousPatterns = [
-    /^test@/,
-    /^fake@/,
-    /^none@/,
-    /^noemail@/,
-    /^na@/,
-    /^asdf/,
-    /^aaa+@/,
-  ];
-  for (const pat of suspiciousPatterns) {
-    if (pat.test(trimmed)) {
-      errors.push("SUSPICIOUS_EMAIL_PATTERN");
-      break;
-    }
+  if (SUSPICIOUS_PATTERNS_RE.test(trimmed)) {
+    errors.push("SUSPICIOUS_EMAIL_PATTERN");
   }
 
-  const hardErrors = errors.filter((e) => !ADVISORY_CODES.has(e));
+  const hasHardError = errors.some((e) => !ADVISORY_CODES.has(e));
   return {
-    valid: hardErrors.length === 0,
+    valid: !hasHardError,
     errors,
     suggestion,
   };
