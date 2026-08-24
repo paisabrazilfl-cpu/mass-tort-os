@@ -26,6 +26,9 @@ test("normalizeStateCode: unknown inputs return null", () => {
   assert.equal(normalizeStateCode(undefined), null);
   assert.equal(normalizeStateCode("ZZ"), null);
   assert.equal(normalizeStateCode("Atlantis"), null);
+  assert.equal(normalizeStateCode("toString"), null);
+  assert.equal(normalizeStateCode("constructor"), null);
+  assert.equal(normalizeStateCode("valueOf"), null);
 });
 
 test("getCourtsForState: every US state + DC has at least one federal court", () => {
