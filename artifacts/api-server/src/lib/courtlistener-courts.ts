@@ -92,10 +92,10 @@ const STATE_LABELS: Record<string, string> = {
   MP: "Northern Mariana Islands", AS: "American Samoa",
 };
 
-// Static reverse lookup dictionary (null prototype) for fast O(1) state name normalization without allocations, linear scans, or prototype leaks.
-const LOWER_STATE_NAME_TO_CODE: Record<string, string> = Object.create(null);
+// Static reverse lookup Map for fast O(1) state name normalization without allocations, linear scans, or prototype leaks.
+const LOWER_STATE_NAME_TO_CODE = new Map<string, string>();
 for (const code in STATE_LABELS) {
-  LOWER_STATE_NAME_TO_CODE[STATE_LABELS[code].toLowerCase()] = code;
+  LOWER_STATE_NAME_TO_CODE.set(STATE_LABELS[code].toLowerCase(), code);
 }
 
 /**
@@ -115,7 +115,7 @@ export function normalizeStateCode(state: string | null | undefined): string | n
   }
 
   const lower = trimmed.toLowerCase();
-  return LOWER_STATE_NAME_TO_CODE[lower] ?? null;
+  return LOWER_STATE_NAME_TO_CODE.get(lower) ?? null;
 }
 
 /**
