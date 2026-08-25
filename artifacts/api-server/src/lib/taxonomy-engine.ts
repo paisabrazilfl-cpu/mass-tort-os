@@ -81,6 +81,42 @@ export interface TaxonomyMatchResult {
   confidence: "high" | "medium" | "low";
 }
 
+const TAXONOMY_DIAGNOSIS_ENTRIES = Object.entries(TAXONOMY_DIAGNOSIS_MAP).filter(
+  ([category]) => category !== "general_practice"
+);
+
+const SPECIALTY_CATEGORY_LOWER_MAP: Record<string, string[]> = Object.fromEntries(
+  Object.entries(SPECIALTY_CATEGORY_MAP).map(([category, list]) => [
+    category,
+    list.map(s => s.toLowerCase()),
+  ])
+);
+
+const GENERALIST_SPECIALTIES = [
+  "internal medicine",
+  "family medicine",
+  "general practice",
+  "general practitioner",
+  "primary care",
+];
+
+const ADULT_CONDITIONS = [
+  "cancer",
+  "carcinoma",
+  "lymphoma",
+  "leukemia",
+  "mesothelioma",
+  "parkinson",
+];
+
+const CANCER_CONDITIONS = [
+  "cancer",
+  "carcinoma",
+  "lymphoma",
+  "leukemia",
+  "mesothelioma",
+];
+
 export function matchTaxonomyToDiagnosis(
   physicianSpecialty: string,
   diagnosis: string,
@@ -91,8 +127,10 @@ export function matchTaxonomyToDiagnosis(
   const fraudIndicators: string[] = [];
 
   let diagnosisCategory: string | null = null;
-  for (const [category, diagnoses] of Object.entries(TAXONOMY_DIAGNOSIS_MAP)) {
-    if (category === "general_practice") continue;
+  for (let i = 0; i < TAXONOMY_DIAGNOSIS_ENTRIES.length; i++) {
+    const entry = TAXONOMY_DIAGNOSIS_ENTRIES[i]!;
+    const category = entry[0];
+    const diagnoses = entry[1];
     if (diagnoses.some(d => diagLower.includes(d))) {
       diagnosisCategory = category;
       break;
@@ -111,22 +149,23 @@ export function matchTaxonomyToDiagnosis(
   }
 
   const expectedSpecialties = SPECIALTY_CATEGORY_MAP[diagnosisCategory] || [];
+  const expectedSpecialtiesLower = SPECIALTY_CATEGORY_LOWER_MAP[diagnosisCategory] || [];
 
-  const isMatch = expectedSpecialties.some(expected => specLower.includes(expected.toLowerCase()));
+  const isMatch = expectedSpecialtiesLower.some(expected => specLower.includes(expected));
 
-  const isGeneralist = ["internal medicine", "family medicine", "general practice", "general practitioner", "primary care"].some(g => specLower.includes(g));
+  const isGeneralist = GENERALIST_SPECIALTIES.some(g => specLower.includes(g));
 
   if (!isMatch && !isGeneralist) {
     fraudIndicators.push("TAXONOMY_MISMATCH");
 
     const isPediatric = specLower.includes("pediatr") || specLower.includes("child");
-    const isAdultCondition = ["cancer", "carcinoma", "lymphoma", "leukemia", "mesothelioma", "parkinson"].some(c => diagLower.includes(c));
+    const isAdultCondition = ADULT_CONDITIONS.some(c => diagLower.includes(c));
     if (isPediatric && isAdultCondition) {
       fraudIndicators.push("PEDIATRIC_PHYSICIAN_ADULT_CONDITION");
     }
 
     const isDermatology = specLower.includes("dermat");
-    const isCancerClaim = ["cancer", "carcinoma", "lymphoma", "leukemia", "mesothelioma"].some(c => diagLower.includes(c));
+    const isCancerClaim = CANCER_CONDITIONS.some(c => diagLower.includes(c));
     if (isDermatology && isCancerClaim) {
       fraudIndicators.push("SPECIALTY_OUTSIDE_SCOPE");
     }
