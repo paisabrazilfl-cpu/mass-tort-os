@@ -31,14 +31,18 @@ export interface ConflictCheckContext {
   user_settings?: Record<string, unknown>;
 }
 
-const VALID_LOCATIONS = [
+const VALID_LOCATIONS = new Set([
   "USA", "US", "UNITED STATES",
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA",
   "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA",
   "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY",
   "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX",
   "UT", "VT", "VA", "WA", "WV", "WI", "WY",
-];
+]);
+
+const GARBAGE_SINGLE_CHAR_RE = /^(.)\1+$/;
+const GARBAGE_TORT_RE = /^[^a-zA-Z]*$|^(.)\1{3,}$/;
+const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const KNOWN_TORT_CONDITIONS: Record<string, string[]> = {
   "Camp Lejeune": ["cancer", "leukemia", "kidney disease", "liver disease", "parkinson", "bladder cancer", "non-hodgkin"],
@@ -59,8 +63,15 @@ export function checkLogicalConflicts(ctx: ConflictCheckContext): ConflictResult
 
   const locationRaw = String(lead.location_name || lead.location || "").toUpperCase().trim();
   if (locationRaw) {
-    const locationWords = locationRaw.split(/[\s,]+/).map((w) => w.trim()).filter(Boolean);
-    const matchesUS = locationWords.some((word) => VALID_LOCATIONS.includes(word));
+    const words = locationRaw.split(/[\s,]+/);
+    let matchesUS = false;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i]?.trim();
+      if (w && VALID_LOCATIONS.has(w)) {
+        matchesUS = true;
+        break;
+      }
+    }
     if (!matchesUS) {
       details.push(`Location "${lead.location_name || lead.location}" is outside allowed US geography`);
     }

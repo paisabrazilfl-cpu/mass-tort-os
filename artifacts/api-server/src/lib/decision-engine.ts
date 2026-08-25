@@ -91,6 +91,25 @@ export function detectMissingFields(
   return missing;
 }
 
+const BASE_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const CANCER_DIAGNOSIS_RE = /cancer|carcinoma|lymphoma|leukemia|myeloma|sarcoma/;
+const DEATH_DIAGNOSIS_RE = /death|deceased|fatal/;
+
+/**
+ * Safely parse a date input string or value into a Date object or null.
+ * Hoisted to module scope to avoid re-creation on every `detectContradictions` call.
+ */
+function parseDate(v: unknown): Date | null {
+  if (!v) return null;
+  let s = String(v).trim();
+  if (!s) return null;
+  // Treat date-only strings as local midnight to avoid UTC-vs-local off-by-one
+  // when comparing against `today` constructed in the local timezone.
+  if (BASE_DATE_ONLY_RE.test(s)) s += "T00:00:00";
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 /**
  * Detect cross-field contradictions in the intake data. These usually indicate
  * sloppy data entry, fraud, or upstream form bugs — always force human review.
@@ -98,31 +117,24 @@ export function detectMissingFields(
 export function detectContradictions(
   lead: Pick<Lead, "diagnosis_date" | "exposure_start" | "exposure_end" | "date_of_birth">
 ): string[] {
+  const dx = parseDate(lead.diagnosis_date);
+  const expStart = parseDate(lead.exposure_start);
+  const expEnd = parseDate(lead.exposure_end);
+  const dob = parseDate(lead.date_of_birth);
+
   const out: string[] = [];
-  const today = new Date();
-  today.setHours(23, 59, 59, 999);
-
-  const parse = (v: unknown): Date | null => {
-    if (!v) return null;
-    let s = String(v).trim();
-    // Treat date-only strings as local midnight to avoid UTC-vs-local off-by-one
-    // when comparing against `today` constructed in the local timezone.
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) s = s + "T00:00:00";
-    const d = new Date(s);
-    return Number.isNaN(d.getTime()) ? null : d;
-  };
-
-  const dx = parse(lead.diagnosis_date);
-  const expStart = parse(lead.exposure_start);
-  const expEnd = parse(lead.exposure_end);
-  const dob = parse(lead.date_of_birth);
 
   if (dx && expStart && dx < expStart) out.push("diagnosis_before_exposure");
   if (expStart && expEnd && expEnd < expStart) out.push("exposure_end_before_start");
-  if (dx && dx > today) out.push("diagnosis_in_future");
-  if (expStart && expStart > today) out.push("exposure_start_in_future");
   if (dob && dx && dx < dob) out.push("diagnosis_before_birth");
-  if (dob && dob > today) out.push("birth_in_future");
+
+  if (dx || expStart || dob) {
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    if (dx && dx > today) out.push("diagnosis_in_future");
+    if (expStart && expStart > today) out.push("exposure_start_in_future");
+    if (dob && dob > today) out.push("birth_in_future");
+  }
 
   return out;
 }
