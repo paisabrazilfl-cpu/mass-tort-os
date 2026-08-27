@@ -3,8 +3,37 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+/**
+ * Fast-path check to see if string is already normalized:
+ * non-empty, no leading/trailing whitespace, no double spaces,
+ * and contains only lowercase ASCII letters (a-z), digits (0-9), underscores (_), and single spaces.
+ */
+function isNormalized(s: string): boolean {
+  if (s.length === 0) return true;
+  if (s.charCodeAt(0) <= 32 || s.charCodeAt(s.length - 1) <= 32) return false;
+  let prevSpace = false;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 32) {
+      if (prevSpace) return false;
+      prevSpace = true;
+    } else if (
+      !(code >= 97 && code <= 122) &&
+      !(code >= 48 && code <= 57) &&
+      code !== 95
+    ) {
+      return false;
+    } else {
+      prevSpace = false;
+    }
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  // Fast path: if string is already normalized, bypass expensive regex & allocations
+  if (isNormalized(s)) return s;
   return s
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -73,10 +102,14 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // Optimization: If neither string contained title or credential tokens,
+  // stripping has no effect. Skip redundant second Levenshtein distance calculation.
+  if (strippedA === na && strippedB === nb) return raw;
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
