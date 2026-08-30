@@ -11,12 +11,9 @@ describe("email-validator", () => {
   });
 
   it("handles missing or non-string email", () => {
-    // @ts-expect-error testing invalid input
     assert.deepEqual(validateEmail(""), { valid: false, errors: ["MISSING_EMAIL"] });
-    // @ts-expect-error testing invalid input
-    assert.deepEqual(validateEmail(null), { valid: false, errors: ["MISSING_EMAIL"] });
-    // @ts-expect-error testing invalid input
-    assert.deepEqual(validateEmail(123), { valid: false, errors: ["MISSING_EMAIL"] });
+    assert.deepEqual(validateEmail(null as unknown as string), { valid: false, errors: ["MISSING_EMAIL"] });
+    assert.deepEqual(validateEmail(123 as unknown as string), { valid: false, errors: ["MISSING_EMAIL"] });
   });
 
   it("handles invalid RFC format", () => {
