@@ -43,7 +43,20 @@ const COMMON_PROVIDERS_FUZZY: Array<{ prefix: string; canonical: string; minLen:
   { prefix: "protonmail", canonical: "protonmail.com", minLen: 8 },
 ];
 
+const KNOWN_VALID_PROVIDERS = new Set([
+  "gmail.com",
+  "yahoo.com",
+  "hotmail.com",
+  "outlook.com",
+  "icloud.com",
+  "protonmail.com",
+  "aol.com",
+]);
+
 function findFuzzyProviderMatch(domain: string): string | null {
+  // Fast path: known valid common providers can never be fuzzy typos.
+  if (KNOWN_VALID_PROVIDERS.has(domain)) return null;
+
   const lastDot = domain.lastIndexOf(".");
   if (lastDot === -1) return null;
   const prefix = domain.slice(0, lastDot);
@@ -57,6 +70,8 @@ function findFuzzyProviderMatch(domain: string): string | null {
     // Anchor on the first character to avoid classifying real-but-similar
     // domains (ymail.com, email.com, cloud.com) as typos of gmail/icloud.
     if (prefix[0] !== known[0]) continue;
+    // Optimization: Levenshtein distance is at least the absolute difference in string lengths.
+    if (Math.abs(prefix.length - known.length) > 4) continue;
     const dist = levenshtein(prefix, known);
     const threshold = known.length <= 7 ? 3 : 4;
     if (dist === 0 || dist > threshold) continue;
@@ -67,10 +82,22 @@ function findFuzzyProviderMatch(domain: string): string | null {
 
 const RFC_EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
 
-const DISPOSABLE_DOMAINS = [
+// Converted to Set<string> for O(1) lookup latency
+const DISPOSABLE_DOMAINS = new Set([
   "tempmail.com", "throwaway.email", "guerrillamail.com", "mailinator.com",
   "yopmail.com", "sharklasers.com", "trashmail.com", "10minutemail.com",
   "fakeinbox.com", "dispostable.com", "maildrop.cc", "guerrillamailblock.com",
+]);
+
+// Hoisted static regex array to avoid allocating RegExp objects on every function call
+const SUSPICIOUS_PATTERNS = [
+  /^test@/,
+  /^fake@/,
+  /^none@/,
+  /^noemail@/,
+  /^na@/,
+  /^asdf/,
+  /^aaa+@/,
 ];
 
 export interface EmailValidationResult {
@@ -101,13 +128,16 @@ export function validateEmail(email: string): EmailValidationResult {
     return { valid: false, errors };
   }
 
-  const parts = trimmed.split("@");
-  if (parts.length !== 2) {
+  // Optimize localPart and domain extraction using string index slicing to avoid split() array allocations
+  const atIndex = trimmed.indexOf("@");
+  const lastAtIndex = trimmed.lastIndexOf("@");
+  if (atIndex === -1 || atIndex !== lastAtIndex) {
     errors.push("INVALID_EMAIL_STRUCTURE");
     return { valid: false, errors };
   }
 
-  const [localPart, domain] = parts;
+  const localPart = trimmed.slice(0, atIndex);
+  const domain = trimmed.slice(atIndex + 1);
 
   if (localPart.length === 0 || localPart.length > 64) {
     errors.push("INVALID_LOCAL_PART");
@@ -121,9 +151,10 @@ export function validateEmail(email: string): EmailValidationResult {
     errors.push("MISSING_TLD");
   }
 
-  if (TYPO_DOMAINS[domain]) {
+  const typo = TYPO_DOMAINS[domain];
+  if (typo) {
     errors.push("TYPO_DOMAIN_DETECTED");
-    suggestion = `${localPart}@${TYPO_DOMAINS[domain]}`;
+    suggestion = `${localPart}@${typo}`;
   } else {
     const fuzzyMatch = findFuzzyProviderMatch(domain);
     if (fuzzyMatch) {
@@ -132,38 +163,40 @@ export function validateEmail(email: string): EmailValidationResult {
     }
   }
 
-  for (const tld of MALFORMED_TLDS) {
-    if (trimmed.endsWith(tld)) {
-      errors.push("MALFORMED_TLD");
-      const corrected = trimmed.slice(0, -tld.length) + ".com";
-      suggestion = corrected;
-      break;
+  // Fast path: skip MALFORMED_TLDS loop for standard valid TLD endings
+  if (!trimmed.endsWith(".com") && !trimmed.endsWith(".org") && !trimmed.endsWith(".net") && !trimmed.endsWith(".edu") && !trimmed.endsWith(".gov")) {
+    for (const tld of MALFORMED_TLDS) {
+      if (trimmed.endsWith(tld)) {
+        errors.push("MALFORMED_TLD");
+        const corrected = trimmed.slice(0, -tld.length) + ".com";
+        suggestion = corrected;
+        break;
+      }
     }
   }
 
-  if (DISPOSABLE_DOMAINS.includes(domain)) {
+  if (DISPOSABLE_DOMAINS.has(domain)) {
     errors.push("DISPOSABLE_EMAIL");
   }
 
-  const suspiciousPatterns = [
-    /^test@/,
-    /^fake@/,
-    /^none@/,
-    /^noemail@/,
-    /^na@/,
-    /^asdf/,
-    /^aaa+@/,
-  ];
-  for (const pat of suspiciousPatterns) {
+  for (const pat of SUSPICIOUS_PATTERNS) {
     if (pat.test(trimmed)) {
       errors.push("SUSPICIOUS_EMAIL_PATTERN");
       break;
     }
   }
 
-  const hardErrors = errors.filter((e) => !ADVISORY_CODES.has(e));
+  // Avoid creating intermediate array via errors.filter(...) to determine validity
+  let valid = true;
+  for (let i = 0; i < errors.length; i++) {
+    if (!ADVISORY_CODES.has(errors[i]!)) {
+      valid = false;
+      break;
+    }
+  }
+
   return {
-    valid: hardErrors.length === 0,
+    valid,
     errors,
     suggestion,
   };
