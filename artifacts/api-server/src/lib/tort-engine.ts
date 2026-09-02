@@ -417,6 +417,30 @@ export interface TortValidationResult {
   category: string | null;
 }
 
+// Optimization: Pre-compute static lookup maps and cached categories at module scope.
+// - TORT_LOOKUP_MAP maps lowercased tort IDs and labels to canonical tort keys, providing O(1) lookup
+//   and eliminating linear scans over Object.keys(TORT_REGISTRY) with repeated string lowercasing on every call.
+// - CACHED_TORT_CATEGORIES caches the category hierarchy to prevent redundant object and array instantiations.
+const TORT_LOOKUP_MAP: Map<string, string> = (() => {
+  const map = new Map<string, string>();
+  for (const [id, tort] of Object.entries(TORT_REGISTRY)) {
+    map.set(id.toLowerCase(), id);
+    map.set(tort.label.toLowerCase(), id);
+    map.set(id.trim().toLowerCase(), id);
+    map.set(tort.label.trim().toLowerCase(), id);
+  }
+  return map;
+})();
+
+const CACHED_TORT_CATEGORIES: { category: string; torts: { id: string; label: string }[] }[] = (() => {
+  const categories: Record<string, { id: string; label: string }[]> = {};
+  for (const [id, tort] of Object.entries(TORT_REGISTRY)) {
+    if (!categories[tort.category]) categories[tort.category] = [];
+    categories[tort.category].push({ id, label: tort.label });
+  }
+  return Object.entries(categories).map(([category, torts]) => ({ category, torts }));
+})();
+
 export function validateTortClaim(data: {
   tort_type: string;
   diagnosis: string;
@@ -427,9 +451,8 @@ export function validateTortClaim(data: {
 }): TortValidationResult {
   const errors: string[] = [];
 
-  const tortKey = Object.keys(TORT_REGISTRY).find(
-    k => TORT_REGISTRY[k].label.toLowerCase() === data.tort_type.toLowerCase() || k === data.tort_type.toLowerCase()
-  );
+  const rawType = (data.tort_type || "").toLowerCase();
+  const tortKey = TORT_LOOKUP_MAP.get(rawType) ?? TORT_LOOKUP_MAP.get(rawType.trim());
 
   if (!tortKey) {
     return {
@@ -489,10 +512,5 @@ export function validateTortClaim(data: {
 }
 
 export function getTortCategories(): { category: string; torts: { id: string; label: string }[] }[] {
-  const categories: Record<string, { id: string; label: string }[]> = {};
-  for (const [id, tort] of Object.entries(TORT_REGISTRY)) {
-    if (!categories[tort.category]) categories[tort.category] = [];
-    categories[tort.category].push({ id, label: tort.label });
-  }
-  return Object.entries(categories).map(([category, torts]) => ({ category, torts }));
+  return CACHED_TORT_CATEGORIES;
 }
