@@ -3,12 +3,35 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+function isNormalized(s: string): boolean {
+  if (s.length === 0) return true;
+  if (s.charCodeAt(0) === 32 || s.charCodeAt(s.length - 1) === 32) return false;
+  let prevSpace = false;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 32) {
+      if (prevSpace) return false;
+      prevSpace = true;
+    } else {
+      prevSpace = false;
+      if (
+        !(code >= 97 && code <= 122) &&
+        !(code >= 48 && code <= 57) &&
+        code !== 95
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  if (isNormalized(s)) return s;
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\w]+/g, " ")
     .trim();
 }
 
@@ -45,10 +68,15 @@ const CREDENTIAL_TOKENS = new Set([
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
  */
+const TITLE_CREDENTIAL_RE = new RegExp(
+  `\\b(?:${Array.from(TITLE_TOKENS).concat(Array.from(CREDENTIAL_TOKENS)).join("|")})\\b`,
+);
+
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) return normalized;
+  return normalized
+    .split(" ")
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
     .join(" ");
 }
@@ -85,25 +113,58 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  // Ensure b is the shorter string to minimize memory usage and auxiliary array size
   let s1 = a;
   let s2 = b;
-  if (s1.length < s2.length) {
-    [s1, s2] = [s2, s1];
+
+  // Trim common prefix
+  let start = 0;
+  while (
+    start < s1.length &&
+    start < s2.length &&
+    s1.charCodeAt(start) === s2.charCodeAt(start)
+  ) {
+    start++;
   }
 
-  const alen = s1.length;
-  const blen = s2.length;
-  const row = new Int32Array(blen + 1);
+  // Trim common suffix
+  let end1 = s1.length - 1;
+  let end2 = s2.length - 1;
+  while (
+    end2 >= start &&
+    end1 >= start &&
+    s1.charCodeAt(end1) === s2.charCodeAt(end2)
+  ) {
+    end1--;
+    end2--;
+  }
 
+  let alen = end1 - start + 1;
+  let blen = end2 - start + 1;
+
+  if (blen <= 0) return alen;
+  if (alen <= 0) return blen;
+
+  // Ensure s2/blen is the shorter string
+  if (alen < blen) {
+    const tmpStr = s1;
+    s1 = s2;
+    s2 = tmpStr;
+
+    const tmpLen = alen;
+    alen = blen;
+    blen = tmpLen;
+  }
+
+  const row = new Int32Array(blen + 1);
   for (let j = 0; j <= blen; j++) row[j] = j;
 
   for (let i = 1; i <= alen; i++) {
     let prevDiag = row[0]; // (i-1, j-1)
     row[0] = i;
+    const charCode1 = s1.charCodeAt(start + i - 1);
     for (let j = 1; j <= blen; j++) {
       const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+      const cost = charCode1 === s2.charCodeAt(start + j - 1) ? 0 : 1;
       row[j] = Math.min(
         row[j] + 1, // (i-1, j) + 1
         row[j - 1] + 1, // (i, j-1) + 1
