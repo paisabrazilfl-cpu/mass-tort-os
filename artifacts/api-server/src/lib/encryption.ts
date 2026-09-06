@@ -29,6 +29,20 @@ const CURRENT_KEY_VERSION = 1;
 const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
 
 /**
+ * Module-level cache for resolved key Buffers keyed by version number.
+ * Caching eliminates repeated process.env lookups, regex tests, and hex Buffer
+ * allocations on every encryption/decryption call.
+ */
+const keyCacheMap = new Map<number, Buffer>();
+
+/**
+ * Clear the key cache. Used primarily in testing if process.env keys are mutated.
+ */
+export function clearKeyCache(): void {
+  keyCacheMap.clear();
+}
+
+/**
  * Resolve the AES-256 key for a given version. Strict, no silent fallbacks
  * across versions (a missing v2 must NOT silently use v1, or you'd produce
  * v2-tagged ciphertext encrypted with the v1 key — undetectable disaster).
@@ -39,6 +53,9 @@ const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
  */
 function getKey(version?: number): Buffer {
   const keyVersion = version ?? CURRENT_KEY_VERSION;
+  const cached = keyCacheMap.get(keyVersion);
+  if (cached) return cached;
+
   const envName = `ENCRYPTION_KEY_V${keyVersion}`;
   let raw = process.env[envName];
   if (!raw && keyVersion === 1) {
@@ -54,7 +71,9 @@ function getKey(version?: number): Buffer {
       `${envName} must be exactly 64 hex characters (32 bytes for AES-256-GCM); got ${raw.length} chars`,
     );
   }
-  return Buffer.from(raw, "hex");
+  const keyBuf = Buffer.from(raw, "hex");
+  keyCacheMap.set(keyVersion, keyBuf);
+  return keyBuf;
 }
 
 export function getCurrentKeyVersion(): number {
@@ -71,11 +90,13 @@ export function isKeyConfigured(version: number): boolean {
   }
 }
 
+/**
+ * Fast-path AAD buffer builder avoiding array allocation and join overhead.
+ */
 function buildAAD(fieldName?: string, entityId?: string): Buffer | undefined {
   if (!fieldName) return undefined;
-  const parts = [fieldName];
-  if (entityId) parts.push(entityId);
-  return Buffer.from(parts.join(":"), "utf8");
+  if (!entityId) return Buffer.from(fieldName, "utf8");
+  return Buffer.from(`${fieldName}:${entityId}`, "utf8");
 }
 
 export function encrypt(plaintext: string, fieldName?: string, entityId?: string): string {
@@ -93,19 +114,18 @@ export function encrypt(plaintext: string, fieldName?: string, entityId?: string
 }
 
 /**
- * Try to decrypt with a specific AAD configuration. Returns null on failure.
- * Used by decrypt() to attempt multiple AAD variants for backward compatibility
- * when historical data was encrypted with a different (or no) AAD than what the
- * caller is now passing.
+ * Try to decrypt with a pre-parsed payload Buffer and specific AAD configuration.
+ * Returns null on failure.
+ * Operating on the pre-parsed Buffer avoids repeating base64 decoding per candidate AAD variant.
  */
-function tryDecryptWithAAD(
-  payload: string,
+function tryDecryptWithBuffer(
+  combined: Buffer,
   keyVersion: number,
   aad: Buffer | undefined,
 ): string | null {
   try {
+    if (combined.length < IV_LENGTH + AUTH_TAG_LENGTH) return null;
     const key = getKey(keyVersion);
-    const combined = Buffer.from(payload, ENCODING);
     const iv = combined.subarray(0, IV_LENGTH);
     const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
     const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
@@ -126,32 +146,34 @@ export function decrypt(ciphertext: string, fieldName?: string, entityId?: strin
   let hasAADFlag = 0;
   let payload: string;
 
+  // Fast header parsing using indexOf to eliminate split/slice array allocations
   if (ciphertext.startsWith("enc:v")) {
-    const parts = ciphertext.split(":");
-    keyVersion = parseInt(parts[1].slice(1), 10) || 1;
-    hasAADFlag = parseInt(parts[2], 10) || 0;
-    payload = parts.slice(3).join(":");
+    const idx1 = ciphertext.indexOf(":", 5);
+    const idx2 = idx1 !== -1 ? ciphertext.indexOf(":", idx1 + 1) : -1;
+    if (idx1 !== -1 && idx2 !== -1) {
+      keyVersion = parseInt(ciphertext.slice(5, idx1), 10) || 1;
+      hasAADFlag = parseInt(ciphertext.slice(idx1 + 1, idx2), 10) || 0;
+      payload = ciphertext.slice(idx2 + 1);
+    } else {
+      payload = ciphertext.slice(4);
+    }
   } else {
     payload = ciphertext.slice(4);
   }
 
-  // Try the AAD configuration the ciphertext was tagged with first. If that
-  // fails, fall back through other AAD variants — historical inconsistencies
-  // (e.g. data encrypted before the entityId was known on insert) would
-  // otherwise be permanently unrecoverable. AES-GCM auth tag verification
-  // still prevents corruption: every fallback that succeeds is cryptographically
-  // valid for the key + IV.
-  const candidates: (Buffer | undefined)[] = [];
-  if (hasAADFlag && fieldName) {
-    candidates.push(buildAAD(fieldName, entityId));      // primary: field+entity
-    candidates.push(buildAAD(fieldName, undefined));     // fallback: field only
-  }
-  candidates.push(undefined);                             // fallback: no AAD
+  // Decode base64 payload to Buffer once before trying AAD candidate variants
+  const combined = Buffer.from(payload, ENCODING);
 
-  for (const aad of candidates) {
-    const result = tryDecryptWithAAD(payload, keyVersion, aad);
-    if (result !== null) return result;
+  // Try the primary AAD configuration (field + entity) first, then fallback to (field only), then (no AAD)
+  if (hasAADFlag && fieldName) {
+    const res1 = tryDecryptWithBuffer(combined, keyVersion, buildAAD(fieldName, entityId));
+    if (res1 !== null) return res1;
+    const res2 = tryDecryptWithBuffer(combined, keyVersion, buildAAD(fieldName, undefined));
+    if (res2 !== null) return res2;
   }
+
+  const res3 = tryDecryptWithBuffer(combined, keyVersion, undefined);
+  if (res3 !== null) return res3;
 
   logger.error(
     { fieldName, hasAAD: !!hasAADFlag, keyVersion },
