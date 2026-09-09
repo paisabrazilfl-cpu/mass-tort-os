@@ -3,12 +3,31 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+/**
+ * Fast check to see if a string is already normalized (lowercase alphanumeric/underscore
+ * with single inner spaces and no leading/trailing whitespace).
+ */
+function isNormalized(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    // lowercase letter ('a'-'z': 97-122), digit ('0'-'9': 48-57), underscore ('_': 95), space (' ': 32)
+    const isLower = code >= 97 && code <= 122;
+    const isDigit = code >= 48 && code <= 57;
+    const isUnderscore = code === 95;
+    const isSpace = code === 32;
+
+    if (!isLower && !isDigit && !isUnderscore && !isSpace) return false;
+    if (isSpace && (i === 0 || i === s.length - 1 || s.charCodeAt(i + 1) === 32)) return false;
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  if (isNormalized(s)) return s;
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\w]+/g, " ")
     .trim();
 }
 
