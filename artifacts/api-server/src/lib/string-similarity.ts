@@ -3,12 +3,37 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+/**
+ * Fast check whether a string is already normalized:
+ * lowercase alphanumeric/underscore with single space separators and no leading/trailing whitespace.
+ */
+function isNormalized(s: string): boolean {
+  if (s.length === 0) return true;
+  if (s.charCodeAt(0) <= 32 || s.charCodeAt(s.length - 1) <= 32) return false;
+  let prevSpace = false;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    // 97-122: a-z, 48-57: 0-9, 95: _
+    if ((code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 95) {
+      prevSpace = false;
+    } else if (code === 32) {
+      if (prevSpace) return false;
+      prevSpace = true;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  // Fast path: if s is already clean, bypass regex allocations and transformations entirely
+  if (isNormalized(s)) return s;
+  // Combine non-word character replacement and multi-space collapse into a single regex pass
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\w]+/g, " ")
     .trim();
 }
 
@@ -45,8 +70,22 @@ const CREDENTIAL_TOKENS = new Set([
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
  */
+// Precompiled regex for fast detection of title or credential tokens.
+// Avoids split/filter/join array allocations when no titles/credentials are present.
+const ALL_TITLE_CRED_TOKENS = new Set([...TITLE_TOKENS, ...CREDENTIAL_TOKENS]);
+const TITLE_CREDENTIAL_RE = new RegExp(
+  `\\b(${Array.from(ALL_TITLE_CRED_TOKENS).join("|")})\\b`,
+  "i",
+);
+
+/**
+ * Optimized name normalization that skips redundant regex processing when
+ * the input is already pre-normalized.
+ */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: if string contains no titles or credentials, return directly without array allocation
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) return normalized;
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
