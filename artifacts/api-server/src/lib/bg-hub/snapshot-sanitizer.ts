@@ -33,9 +33,7 @@ export function maskEmail(value: unknown): unknown {
   if (typeof value !== "string" || value.length === 0) return value;
   const at = value.indexOf("@");
   if (at < 1) return "***";
-  const local = value.slice(0, at);
-  const domain = value.slice(at);
-  return `${local[0]}***${domain}`;
+  return `${value[0]}***${value.slice(at)}`;
 }
 
 /** Mask phone: keep last 4 digits, mask the rest. "5555550199" → "***-***-0199" */
@@ -49,10 +47,12 @@ export function maskPhone(value: unknown): unknown {
 
 /** Mask a person's name: "John Doe" → "J*** D***". Empty input passes through. */
 export function maskName(value: unknown): unknown {
-  if (typeof value !== "string" || value.trim().length === 0) return value;
-  return value
+  if (typeof value !== "string" || value.length === 0) return value;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return value;
+  // Splitting trimmed string on \s+ guarantees non-empty tokens without redundant filter(Boolean)
+  return trimmed
     .split(/\s+/)
-    .filter(Boolean)
     .map((part) => `${part[0]}***`)
     .join(" ");
 }
@@ -152,18 +152,31 @@ const FIELD_MASKERS: Record<string, (v: unknown) => unknown> = {
   reason: redactFreeText,
 };
 
+const hasOwn = Object.prototype.hasOwnProperty;
+
 /**
  * Recursively walk an arbitrary value, masking known sensitive keys.
  * Pure: returns a new object/array; never mutates the input.
  */
 function sanitizeValue(value: unknown): unknown {
   if (value == null) return value;
-  if (Array.isArray(value)) return value.map(sanitizeValue);
+  if (Array.isArray(value)) {
+    const len = value.length;
+    const out = new Array(len);
+    for (let i = 0; i < len; i++) {
+      out[i] = sanitizeValue(value[i]);
+    }
+    return out;
+  }
   if (typeof value !== "object") return value;
+  const obj = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    const handler = FIELD_MASKERS[k];
-    out[k] = handler ? handler(v) : sanitizeValue(v);
+  for (const k in obj) {
+    if (hasOwn.call(obj, k)) {
+      const v = obj[k];
+      const handler = FIELD_MASKERS[k];
+      out[k] = handler ? handler(v) : sanitizeValue(v);
+    }
   }
   return out;
 }
