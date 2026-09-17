@@ -5,10 +5,11 @@
 
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  // Single regex pass matching contiguous non-word characters replaces punctuation
+  // and condenses whitespace simultaneously, avoiding intermediate string allocations.
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\w]+/g, " ")
     .trim();
 }
 
@@ -41,12 +42,19 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+// Fast RegExp to check if normalized string contains any title or credential tokens.
+// Avoids splitting, filtering, and joining arrays when the string is already clean.
+const TITLE_CREDENTIAL_RE =
+  /\b(?:dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/;
+
 /**
  * Optimized name normalization that skips redundant regex processing when
- * the input is already pre-normalized.
+ * the input is already pre-normalized. Fast-paths clean names with regex test.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: if no title or credential tokens exist, return as-is
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) return normalized;
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +81,14 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // Fast path: if neither string had title/credential tokens stripped,
+  // stripped ratio is identical to raw ratio; skip redundant Levenshtein calculation.
+  if (strippedA === na && strippedB === nb) return raw;
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
