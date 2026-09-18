@@ -18,6 +18,10 @@ export interface FraudDetectionResult {
   summary: string;
 }
 
+// OPTIMIZATION: Static module constants to avoid re-allocating arrays and numbers per function invocation
+const MS_PER_YEAR = 31557600000; // 365.25 * 24 * 60 * 60 * 1000
+const ADULT_ONLY_CONDITIONS = ["mesothelioma", "parkinson", "metallosis", "gastroparesis"] as const;
+
 export function runFraudDetection(context: {
   lead_data: Record<string, unknown>;
   tort_validation: TortValidationResult;
@@ -31,10 +35,14 @@ export function runFraudDetection(context: {
 
   const dob = context.lead_data.date_of_birth as string;
   const diagDate = context.lead_data.diagnosis_date as string;
-  if (dob && diagDate) {
-    const birthDate = new Date(dob);
-    const diagnosisDate = new Date(diagDate);
-    const ageAtDiagnosis = (diagnosisDate.getTime() - birthDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+
+  // OPTIMIZATION: Parse ISO date strings directly into primitive millisecond timestamps with Date.parse()
+  // to avoid heap allocations from `new Date()` wrapper objects.
+  const birthTime = dob ? Date.parse(dob) : NaN;
+  const diagTime = diagDate ? Date.parse(diagDate) : NaN;
+
+  if (!Number.isNaN(birthTime) && !Number.isNaN(diagTime)) {
+    const ageAtDiagnosis = (diagTime - birthTime) / MS_PER_YEAR;
 
     if (ageAtDiagnosis < 0) {
       indicators.push({
@@ -47,7 +55,8 @@ export function runFraudDetection(context: {
       score += 100;
     }
 
-    if (diagnosisDate > new Date()) {
+    // OPTIMIZATION: Use Date.now() primitive numeric timestamp instead of `new Date()`
+    if (diagTime > Date.now()) {
       indicators.push({
         type: "FUTURE_DIAGNOSIS_DATE",
         description: "Diagnosis date is in the future",
@@ -60,8 +69,8 @@ export function runFraudDetection(context: {
 
     if (!hardBlock && ageAtDiagnosis < 5) {
       const diagnosis = (context.lead_data.diagnosis as string || "").toLowerCase();
-      const adultOnlyConditions = ["mesothelioma", "parkinson", "metallosis", "gastroparesis"];
-      if (adultOnlyConditions.some(c => diagnosis.includes(c))) {
+      // OPTIMIZATION: Re-use pre-allocated ADULT_ONLY_CONDITIONS array
+      if (ADULT_ONLY_CONDITIONS.some((c) => diagnosis.includes(c))) {
         indicators.push({
           type: "IMPOSSIBLE_MEDICAL_TIMELINE",
           description: `Diagnosis "${context.lead_data.diagnosis}" is extremely rare in children under 5`,
@@ -75,10 +84,10 @@ export function runFraudDetection(context: {
   }
 
   const exposureStart = context.lead_data.exposure_start as string;
-  if (exposureStart && dob) {
-    const birthDate = new Date(dob);
-    const expDate = new Date(exposureStart);
-    if (expDate < birthDate) {
+  if (exposureStart && !Number.isNaN(birthTime)) {
+    // OPTIMIZATION: Re-use birthTime and parse exposure date directly into timestamp
+    const expTime = Date.parse(exposureStart);
+    if (!Number.isNaN(expTime) && expTime < birthTime) {
       indicators.push({
         type: "EXPOSURE_BEFORE_BIRTH",
         description: "Claimed exposure start date is before date of birth",
@@ -167,9 +176,16 @@ export function runFraudDetection(context: {
   const cappedScore = Math.min(score, 100);
   const hasFlags = indicators.length > 0;
 
-  const summary = indicators.length === 0
-    ? "No fraud indicators detected"
-    : `${indicators.length} fraud indicator(s) found (score: ${cappedScore}/100): ${indicators.map(i => i.type).join(", ")}`;
+  // OPTIMIZATION: Construct summary string using loop concatenation to avoid `.map().join()` temporary array allocation
+  let summary = "No fraud indicators detected";
+  if (hasFlags) {
+    let typeList = "";
+    for (let i = 0; i < indicators.length; i++) {
+      if (i > 0) typeList += ", ";
+      typeList += indicators[i]!.type;
+    }
+    summary = `${indicators.length} fraud indicator(s) found (score: ${cappedScore}/100): ${typeList}`;
+  }
 
   return { hard_block: hardBlock, hard_block_reason: hardBlockReason, has_flags: hasFlags, fraud_score: cappedScore, indicators, summary };
 }
