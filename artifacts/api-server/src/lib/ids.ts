@@ -86,38 +86,67 @@ function getClientIp(req: Request): string {
     || "unknown";
 }
 
-function scanValue(value: string): ThreatDetection | null {
+// Bolt performance optimization:
+// 1. Export scanValue and deepScan for unit tests and benchmarks.
+// 2. Early return for falsy/short strings (length < 2) in scanValue.
+// 3. Fast character presence checks before executing XSS, Path Traversal, and Command Injection regex sets.
+// 4. In deepScan, use for...in with Object.hasOwn and index loops for arrays to avoid Object.entries() tuple allocations.
+export function scanValue(value: string): ThreatDetection | null {
+  if (!value || typeof value !== "string" || value.length < 2) return null;
+
   for (const pattern of SQL_INJECTION_PATTERNS) {
     if (pattern.test(value)) {
       return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
     }
   }
-  for (const pattern of XSS_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+
+  // Fast character presence check for XSS patterns
+  if (value.includes("<") || value.includes(":") || value.includes("=") || value.includes("(") || value.includes(".")) {
+    for (const pattern of XSS_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of PATH_TRAVERSAL_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+
+  // Fast character presence check for Path Traversal patterns
+  if (value.includes(".") || value.includes("/") || value.includes("\\") || value.includes("%") || value.includes("etc") || value.includes("proc") || value.includes("boot")) {
+    for (const pattern of PATH_TRAVERSAL_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of COMMAND_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+
+  // Fast character presence check for Command Injection patterns
+  if (value.includes(";") || value.includes("&") || value.includes("|") || value.includes("`") || value.includes("$")) {
+    for (const pattern of COMMAND_INJECTION_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
+
   return null;
 }
 
-function deepScan(obj: any, path = ""): ThreatDetection | null {
+export function deepScan(obj: any): ThreatDetection | null {
   if (typeof obj === "string") {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i]);
+        if (threat) return threat;
+      }
+    } else {
+      for (const key in obj) {
+        if (Object.hasOwn(obj, key)) {
+          const threat = deepScan(obj[key]);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;

@@ -1,3 +1,7 @@
 ## 2025-05-15 - [String Similarity Optimization]
 **Learning:** Redundant normalization in fuzzy matching functions (calling `normalize()` multiple times on the same input) is a significant bottleneck. Standard `Array<number>` for Levenshtein distance creates GC pressure and is slower than `Int32Array`. String swapping ensures the auxiliary array is as small as possible.
 **Action:** Use `Int32Array` and single-vector DP approach for Levenshtein. Always reuse normalized strings instead of re-normalizing in wrapper functions. Add early returns for near-exact matches to skip expensive fuzzy logic.
+
+## 2026-04-26 - [IDS Payload DeepScan & Character Presence Guard Optimization]
+**Learning:** Recursive payload inspection (`deepScan`) using `Object.entries()` allocates `[key, value]` tuple arrays for every property in a JSON tree, and string interpolation for unused paths adds garbage collection overhead. Furthermore, executing regex pattern sets over every string value in clean request payloads creates unnecessary regex engine passes. Cheap character presence checks (`value.includes()`) before firing regex sets immediately short-circuit clean inputs. Note: V8's native C++ RegExp engine can outperform JS manual string slicing loops (`indexOf`/`slice`), so pre-compiled RegExp with character guards strikes the optimal balance.
+**Action:** Replace `Object.entries()` in recursive object scans with `for...in` + `Object.hasOwn()` and index loops for arrays. Use fast character presence guards (`value.includes(...)`) to bypass RegExp sets on clean input strings.
