@@ -31,14 +31,20 @@ export interface ConflictCheckContext {
   user_settings?: Record<string, unknown>;
 }
 
-const VALID_LOCATIONS = [
+// Convert VALID_LOCATIONS array to Set<string> for O(1) location lookups
+const VALID_LOCATIONS = new Set([
   "USA", "US", "UNITED STATES",
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA",
   "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA",
   "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY",
   "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX",
   "UT", "VT", "VA", "WA", "WV", "WI", "WY",
-];
+]);
+
+// Hoisted static regexes to avoid RegExp object instantiation per check function call
+const REPEATED_CHAR_RE = /^(.)\1+$/;
+const GARBAGE_TORT_RE = /^[^a-zA-Z]*$|^(.)\1{3,}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const KNOWN_TORT_CONDITIONS: Record<string, string[]> = {
   "Camp Lejeune": ["cancer", "leukemia", "kidney disease", "liver disease", "parkinson", "bladder cancer", "non-hodgkin"],
@@ -59,8 +65,16 @@ export function checkLogicalConflicts(ctx: ConflictCheckContext): ConflictResult
 
   const locationRaw = String(lead.location_name || lead.location || "").toUpperCase().trim();
   if (locationRaw) {
-    const locationWords = locationRaw.split(/[\s,]+/).map((w) => w.trim()).filter(Boolean);
-    const matchesUS = locationWords.some((word) => VALID_LOCATIONS.includes(word));
+    // Avoid .map().filter() array allocations when tokenizing locations
+    const locationWords = locationRaw.split(/[\s,]+/);
+    let matchesUS = false;
+    for (let i = 0; i < locationWords.length; i++) {
+      const word = locationWords[i];
+      if (word && VALID_LOCATIONS.has(word)) {
+        matchesUS = true;
+        break;
+      }
+    }
     if (!matchesUS) {
       details.push(`Location "${lead.location_name || lead.location}" is outside allowed US geography`);
     }
@@ -79,9 +93,10 @@ export function checkLogicalConflicts(ctx: ConflictCheckContext): ConflictResult
   }
 
   if (lead.exposure_start && lead.exposure_end) {
-    const start = new Date(String(lead.exposure_start));
-    const end = new Date(String(lead.exposure_end));
-    if (start > end) {
+    // Use primitive timestamps from Date.parse() to avoid V8 Date object allocations
+    const start = Date.parse(String(lead.exposure_start));
+    const end = Date.parse(String(lead.exposure_end));
+    if (!isNaN(start) && !isNaN(end) && start > end) {
       details.push(`Exposure start date (${lead.exposure_start}) is after end date (${lead.exposure_end})`);
     }
   }
@@ -105,7 +120,8 @@ export function checkDataIntegrity(ctx: ConflictCheckContext): ConflictResult {
   const lead = ctx.lead_data || {};
 
   const requiredFields = ["name", "tort_type"];
-  for (const field of requiredFields) {
+  for (let i = 0; i < requiredFields.length; i++) {
+    const field = requiredFields[i];
     const val = lead[field];
     if (val === undefined || val === null || String(val).trim() === "") {
       details.push(`Required field "${field}" is missing or empty`);
@@ -116,7 +132,7 @@ export function checkDataIntegrity(ctx: ConflictCheckContext): ConflictResult {
   if (name && name.length < 2) {
     details.push(`Name "${name}" appears invalid (too short)`);
   }
-  if (name && /^(.)\1+$/.test(name)) {
+  if (name && REPEATED_CHAR_RE.test(name)) {
     details.push(`Name "${name}" appears to be garbage input`);
   }
 
@@ -124,19 +140,28 @@ export function checkDataIntegrity(ctx: ConflictCheckContext): ConflictResult {
   if (tortType && tortType.length < 3) {
     details.push(`Tort type "${tortType}" appears invalid`);
   }
-  const garbagePattern = /^[^a-zA-Z]*$|^(.)\1{3,}$/;
-  if (tortType && garbagePattern.test(tortType)) {
+  if (tortType && GARBAGE_TORT_RE.test(tortType)) {
     details.push(`Tort type "${tortType}" appears to be garbage input`);
   }
 
   const email = String(lead.email || "").trim();
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (email && !EMAIL_RE.test(email)) {
     details.push(`Email "${email}" format is invalid`);
   }
 
   const phone = String(lead.phone || "").trim();
-  if (phone && phone.replace(/\D/g, "").length < 10) {
-    details.push(`Phone "${phone}" appears invalid (too few digits)`);
+  if (phone) {
+    // Count ASCII digits directly without allocating intermediate strings via .replace(/\D/g, "")
+    let digitCount = 0;
+    for (let i = 0; i < phone.length; i++) {
+      const code = phone.charCodeAt(i);
+      if (code >= 48 && code <= 57) {
+        digitCount++;
+      }
+    }
+    if (digitCount < 10) {
+      details.push(`Phone "${phone}" appears invalid (too few digits)`);
+    }
   }
 
   if (details.length === 0) {
@@ -200,9 +225,22 @@ export function checkRuleOverrideConflict(
     const buyerLocs = Array.isArray(buyerCriteria.allowed_locations) ? buyerCriteria.allowed_locations : [buyerCriteria.allowed_locations];
     const globalLocs = Array.isArray(globalTortRules.allowed_locations) ? globalTortRules.allowed_locations : [globalTortRules.allowed_locations];
 
-    const buyerSet = new Set(buyerLocs.map((l: string) => String(l).toUpperCase()));
-    const globalSet = new Set(globalLocs.map((l: string) => String(l).toUpperCase()));
-    const extraLocs = [...buyerSet].filter((l) => !globalSet.has(l));
+    const globalSet = new Set<string>();
+    for (let i = 0; i < globalLocs.length; i++) {
+      globalSet.add(String(globalLocs[i]).toUpperCase());
+    }
+
+    const extraLocs: string[] = [];
+    const seenBuyer = new Set<string>();
+    for (let i = 0; i < buyerLocs.length; i++) {
+      const locUpper = String(buyerLocs[i]).toUpperCase();
+      if (!seenBuyer.has(locUpper)) {
+        seenBuyer.add(locUpper);
+        if (!globalSet.has(locUpper)) {
+          extraLocs.push(locUpper);
+        }
+      }
+    }
     if (extraLocs.length > 0) {
       details.push(`Buyer criteria allows locations [${extraLocs.join(", ")}] that are excluded by global tort rules`);
     }
@@ -215,13 +253,14 @@ export function checkRuleOverrideConflict(
   }
 
   if (buyerCriteria.required_conditions && globalTortRules.required_conditions) {
-    const buyerConds = new Set(
-      (Array.isArray(buyerCriteria.required_conditions) ? buyerCriteria.required_conditions : []).map((c: string) =>
-        String(c).toLowerCase()
-      )
-    );
+    const buyerConds = new Set<string>();
+    const rawBuyer = Array.isArray(buyerCriteria.required_conditions) ? buyerCriteria.required_conditions : [];
+    for (let i = 0; i < rawBuyer.length; i++) {
+      buyerConds.add(String(rawBuyer[i]).toLowerCase());
+    }
     const globalConds = Array.isArray(globalTortRules.required_conditions) ? globalTortRules.required_conditions : [];
-    for (const gc of globalConds) {
+    for (let i = 0; i < globalConds.length; i++) {
+      const gc = globalConds[i];
       if (!buyerConds.has(String(gc).toLowerCase())) {
         details.push(`Global required condition "${gc}" is missing from buyer criteria`);
       }
