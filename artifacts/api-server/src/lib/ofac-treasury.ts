@@ -47,6 +47,11 @@ interface SdnEntry {
   type: string;
   programs: string[];
   akas: string[];
+  // Cached token sets for $O(1)$ whole-word set lookups per screening query.
+  // Pre-computed lazily on first access or upon snapshot load to avoid 10k+
+  // string normalizations, regex passes, splits, and Set allocations per lookup.
+  _primaryTokens?: Set<string>;
+  _akaTokensList?: Array<{ aka: string; tokens: Set<string> }>;
 }
 
 interface SdnSnapshot {
@@ -75,6 +80,47 @@ function normalize(s: string): string {
     .replace(/[.,;()\[\]"']/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * Tokenize a string into a Set of non-empty normalized whole-word tokens.
+ */
+function tokenize(s: string): Set<string> {
+  const norm = normalize(s);
+  if (!norm) return new Set();
+  return new Set(norm.split(" "));
+}
+
+/**
+ * Extract normalized word tokens from query string.
+ */
+function extractTokens(s: string): string[] {
+  const norm = normalize(s);
+  if (!norm) return [];
+  return norm.split(" ");
+}
+
+/**
+ * Ensures an SdnEntry has its token sets populated for fast matching.
+ */
+function ensureEntryIndexed(e: SdnEntry): void {
+  if (!e._primaryTokens) {
+    e._primaryTokens = tokenize(e.name);
+    e._akaTokensList = e.akas.map((aka) => ({
+      aka,
+      tokens: tokenize(aka),
+    }));
+  }
+}
+
+/**
+ * Checks whether all required tokens exist in the candidate's token set.
+ */
+function containsAllTokens(tokenSet: Set<string>, requiredTokens: string[]): boolean {
+  for (let i = 0; i < requiredTokens.length; i++) {
+    if (!tokenSet.has(requiredTokens[i]!)) return false;
+  }
+  return true;
 }
 
 // Treasury CSV uses an unusual quoting style: fields are quoted with double
@@ -157,13 +203,15 @@ async function fetchSnapshot(): Promise<SdnSnapshot> {
     const type = cols[2]?.trim() ?? "";
     const program = cols[3]?.trim() ?? "";
     if (!id || !name) continue;
-    entries.push({
+    const entry: SdnEntry = {
       sdn_id: id,
       name,
       type,
       programs: program ? program.split(/\s*;\s*/).filter(Boolean) : [],
       akas: akaIndex.get(id) ?? [],
-    });
+    };
+    ensureEntryIndexed(entry);
+    entries.push(entry);
   }
 
   return {
@@ -218,18 +266,17 @@ export interface TreasurySdnMatchOutcome {
  * the candidate name (or any AKA) after normalization. Returns up to 5
  * matches.
  *
- * This intentionally does not gate on the bg-hub's normal name
- * heuristics — the SDN list is small enough that a linear scan per
- * lookup is ~5 ms (10 K entries). We can swap in a token-index if a
- * future profile shows it matters.
+ * Performance optimized: Uses pre-computed token sets (`Set<string>`) on SDN entries
+ * to perform $O(1)$ whole-word token set lookups, bypassing redundant per-query
+ * string normalizations, splits, and Set allocations across 10,000+ entries.
  */
 export async function matchTreasurySdn(person: {
   first_name: string;
   last_name: string;
 }): Promise<TreasurySdnMatchOutcome> {
-  const first = normalize(person.first_name || "");
-  const last = normalize(person.last_name || "");
-  if (!first || !last) {
+  const firstTokens = extractTokens(person.first_name || "");
+  const lastTokens = extractTokens(person.last_name || "");
+  if (firstTokens.length === 0 || lastTokens.length === 0) {
     return {
       status: "error",
       matches: [],
@@ -250,30 +297,31 @@ export async function matchTreasurySdn(person: {
       note: `Treasury SDN list unavailable: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const wholeWord = (haystack: string, needle: string): boolean => {
-    // Whole-word match against tokenized haystack — defends against the
-    // pathological case where someone named "Al" matches every Al-prefixed
-    // SDN entry (e.g. "Albert", "Aleksandr").
-    const tokens = new Set(haystack.split(" "));
-    return tokens.has(needle);
-  };
+
+  const queryTokens = [...firstTokens, ...lastTokens];
   const matches: TreasurySdnMatchOutcome["matches"] = [];
-  for (const e of snap.entries) {
-    const primary = normalize(e.name);
-    if (wholeWord(primary, first) && wholeWord(primary, last)) {
+
+  for (let i = 0; i < snap.entries.length; i++) {
+    const e = snap.entries[i]!;
+    ensureEntryIndexed(e);
+
+    if (containsAllTokens(e._primaryTokens!, queryTokens)) {
       matches.push({ sdn_id: e.sdn_id, name: e.name, programs: e.programs, matched_via: "name" });
       if (matches.length >= 5) break;
       continue;
     }
-    for (const aka of e.akas) {
-      const norm = normalize(aka);
-      if (wholeWord(norm, first) && wholeWord(norm, last)) {
-        matches.push({ sdn_id: e.sdn_id, name: aka, programs: e.programs, matched_via: "aka" });
+
+    const akas = e._akaTokensList!;
+    for (let j = 0; j < akas.length; j++) {
+      const akaObj = akas[j]!;
+      if (containsAllTokens(akaObj.tokens, queryTokens)) {
+        matches.push({ sdn_id: e.sdn_id, name: akaObj.aka, programs: e.programs, matched_via: "aka" });
         break;
       }
     }
     if (matches.length >= 5) break;
   }
+
   return {
     status: "ok",
     matches,
