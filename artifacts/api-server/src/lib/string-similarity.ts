@@ -3,12 +3,12 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+// Fast normalization replacing non-word characters with spaces in a single pass
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\w]+/g, " ")
     .trim();
 }
 
@@ -48,9 +48,18 @@ const CREDENTIAL_TOKENS = new Set([
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
   const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  let modified = false;
+  const filtered: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (TITLE_TOKENS.has(t) || CREDENTIAL_TOKENS.has(t)) {
+      modified = true;
+    } else {
+      filtered.push(t);
+    }
+  }
+  if (!modified) return normalized;
+  return filtered.join(" ");
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -73,10 +82,12 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const sa = normalizeNameFromNormalized(na);
+  const sb = normalizeNameFromNormalized(nb);
+  // Fast path: if title/credential stripping did not alter either string, skip repeating Levenshtein
+  if (sa === na && sb === nb) return raw;
+
+  const stripped = similarityPreNormalized(sa, sb);
   return Math.max(raw, stripped);
 }
 
