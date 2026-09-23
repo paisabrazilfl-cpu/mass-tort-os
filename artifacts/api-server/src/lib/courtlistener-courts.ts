@@ -92,6 +92,15 @@ const STATE_LABELS: Record<string, string> = {
   MP: "Northern Mariana Islands", AS: "American Samoa",
 };
 
+// Optimization: Pre-compute lowercased full state name -> 2-letter state code Map
+// at module scope. Enables O(1) Map lookups for full state names ("New Jersey" -> "NJ")
+// and avoids allocating Object.entries(STATE_LABELS) arrays and re-lowercasing state
+// labels on every invocation.
+const STATE_NAME_TO_CODE_MAP = new Map<string, string>();
+for (const [code, label] of Object.entries(STATE_LABELS)) {
+  STATE_NAME_TO_CODE_MAP.set(label.toLowerCase(), code);
+}
+
 /**
  * Normalize a state input to a 2-letter US state code, or null if unknown.
  * Accepts:
@@ -104,16 +113,11 @@ export function normalizeStateCode(state: string | null | undefined): string | n
   if (!trimmed) return null;
 
   const upper = trimmed.toUpperCase();
-  if (upper.length === 2 && STATE_COURT_IDS[upper] !== undefined) {
+  if (upper.length === 2 && (STATE_COURT_IDS[upper] !== undefined || STATE_LABELS[upper] !== undefined)) {
     return upper;
   }
 
-  const lower = trimmed.toLowerCase();
-  for (const [code, label] of Object.entries(STATE_LABELS)) {
-    if (label.toLowerCase() === lower) return code;
-  }
-
-  return null;
+  return STATE_NAME_TO_CODE_MAP.get(trimmed.toLowerCase()) ?? null;
 }
 
 /**
