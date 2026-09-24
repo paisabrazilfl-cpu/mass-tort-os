@@ -44,13 +44,13 @@ const COMMON_PROVIDERS_FUZZY: Array<{ prefix: string; canonical: string; minLen:
 ];
 
 function findFuzzyProviderMatch(domain: string): string | null {
-  const lastDot = domain.lastIndexOf(".");
-  if (lastDot === -1) return null;
-  const prefix = domain.slice(0, lastDot);
-  const tld = domain.slice(lastDot);
-  if (tld !== ".com") return null;
+  if (!domain.endsWith(".com")) return null;
+  const prefix = domain.slice(0, -4);
   if (prefix.length < 3) return null;
-  let best: { canonical: string; distance: number } | null = null;
+
+  let bestCanonical: string | null = null;
+  let minDistance = Infinity;
+
   for (const { prefix: known, canonical, minLen } of COMMON_PROVIDERS_FUZZY) {
     if (prefix.length < minLen) continue;
     if (prefix === known) return null;
@@ -60,17 +60,32 @@ function findFuzzyProviderMatch(domain: string): string | null {
     const dist = levenshtein(prefix, known);
     const threshold = known.length <= 7 ? 3 : 4;
     if (dist === 0 || dist > threshold) continue;
-    if (!best || dist < best.distance) best = { canonical, distance: dist };
+    if (dist < minDistance) {
+      bestCanonical = canonical;
+      minDistance = dist;
+    }
   }
-  return best?.canonical ?? null;
+  return bestCanonical;
 }
 
 const RFC_EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
 
-const DISPOSABLE_DOMAINS = [
+// Hoisted Set for O(1) constant-time disposable domain lookups
+const DISPOSABLE_DOMAINS_SET = new Set([
   "tempmail.com", "throwaway.email", "guerrillamail.com", "mailinator.com",
   "yopmail.com", "sharklasers.com", "trashmail.com", "10minutemail.com",
   "fakeinbox.com", "dispostable.com", "maildrop.cc", "guerrillamailblock.com",
+]);
+
+// Hoisted static regex patterns to avoid re-instantiating RegExp objects per call
+const SUSPICIOUS_PATTERNS = [
+  /^test@/,
+  /^fake@/,
+  /^none@/,
+  /^noemail@/,
+  /^na@/,
+  /^asdf/,
+  /^aaa+@/,
 ];
 
 export interface EmailValidationResult {
@@ -101,13 +116,14 @@ export function validateEmail(email: string): EmailValidationResult {
     return { valid: false, errors };
   }
 
-  const parts = trimmed.split("@");
-  if (parts.length !== 2) {
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex === -1) {
     errors.push("INVALID_EMAIL_STRUCTURE");
     return { valid: false, errors };
   }
 
-  const [localPart, domain] = parts;
+  const localPart = trimmed.slice(0, atIndex);
+  const domain = trimmed.slice(atIndex + 1);
 
   if (localPart.length === 0 || localPart.length > 64) {
     errors.push("INVALID_LOCAL_PART");
@@ -121,9 +137,10 @@ export function validateEmail(email: string): EmailValidationResult {
     errors.push("MISSING_TLD");
   }
 
-  if (TYPO_DOMAINS[domain]) {
+  const typoTarget = TYPO_DOMAINS[domain];
+  if (typoTarget) {
     errors.push("TYPO_DOMAIN_DETECTED");
-    suggestion = `${localPart}@${TYPO_DOMAINS[domain]}`;
+    suggestion = `${localPart}@${typoTarget}`;
   } else {
     const fuzzyMatch = findFuzzyProviderMatch(domain);
     if (fuzzyMatch) {
@@ -132,38 +149,40 @@ export function validateEmail(email: string): EmailValidationResult {
     }
   }
 
-  for (const tld of MALFORMED_TLDS) {
-    if (trimmed.endsWith(tld)) {
-      errors.push("MALFORMED_TLD");
-      const corrected = trimmed.slice(0, -tld.length) + ".com";
-      suggestion = corrected;
-      break;
+  if (!trimmed.endsWith(".com")) {
+    for (const tld of MALFORMED_TLDS) {
+      if (trimmed.endsWith(tld)) {
+        errors.push("MALFORMED_TLD");
+        suggestion = trimmed.slice(0, -tld.length) + ".com";
+        break;
+      }
     }
   }
 
-  if (DISPOSABLE_DOMAINS.includes(domain)) {
+  if (DISPOSABLE_DOMAINS_SET.has(domain)) {
     errors.push("DISPOSABLE_EMAIL");
   }
 
-  const suspiciousPatterns = [
-    /^test@/,
-    /^fake@/,
-    /^none@/,
-    /^noemail@/,
-    /^na@/,
-    /^asdf/,
-    /^aaa+@/,
-  ];
-  for (const pat of suspiciousPatterns) {
+  for (const pat of SUSPICIOUS_PATTERNS) {
     if (pat.test(trimmed)) {
       errors.push("SUSPICIOUS_EMAIL_PATTERN");
       break;
     }
   }
 
-  const hardErrors = errors.filter((e) => !ADVISORY_CODES.has(e));
+  // Fast check: avoid .filter() array allocations on every call
+  let isValid = true;
+  if (errors.length > 0) {
+    for (let i = 0; i < errors.length; i++) {
+      if (!ADVISORY_CODES.has(errors[i]!)) {
+        isValid = false;
+        break;
+      }
+    }
+  }
+
   return {
-    valid: hardErrors.length === 0,
+    valid: isValid,
     errors,
     suggestion,
   };
