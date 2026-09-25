@@ -72,6 +72,48 @@ const SPECIALTY_CATEGORY_MAP: Record<string, string[]> = {
   "general_practice": ["internal medicine", "family medicine", "general practice", "primary care"],
 };
 
+// Bolt optimization: Pre-compute module-scoped constants to eliminate per-call object/array allocations.
+// 1. Pre-extract taxonomy diagnosis entries (excluding general_practice) to avoid Object.entries() allocations per call.
+const TAXONOMY_DIAGNOSIS_ENTRIES: Array<[string, string[]]> = Object.entries(TAXONOMY_DIAGNOSIS_MAP).filter(
+  ([cat]) => cat !== "general_practice"
+);
+
+// 2. Pre-lower-case specialty terms for O(1) loop lookups without calling .toLowerCase() repeatedly.
+const SPECIALTY_CATEGORY_MAP_LOWER: Record<string, string[]> = Object.fromEntries(
+  Object.entries(SPECIALTY_CATEGORY_MAP).map(([cat, specialties]) => [
+    cat,
+    specialties.map(s => s.toLowerCase()),
+  ])
+);
+
+// 3. Hoist static term lists to avoid temporary array allocations inside functions.
+const GENERALIST_TERMS = [
+  "internal medicine",
+  "family medicine",
+  "general practice",
+  "general practitioner",
+  "primary care",
+];
+
+const ADULT_CONDITION_TERMS = [
+  "cancer",
+  "carcinoma",
+  "lymphoma",
+  "leukemia",
+  "mesothelioma",
+  "parkinson",
+];
+
+const CANCER_CLAIM_TERMS = [
+  "cancer",
+  "carcinoma",
+  "lymphoma",
+  "leukemia",
+  "mesothelioma",
+];
+
+const ONCOLOGY_DIAGNOSES = TAXONOMY_DIAGNOSIS_MAP["oncology"];
+
 export interface TaxonomyMatchResult {
   matched: boolean;
   physician_specialty: string;
@@ -91,9 +133,18 @@ export function matchTaxonomyToDiagnosis(
   const fraudIndicators: string[] = [];
 
   let diagnosisCategory: string | null = null;
-  for (const [category, diagnoses] of Object.entries(TAXONOMY_DIAGNOSIS_MAP)) {
-    if (category === "general_practice") continue;
-    if (diagnoses.some(d => diagLower.includes(d))) {
+  for (let i = 0; i < TAXONOMY_DIAGNOSIS_ENTRIES.length; i++) {
+    const entry = TAXONOMY_DIAGNOSIS_ENTRIES[i];
+    const category = entry[0];
+    const diagnoses = entry[1];
+    let found = false;
+    for (let j = 0; j < diagnoses.length; j++) {
+      if (diagLower.includes(diagnoses[j])) {
+        found = true;
+        break;
+      }
+    }
+    if (found) {
       diagnosisCategory = category;
       break;
     }
@@ -111,22 +162,47 @@ export function matchTaxonomyToDiagnosis(
   }
 
   const expectedSpecialties = SPECIALTY_CATEGORY_MAP[diagnosisCategory] || [];
+  const expectedSpecialtiesLower = SPECIALTY_CATEGORY_MAP_LOWER[diagnosisCategory] || [];
 
-  const isMatch = expectedSpecialties.some(expected => specLower.includes(expected.toLowerCase()));
+  let isMatch = false;
+  for (let i = 0; i < expectedSpecialtiesLower.length; i++) {
+    if (specLower.includes(expectedSpecialtiesLower[i])) {
+      isMatch = true;
+      break;
+    }
+  }
 
-  const isGeneralist = ["internal medicine", "family medicine", "general practice", "general practitioner", "primary care"].some(g => specLower.includes(g));
+  let isGeneralist = false;
+  for (let i = 0; i < GENERALIST_TERMS.length; i++) {
+    if (specLower.includes(GENERALIST_TERMS[i])) {
+      isGeneralist = true;
+      break;
+    }
+  }
 
   if (!isMatch && !isGeneralist) {
     fraudIndicators.push("TAXONOMY_MISMATCH");
 
     const isPediatric = specLower.includes("pediatr") || specLower.includes("child");
-    const isAdultCondition = ["cancer", "carcinoma", "lymphoma", "leukemia", "mesothelioma", "parkinson"].some(c => diagLower.includes(c));
+    let isAdultCondition = false;
+    for (let i = 0; i < ADULT_CONDITION_TERMS.length; i++) {
+      if (diagLower.includes(ADULT_CONDITION_TERMS[i])) {
+        isAdultCondition = true;
+        break;
+      }
+    }
     if (isPediatric && isAdultCondition) {
       fraudIndicators.push("PEDIATRIC_PHYSICIAN_ADULT_CONDITION");
     }
 
     const isDermatology = specLower.includes("dermat");
-    const isCancerClaim = ["cancer", "carcinoma", "lymphoma", "leukemia", "mesothelioma"].some(c => diagLower.includes(c));
+    let isCancerClaim = false;
+    for (let i = 0; i < CANCER_CLAIM_TERMS.length; i++) {
+      if (diagLower.includes(CANCER_CLAIM_TERMS[i])) {
+        isCancerClaim = true;
+        break;
+      }
+    }
     if (isDermatology && isCancerClaim) {
       fraudIndicators.push("SPECIALTY_OUTSIDE_SCOPE");
     }
@@ -138,7 +214,13 @@ export function matchTaxonomyToDiagnosis(
   }
 
   if (npiTaxonomyCode && ONCOLOGY_TAXONOMIES.has(npiTaxonomyCode)) {
-    const isCancerDiag = TAXONOMY_DIAGNOSIS_MAP["oncology"].some(d => diagLower.includes(d));
+    let isCancerDiag = false;
+    for (let i = 0; i < ONCOLOGY_DIAGNOSES.length; i++) {
+      if (diagLower.includes(ONCOLOGY_DIAGNOSES[i])) {
+        isCancerDiag = true;
+        break;
+      }
+    }
     if (isCancerDiag) {
       return {
         matched: true,
