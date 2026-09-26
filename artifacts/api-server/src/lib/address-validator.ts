@@ -7,6 +7,15 @@ const US_STATES: Set<string> = new Set([
 
 const US_ZIP_REGEX = /^\d{5}(-\d{4})?$/;
 const STREET_PATTERN = /\d+\s+\S+/;
+// Hoist garbage patterns to module level to eliminate per-call RegExp allocations
+const GARBAGE_PATTERNS = [
+  /^[x]+$/i,
+  /^[0]+$/,
+  /^test$/i,
+  /^asdf$/i,
+  /^na$/i,
+  /^none$/i,
+];
 
 export interface AddressValidationResult {
   valid: boolean;
@@ -21,39 +30,50 @@ export function validateAddress(address: {
 }): AddressValidationResult {
   const errors: string[] = [];
 
-  if (!address.street_address?.trim()) {
+  // Trim inputs once to eliminate redundant string allocations
+  const street = address.street_address?.trim() ?? "";
+  if (!street) {
     errors.push("MISSING_STREET");
-  } else if (!STREET_PATTERN.test(address.street_address.trim())) {
+  } else if (!STREET_PATTERN.test(street)) {
     errors.push("INVALID_STREET_FORMAT");
   }
 
-  if (!address.city?.trim()) {
+  const city = address.city?.trim() ?? "";
+  if (!city) {
     errors.push("MISSING_CITY");
-  } else if (address.city.trim().length < 2) {
+  } else if (city.length < 2) {
     errors.push("INVALID_CITY");
   }
 
-  if (!address.state?.trim()) {
+  const state = address.state?.trim() ?? "";
+  if (!state) {
     errors.push("MISSING_STATE");
-  } else if (!US_STATES.has(address.state.trim().toUpperCase())) {
+  } else if (!US_STATES.has(state.toUpperCase())) {
     errors.push("INVALID_STATE_CODE");
   }
 
-  if (!address.zip?.trim()) {
+  const zip = address.zip?.trim() ?? "";
+  if (!zip) {
     errors.push("MISSING_ZIP");
-  } else if (!US_ZIP_REGEX.test(address.zip.trim())) {
+  } else if (!US_ZIP_REGEX.test(zip)) {
     errors.push("INVALID_ZIP_FORMAT");
   }
 
-  const garbagePatterns = [/^[x]+$/i, /^[0]+$/, /^test$/i, /^asdf$/i, /^na$/i, /^none$/i];
-  const fieldsToCheck = [address.street_address, address.city];
-  for (const field of fieldsToCheck) {
-    if (field) {
-      for (const pat of garbagePatterns) {
-        if (pat.test(field.trim())) {
-          errors.push("GARBAGE_ADDRESS_DATA");
-          break;
-        }
+  // Check garbage patterns directly on trimmed strings without allocating temporary arrays
+  if (street) {
+    for (let i = 0; i < GARBAGE_PATTERNS.length; i++) {
+      if (GARBAGE_PATTERNS[i]!.test(street)) {
+        errors.push("GARBAGE_ADDRESS_DATA");
+        break;
+      }
+    }
+  }
+
+  if (city) {
+    for (let i = 0; i < GARBAGE_PATTERNS.length; i++) {
+      if (GARBAGE_PATTERNS[i]!.test(city)) {
+        errors.push("GARBAGE_ADDRESS_DATA");
+        break;
       }
     }
   }
