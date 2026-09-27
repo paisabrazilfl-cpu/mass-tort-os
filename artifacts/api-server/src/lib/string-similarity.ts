@@ -3,54 +3,32 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+// Single regex matching 1 or more contiguous non-word characters. Replaces two chained
+// .replace() regex passes with a single pass, avoiding intermediate string allocations.
+const NON_WORD_RE = /[^\w]+/g;
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(NON_WORD_RE, " ")
     .trim();
 }
 
-// Title and credential tokens that should NOT contribute to person-name
-// similarity. "Dr. John Smith MD" and "John Smith" are the same person; the
-// raw normalize() above would penalize them ~40%. Used by name comparisons
-// in npi-verify so "Dr. Micah Edwin, MD" matches "Micah Edwin" cleanly.
-const TITLE_TOKENS = new Set(["dr", "doctor", "mr", "mrs", "ms", "miss"]);
-const CREDENTIAL_TOKENS = new Set([
-  "md",
-  "do",
-  "pa",
-  "np",
-  "rn",
-  "lpn",
-  "pharmd",
-  "dds",
-  "dmd",
-  "phd",
-  "psyd",
-  "msw",
-  "lcsw",
-  "facp",
-  "facs",
-  "esq",
-  "jr",
-  "sr",
-  "ii",
-  "iii",
-  "iv",
-]);
+// Module-level regex for stripping title and credential tokens in a single fast pass.
+// Avoids array splitting, set lookups, and joining overhead when normalizing names.
+const TITLE_CREDENTIAL_RE = /\b(?:dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/gi;
 
 /**
  * Optimized name normalization that skips redundant regex processing when
- * the input is already pre-normalized.
+ * the input is already pre-normalized and contains no title or credential tokens.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  TITLE_CREDENTIAL_RE.lastIndex = 0;
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) return normalized;
+  TITLE_CREDENTIAL_RE.lastIndex = 0;
+  return normalized.replace(TITLE_CREDENTIAL_RE, "").replace(NON_WORD_RE, " ").trim();
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -73,10 +51,15 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // If neither string contained title/credential tokens, the stripped result is identical to raw
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
