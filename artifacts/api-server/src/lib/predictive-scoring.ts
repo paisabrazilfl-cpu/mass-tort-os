@@ -49,6 +49,22 @@ interface TrainingRow {
   source: string | null;
 }
 
+export interface PredictiveLeadInput {
+  id: number;
+  status: string;
+  tort_type: string;
+  fraud_score: number | null;
+  npi_verified?: boolean | null;
+  diagnosis_confirmed: boolean;
+  was_at_location: boolean;
+  email?: string | null;
+  phone?: string | null;
+  phone_primary?: string | null;
+  street_address?: string | null;
+  ad_spend?: string | number | null;
+  source?: string | null;
+}
+
 const FEATURE_WEIGHTS: Record<string, number> = {
   fraud_score_low: 0.25,
   npi_verified: 0.20,
@@ -99,14 +115,16 @@ function getQualityTier(conversionScore: number, riskScore: number): string {
   return "unqualified";
 }
 
-// firmId guards against IDOR: callers must pass req.user!.firm_id so we
-// verify the lead belongs to their firm before returning score data.
-export async function scoreLeadPredictive(leadId: number, firmId?: number): Promise<PredictiveScore> {
-  const where = firmId != null
-    ? and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId))
-    : sql`${leadsTable.id} = ${leadId}`;
-  const [lead] = await db.select().from(leadsTable).where(where);
-  if (!lead) throw new Error(`Lead ${leadId} not found`);
+/**
+ * Pure scoring calculation from a lead record.
+ * Extracted to allow batch operations without triggering N+1 database queries.
+ */
+export function computePredictiveScoreForLead(lead: PredictiveLeadInput): PredictiveScore {
+  const adSpend = typeof lead.ad_spend === "number"
+    ? lead.ad_spend
+    : lead.ad_spend
+      ? parseFloat(String(lead.ad_spend))
+      : 0;
 
   const row: TrainingRow = {
     status: lead.status,
@@ -118,8 +136,8 @@ export async function scoreLeadPredictive(leadId: number, firmId?: number): Prom
     has_email: !!lead.email,
     has_phone: !!lead.phone_primary || !!lead.phone,
     has_address: !!lead.street_address,
-    ad_spend: lead.ad_spend ? parseFloat(lead.ad_spend) : 0,
-    source: lead.source,
+    ad_spend: Number.isNaN(adSpend) ? 0 : adSpend,
+    source: lead.source ?? null,
   };
 
   const conversionProb = computeConversionScore(row);
@@ -141,7 +159,25 @@ export async function scoreLeadPredictive(leadId: number, firmId?: number): Prom
   if (row.was_at_location) factors.push({ name: "Location Verified", impact: 1, description: "Presence at exposure location confirmed" });
   if (!row.has_email && !row.has_phone) factors.push({ name: "Missing Contact", impact: -1, description: "No email or phone on file" });
 
-  return { lead_id: leadId, conversion_probability: Math.round(conversionProb * 100), risk_score: Math.round(riskScore * 100), quality_tier: qualityTier, factors };
+  return {
+    lead_id: lead.id,
+    conversion_probability: Math.round(conversionProb * 100),
+    risk_score: Math.round(riskScore * 100),
+    quality_tier: qualityTier,
+    factors,
+  };
+}
+
+// firmId guards against IDOR: callers must pass req.user!.firm_id so we
+// verify the lead belongs to their firm before returning score data.
+export async function scoreLeadPredictive(leadId: number, firmId?: number): Promise<PredictiveScore> {
+  const where = firmId != null
+    ? and(eq(leadsTable.id, leadId), eq(leadsTable.firm_id, firmId))
+    : sql`${leadsTable.id} = ${leadId}`;
+  const [lead] = await db.select().from(leadsTable).where(where);
+  if (!lead) throw new Error(`Lead ${leadId} not found`);
+
+  return computePredictiveScoreForLead(lead);
 }
 
 export async function getModelStats(firmId?: number): Promise<ModelStats> {
@@ -214,23 +250,21 @@ export async function getModelStats(firmId?: number): Promise<ModelStats> {
   };
 }
 
+/**
+ * Batch predictions endpoint helper.
+ * Optimized: fetches all required lead records in a single database query,
+ * eliminating the N+1 query bottleneck (1 query instead of 1 + N queries).
+ */
 export async function getBatchPredictions(limit = 50, firmId?: number): Promise<PredictiveScore[]> {
   const firmPred = firmId != null ? eq(leadsTable.firm_id, firmId) : undefined;
   const leads = await db
-    .select({ id: leadsTable.id })
+    .select()
     .from(leadsTable)
     .where(firmPred)
     .orderBy(desc(leadsTable.created_at))
     .limit(limit);
-  const results: PredictiveScore[] = [];
-  for (const lead of leads) {
-    try {
-      results.push(await scoreLeadPredictive(lead.id, firmId));
-    } catch (err) {
-      logger.error({ err, lead_id: lead.id }, "Batch prediction failed for lead");
-    }
-  }
-  return results;
+
+  return leads.map((lead) => computePredictiveScoreForLead(lead));
 }
 
 export async function getTortPredictions(firmId?: number): Promise<{ tort_type: string; avg_conversion: number; avg_risk: number; count: number }[]> {
