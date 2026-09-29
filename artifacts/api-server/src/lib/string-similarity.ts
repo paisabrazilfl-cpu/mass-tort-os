@@ -24,9 +24,10 @@ const TITLE_CREDENTIAL_RE =
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  // Fast path: if no title/credential tokens match, return normalized as-is
-  if (!TITLE_CREDENTIAL_RE.test(normalized)) return normalized;
-  return normalized.replace(TITLE_CREDENTIAL_RE, "").replace(/\s+/g, " ").trim();
+  const replaced = normalized.replace(TITLE_CREDENTIAL_RE, "");
+  // Fast path: if no replacements occurred, return original string directly
+  if (replaced.length === normalized.length) return normalized;
+  return replaced.replace(/\s+/g, " ").trim();
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
