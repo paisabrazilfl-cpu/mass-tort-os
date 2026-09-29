@@ -5,52 +5,29 @@
 
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  // Single-pass regex replaces contiguous non-word characters with a single space.
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\w]+/g, " ")
     .trim();
 }
 
-// Title and credential tokens that should NOT contribute to person-name
-// similarity. "Dr. John Smith MD" and "John Smith" are the same person; the
-// raw normalize() above would penalize them ~40%. Used by name comparisons
-// in npi-verify so "Dr. Micah Edwin, MD" matches "Micah Edwin" cleanly.
-const TITLE_TOKENS = new Set(["dr", "doctor", "mr", "mrs", "ms", "miss"]);
-const CREDENTIAL_TOKENS = new Set([
-  "md",
-  "do",
-  "pa",
-  "np",
-  "rn",
-  "lpn",
-  "pharmd",
-  "dds",
-  "dmd",
-  "phd",
-  "psyd",
-  "msw",
-  "lcsw",
-  "facp",
-  "facs",
-  "esq",
-  "jr",
-  "sr",
-  "ii",
-  "iii",
-  "iv",
-]);
+// Pre-compiled regex matching title and credential tokens as word boundaries.
+// "Dr. John Smith MD" and "John Smith" are the same person; stripping titles
+// prevents raw normalize() from penalizing titles/credentials by ~40%.
+const TITLE_CREDENTIAL_RE =
+  /\b(?:dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/g;
 
 /**
- * Optimized name normalization that skips redundant regex processing when
- * the input is already pre-normalized.
+ * Optimized name normalization using a pre-compiled regex to remove
+ * title and credential tokens without array allocations or splits.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  const replaced = normalized.replace(TITLE_CREDENTIAL_RE, "");
+  // Fast path: if no replacements occurred, return original string directly
+  if (replaced.length === normalized.length) return normalized;
+  return replaced.replace(/\s+/g, " ").trim();
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -73,10 +50,16 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const strippedA = normalizeNameFromNormalized(na);
+  const strippedB = normalizeNameFromNormalized(nb);
+
+  // Fast path: if neither string contained titles/credentials, stripped variants
+  // match the originals, so raw is already the exact result.
+  if (strippedA === na && strippedB === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(strippedA, strippedB);
   return Math.max(raw, stripped);
 }
 
