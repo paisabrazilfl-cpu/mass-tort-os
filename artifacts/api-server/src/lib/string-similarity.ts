@@ -3,13 +3,13 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+// Pre-compiled regex replacing non-word sequences (punctuation and whitespace) in a single pass.
+const NON_WORD_RE = /[^\w]+/g;
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
-  return s
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Single regex pass replacing non-word character sequences with space, avoiding double regex pass and intermediate string allocation.
+  return s.toLowerCase().replace(NON_WORD_RE, " ").trim();
 }
 
 // Title and credential tokens that should NOT contribute to person-name
@@ -41,12 +41,19 @@ const CREDENTIAL_TOKENS = new Set([
   "iv",
 ]);
 
+// Fast regex check to test if any title or credential token exists in the normalized string before splitting.
+const TITLE_CREDENTIAL_RE = /\b(?:dr|doctor|mr|mrs|ms|miss|md|do|pa|np|rn|lpn|pharmd|dds|dmd|phd|psyd|msw|lcsw|facp|facs|esq|jr|sr|ii|iii|iv)\b/i;
+
 /**
- * Optimized name normalization that skips redundant regex processing when
+ * Optimized name normalization that skips redundant processing when
  * the input is already pre-normalized.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
+  // Fast path: if no title or credential tokens exist, return string directly to skip array allocations and set lookups.
+  if (!TITLE_CREDENTIAL_RE.test(normalized)) {
+    return normalized;
+  }
   const tokens = normalized.split(" ");
   return tokens
     .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
@@ -73,10 +80,16 @@ export function similarityName(
   const raw = similarityPreNormalized(na, nb);
   if (raw >= 0.98) return raw; // Early return for near-perfect matches
 
-  const stripped = similarityPreNormalized(
-    normalizeNameFromNormalized(na),
-    normalizeNameFromNormalized(nb),
-  );
+  const naStripped = normalizeNameFromNormalized(na);
+  const nbStripped = normalizeNameFromNormalized(nb);
+
+  // Fast path: if neither string changed after title/credential stripping,
+  // raw score is identical to stripped score — skip redundant $O(N \times M)$ Levenshtein DP calculation.
+  if (naStripped === na && nbStripped === nb) {
+    return raw;
+  }
+
+  const stripped = similarityPreNormalized(naStripped, nbStripped);
   return Math.max(raw, stripped);
 }
 
