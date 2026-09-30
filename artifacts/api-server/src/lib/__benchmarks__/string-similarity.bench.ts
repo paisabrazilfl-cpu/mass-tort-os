@@ -1,7 +1,9 @@
 import { levenshtein, similarity, similarityName, normalize, normalizeName } from "../string-similarity";
 
-const a = "Dr. Micah Edwin, MD";
-const b = "Micah Edwin";
+const titleA = "Dr. Micah Edwin, MD";
+const titleB = "Micah Edwin";
+const cleanA = "Micah Edwin";
+const cleanB = "Micha Edwin";
 
 const iterations = 100000;
 
@@ -17,21 +19,29 @@ function benchmark(name: string, fn: () => void) {
 }
 
 benchmark("levenshtein", () => {
-  levenshtein(a, b);
+  levenshtein(titleA, titleB);
 });
 
 benchmark("normalize", () => {
-  normalize(a);
+  normalize(titleA);
 });
 
-benchmark("normalizeName", () => {
-  normalizeName(a);
+benchmark("normalizeName (clean)", () => {
+  normalizeName(cleanA);
+});
+
+benchmark("normalizeName (title)", () => {
+  normalizeName(titleA);
 });
 
 benchmark("similarity", () => {
-  similarity(a, b);
+  similarity(titleA, titleB);
 });
 
-benchmark("similarityName", () => {
-  similarityName(a, b);
+benchmark("similarityName (clean non-exact)", () => {
+  similarityName(cleanA, cleanB);
+});
+
+benchmark("similarityName (title)", () => {
+  similarityName(titleA, titleB);
 });
