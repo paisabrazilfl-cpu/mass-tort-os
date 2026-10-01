@@ -1,3 +1,7 @@
 ## 2025-05-15 - [String Similarity Optimization]
 **Learning:** Redundant normalization in fuzzy matching functions (calling `normalize()` multiple times on the same input) is a significant bottleneck. Standard `Array<number>` for Levenshtein distance creates GC pressure and is slower than `Int32Array`. String swapping ensures the auxiliary array is as small as possible.
 **Action:** Use `Int32Array` and single-vector DP approach for Levenshtein. Always reuse normalized strings instead of re-normalizing in wrapper functions. Add early returns for near-exact matches to skip expensive fuzzy logic.
+
+## 2026-03-30 - [NPI Provider Search & Specialty Normalization]
+**Learning:** In NPI provider lookup (`npi-verify.ts`), repeated normalization of query parameters (`expected` name, org, city, state) inside candidate evaluation loops degrades search performance. Hoisting parameter normalizations outside candidate loops and using `similarityPreNormalized` avoids $O(N)$ string normalization overhead across search candidates. Pre-normalizing static lookup aliases at module scope and combining taxonomy iterations into a single pass eliminates intermediate array allocations.
+**Action:** When comparing query parameters against arrays of candidates, always hoist normalization of expected query values outside candidate loops and use pre-normalized comparison primitives (`similarityPreNormalized`). Combine taxonomy descriptor extraction and matching into a single loop.
