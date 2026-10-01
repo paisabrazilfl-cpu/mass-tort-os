@@ -10,7 +10,13 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity, similarityName } from "./string-similarity";
+import {
+  normalize,
+  normalizeNameFromNormalized,
+  similarity,
+  similarityName,
+  similarityPreNormalized,
+} from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
@@ -21,7 +27,7 @@ const NPI_MAX_RETRIES = 2; // 1 initial + 2 retries = 3 attempts total
 // Specialty aliases: when an operator types "general practitioner" we want the
 // taxonomy match to also accept "general practice", "family medicine", or
 // "internal medicine" — those are the actual NPPES taxonomy descriptions for
-// the same job. Without this, perfectly valid NPIs scored 0 on specialty.
+// the same job. Pre-normalized at module scope to eliminate per-call normalizations.
 const SPECIALTY_ALIASES: Record<string, readonly string[]> = {
   "general practitioner": ["general practice", "family medicine", "internal medicine"],
   "general practice": ["family medicine", "internal medicine"],
@@ -249,20 +255,65 @@ function pickBestSearchResult(
   const expCity = expected.city ?? "";
   const expState = expected.state ?? "";
 
+  // Pre-normalize expected parameters once before the candidate comparison loop
+  const expNameNorm = normalize(expName);
+  const expNameStripped = normalizeNameFromNormalized(expNameNorm);
+  const expOrgNorm = normalize(expOrg);
+  const expCityNorm = normalize(expCity);
+  const expStateNorm = normalize(expState);
+
   for (const r of results) {
     const basic = r.basic ?? {};
-    const name =
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
+    let name = basic.name;
+    if (!name) {
+      const fn = basic.first_name;
+      const ln = basic.last_name;
+      if (fn && ln) name = `${fn} ${ln}`;
+      else name = fn || ln || "";
+    }
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
-    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
-    const orgScore = similarity(expOrg, org);
-    const cityScore = similarity(expCity, primaryAddr.city ?? "");
+
+    // Compute similarity score for candidate name vs expected name (title/credential stripped)
+    const nameNorm = normalize(name);
+    const nameRaw = similarityPreNormalized(expNameNorm, nameNorm);
+    const candidateNameScore =
+      nameRaw >= 0.98
+        ? nameRaw
+        : Math.max(
+            nameRaw,
+            similarityPreNormalized(
+              expNameStripped,
+              normalizeNameFromNormalized(nameNorm),
+            ),
+          );
+
+    // Compute similarity score for candidate org name vs expected name
+    const orgNorm = normalize(org);
+    const orgRaw = similarityPreNormalized(expNameNorm, orgNorm);
+    const candidateNameOrgScore =
+      orgRaw >= 0.98
+        ? orgRaw
+        : Math.max(
+            orgRaw,
+            similarityPreNormalized(
+              expNameStripped,
+              normalizeNameFromNormalized(orgNorm),
+            ),
+          );
+
+    const nameScore = Math.max(candidateNameScore, candidateNameOrgScore);
+    const orgScore = similarityPreNormalized(expOrgNorm, orgNorm);
+
+    const cityNorm = normalize(primaryAddr.city ?? "");
+    const cityScore = similarityPreNormalized(expCityNorm, cityNorm);
+
+    const stateNorm = normalize(primaryAddr.state ?? "");
     const stateScore =
-      normalize(expState) === normalize(primaryAddr.state ?? "")
+      expStateNorm === stateNorm
         ? 1.0
-        : similarity(expState, primaryAddr.state ?? "");
+        : similarityPreNormalized(expStateNorm, stateNorm);
+
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
     const score = 0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
     if (score > bestScore) {
@@ -281,9 +332,14 @@ function pickBestSearchResult(
 function specialtyAcceptedTerms(expectedSpecialty: string): string[] {
   const base = normalize(expectedSpecialty);
   if (!base) return [];
-  const aliases = SPECIALTY_ALIASES[base] ?? [];
-  const all = [base, ...aliases].map((t) => normalize(t)).filter(Boolean);
-  return Array.from(new Set(all));
+  const aliases = SPECIALTY_ALIASES[base];
+  if (!aliases) return [base];
+  const set = new Set<string>();
+  set.add(base);
+  for (let i = 0; i < aliases.length; i++) {
+    set.add(aliases[i]);
+  }
+  return Array.from(set);
 }
 
 function providerTaxonomyMatches(
@@ -293,19 +349,21 @@ function providerTaxonomyMatches(
   const terms = specialtyAcceptedTerms(expectedSpecialty);
   const taxonomies = provider.taxonomies ?? [];
   const matchedTaxonomies: Array<{ code: string; desc: string; primary: boolean }> = [];
-  if (terms.length > 0) {
-    for (const t of taxonomies) {
-      const desc = t.desc ?? "";
-      if (!desc) continue;
+  const allDescs: string[] = [];
+
+  for (const t of taxonomies) {
+    const desc = t.desc ?? "";
+    if (!desc) continue;
+    allDescs.push(desc);
+
+    if (terms.length > 0) {
       const descNorm = normalize(desc);
-      // Substring match either direction so "family medicine" matches
-      // "Family Medicine - Sports Medicine Physician" and so on.
       if (terms.some((term) => descNorm.includes(term) || term.includes(descNorm))) {
         matchedTaxonomies.push({ code: t.code ?? "", desc, primary: !!t.primary });
       }
     }
   }
-  const allDescs = taxonomies.map((t) => t.desc ?? "").filter(Boolean);
+
   return {
     matched: matchedTaxonomies.length > 0,
     matched_taxonomies: matchedTaxonomies,
