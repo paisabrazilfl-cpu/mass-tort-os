@@ -74,6 +74,33 @@ const BASELINE_CRITICAL_FIELDS = [
 
 const MAX_MISSING_FIELDS_BEFORE_DEFER = 2;
 
+// Hoisted static regexes to avoid per-call RegExp allocations
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const CANCER_DIAGNOSIS_RE = /cancer|carcinoma|lymphoma|leukemia|myeloma|sarcoma/;
+const DEATH_DIAGNOSIS_RE = /death|deceased|fatal/;
+
+/**
+ * Helper to parse date inputs (string, Date, or timestamp) directly into millisecond timestamps.
+ * Returns null if invalid or missing, avoiding Date object heap allocations.
+ */
+function parseDateMs(v: unknown): number | null {
+  if (!v) return null;
+  if (typeof v === "number") return Number.isNaN(v) ? null : v;
+  if (v instanceof Date) {
+    const ms = v.getTime();
+    return Number.isNaN(ms) ? null : ms;
+  }
+  let s = String(v).trim();
+  if (!s) return null;
+  // Treat date-only strings as local midnight to avoid UTC-vs-local off-by-one
+  // when comparing against `today` constructed in the local timezone.
+  if (DATE_ONLY_RE.test(s)) {
+    s = s + "T00:00:00";
+  }
+  const ms = Date.parse(s);
+  return Number.isNaN(ms) ? null : ms;
+}
+
 /**
  * Detect missing critical intake fields. Returns short codes (UI labels them).
  * Tort-aware: torts with required_exposure also demand exposure_start.
@@ -101,28 +128,19 @@ export function detectContradictions(
   const out: string[] = [];
   const today = new Date();
   today.setHours(23, 59, 59, 999);
+  const todayMs = today.getTime();
 
-  const parse = (v: unknown): Date | null => {
-    if (!v) return null;
-    let s = String(v).trim();
-    // Treat date-only strings as local midnight to avoid UTC-vs-local off-by-one
-    // when comparing against `today` constructed in the local timezone.
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) s = s + "T00:00:00";
-    const d = new Date(s);
-    return Number.isNaN(d.getTime()) ? null : d;
-  };
+  const dx = parseDateMs(lead.diagnosis_date);
+  const expStart = parseDateMs(lead.exposure_start);
+  const expEnd = parseDateMs(lead.exposure_end);
+  const dob = parseDateMs(lead.date_of_birth);
 
-  const dx = parse(lead.diagnosis_date);
-  const expStart = parse(lead.exposure_start);
-  const expEnd = parse(lead.exposure_end);
-  const dob = parse(lead.date_of_birth);
-
-  if (dx && expStart && dx < expStart) out.push("diagnosis_before_exposure");
-  if (expStart && expEnd && expEnd < expStart) out.push("exposure_end_before_start");
-  if (dx && dx > today) out.push("diagnosis_in_future");
-  if (expStart && expStart > today) out.push("exposure_start_in_future");
-  if (dob && dx && dx < dob) out.push("diagnosis_before_birth");
-  if (dob && dob > today) out.push("birth_in_future");
+  if (dx !== null && expStart !== null && dx < expStart) out.push("diagnosis_before_exposure");
+  if (expStart !== null && expEnd !== null && expEnd < expStart) out.push("exposure_end_before_start");
+  if (dx !== null && dx > todayMs) out.push("diagnosis_in_future");
+  if (expStart !== null && expStart > todayMs) out.push("exposure_start_in_future");
+  if (dob !== null && dx !== null && dx < dob) out.push("diagnosis_before_birth");
+  if (dob !== null && dob > todayMs) out.push("birth_in_future");
 
   return out;
 }
@@ -139,13 +157,13 @@ export function detectRuinFlags(
 
   // 1. Statute of limitations expired
   if (tort.sol_months && (lead.diagnosis_date || lead.exposure_start)) {
-    const startDate = lead.diagnosis_date
-      ? new Date(lead.diagnosis_date)
+    const startDateMs = lead.diagnosis_date
+      ? parseDateMs(lead.diagnosis_date)
       : lead.exposure_start
-        ? new Date(lead.exposure_start)
+        ? parseDateMs(lead.exposure_start)
         : null;
-    if (startDate && !Number.isNaN(startDate.getTime())) {
-      const ageMonths = (Date.now() - startDate.getTime()) / (1000 * 60 * 60 * 24 * 30.44);
+    if (startDateMs !== null) {
+      const ageMonths = (Date.now() - startDateMs) / (1000 * 60 * 60 * 24 * 30.44);
       if (ageMonths > tort.sol_months) flags.push("sol_expired");
     }
   }
@@ -156,7 +174,14 @@ export function detectRuinFlags(
   // 3. Required diagnosis missing or not valid for this tort
   if (tort.valid_diagnoses.length > 0 && lead.diagnosis) {
     const dx = lead.diagnosis.toLowerCase().trim();
-    const matches = tort.valid_diagnoses.some(d => dx.includes(d.toLowerCase()) || d.toLowerCase().includes(dx));
+    let matches = false;
+    for (let i = 0; i < tort.valid_diagnoses.length; i++) {
+      const validDx = tort.valid_diagnoses[i].toLowerCase();
+      if (dx.includes(validDx) || validDx.includes(dx)) {
+        matches = true;
+        break;
+      }
+    }
     if (!matches) flags.push("diagnosis_invalid");
   }
 
@@ -214,8 +239,8 @@ export function scoreLead(
   // Diagnosis severity multiplier (cancer/death > chronic > acute)
   const dx = (lead.diagnosis || "").toLowerCase();
   let severityMult = 1.0;
-  if (/cancer|carcinoma|lymphoma|leukemia|myeloma|sarcoma/.test(dx)) severityMult = 1.4;
-  else if (/death|deceased|fatal/.test(dx)) severityMult = 1.6;
+  if (CANCER_DIAGNOSIS_RE.test(dx)) severityMult = 1.4;
+  else if (DEATH_DIAGNOSIS_RE.test(dx)) severityMult = 1.6;
   else if (lead.diagnosis_confirmed) severityMult = 1.1;
   else severityMult = 0.7;
 
