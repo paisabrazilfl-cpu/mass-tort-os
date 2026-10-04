@@ -35,3 +35,14 @@ benchmark("similarity", () => {
 benchmark("similarityName", () => {
   similarityName(a, b);
 });
+
+const cleanA = "Micah Edwin";
+const cleanB = "Micah Edwyn";
+
+benchmark("normalizeName (clean)", () => {
+  normalizeName(cleanA);
+});
+
+benchmark("similarityName (clean pair)", () => {
+  similarityName(cleanA, cleanB);
+});
