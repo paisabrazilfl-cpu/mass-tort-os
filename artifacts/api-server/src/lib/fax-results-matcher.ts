@@ -14,6 +14,13 @@
 
 const SOURCE_FILE_PREFIX = "med_records_request";
 
+// Hoist regular expression to module scope to avoid re-compilation and per-call RegExp allocations.
+// `[1-9]\d*` ensures lead_id is a positive non-zero integer directly in regex pattern matching.
+const FAX_SOURCE_FILE_RE = /^med_records_request_lead_([1-9]\d*)_env_(.+)\.pdf$/;
+
+// Minimum valid length: 25 ("med_records_request_lead_") + 1 (leadId) + 5 ("_env_") + 1 (envelopeId) + 4 (".pdf") = 36
+const MIN_FAX_SOURCE_FILE_LEN = 36;
+
 export const FAX_SOURCE_FILE_TEMPLATE = (leadId: number, envelopeId: number | string) =>
   `${SOURCE_FILE_PREFIX}_lead_${leadId}_env_${envelopeId}.pdf`;
 
@@ -43,12 +50,14 @@ export interface ParsedFaxSourceFile {
  * (DocuSign uses UUIDs, but we allow any non-empty string).
  */
 export function parseFaxSourceFile(sourceFile: string | null | undefined): ParsedFaxSourceFile | null {
-  if (typeof sourceFile !== "string" || sourceFile.length === 0) return null;
-  const match = sourceFile.match(/^med_records_request_lead_(\d+)_env_(.+)\.pdf$/);
+  // Fast path: early return if input is not a string or too short to match pattern
+  if (typeof sourceFile !== "string" || sourceFile.length < MIN_FAX_SOURCE_FILE_LEN) return null;
+
+  const match = FAX_SOURCE_FILE_RE.exec(sourceFile);
   if (!match) return null;
-  const leadId = Number(match[1]);
-  if (!Number.isInteger(leadId) || leadId <= 0) return null;
-  const envelopeId = match[2];
-  if (!envelopeId || envelopeId.length === 0) return null;
-  return { lead_id: leadId, envelope_id: envelopeId };
+
+  return {
+    lead_id: Number(match[1]),
+    envelope_id: match[2],
+  };
 }
