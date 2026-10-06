@@ -3,12 +3,15 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+// Hoisted regex for single-pass non-word character replacement & space normalization
+const NON_WORD_RE = /[^\w]+/g;
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
+  // Single pass regex replacement avoids creating intermediate string allocations
   return s
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(NON_WORD_RE, " ")
     .trim();
 }
 
@@ -48,9 +51,15 @@ const CREDENTIAL_TOKENS = new Set([
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
   const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  // In-place string accumulation avoids intermediate array allocation from .filter().join()
+  let result = "";
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (TITLE_TOKENS.has(t) || CREDENTIAL_TOKENS.has(t)) continue;
+    if (result.length > 0) result += " ";
+    result += t;
+  }
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -80,6 +89,9 @@ export function similarityName(
   return Math.max(raw, stripped);
 }
 
+// Reuse a shared typed array buffer for short strings to prevent repeated heap allocations in hot loops
+const SHARED_LEVENSHTEIN_ROW = new Int32Array(256);
+
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   if (a.length === 0) return b.length;
@@ -94,7 +106,8 @@ export function levenshtein(a: string, b: string): number {
 
   const alen = s1.length;
   const blen = s2.length;
-  const row = new Int32Array(blen + 1);
+  // Use preallocated buffer for strings within length limit, fall back to new buffer for unusually long strings
+  const row = blen < 256 ? SHARED_LEVENSHTEIN_ROW : new Int32Array(blen + 1);
 
   for (let j = 0; j <= blen; j++) row[j] = j;
 
