@@ -22,6 +22,41 @@ export interface LeadIntelligenceScore {
   scored_at: string;
 }
 
+// Hoisted static field configurations to avoid per-invocation array allocations.
+const REQUIRED_FIELDS: readonly [string, string][] = [
+  ["first_name", "First Name"],
+  ["last_name", "Last Name"],
+  ["date_of_birth", "Date of Birth"],
+  ["phone_primary", "Primary Phone"],
+  ["email", "Email Address"],
+  ["street_address", "Street Address"],
+  ["city", "City"],
+  ["state", "State"],
+  ["zip", "ZIP Code"],
+  ["last_4_ssn", "Last 4 SSN"],
+  ["tort_type", "Tort Classification"],
+  ["diagnosis", "Diagnosis"],
+  ["diagnosis_date", "Diagnosis Date"],
+  ["physician_first_name", "Treating Physician First Name"],
+  ["physician_last_name", "Treating Physician Last Name"],
+  ["physician_full_address", "Physician Address"],
+  ["physician_contact_info", "Physician Contact"],
+  ["hospital_name", "Hospital/Facility Name"],
+  ["hospital_fax", "Hospital Fax"],
+  ["hospital_contact_info", "Hospital Contact"],
+];
+
+const SUPPLEMENTARY_FIELDS: readonly [string, string][] = [
+  ["medications", "Current Medications"],
+  ["exposure_start", "Exposure Start Date"],
+  ["exposure_end", "Exposure End Date"],
+  ["location_name", "Exposure Location"],
+  ["npi_number", "NPI Number"],
+  ["source", "Lead Source"],
+  ["law_firm", "Referring Law Firm"],
+  ["trustedform_cert_url", "TrustedForm Certificate"],
+];
+
 function gradeFromScore(score: number): string {
   if (score >= 90) return "Exceptional";
   if (score >= 75) return "Strong";
@@ -30,63 +65,37 @@ function gradeFromScore(score: number): string {
   return "Critical";
 }
 
-function computeCompletionScore(lead: Record<string, any>): { score: number; details: string[] } {
+export function computeCompletionScore(lead: Record<string, any>): { score: number; details: string[] } {
   const details: string[] = [];
   let filled = 0;
   let total = 0;
 
-  const requiredFields: [string, string][] = [
-    ["first_name", "First Name"],
-    ["last_name", "Last Name"],
-    ["date_of_birth", "Date of Birth"],
-    ["phone_primary", "Primary Phone"],
-    ["email", "Email Address"],
-    ["street_address", "Street Address"],
-    ["city", "City"],
-    ["state", "State"],
-    ["zip", "ZIP Code"],
-    ["last_4_ssn", "Last 4 SSN"],
-    ["tort_type", "Tort Classification"],
-    ["diagnosis", "Diagnosis"],
-    ["diagnosis_date", "Diagnosis Date"],
-    ["physician_first_name", "Treating Physician First Name"],
-    ["physician_last_name", "Treating Physician Last Name"],
-    ["physician_full_address", "Physician Address"],
-    ["physician_contact_info", "Physician Contact"],
-    ["hospital_name", "Hospital/Facility Name"],
-    ["hospital_fax", "Hospital Fax"],
-    ["hospital_contact_info", "Hospital Contact"],
-  ];
-
-  const supplementaryFields: [string, string][] = [
-    ["medications", "Current Medications"],
-    ["exposure_start", "Exposure Start Date"],
-    ["exposure_end", "Exposure End Date"],
-    ["location_name", "Exposure Location"],
-    ["npi_number", "NPI Number"],
-    ["source", "Lead Source"],
-    ["law_firm", "Referring Law Firm"],
-    ["trustedform_cert_url", "TrustedForm Certificate"],
-  ];
-
-  for (const [key, label] of requiredFields) {
+  for (let i = 0; i < REQUIRED_FIELDS.length; i++) {
+    const [key, label] = REQUIRED_FIELDS[i]!;
     total += 3;
     const val = lead[key];
-    if (val && String(val).trim() && !String(val).includes("[DECRYPTION_ERROR]")) {
-      filled += 3;
-    } else {
-      details.push(`Missing required field: ${label}`);
+    if (val != null) {
+      const strVal = typeof val === "string" ? val.trim() : String(val).trim();
+      if (strVal.length > 0 && !strVal.includes("[DECRYPTION_ERROR]")) {
+        filled += 3;
+        continue;
+      }
     }
+    details.push(`Missing required field: ${label}`);
   }
 
-  for (const [key, label] of supplementaryFields) {
+  for (let i = 0; i < SUPPLEMENTARY_FIELDS.length; i++) {
+    const [key, label] = SUPPLEMENTARY_FIELDS[i]!;
     total += 1;
     const val = lead[key];
-    if (val && String(val).trim() && !String(val).includes("[DECRYPTION_ERROR]")) {
-      filled += 1;
-    } else {
-      details.push(`Missing supplementary field: ${label}`);
+    if (val != null) {
+      const strVal = typeof val === "string" ? val.trim() : String(val).trim();
+      if (strVal.length > 0 && !strVal.includes("[DECRYPTION_ERROR]")) {
+        filled += 1;
+        continue;
+      }
     }
+    details.push(`Missing supplementary field: ${label}`);
   }
 
   if (lead.diagnosis_confirmed) {
@@ -120,7 +129,7 @@ function computeCompletionScore(lead: Record<string, any>): { score: number; det
   return { score, details };
 }
 
-function computeReliabilityScore(lead: Record<string, any>, documents: Array<Record<string, any>>): { score: number; details: string[] } {
+export function computeReliabilityScore(lead: Record<string, any>, documents: Array<Record<string, any>>): { score: number; details: string[] } {
   const details: string[] = [];
   let score = 50;
 
@@ -171,10 +180,16 @@ function computeReliabilityScore(lead: Record<string, any>, documents: Array<Rec
   }
 
   if (documents && documents.length > 0) {
-    const signedDocs = documents.filter((d: any) => d.signed);
-    if (signedDocs.length > 0) {
+    // Avoid array allocation via .filter() by counting in a single pass.
+    let signedDocsCount = 0;
+    for (let i = 0; i < documents.length; i++) {
+      if (documents[i]?.signed) {
+        signedDocsCount++;
+      }
+    }
+    if (signedDocsCount > 0) {
       score += 10;
-      details.push(`${signedDocs.length} signed document(s) on file`);
+      details.push(`${signedDocsCount} signed document(s) on file`);
     }
     score += Math.min(documents.length * 2, 8);
     details.push(`${documents.length} document(s) associated with this lead`);
@@ -191,7 +206,7 @@ function computeReliabilityScore(lead: Record<string, any>, documents: Array<Rec
   return { score, details };
 }
 
-function computeTruthfulnessScore(lead: Record<string, any>): { score: number; details: string[] } {
+export function computeTruthfulnessScore(lead: Record<string, any>): { score: number; details: string[] } {
   const details: string[] = [];
   let score = 70;
 
@@ -225,17 +240,29 @@ function computeTruthfulnessScore(lead: Record<string, any>): { score: number; d
   }
 
   if (lead.fraud_indicators) {
-    try {
-      const indicators = JSON.parse(lead.fraud_indicators);
-      if (Array.isArray(indicators) && indicators.length > 0) {
-        score -= indicators.length * 5;
-        details.push(`${indicators.length} fraud indicator(s) flagged: ${indicators.slice(0, 3).join(", ")}${indicators.length > 3 ? "..." : ""}`);
-      }
-    } catch {
-      if (typeof lead.fraud_indicators === "string" && lead.fraud_indicators.trim()) {
+    const rawIndicators = lead.fraud_indicators;
+    if (typeof rawIndicators === "string") {
+      const trimmed = rawIndicators.trim();
+      if (trimmed.startsWith("[")) {
+        try {
+          const indicators = JSON.parse(trimmed);
+          if (Array.isArray(indicators) && indicators.length > 0) {
+            score -= indicators.length * 5;
+            details.push(`${indicators.length} fraud indicator(s) flagged: ${indicators.slice(0, 3).join(", ")}${indicators.length > 3 ? "..." : ""}`);
+          }
+        } catch {
+          if (trimmed.length > 0) {
+            score -= 10;
+            details.push("Fraud indicators present in record");
+          }
+        }
+      } else if (trimmed.length > 0) {
         score -= 10;
         details.push("Fraud indicators present in record");
       }
+    } else if (Array.isArray(rawIndicators) && rawIndicators.length > 0) {
+      score -= rawIndicators.length * 5;
+      details.push(`${rawIndicators.length} fraud indicator(s) flagged: ${rawIndicators.slice(0, 3).join(", ")}${rawIndicators.length > 3 ? "..." : ""}`);
     }
   }
 
