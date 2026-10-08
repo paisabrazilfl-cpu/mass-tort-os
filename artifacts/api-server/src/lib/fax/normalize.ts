@@ -33,35 +33,60 @@ export interface NormalizedFaxError {
   message: string;
 }
 
+// Module-scoped regular expressions to prevent per-call re-compilation overhead.
+const EXT_SUFFIX_RE = /\s*(?:ext\.?|x|#)\s*\d+\s*$/i;
+const NON_DIGIT_RE = /\D/g;
+
+/**
+ * Zero-allocation helper to check if a string consists entirely of identical characters.
+ * Replaces expensive RegExp `/^(\d)\1+$/` evaluations.
+ */
+function isAllSameDigit(s: string): boolean {
+  const first = s.charCodeAt(0);
+  for (let i = 1; i < s.length; i++) {
+    if (s.charCodeAt(i) !== first) return false;
+  }
+  return true;
+}
+
 export function normalizeFaxNumber(raw: string | null | undefined): NormalizedFax | NormalizedFaxError {
   if (raw == null) return { ok: false, code: "empty", message: "Fax number is required." };
-  const s = String(raw).trim();
+  const s = typeof raw === "string" ? raw.trim() : String(raw).trim();
   if (!s) return { ok: false, code: "empty", message: "Fax number is required." };
 
   // Strip extension suffixes ("ext 5", "x123", "#10") before counting digits —
   // a fax extension would otherwise inflate the digit count past 10 and trip
   // the too_long check below.
-  const noExt = s.replace(/\s*(?:ext\.?|x|#)\s*\d+\s*$/i, "");
+  const noExt = s.replace(EXT_SUFFIX_RE, "");
   // Keep digits only — drop "+", spaces, dashes, parens, dots, letters.
-  let digits = noExt.replace(/\D/g, "");
-  if (digits.length === 11 && digits.startsWith("1")) digits = digits.slice(1);
+  let digits = noExt.replace(NON_DIGIT_RE, "");
+  if (digits.length === 11 && digits.charCodeAt(0) === 49 /* '1' */) {
+    digits = digits.slice(1);
+  }
 
-  if (digits.length < 10) {
-    return { ok: false, code: "too_short", message: `Fax number must be 10 digits (got ${digits.length}).` };
+  const len = digits.length;
+  if (len < 10) {
+    return { ok: false, code: "too_short", message: `Fax number must be 10 digits (got ${len}).` };
   }
-  if (digits.length > 10) {
-    return { ok: false, code: "too_long", message: `Fax number must be 10 digits (got ${digits.length}).` };
+  if (len > 10) {
+    return { ok: false, code: "too_long", message: `Fax number must be 10 digits (got ${len}).` };
   }
+
   // Reject NANP-impossible numbers: area code can't start with 0 or 1,
   // exchange (NXX) can't start with 0 or 1.
-  if (digits[0] === "0" || digits[0] === "1") {
+  // Using charCodeAt checks avoids string indexing / allocation overhead.
+  const firstChar = digits.charCodeAt(0);
+  if (firstChar === 48 /* '0' */ || firstChar === 49 /* '1' */) {
     return { ok: false, code: "invalid_digits", message: "Invalid area code." };
   }
-  if (digits[3] === "0" || digits[3] === "1") {
+
+  const fourthChar = digits.charCodeAt(3);
+  if (fourthChar === 48 /* '0' */ || fourthChar === 49 /* '1' */) {
     return { ok: false, code: "invalid_digits", message: "Invalid exchange code." };
   }
-  // Reject obvious garbage (all same digit).
-  if (/^(\d)\1+$/.test(digits)) {
+
+  // Reject obvious garbage (all same digit) using fast char loop instead of regex.
+  if (isAllSameDigit(digits)) {
     return { ok: false, code: "invalid_digits", message: "Fax number looks invalid." };
   }
   return { ok: true, tenDigit: digits, e164: `+1${digits}` };
