@@ -86,38 +86,66 @@ function getClientIp(req: Request): string {
     || "unknown";
 }
 
-function scanValue(value: string): ThreatDetection | null {
-  for (const pattern of SQL_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+// Fast-path guard regexes to avoid running whole regex families when trigger characters are absent
+const HAS_SQL_TRIGGER = /['"=;]|\/\*|--|\b(union|select|insert|update|delete|drop|alter|create|exec|execute|waitfor|sleep)\b/i;
+const HAS_COMMAND_TRIGGER = /[;&|`$]/;
+const HAS_PATH_TRIGGER = /[.\/\\%]|boot/i;
+const HAS_XSS_TRIGGER = /[<:=().]/;
+
+export function scanValue(value: string): ThreatDetection | null {
+  // Fast path: strings under 3 chars cannot match any SQL/XSS/Traversal/Command injection patterns
+  if (value.length < 3) return null;
+
+  if (HAS_SQL_TRIGGER.test(value)) {
+    for (const pattern of SQL_INJECTION_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of XSS_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+  if (HAS_XSS_TRIGGER.test(value)) {
+    for (const pattern of XSS_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of PATH_TRAVERSAL_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+  if (HAS_PATH_TRIGGER.test(value)) {
+    for (const pattern of PATH_TRAVERSAL_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of COMMAND_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+  if (HAS_COMMAND_TRIGGER.test(value)) {
+    for (const pattern of COMMAND_INJECTION_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
   return null;
 }
 
-function deepScan(obj: any, path = ""): ThreatDetection | null {
+export function deepScan(obj: any): ThreatDetection | null {
   if (typeof obj === "string") {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+    // Array fast-path avoiding Object.entries array tuple allocations
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i]);
+        if (threat) return threat;
+      }
+    } else {
+      // Direct key iteration avoiding Object.entries array tuple allocations
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          const threat = deepScan(obj[key]);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;
