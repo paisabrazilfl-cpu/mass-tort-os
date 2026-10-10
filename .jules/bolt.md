@@ -1,3 +1,7 @@
 ## 2025-05-15 - [String Similarity Optimization]
 **Learning:** Redundant normalization in fuzzy matching functions (calling `normalize()` multiple times on the same input) is a significant bottleneck. Standard `Array<number>` for Levenshtein distance creates GC pressure and is slower than `Int32Array`. String swapping ensures the auxiliary array is as small as possible.
 **Action:** Use `Int32Array` and single-vector DP approach for Levenshtein. Always reuse normalized strings instead of re-normalizing in wrapper functions. Add early returns for near-exact matches to skip expensive fuzzy logic.
+
+## 2025-05-16 - [Fraud Engine Timeline & Allocation Optimization]
+**Learning:** In high-volume fraud/risk evaluation functions, instantiating `new Date(dateStr)` objects for age and timeline comparisons allocates heap objects per rule check. Using `Date.parse(dateStr)` primitive timestamps and reusing parsed birth timestamps avoids GC pressure and heap allocations. Additionally, replacing `.some()` callbacks and `.map().join()` temporary string array allocations with indexed loops and zero-allocation string accumulation provides significant latency reductions.
+**Action:** Use `Date.parse()` primitive timestamps for relative date math and timeline comparison checks. Hoist condition array constants to module scope and use indexed `for` loops instead of array iterator methods in rule evaluation functions.

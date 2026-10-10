@@ -18,6 +18,10 @@ export interface FraudDetectionResult {
   summary: string;
 }
 
+// Module-scoped constants to eliminate per-call object/array heap allocations
+const ADULT_ONLY_CONDITIONS = ["mesothelioma", "parkinson", "metallosis", "gastroparesis"];
+const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
+
 export function runFraudDetection(context: {
   lead_data: Record<string, unknown>;
   tort_validation: TortValidationResult;
@@ -29,56 +33,66 @@ export function runFraudDetection(context: {
   let hardBlock = false;
   let hardBlockReason: string | null = null;
 
-  const dob = context.lead_data.date_of_birth as string;
-  const diagDate = context.lead_data.diagnosis_date as string;
-  if (dob && diagDate) {
-    const birthDate = new Date(dob);
-    const diagnosisDate = new Date(diagDate);
-    const ageAtDiagnosis = (diagnosisDate.getTime() - birthDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+  const dob = context.lead_data.date_of_birth;
+  const diagDate = context.lead_data.diagnosis_date;
 
-    if (ageAtDiagnosis < 0) {
-      indicators.push({
-        type: "IMPOSSIBLE_TIMELINE",
-        description: "Diagnosis date is before date of birth",
-        severity: "hard_block",
-      });
-      hardBlock = true;
-      hardBlockReason = "IMPOSSIBLE_TIMELINE";
-      score += 100;
-    }
+  // Perform primitive timestamp parsing via Date.parse to avoid heap allocations from new Date()
+  const birthDateMs = typeof dob === "string" && dob.length > 0 ? Date.parse(dob) : NaN;
+  const hasBirthDate = !Number.isNaN(birthDateMs);
 
-    if (diagnosisDate > new Date()) {
-      indicators.push({
-        type: "FUTURE_DIAGNOSIS_DATE",
-        description: "Diagnosis date is in the future",
-        severity: "hard_block",
-      });
-      hardBlock = true;
-      hardBlockReason = hardBlockReason || "FUTURE_DIAGNOSIS_DATE";
-      score += 100;
-    }
+  if (hasBirthDate && typeof diagDate === "string" && diagDate.length > 0) {
+    const diagnosisDateMs = Date.parse(diagDate);
+    if (!Number.isNaN(diagnosisDateMs)) {
+      const ageAtDiagnosis = (diagnosisDateMs - birthDateMs) / MS_PER_YEAR;
 
-    if (!hardBlock && ageAtDiagnosis < 5) {
-      const diagnosis = (context.lead_data.diagnosis as string || "").toLowerCase();
-      const adultOnlyConditions = ["mesothelioma", "parkinson", "metallosis", "gastroparesis"];
-      if (adultOnlyConditions.some(c => diagnosis.includes(c))) {
+      if (ageAtDiagnosis < 0) {
         indicators.push({
-          type: "IMPOSSIBLE_MEDICAL_TIMELINE",
-          description: `Diagnosis "${context.lead_data.diagnosis}" is extremely rare in children under 5`,
+          type: "IMPOSSIBLE_TIMELINE",
+          description: "Diagnosis date is before date of birth",
           severity: "hard_block",
         });
         hardBlock = true;
-        hardBlockReason = hardBlockReason || "IMPOSSIBLE_MEDICAL_TIMELINE";
+        hardBlockReason = "IMPOSSIBLE_TIMELINE";
         score += 100;
+      }
+
+      if (diagnosisDateMs > Date.now()) {
+        indicators.push({
+          type: "FUTURE_DIAGNOSIS_DATE",
+          description: "Diagnosis date is in the future",
+          severity: "hard_block",
+        });
+        hardBlock = true;
+        hardBlockReason = hardBlockReason || "FUTURE_DIAGNOSIS_DATE";
+        score += 100;
+      }
+
+      if (!hardBlock && ageAtDiagnosis < 5) {
+        const diagStr = context.lead_data.diagnosis;
+        const diagnosis = typeof diagStr === "string" ? diagStr.toLowerCase() : "";
+        // Indexed loop over module-scoped array avoids closure & array allocations
+        for (let i = 0; i < ADULT_ONLY_CONDITIONS.length; i++) {
+          if (diagnosis.includes(ADULT_ONLY_CONDITIONS[i])) {
+            indicators.push({
+              type: "IMPOSSIBLE_MEDICAL_TIMELINE",
+              description: `Diagnosis "${diagStr}" is extremely rare in children under 5`,
+              severity: "hard_block",
+            });
+            hardBlock = true;
+            hardBlockReason = hardBlockReason || "IMPOSSIBLE_MEDICAL_TIMELINE";
+            score += 100;
+            break;
+          }
+        }
       }
     }
   }
 
-  const exposureStart = context.lead_data.exposure_start as string;
-  if (exposureStart && dob) {
-    const birthDate = new Date(dob);
-    const expDate = new Date(exposureStart);
-    if (expDate < birthDate) {
+  const exposureStart = context.lead_data.exposure_start;
+  if (hasBirthDate && typeof exposureStart === "string" && exposureStart.length > 0) {
+    const expDateMs = Date.parse(exposureStart);
+    // Reuse primitive birthDateMs timestamp instead of re-instantiating new Date(dob)
+    if (!Number.isNaN(expDateMs) && expDateMs < birthDateMs) {
       indicators.push({
         type: "EXPOSURE_BEFORE_BIRTH",
         description: "Claimed exposure start date is before date of birth",
@@ -91,7 +105,10 @@ export function runFraudDetection(context: {
   }
 
   if (context.taxonomy_match) {
-    for (const flag of context.taxonomy_match.fraud_indicators) {
+    const flags = context.taxonomy_match.fraud_indicators;
+    // Indexed loop avoids iterator object allocations
+    for (let i = 0; i < flags.length; i++) {
+      const flag = flags[i];
       if (flag === "TAXONOMY_MISMATCH") {
         indicators.push({
           type: "TAXONOMY_MISMATCH",
@@ -99,24 +116,21 @@ export function runFraudDetection(context: {
           severity: "review",
         });
         score += 30;
-      }
-      if (flag === "PEDIATRIC_PHYSICIAN_ADULT_CONDITION") {
+      } else if (flag === "PEDIATRIC_PHYSICIAN_ADULT_CONDITION") {
         indicators.push({
           type: "PEDIATRIC_PHYSICIAN_ADULT_CONDITION",
           description: "Pediatric physician listed for adult cancer/disease claim",
           severity: "review",
         });
         score += 50;
-      }
-      if (flag === "SPECIALTY_OUTSIDE_SCOPE") {
+      } else if (flag === "SPECIALTY_OUTSIDE_SCOPE") {
         indicators.push({
           type: "SPECIALTY_OUTSIDE_SCOPE",
           description: "Physician specialty is entirely outside scope of claimed diagnosis",
           severity: "review",
         });
         score += 35;
-      }
-      if (flag === "NON_MEDICAL_PROVIDER") {
+      } else if (flag === "NON_MEDICAL_PROVIDER") {
         indicators.push({
           type: "NON_MEDICAL_PROVIDER",
           description: "Listed provider is not a medical doctor (dentist, optometrist, etc.)",
@@ -145,7 +159,10 @@ export function runFraudDetection(context: {
     score += 25;
   }
 
-  for (const err of context.tort_validation.errors) {
+  const errs = context.tort_validation.errors;
+  // Indexed loop avoids iterator object allocations
+  for (let i = 0; i < errs.length; i++) {
+    const err = errs[i];
     if (err === "NO_EXPOSURE") {
       indicators.push({
         type: "INCONSISTENT_EXPOSURE",
@@ -153,8 +170,7 @@ export function runFraudDetection(context: {
         severity: "soft",
       });
       score += 15;
-    }
-    if (err === "EXPOSURE_OUTSIDE_1953_1987") {
+    } else if (err === "EXPOSURE_OUTSIDE_1953_1987") {
       indicators.push({
         type: "EXPOSURE_OUTSIDE_RANGE",
         description: "Camp Lejeune exposure must be between 1953-1987",
@@ -165,11 +181,27 @@ export function runFraudDetection(context: {
   }
 
   const cappedScore = Math.min(score, 100);
-  const hasFlags = indicators.length > 0;
+  const count = indicators.length;
+  const hasFlags = count > 0;
 
-  const summary = indicators.length === 0
-    ? "No fraud indicators detected"
-    : `${indicators.length} fraud indicator(s) found (score: ${cappedScore}/100): ${indicators.map(i => i.type).join(", ")}`;
+  // Single-pass string concatenation avoids allocating temporary string arrays with .map().join()
+  let summary: string;
+  if (count === 0) {
+    summary = "No fraud indicators detected";
+  } else {
+    let types = indicators[0].type;
+    for (let i = 1; i < count; i++) {
+      types += ", " + indicators[i].type;
+    }
+    summary = `${count} fraud indicator(s) found (score: ${cappedScore}/100): ${types}`;
+  }
 
-  return { hard_block: hardBlock, hard_block_reason: hardBlockReason, has_flags: hasFlags, fraud_score: cappedScore, indicators, summary };
+  return {
+    hard_block: hardBlock,
+    hard_block_reason: hardBlockReason,
+    has_flags: hasFlags,
+    fraud_score: cappedScore,
+    indicators,
+    summary,
+  };
 }
