@@ -7,17 +7,19 @@ import { TaxonomyMatchResult } from "../taxonomy-engine";
 test("runFraudDetection returns no flags for valid clean lead", () => {
   const tortValid: TortValidationResult = {
     valid: true,
+    tort_id: "roundup",
     diagnosis_match: true,
     category: "Toxic Tort",
     errors: [],
-    required_evidence: [],
   };
 
   const taxonomy: TaxonomyMatchResult = {
-    match: true,
+    matched: true,
     physician_specialty: "Oncology",
+    expected_specialties: ["Oncology"],
     diagnosis_category: "Cancer",
     fraud_indicators: [],
+    confidence: "high",
   };
 
   const result = runFraudDetection({
@@ -50,7 +52,7 @@ test("runFraudDetection flags IMPOSSIBLE_TIMELINE when diagnosis date is before 
       diagnosis_date: "1995-01-01",
       diagnosis: "Cancer",
     },
-    tort_validation: { valid: true, diagnosis_match: true, category: "Toxic Tort", errors: [], required_evidence: [] },
+    tort_validation: { valid: true, tort_id: "test", diagnosis_match: true, category: "Toxic Tort", errors: [] },
     taxonomy_match: null,
     npi_found: true,
   });
@@ -70,7 +72,7 @@ test("runFraudDetection flags FUTURE_DIAGNOSIS_DATE when diagnosis date is in th
       diagnosis_date: `${futureYear}-01-01`,
       diagnosis: "Cancer",
     },
-    tort_validation: { valid: true, diagnosis_match: true, category: "Toxic Tort", errors: [], required_evidence: [] },
+    tort_validation: { valid: true, tort_id: "test", diagnosis_match: true, category: "Toxic Tort", errors: [] },
     taxonomy_match: null,
     npi_found: true,
   });
@@ -87,7 +89,7 @@ test("runFraudDetection flags IMPOSSIBLE_MEDICAL_TIMELINE for adult-only conditi
       diagnosis_date: "2023-01-01", // age 1
       diagnosis: "Mesothelioma",
     },
-    tort_validation: { valid: true, diagnosis_match: true, category: "Toxic Tort", errors: [], required_evidence: [] },
+    tort_validation: { valid: true, tort_id: "test", diagnosis_match: true, category: "Toxic Tort", errors: [] },
     taxonomy_match: null,
     npi_found: true,
   });
@@ -104,7 +106,7 @@ test("runFraudDetection flags EXPOSURE_BEFORE_BIRTH when exposure start precedes
       diagnosis_date: "2020-01-01",
       exposure_start: "1985-01-01",
     },
-    tort_validation: { valid: true, diagnosis_match: true, category: "Toxic Tort", errors: [], required_evidence: [] },
+    tort_validation: { valid: true, tort_id: "test", diagnosis_match: true, category: "Toxic Tort", errors: [] },
     taxonomy_match: null,
     npi_found: true,
   });
@@ -116,8 +118,9 @@ test("runFraudDetection flags EXPOSURE_BEFORE_BIRTH when exposure start precedes
 
 test("runFraudDetection handles taxonomy mismatch flags and score capping", () => {
   const taxonomy: TaxonomyMatchResult = {
-    match: false,
+    matched: false,
     physician_specialty: "Pediatrics",
+    expected_specialties: ["Oncology"],
     diagnosis_category: "Oncology",
     fraud_indicators: [
       "TAXONOMY_MISMATCH",
@@ -125,6 +128,7 @@ test("runFraudDetection handles taxonomy mismatch flags and score capping", () =
       "SPECIALTY_OUTSIDE_SCOPE",
       "NON_MEDICAL_PROVIDER",
     ],
+    confidence: "low",
   };
 
   const result = runFraudDetection({
@@ -134,10 +138,10 @@ test("runFraudDetection handles taxonomy mismatch flags and score capping", () =
     },
     tort_validation: {
       valid: false,
+      tort_id: "test",
       diagnosis_match: false,
       category: "Toxic Tort",
       errors: ["NO_EXPOSURE", "EXPOSURE_OUTSIDE_1953_1987"],
-      required_evidence: [],
     },
     taxonomy_match: taxonomy,
     npi_found: false,

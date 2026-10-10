@@ -4,17 +4,19 @@ import { TaxonomyMatchResult } from "../taxonomy-engine";
 
 const mockTortValid: TortValidationResult = {
   valid: true,
+  tort_id: "camp_lejeune",
   diagnosis_match: true,
   category: "Toxic Tort",
   errors: ["EXPOSURE_OUTSIDE_1953_1987"],
-  required_evidence: [],
 };
 
 const mockTaxonomy: TaxonomyMatchResult = {
-  match: true,
+  matched: true,
   physician_specialty: "Oncology",
+  expected_specialties: ["Oncology"],
   diagnosis_category: "Cancer",
   fraud_indicators: ["TAXONOMY_MISMATCH", "SPECIALTY_OUTSIDE_SCOPE"],
+  confidence: "medium",
 };
 
 const mockContexts = [
@@ -56,7 +58,7 @@ const mockContexts = [
       physician_last_name: "Johnson",
       tort_type: "Roundup",
     },
-    tort_validation: { valid: true, diagnosis_match: true, category: "Toxic Tort", errors: [], required_evidence: [] },
+    tort_validation: { valid: true, tort_id: "roundup", diagnosis_match: true, category: "Toxic Tort", errors: [] },
     taxonomy_match: null,
     npi_found: true,
   },
