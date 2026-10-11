@@ -3,13 +3,13 @@
 // (mirrors Python difflib.SequenceMatcher.ratio() decisions in practice),
 // and a punctuation-stripping normalizer used before comparison.
 
+// Hoisted single-pass non-word replacement regex to eliminate intermediate string allocations.
+const NON_WORD_RE = /[^\w]+/g;
+
 export function normalize(s: string | null | undefined): string {
   if (!s) return "";
-  return s
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Replaces all non-word character sequences with a single space in a single pass.
+  return s.toLowerCase().replace(NON_WORD_RE, " ").trim();
 }
 
 // Title and credential tokens that should NOT contribute to person-name
@@ -44,13 +44,27 @@ const CREDENTIAL_TOKENS = new Set([
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
+ * Avoids intermediate .split().filter().join() array allocations.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  let result = "";
+  let start = 0;
+  const len = normalized.length;
+
+  for (let i = 0; i <= len; i++) {
+    if (i === len || normalized.charCodeAt(i) === 32 /* space */) {
+      if (i > start) {
+        const token = normalized.slice(start, i);
+        if (!TITLE_TOKENS.has(token) && !CREDENTIAL_TOKENS.has(token)) {
+          if (result.length > 0) result += " ";
+          result += token;
+        }
+      }
+      start = i + 1;
+    }
+  }
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -80,6 +94,16 @@ export function similarityName(
   return Math.max(raw, stripped);
 }
 
+// Reusable thread-safe (single-threaded JS) typed array buffer to avoid per-call Int32Array allocations
+let sharedRowBuffer = new Int32Array(256);
+
+function getRowBuffer(minSize: number): Int32Array {
+  if (sharedRowBuffer.length < minSize) {
+    sharedRowBuffer = new Int32Array(Math.max(minSize, sharedRowBuffer.length * 2));
+  }
+  return sharedRowBuffer;
+}
+
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   if (a.length === 0) return b.length;
@@ -94,7 +118,7 @@ export function levenshtein(a: string, b: string): number {
 
   const alen = s1.length;
   const blen = s2.length;
-  const row = new Int32Array(blen + 1);
+  const row = getRowBuffer(blen + 1);
 
   for (let j = 0; j <= blen; j++) row[j] = j;
 
