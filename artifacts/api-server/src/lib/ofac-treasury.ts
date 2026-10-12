@@ -47,6 +47,10 @@ interface SdnEntry {
   type: string;
   programs: string[];
   akas: string[];
+  /** Pre-computed token set for primary name lookup optimization */
+  nameTokens?: Set<string>;
+  /** Pre-computed token sets for AKA lookup optimization */
+  akaTokens?: Set<string>[];
 }
 
 interface SdnSnapshot {
@@ -75,6 +79,21 @@ function normalize(s: string): string {
     .replace(/[.,;()\[\]"']/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function tokenize(s: string): Set<string> {
+  const norm = normalize(s);
+  return new Set(norm ? norm.split(" ") : []);
+}
+
+function prepareEntryTokens(e: SdnEntry): SdnEntry {
+  if (!e.nameTokens) {
+    e.nameTokens = tokenize(e.name);
+  }
+  if (!e.akaTokens) {
+    e.akaTokens = e.akas.map(tokenize);
+  }
+  return e;
 }
 
 // Treasury CSV uses an unusual quoting style: fields are quoted with double
@@ -157,12 +176,15 @@ async function fetchSnapshot(): Promise<SdnSnapshot> {
     const type = cols[2]?.trim() ?? "";
     const program = cols[3]?.trim() ?? "";
     if (!id || !name) continue;
+    const akas = akaIndex.get(id) ?? [];
     entries.push({
       sdn_id: id,
       name,
       type,
       programs: program ? program.split(/\s*;\s*/).filter(Boolean) : [],
-      akas: akaIndex.get(id) ?? [],
+      akas,
+      nameTokens: tokenize(name),
+      akaTokens: akas.map(tokenize),
     });
   }
 
@@ -250,25 +272,26 @@ export async function matchTreasurySdn(person: {
       note: `Treasury SDN list unavailable: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const wholeWord = (haystack: string, needle: string): boolean => {
-    // Whole-word match against tokenized haystack — defends against the
-    // pathological case where someone named "Al" matches every Al-prefixed
-    // SDN entry (e.g. "Albert", "Aleksandr").
-    const tokens = new Set(haystack.split(" "));
-    return tokens.has(needle);
-  };
   const matches: TreasurySdnMatchOutcome["matches"] = [];
-  for (const e of snap.entries) {
-    const primary = normalize(e.name);
-    if (wholeWord(primary, first) && wholeWord(primary, last)) {
+  const entriesCount = snap.entries.length;
+  for (let i = 0; i < entriesCount; i++) {
+    const e = snap.entries[i]!;
+    if (!e.nameTokens || !e.akaTokens) {
+      prepareEntryTokens(e);
+    }
+    const nameTokens = e.nameTokens!;
+    if (nameTokens.has(first) && nameTokens.has(last)) {
       matches.push({ sdn_id: e.sdn_id, name: e.name, programs: e.programs, matched_via: "name" });
       if (matches.length >= 5) break;
       continue;
     }
-    for (const aka of e.akas) {
-      const norm = normalize(aka);
-      if (wholeWord(norm, first) && wholeWord(norm, last)) {
-        matches.push({ sdn_id: e.sdn_id, name: aka, programs: e.programs, matched_via: "aka" });
+
+    const akaTokensList = e.akaTokens!;
+    const akaCount = akaTokensList.length;
+    for (let k = 0; k < akaCount; k++) {
+      const akaTokens = akaTokensList[k]!;
+      if (akaTokens.has(first) && akaTokens.has(last)) {
+        matches.push({ sdn_id: e.sdn_id, name: e.akas[k]!, programs: e.programs, matched_via: "aka" });
         break;
       }
     }
@@ -286,6 +309,11 @@ export async function matchTreasurySdn(person: {
 // non-test code. Exported behind a deliberate underscore prefix so it
 // doesn't show up in editor autocomplete for normal usage.
 export function __setSdnSnapshotForTests(s: SdnSnapshot | null): void {
+  if (s) {
+    for (let i = 0; i < s.entries.length; i++) {
+      prepareEntryTokens(s.entries[i]!);
+    }
+  }
   snapshot = s;
   pendingFetch = null;
 }
