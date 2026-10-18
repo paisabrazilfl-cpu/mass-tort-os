@@ -10,7 +10,14 @@
 // Distinct from lookupNpiAndMatch() in taxonomy-engine.ts, which is a
 // thinner first-result-only path used by the public form pipeline.
 import { logger } from "./logger";
-import { normalize, similarity, similarityName } from "./string-similarity";
+import {
+  normalize,
+  normalizeNameFromNormalized,
+  similarity,
+  similarityName,
+  similarityNamePreNormalized,
+  similarityPreNormalized,
+} from "./string-similarity";
 
 const NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/";
 const NPI_VERSION = "2.1";
@@ -205,13 +212,14 @@ async function fetchNpi(params: URLSearchParams): Promise<NpiRegistryResult[]> {
 // MAILING and LOCATION (practice) addresses; LOCATION is what we want for
 // "where do they actually work" matching. Falls back to MAILING, then any.
 function pickPrimaryAddress(addresses: NpiAddress[] | undefined): NpiAddress {
-  const list = addresses ?? [];
-  return (
-    list.find((a) => a.address_purpose === "LOCATION") ??
-    list.find((a) => a.address_purpose === "MAILING") ??
-    list[0] ??
-    {}
-  );
+  if (!addresses || addresses.length === 0) return {};
+  let mailing: NpiAddress | undefined;
+  for (let i = 0; i < addresses.length; i++) {
+    const a = addresses[i];
+    if (a.address_purpose === "LOCATION") return a;
+    if (!mailing && a.address_purpose === "MAILING") mailing = a;
+  }
+  return mailing ?? addresses[0] ?? {};
 }
 
 async function lookupByNpi(npi: string): Promise<NpiRegistryResult | null> {
@@ -245,24 +253,49 @@ function pickBestSearchResult(
   let best: NpiRegistryResult | null = null;
   let bestScore = -1;
   const expName = expected.name ?? "";
-  const expOrg = expected.organization ?? "";
-  const expCity = expected.city ?? "";
-  const expState = expected.state ?? "";
+  const expNameNorm = normalize(expName);
+  const expNameStripped = normalizeNameFromNormalized(expNameNorm);
 
-  for (const r of results) {
+  const expOrg = expected.organization ?? "";
+  const expOrgNorm = normalize(expOrg);
+
+  const expCity = expected.city ?? "";
+  const expCityNorm = normalize(expCity);
+
+  const expState = expected.state ?? "";
+  const expStateNorm = normalize(expState);
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
     const basic = r.basic ?? {};
-    const name =
-      basic.name ??
-      [basic.first_name, basic.last_name].filter(Boolean).join(" ").trim();
+
+    // Single-pass string composition without temporary array allocations
+    let name = basic.name;
+    if (!name) {
+      if (basic.first_name && basic.last_name) {
+        name = `${basic.first_name} ${basic.last_name}`;
+      } else {
+        name = basic.first_name || basic.last_name || "";
+      }
+    }
+
     const org = basic.organization_name ?? "";
     const primaryAddr = pickPrimaryAddress(r.addresses);
-    const nameScore = Math.max(similarityName(expName, name), similarityName(expName, org));
-    const orgScore = similarity(expOrg, org);
-    const cityScore = similarity(expCity, primaryAddr.city ?? "");
+
+    const nameScore = Math.max(
+      similarityNamePreNormalized(expNameNorm, expNameStripped, name),
+      similarityNamePreNormalized(expNameNorm, expNameStripped, org),
+    );
+
+    const orgScore = similarityPreNormalized(expOrgNorm, normalize(org));
+    const cityScore = similarityPreNormalized(expCityNorm, normalize(primaryAddr.city ?? ""));
+
+    const candStateNorm = normalize(primaryAddr.state ?? "");
     const stateScore =
-      normalize(expState) === normalize(primaryAddr.state ?? "")
+      expStateNorm === candStateNorm
         ? 1.0
-        : similarity(expState, primaryAddr.state ?? "");
+        : similarityPreNormalized(expStateNorm, candStateNorm);
+
     // Same weighting as the Python reference: name/org max 0.5, city 0.25, state 0.25
     const score = 0.5 * Math.max(nameScore, orgScore) + 0.25 * cityScore + 0.25 * stateScore;
     if (score > bestScore) {
@@ -278,12 +311,24 @@ function pickBestSearchResult(
 // the operator-supplied term verbatim plus any aliases registered in
 // SPECIALTY_ALIASES. All terms are normalized for case-insensitive substring
 // comparison against NPPES taxonomy descriptions.
+// Specialty accepted terms cache to avoid repeated normalization and array/Set allocations
+const SPECIALTY_TERMS_CACHE = new Map<string, string[]>();
+
 function specialtyAcceptedTerms(expectedSpecialty: string): string[] {
+  if (!expectedSpecialty) return [];
+  const cached = SPECIALTY_TERMS_CACHE.get(expectedSpecialty);
+  if (cached !== undefined) return cached;
+
   const base = normalize(expectedSpecialty);
-  if (!base) return [];
+  if (!base) {
+    SPECIALTY_TERMS_CACHE.set(expectedSpecialty, []);
+    return [];
+  }
   const aliases = SPECIALTY_ALIASES[base] ?? [];
   const all = [base, ...aliases].map((t) => normalize(t)).filter(Boolean);
-  return Array.from(new Set(all));
+  const result = Array.from(new Set(all));
+  SPECIALTY_TERMS_CACHE.set(expectedSpecialty, result);
+  return result;
 }
 
 function providerTaxonomyMatches(
@@ -293,19 +338,37 @@ function providerTaxonomyMatches(
   const terms = specialtyAcceptedTerms(expectedSpecialty);
   const taxonomies = provider.taxonomies ?? [];
   const matchedTaxonomies: Array<{ code: string; desc: string; primary: boolean }> = [];
+  const allDescs: string[] = [];
+
   if (terms.length > 0) {
-    for (const t of taxonomies) {
+    for (let i = 0; i < taxonomies.length; i++) {
+      const t = taxonomies[i];
       const desc = t.desc ?? "";
       if (!desc) continue;
+      allDescs.push(desc);
       const descNorm = normalize(desc);
+
       // Substring match either direction so "family medicine" matches
       // "Family Medicine - Sports Medicine Physician" and so on.
-      if (terms.some((term) => descNorm.includes(term) || term.includes(descNorm))) {
+      let isMatch = false;
+      for (let j = 0; j < terms.length; j++) {
+        const term = terms[j];
+        if (descNorm.includes(term) || term.includes(descNorm)) {
+          isMatch = true;
+          break;
+        }
+      }
+      if (isMatch) {
         matchedTaxonomies.push({ code: t.code ?? "", desc, primary: !!t.primary });
       }
     }
+  } else {
+    for (let i = 0; i < taxonomies.length; i++) {
+      const desc = taxonomies[i].desc ?? "";
+      if (desc) allDescs.push(desc);
+    }
   }
-  const allDescs = taxonomies.map((t) => t.desc ?? "").filter(Boolean);
+
   return {
     matched: matchedTaxonomies.length > 0,
     matched_taxonomies: matchedTaxonomies,
