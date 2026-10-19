@@ -93,6 +93,14 @@ const STATE_LABELS: Record<string, string> = {
 };
 
 /**
+ * Pre-computed O(1) map for full state name lookups.
+ * Eliminates per-call `Object.entries(STATE_LABELS)` array allocations and loop iterations.
+ */
+const LOWER_STATE_NAME_TO_CODE = new Map<string, string>(
+  Object.entries(STATE_LABELS).map(([code, label]) => [label.toLowerCase(), code]),
+);
+
+/**
  * Normalize a state input to a 2-letter US state code, or null if unknown.
  * Accepts:
  *   - 2-letter codes (case-insensitive): "NJ", "nj"
@@ -108,12 +116,7 @@ export function normalizeStateCode(state: string | null | undefined): string | n
     return upper;
   }
 
-  const lower = trimmed.toLowerCase();
-  for (const [code, label] of Object.entries(STATE_LABELS)) {
-    if (label.toLowerCase() === lower) return code;
-  }
-
-  return null;
+  return LOWER_STATE_NAME_TO_CODE.get(trimmed.toLowerCase()) ?? null;
 }
 
 /**
