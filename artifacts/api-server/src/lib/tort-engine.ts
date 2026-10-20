@@ -409,6 +409,23 @@ export const TORT_REGISTRY: Record<string, TortDefinition> = {
   },
 };
 
+// Performance pre-computations for O(1) lookups and zero-allocation evaluations
+const TORT_LOOKUP_MAP = new Map<string, string>();
+for (const [id, tort] of Object.entries(TORT_REGISTRY)) {
+  TORT_LOOKUP_MAP.set(id.toLowerCase(), id);
+  TORT_LOOKUP_MAP.set(tort.label.toLowerCase(), id);
+}
+
+// Pre-computed category list to avoid dynamic Object.entries() allocations per call
+const CACHED_TORT_CATEGORIES: { category: string; torts: { id: string; label: string }[] }[] = (() => {
+  const categories: Record<string, { id: string; label: string }[]> = {};
+  for (const [id, tort] of Object.entries(TORT_REGISTRY)) {
+    if (!categories[tort.category]) categories[tort.category] = [];
+    categories[tort.category].push({ id, label: tort.label });
+  }
+  return Object.entries(categories).map(([category, torts]) => ({ category, torts }));
+})();
+
 export interface TortValidationResult {
   valid: boolean;
   tort_id: string | null;
@@ -427,9 +444,7 @@ export function validateTortClaim(data: {
 }): TortValidationResult {
   const errors: string[] = [];
 
-  const tortKey = Object.keys(TORT_REGISTRY).find(
-    k => TORT_REGISTRY[k].label.toLowerCase() === data.tort_type.toLowerCase() || k === data.tort_type.toLowerCase()
-  );
+  const tortKey = TORT_LOOKUP_MAP.get(data.tort_type.toLowerCase()) ?? null;
 
   if (!tortKey) {
     return {
@@ -443,7 +458,17 @@ export function validateTortClaim(data: {
 
   const tort = TORT_REGISTRY[tortKey];
   const diagLower = data.diagnosis.toLowerCase().trim();
-  const diagnosisMatch = tort.valid_diagnoses.some(d => diagLower.includes(d) || d.includes(diagLower));
+
+  // Optimized indexed loop replaces .some() to avoid per-call closure allocations
+  let diagnosisMatch = false;
+  const validDiags = tort.valid_diagnoses;
+  for (let i = 0; i < validDiags.length; i++) {
+    const d = validDiags[i];
+    if (diagLower.includes(d) || d.includes(diagLower)) {
+      diagnosisMatch = true;
+      break;
+    }
+  }
 
   if (!diagnosisMatch) {
     errors.push("DIAGNOSIS_MISMATCH");
@@ -459,7 +484,9 @@ export function validateTortClaim(data: {
     }
   }
 
-  for (const rule of tort.rules) {
+  const rules = tort.rules;
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
     if (rule === "LOCATION_REQUIRED" && (!data.location_name || !data.location_name.trim())) {
       errors.push("TORT_RULE:LOCATION_REQUIRED");
     }
@@ -473,7 +500,9 @@ export function validateTortClaim(data: {
   }
 
   if (tortKey === "camp-lejeune" && data.exposure_start) {
-    const startYear = new Date(data.exposure_start).getFullYear();
+    // Fast year extraction using regex to avoid Date object creation overhead
+    const match = /^(\d{4})/.exec(data.exposure_start.trim());
+    const startYear = match ? parseInt(match[1], 10) : new Date(data.exposure_start).getFullYear();
     if (startYear < 1953 || startYear > 1987) {
       errors.push("EXPOSURE_OUTSIDE_1953_1987");
     }
@@ -489,10 +518,5 @@ export function validateTortClaim(data: {
 }
 
 export function getTortCategories(): { category: string; torts: { id: string; label: string }[] }[] {
-  const categories: Record<string, { id: string; label: string }[]> = {};
-  for (const [id, tort] of Object.entries(TORT_REGISTRY)) {
-    if (!categories[tort.category]) categories[tort.category] = [];
-    categories[tort.category].push({ id, label: tort.label });
-  }
-  return Object.entries(categories).map(([category, torts]) => ({ category, torts }));
+  return CACHED_TORT_CATEGORIES;
 }
