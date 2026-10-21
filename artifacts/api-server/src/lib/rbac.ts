@@ -26,9 +26,6 @@ const JWT_SECRET = (() => {
   if (IS_PROD_LIKE && !secret) {
     throw new Error("FATAL: SESSION_SECRET environment variable is required in production/staging");
   }
-  if (!secret && !IS_DEV) {
-    throw new Error(`FATAL: SESSION_SECRET is required when NODE_ENV="${NODE_ENV ?? ""}" (only NODE_ENV="development" gets the fallback)`);
-  }
   return secret || "mtos-dev-secret";
 })();
 
