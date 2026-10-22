@@ -47,7 +47,14 @@ const COMMAND_INJECTION_PATTERNS = [
   /\$\(.*\)/,
 ];
 
-interface ThreatDetection {
+// Fast trigger regexes for pre-filtering strings before scanning pattern arrays.
+// Must cover all possible syntax or keyword triggers checked by the underlying pattern arrays.
+const HAS_SQL_TRIGGER = /['"/*;]|union|select|insert|update|delete|drop|alter|create|exec|execute|waitfor|sleep/i;
+const HAS_XSS_TRIGGER = /[<:]|on\w+\s*=|expression|eval|document/i;
+const HAS_PATH_TRIGGER = /[./\\%]/;
+const HAS_COMMAND_TRIGGER = /[;&|`$]/;
+
+export interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
   severity: "critical" | "high" | "medium" | "low";
   details: string;
@@ -86,38 +93,66 @@ function getClientIp(req: Request): string {
     || "unknown";
 }
 
-function scanValue(value: string): ThreatDetection | null {
-  for (const pattern of SQL_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+export function scanValue(value: string): ThreatDetection | null {
+  if (value.length < 3) return null;
+
+  if (HAS_SQL_TRIGGER.test(value)) {
+    for (let i = 0; i < SQL_INJECTION_PATTERNS.length; i++) {
+      const pattern = SQL_INJECTION_PATTERNS[i]!;
+      if (pattern.test(value)) {
+        return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of XSS_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+
+  if (HAS_XSS_TRIGGER.test(value)) {
+    for (let i = 0; i < XSS_PATTERNS.length; i++) {
+      const pattern = XSS_PATTERNS[i]!;
+      if (pattern.test(value)) {
+        return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of PATH_TRAVERSAL_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+
+  if (HAS_PATH_TRIGGER.test(value)) {
+    for (let i = 0; i < PATH_TRAVERSAL_PATTERNS.length; i++) {
+      const pattern = PATH_TRAVERSAL_PATTERNS[i]!;
+      if (pattern.test(value)) {
+        return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of COMMAND_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+
+  if (HAS_COMMAND_TRIGGER.test(value)) {
+    for (let i = 0; i < COMMAND_INJECTION_PATTERNS.length; i++) {
+      const pattern = COMMAND_INJECTION_PATTERNS[i]!;
+      if (pattern.test(value)) {
+        return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
+
   return null;
 }
 
-function deepScan(obj: any, path = ""): ThreatDetection | null {
+export function deepScan(obj: any, path = ""): ThreatDetection | null {
   if (typeof obj === "string") {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i], path ? `${path}[${i}]` : `[${i}]`);
+        if (threat) return threat;
+      }
+    } else {
+      // Direct for...in loop eliminates per-level Object.entries() array tuple allocations
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          const threat = deepScan(obj[key], path ? `${path}.${key}` : key);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;
