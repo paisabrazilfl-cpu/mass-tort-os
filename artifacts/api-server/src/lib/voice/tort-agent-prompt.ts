@@ -391,10 +391,17 @@ export function computeTortAgentFingerprint(
   return crypto.createHash("sha256").update(payload).digest("hex");
 }
 
+const TORT_AGENT_PROMPT_CACHE = new Map<string, TortAgentPrompt>();
+
 export function buildTortAgentPrompt(tort: TortDefinition): TortAgentPrompt {
+  const cached = TORT_AGENT_PROMPT_CACHE.get(tort.id);
+  if (cached) return cached;
+
   const qualifyingQuestions = buildQualifyingQuestions(tort);
   const systemPrompt = buildSystemPrompt(tort, qualifyingQuestions);
   const firstMessage = buildFirstMessage(tort);
   const fingerprint = computeTortAgentFingerprint(tort, systemPrompt, firstMessage);
-  return { systemPrompt, firstMessage, qualifyingQuestions, fingerprint };
+  const result: TortAgentPrompt = { systemPrompt, firstMessage, qualifyingQuestions, fingerprint };
+  TORT_AGENT_PROMPT_CACHE.set(tort.id, result);
+  return result;
 }
