@@ -74,6 +74,27 @@ const BASELINE_CRITICAL_FIELDS = [
 
 const MAX_MISSING_FIELDS_BEFORE_DEFER = 2;
 
+// Hoisted static regexes to eliminate per-call RegExp allocations.
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const CANCER_DIAGNOSIS_RE = /cancer|carcinoma|lymphoma|leukemia|myeloma|sarcoma/;
+const DEATH_DIAGNOSIS_RE = /death|deceased|fatal/;
+
+/**
+ * Fast date-string to timestamp parser (ms since epoch).
+ * Avoids instantiating intermediate `Date` heap objects.
+ */
+function parseTimestamp(v: unknown): number | null {
+  if (!v) return null;
+  const s = typeof v === "string" ? v.trim() : String(v).trim();
+  if (!s) return null;
+
+  // Treat date-only strings ("YYYY-MM-DD") as local midnight to avoid UTC-vs-local
+  // off-by-one when comparing against `today` constructed in the local timezone.
+  const str = DATE_ONLY_RE.test(s) ? s + "T00:00:00" : s;
+  const t = Date.parse(str);
+  return Number.isNaN(t) ? null : t;
+}
+
 /**
  * Detect missing critical intake fields. Returns short codes (UI labels them).
  * Tort-aware: torts with required_exposure also demand exposure_start.
@@ -83,9 +104,15 @@ export function detectMissingFields(
   tort: TortInputs
 ): string[] {
   const missing: string[] = [];
-  if (!lead.diagnosis || !String(lead.diagnosis).trim()) missing.push("diagnosis");
-  if (!lead.diagnosis_date || !String(lead.diagnosis_date).trim()) missing.push("diagnosis_date");
-  if (!lead.state || !String(lead.state).trim()) missing.push("state");
+  const dx = lead.diagnosis;
+  if (!dx || (typeof dx === "string" ? !dx.trim() : !String(dx).trim())) missing.push("diagnosis");
+
+  const dxd = lead.diagnosis_date;
+  if (!dxd || (typeof dxd === "string" ? !dxd.trim() : !String(dxd).trim())) missing.push("diagnosis_date");
+
+  const st = lead.state;
+  if (!st || (typeof st === "string" ? !st.trim() : !String(st).trim())) missing.push("state");
+
   if (!lead.phone && !lead.email) missing.push("contact");
   if (tort.required_exposure && !lead.exposure_start) missing.push("exposure_start");
   return missing;
@@ -99,30 +126,21 @@ export function detectContradictions(
   lead: Pick<Lead, "diagnosis_date" | "exposure_start" | "exposure_end" | "date_of_birth">
 ): string[] {
   const out: string[] = [];
-  const today = new Date();
-  today.setHours(23, 59, 59, 999);
 
-  const parse = (v: unknown): Date | null => {
-    if (!v) return null;
-    let s = String(v).trim();
-    // Treat date-only strings as local midnight to avoid UTC-vs-local off-by-one
-    // when comparing against `today` constructed in the local timezone.
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) s = s + "T00:00:00";
-    const d = new Date(s);
-    return Number.isNaN(d.getTime()) ? null : d;
-  };
+  const dx = parseTimestamp(lead.diagnosis_date);
+  const expStart = parseTimestamp(lead.exposure_start);
+  const expEnd = parseTimestamp(lead.exposure_end);
+  const dob = parseTimestamp(lead.date_of_birth);
 
-  const dx = parse(lead.diagnosis_date);
-  const expStart = parse(lead.exposure_start);
-  const expEnd = parse(lead.exposure_end);
-  const dob = parse(lead.date_of_birth);
+  // Today at 23:59:59.999 local time as primitive timestamp
+  const todayEnd = new Date().setHours(23, 59, 59, 999);
 
-  if (dx && expStart && dx < expStart) out.push("diagnosis_before_exposure");
-  if (expStart && expEnd && expEnd < expStart) out.push("exposure_end_before_start");
-  if (dx && dx > today) out.push("diagnosis_in_future");
-  if (expStart && expStart > today) out.push("exposure_start_in_future");
-  if (dob && dx && dx < dob) out.push("diagnosis_before_birth");
-  if (dob && dob > today) out.push("birth_in_future");
+  if (dx !== null && expStart !== null && dx < expStart) out.push("diagnosis_before_exposure");
+  if (expStart !== null && expEnd !== null && expEnd < expStart) out.push("exposure_end_before_start");
+  if (dx !== null && dx > todayEnd) out.push("diagnosis_in_future");
+  if (expStart !== null && expStart > todayEnd) out.push("exposure_start_in_future");
+  if (dob !== null && dx !== null && dx < dob) out.push("diagnosis_before_birth");
+  if (dob !== null && dob > todayEnd) out.push("birth_in_future");
 
   return out;
 }
@@ -139,13 +157,10 @@ export function detectRuinFlags(
 
   // 1. Statute of limitations expired
   if (tort.sol_months && (lead.diagnosis_date || lead.exposure_start)) {
-    const startDate = lead.diagnosis_date
-      ? new Date(lead.diagnosis_date)
-      : lead.exposure_start
-        ? new Date(lead.exposure_start)
-        : null;
-    if (startDate && !Number.isNaN(startDate.getTime())) {
-      const ageMonths = (Date.now() - startDate.getTime()) / (1000 * 60 * 60 * 24 * 30.44);
+    const startDateVal = lead.diagnosis_date || lead.exposure_start;
+    const startTime = parseTimestamp(startDateVal);
+    if (startTime !== null) {
+      const ageMonths = (Date.now() - startTime) / (1000 * 60 * 60 * 24 * 30.44);
       if (ageMonths > tort.sol_months) flags.push("sol_expired");
     }
   }
@@ -156,7 +171,14 @@ export function detectRuinFlags(
   // 3. Required diagnosis missing or not valid for this tort
   if (tort.valid_diagnoses.length > 0 && lead.diagnosis) {
     const dx = lead.diagnosis.toLowerCase().trim();
-    const matches = tort.valid_diagnoses.some(d => dx.includes(d.toLowerCase()) || d.toLowerCase().includes(dx));
+    let matches = false;
+    for (let i = 0; i < tort.valid_diagnoses.length; i++) {
+      const validDxLower = tort.valid_diagnoses[i].toLowerCase();
+      if (dx.includes(validDxLower) || validDxLower.includes(dx)) {
+        matches = true;
+        break;
+      }
+    }
     if (!matches) flags.push("diagnosis_invalid");
   }
 
@@ -214,8 +236,8 @@ export function scoreLead(
   // Diagnosis severity multiplier (cancer/death > chronic > acute)
   const dx = (lead.diagnosis || "").toLowerCase();
   let severityMult = 1.0;
-  if (/cancer|carcinoma|lymphoma|leukemia|myeloma|sarcoma/.test(dx)) severityMult = 1.4;
-  else if (/death|deceased|fatal/.test(dx)) severityMult = 1.6;
+  if (CANCER_DIAGNOSIS_RE.test(dx)) severityMult = 1.4;
+  else if (DEATH_DIAGNOSIS_RE.test(dx)) severityMult = 1.6;
   else if (lead.diagnosis_confirmed) severityMult = 1.1;
   else severityMult = 0.7;
 
@@ -332,18 +354,21 @@ export function buildPortfolio(
 ): PortfolioSummary {
   // Filter orphan tort buckets (no matching form configuration) BEFORE
   // computing totalSpend so the denominator only counts spend we are actually
-  // surfacing in `rows`. Otherwise unmapped legacy tort labels inflate the
-  // total and depress every surviving tort's spend_pct, which can suppress
-  // concentration warnings that should fire.
-  const validEntries = Array.from(leadsByTort.entries()).filter(([id]) => torts.has(id));
-  const totalSpend = validEntries.reduce((s, [, r]) => s + r.total_spend, 0);
+  // surfacing in `rows`.
+  let totalSpend = 0;
+  for (const [id, agg] of leadsByTort) {
+    if (torts.has(id)) {
+      totalSpend += agg.total_spend;
+    }
+  }
+
   let totalConvex = 0;
   let totalConcave = 0;
   let totalRuin = 0;
   let concentration: { tort_id: string; pct: number } | null = null;
 
   const rows: PortfolioTortRow[] = [];
-  for (const [tort_id, agg] of validEntries) {
+  for (const [tort_id, agg] of leadsByTort) {
     const tort = torts.get(tort_id);
     if (!tort) continue;
     const qualified_rate = agg.lead_count > 0 ? agg.qualified / agg.lead_count : 0;
