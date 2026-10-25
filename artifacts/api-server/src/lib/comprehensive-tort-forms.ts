@@ -155,6 +155,9 @@ export const ANTI_FRAUD_RULES: EligibilityRule[] = [
   { id: "hipaa_consent_required", field: "hipaa_release_consent", op: "ne", value: "Yes — I will sign the HIPAA release", message: "Initial intake requires HIPAA authorization to verify medical records — please call us to discuss." },
 ];
 
+/** Pre-computed set of anti-fraud probe field keys to avoid per-call array + set allocations in summarizeWebForm */
+const ANTI_FRAUD_KEYS: ReadonlySet<string> = new Set(ANTI_FRAUD_FIELDS.map((f) => f.key));
+
 export const TREATMENT_FIELDS: WebFormField[] = [
   { key: "had_surgery", label: "Did you require surgery related to this condition?", type: "radio", section: "story", required: false, options: ["Yes", "No", "Scheduled"] },
   { key: "hospitalized", label: "Were you hospitalized due to this condition?", type: "radio", section: "story", required: false, options: ["Yes", "No"] },
@@ -1293,32 +1296,51 @@ const UNIVERSAL_EXTRA_FIELDS: string[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────
+// COMPREHENSIVE TORT FORMS CACHE
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Module-scoped cache map for comprehensive tort forms.
+ * Pre-building at module load avoids per-call Set deduplication and array
+ * allocations on every getComprehensiveTortForm / getAllComprehensiveTortForms call.
+ */
+const COMPREHENSIVE_TORT_FORMS_MAP = new Map<string, ComprehensiveTortForm>();
+
+function buildComprehensiveTortFormsCache(): void {
+  for (const tortId of Object.keys(TORT_REGISTRY)) {
+    const webForm = WEB_FORMS[tortId];
+    const tort = TORT_REGISTRY[tortId];
+    if (!webForm || !tort) continue;
+
+    const tortCustom = TORT_SPECIFIC_CUSTOM_FIELDS[tortId] ?? [];
+    const customFields: CustomField[] = [...UNIVERSAL_CUSTOM_FIELDS, ...tortCustom];
+
+    // Merge registry rules with the universal compliance set, de-duped.
+    const rules = Array.from(new Set([...(tort.rules ?? []), ...UNIVERSAL_RULES]));
+
+    // Merge registry extra_fields with the universal compliance set, de-duped.
+    const extra_fields = Array.from(
+      new Set([...(tort.extra_fields ?? []), ...UNIVERSAL_EXTRA_FIELDS]),
+    );
+
+    COMPREHENSIVE_TORT_FORMS_MAP.set(tortId, {
+      intro_text: webForm.intro_subhead,
+      custom_fields: customFields,
+      extra_fields,
+      rules,
+      web_form_config: webForm,
+    });
+  }
+}
+
+buildComprehensiveTortFormsCache();
+
+// ─────────────────────────────────────────────────────────────────────────
 // PUBLIC API
 // ─────────────────────────────────────────────────────────────────────────
 
 export function getComprehensiveTortForm(tortId: string): ComprehensiveTortForm | null {
-  const webForm = WEB_FORMS[tortId];
-  const tort = TORT_REGISTRY[tortId];
-  if (!webForm || !tort) return null;
-
-  const tortCustom = TORT_SPECIFIC_CUSTOM_FIELDS[tortId] ?? [];
-  const customFields: CustomField[] = [...UNIVERSAL_CUSTOM_FIELDS, ...tortCustom];
-
-  // Merge registry rules with the universal compliance set, de-duped.
-  const rules = Array.from(new Set([...(tort.rules ?? []), ...UNIVERSAL_RULES]));
-
-  // Merge registry extra_fields with the universal compliance set, de-duped.
-  const extra_fields = Array.from(
-    new Set([...(tort.extra_fields ?? []), ...UNIVERSAL_EXTRA_FIELDS]),
-  );
-
-  return {
-    intro_text: webForm.intro_subhead,
-    custom_fields: customFields,
-    extra_fields,
-    rules,
-    web_form_config: webForm,
-  };
+  return COMPREHENSIVE_TORT_FORMS_MAP.get(tortId) ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1367,9 +1389,8 @@ export function getTortSolMonths(tortId: string): number | null {
 
 export function getAllComprehensiveTortForms(): Record<string, ComprehensiveTortForm> {
   const out: Record<string, ComprehensiveTortForm> = {};
-  for (const tortId of Object.keys(TORT_REGISTRY)) {
-    const f = getComprehensiveTortForm(tortId);
-    if (f) out[tortId] = f;
+  for (const [tortId, form] of COMPREHENSIVE_TORT_FORMS_MAP.entries()) {
+    out[tortId] = form;
   }
   return out;
 }
@@ -1393,14 +1414,31 @@ export interface WebFormStats {
 export function summarizeWebForm(cfg: WebFormConfig | null | undefined): WebFormStats | null {
   if (!cfg) return null;
   const fields = cfg.fields ?? [];
-  const antiFraudKeys = new Set(ANTI_FRAUD_FIELDS.map(f => f.key));
+  let eligibility_count = 0;
+  let contact_count = 0;
+  let story_count = 0;
+  let required_count = 0;
+  let anti_fraud_count = 0;
+
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    if (!f) continue;
+    const sec = f.section;
+    if (sec === "eligibility") eligibility_count++;
+    else if (sec === "contact") contact_count++;
+    else if (sec === "story") story_count++;
+
+    if (f.required) required_count++;
+    if (ANTI_FRAUD_KEYS.has(f.key)) anti_fraud_count++;
+  }
+
   return {
     total_fields: fields.length,
-    eligibility_count: fields.filter(f => f.section === "eligibility").length,
-    contact_count: fields.filter(f => f.section === "contact").length,
-    story_count: fields.filter(f => f.section === "story").length,
-    required_count: fields.filter(f => f.required).length,
-    anti_fraud_count: fields.filter(f => antiFraudKeys.has(f.key)).length,
+    eligibility_count,
+    contact_count,
+    story_count,
+    required_count,
+    anti_fraud_count,
     eligibility_rules_count: (cfg.eligibility_rules ?? []).length,
     enabled: cfg.enabled !== false,
   };
