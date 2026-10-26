@@ -47,6 +47,12 @@ const COMMAND_INJECTION_PATTERNS = [
   /\$\(.*\)/,
 ];
 
+// Trigger pre-checks to fast-path clean strings without executing all regex patterns
+const HAS_SQL_TRIGGER = /['"-\/*;=]|\b(union|select|insert|update|delete|drop|alter|create|exec|execute|waitfor|sleep)\b/i;
+const HAS_XSS_TRIGGER = /[<>]|\b(javascript|document|eval|expression)\b/i;
+const HAS_PATH_TRIGGER = /\.|%|\/etc|\/proc|boot\.ini/i;
+const HAS_COMMAND_TRIGGER = /[;&|`$]/;
+
 interface ThreatDetection {
   type: "sql_injection" | "xss" | "path_traversal" | "command_injection" | "brute_force" | "suspicious_payload";
   severity: "critical" | "high" | "medium" | "low";
@@ -87,26 +93,41 @@ function getClientIp(req: Request): string {
 }
 
 function scanValue(value: string): ThreatDetection | null {
-  for (const pattern of SQL_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+  // Guard short or empty strings as all threat patterns require at least 2 characters
+  if (!value || value.length < 2) return null;
+
+  if (HAS_SQL_TRIGGER.test(value)) {
+    for (const pattern of SQL_INJECTION_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "sql_injection", severity: "critical", details: `SQL injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of XSS_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+
+  if (HAS_XSS_TRIGGER.test(value)) {
+    for (const pattern of XSS_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "xss", severity: "high", details: `Cross-site scripting attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of PATH_TRAVERSAL_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+
+  if (HAS_PATH_TRIGGER.test(value)) {
+    for (const pattern of PATH_TRAVERSAL_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "path_traversal", severity: "high", details: `Path traversal attempt detected`, pattern: pattern.source };
+      }
     }
   }
-  for (const pattern of COMMAND_INJECTION_PATTERNS) {
-    if (pattern.test(value)) {
-      return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+
+  if (HAS_COMMAND_TRIGGER.test(value)) {
+    for (const pattern of COMMAND_INJECTION_PATTERNS) {
+      if (pattern.test(value)) {
+        return { type: "command_injection", severity: "critical", details: `Command injection attempt detected`, pattern: pattern.source };
+      }
     }
   }
+
   return null;
 }
 
@@ -115,9 +136,18 @@ function deepScan(obj: any, path = ""): ThreatDetection | null {
     return scanValue(obj);
   }
   if (typeof obj === "object" && obj !== null) {
-    for (const [key, val] of Object.entries(obj)) {
-      const threat = deepScan(val, `${path}.${key}`);
-      if (threat) return threat;
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const threat = deepScan(obj[i], path ? `${path}[${i}]` : `[${i}]`);
+        if (threat) return threat;
+      }
+    } else {
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          const threat = deepScan(obj[key], path ? `${path}.${key}` : key);
+          if (threat) return threat;
+        }
+      }
     }
   }
   return null;
@@ -262,7 +292,7 @@ export function idsMiddleware() {
     // Task #7: skip body deep-scan for credentialed CRM traffic. Free-text
     // fields (lead notes, email body, intake transcripts, deposition memos)
     // routinely contain `select * from claimants` style legal prose that
-    // the regex set treats as SQL injection. URL + query are still scanned,
+    // the regex set treats as SQL injection. URL + query are scanned regardless,
     // and unauthenticated public surfaces (forms, webhooks) keep full
     // scrutiny.
     if (!internal && req.body && typeof req.body === "object") {
