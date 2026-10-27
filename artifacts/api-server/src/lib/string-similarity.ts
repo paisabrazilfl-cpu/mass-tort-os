@@ -44,13 +44,26 @@ const CREDENTIAL_TOKENS = new Set([
 /**
  * Optimized name normalization that skips redundant regex processing when
  * the input is already pre-normalized.
+ * Avoids array allocations (.split/.filter/.join) by scanning tokens in a single pass.
  */
 export function normalizeNameFromNormalized(normalized: string): string {
   if (!normalized) return "";
-  const tokens = normalized.split(" ");
-  return tokens
-    .filter((t) => !TITLE_TOKENS.has(t) && !CREDENTIAL_TOKENS.has(t))
-    .join(" ");
+  let result = "";
+  let start = 0;
+  const len = normalized.length;
+  for (let i = 0; i <= len; i++) {
+    if (i === len || normalized.charCodeAt(i) === 32) {
+      if (start < i) {
+        const token = normalized.slice(start, i);
+        if (!TITLE_TOKENS.has(token) && !CREDENTIAL_TOKENS.has(token)) {
+          if (result.length > 0) result += " ";
+          result += token;
+        }
+      }
+      start = i + 1;
+    }
+  }
+  return result;
 }
 
 // Strip title and credential tokens AFTER applying normalize(), so that
@@ -80,6 +93,9 @@ export function similarityName(
   return Math.max(raw, stripped);
 }
 
+// Pre-allocated reusable buffer to avoid typed array heap allocations and GC pressure on every levenshtein call.
+let ROW_BUFFER = new Int32Array(256);
+
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   if (a.length === 0) return b.length;
@@ -94,16 +110,25 @@ export function levenshtein(a: string, b: string): number {
 
   const alen = s1.length;
   const blen = s2.length;
-  const row = new Int32Array(blen + 1);
+  const needed = blen + 1;
+
+  let row: Int32Array;
+  if (needed <= ROW_BUFFER.length) {
+    row = ROW_BUFFER;
+  } else {
+    ROW_BUFFER = new Int32Array(Math.max(needed, ROW_BUFFER.length * 2));
+    row = ROW_BUFFER;
+  }
 
   for (let j = 0; j <= blen; j++) row[j] = j;
 
   for (let i = 1; i <= alen; i++) {
     let prevDiag = row[0]; // (i-1, j-1)
     row[0] = i;
+    const char1 = s1.charCodeAt(i - 1);
     for (let j = 1; j <= blen; j++) {
       const temp = row[j]; // (i-1, j)
-      const cost = s1.charCodeAt(i - 1) === s2.charCodeAt(j - 1) ? 0 : 1;
+      const cost = char1 === s2.charCodeAt(j - 1) ? 0 : 1;
       row[j] = Math.min(
         row[j] + 1, // (i-1, j) + 1
         row[j - 1] + 1, // (i, j-1) + 1
