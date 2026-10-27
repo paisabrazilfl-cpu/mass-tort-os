@@ -1,13 +1,17 @@
-import { levenshtein, similarity, similarityName, normalize, normalizeName } from "../string-similarity";
+import { levenshtein, similarity, similarityName, normalize, normalizeName, normalizeNameFromNormalized } from "../string-similarity";
 
 const a = "Dr. Micah Edwin, MD";
 const b = "Micah Edwin";
+const normA = "dr micah edwin md";
 
-const iterations = 100000;
+const iterations = 500000;
 
 console.log(`Running benchmarks with ${iterations} iterations...`);
 
 function benchmark(name: string, fn: () => void) {
+  // Warmup
+  for (let i = 0; i < 10000; i++) fn();
+
   const start = performance.now();
   for (let i = 0; i < iterations; i++) {
     fn();
@@ -22,6 +26,10 @@ benchmark("levenshtein", () => {
 
 benchmark("normalize", () => {
   normalize(a);
+});
+
+benchmark("normalizeNameFromNormalized", () => {
+  normalizeNameFromNormalized(normA);
 });
 
 benchmark("normalizeName", () => {
