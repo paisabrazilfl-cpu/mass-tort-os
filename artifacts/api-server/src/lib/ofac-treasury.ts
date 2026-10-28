@@ -41,7 +41,7 @@
  */
 import { logger } from "./logger";
 
-interface SdnEntry {
+export interface SdnEntry {
   sdn_id: string;
   name: string;
   type: string;
@@ -49,7 +49,7 @@ interface SdnEntry {
   akas: string[];
 }
 
-interface SdnSnapshot {
+export interface SdnSnapshot {
   fetched_at: number;
   entries: SdnEntry[];
   source: string;
@@ -69,12 +69,65 @@ export function isTreasurySdnEnabled(): boolean {
 let snapshot: SdnSnapshot | null = null;
 let pendingFetch: Promise<SdnSnapshot> | null = null;
 
+// Pre-tokenized snapshot data structures to eliminate per-query normalization & string split allocations
+interface PreparedSdnEntry {
+  raw: SdnEntry;
+  nameTokens: Set<string>;
+  akaTokens: Set<string>[];
+}
+
+interface PreparedSnapshot {
+  rawSnapshot: SdnSnapshot;
+  preparedEntries: PreparedSdnEntry[];
+}
+
+let cachedPreparedSnapshot: PreparedSnapshot | null = null;
+
 function normalize(s: string): string {
   return s
     .toLowerCase()
     .replace(/[.,;()\[\]"']/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function tokenizeName(s: string): Set<string> {
+  const norm = normalize(s);
+  const tokens = new Set<string>();
+  if (norm) {
+    const parts = norm.split(" ");
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i]) tokens.add(parts[i]);
+    }
+  }
+  return tokens;
+}
+
+function prepareEntry(e: SdnEntry): PreparedSdnEntry {
+  const nameTokens = tokenizeName(e.name);
+  const akaTokens: Set<string>[] = [];
+  if (e.akas && e.akas.length > 0) {
+    for (let i = 0; i < e.akas.length; i++) {
+      akaTokens.push(tokenizeName(e.akas[i]));
+    }
+  }
+  return {
+    raw: e,
+    nameTokens,
+    akaTokens,
+  };
+}
+
+function getPreparedSnapshot(snap: SdnSnapshot): PreparedSnapshot {
+  if (cachedPreparedSnapshot && cachedPreparedSnapshot.rawSnapshot === snap) {
+    return cachedPreparedSnapshot;
+  }
+  const preparedEntries = snap.entries.map(prepareEntry);
+  cachedPreparedSnapshot = {
+    rawSnapshot: snap,
+    preparedEntries,
+  };
+  return cachedPreparedSnapshot;
 }
 
 // Treasury CSV uses an unusual quoting style: fields are quoted with double
@@ -186,6 +239,7 @@ async function getSnapshot(): Promise<SdnSnapshot> {
         "OFAC Treasury SDN list refreshed",
       );
       snapshot = fresh;
+      cachedPreparedSnapshot = null;
       return fresh;
     } catch (err) {
       if (snapshot) {
@@ -218,10 +272,9 @@ export interface TreasurySdnMatchOutcome {
  * the candidate name (or any AKA) after normalization. Returns up to 5
  * matches.
  *
- * This intentionally does not gate on the bg-hub's normal name
- * heuristics — the SDN list is small enough that a linear scan per
- * lookup is ~5 ms (10 K entries). We can swap in a token-index if a
- * future profile shows it matters.
+ * Performance optimization: Entries are pre-tokenized into `Set<string>`
+ * when the snapshot is cached/processed. Query lookups perform fast Set
+ * membership checks without per-entry normalization, regex, or heap allocations.
  */
 export async function matchTreasurySdn(person: {
   first_name: string;
@@ -250,30 +303,57 @@ export async function matchTreasurySdn(person: {
       note: `Treasury SDN list unavailable: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const wholeWord = (haystack: string, needle: string): boolean => {
-    // Whole-word match against tokenized haystack — defends against the
-    // pathological case where someone named "Al" matches every Al-prefixed
-    // SDN entry (e.g. "Albert", "Aleksandr").
-    const tokens = new Set(haystack.split(" "));
-    return tokens.has(needle);
+
+  const prepared = getPreparedSnapshot(snap);
+
+  const firstTokens = first.includes(" ") ? first.split(" ") : null;
+  const lastTokens = last.includes(" ") ? last.split(" ") : null;
+
+  const matchTokens = (tokens: Set<string>): boolean => {
+    if (firstTokens) {
+      for (let i = 0; i < firstTokens.length; i++) {
+        if (!tokens.has(firstTokens[i])) return false;
+      }
+    } else {
+      if (!tokens.has(first)) return false;
+    }
+
+    if (lastTokens) {
+      for (let i = 0; i < lastTokens.length; i++) {
+        if (!tokens.has(lastTokens[i])) return false;
+      }
+    } else {
+      if (!tokens.has(last)) return false;
+    }
+
+    return true;
   };
+
   const matches: TreasurySdnMatchOutcome["matches"] = [];
-  for (const e of snap.entries) {
-    const primary = normalize(e.name);
-    if (wholeWord(primary, first) && wholeWord(primary, last)) {
+  const entries = prepared.preparedEntries;
+  const entriesCount = entries.length;
+
+  for (let i = 0; i < entriesCount; i++) {
+    const pEntry = entries[i];
+    const e = pEntry.raw;
+
+    if (matchTokens(pEntry.nameTokens)) {
       matches.push({ sdn_id: e.sdn_id, name: e.name, programs: e.programs, matched_via: "name" });
       if (matches.length >= 5) break;
       continue;
     }
-    for (const aka of e.akas) {
-      const norm = normalize(aka);
-      if (wholeWord(norm, first) && wholeWord(norm, last)) {
-        matches.push({ sdn_id: e.sdn_id, name: aka, programs: e.programs, matched_via: "aka" });
+
+    const akaTokens = pEntry.akaTokens;
+    const akaCount = akaTokens.length;
+    for (let j = 0; j < akaCount; j++) {
+      if (matchTokens(akaTokens[j])) {
+        matches.push({ sdn_id: e.sdn_id, name: e.akas[j], programs: e.programs, matched_via: "aka" });
         break;
       }
     }
     if (matches.length >= 5) break;
   }
+
   return {
     status: "ok",
     matches,
@@ -288,4 +368,5 @@ export async function matchTreasurySdn(person: {
 export function __setSdnSnapshotForTests(s: SdnSnapshot | null): void {
   snapshot = s;
   pendingFetch = null;
+  cachedPreparedSnapshot = null;
 }
