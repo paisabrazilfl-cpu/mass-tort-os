@@ -1,5 +1,5 @@
-import { TaxonomyMatchResult } from "./taxonomy-engine";
-import { TortValidationResult } from "./tort-engine";
+import type { TaxonomyMatchResult } from "./taxonomy-engine";
+import type { TortValidationResult } from "./tort-engine";
 
 export type FraudSeverity = "none" | "soft" | "review" | "hard_block";
 
