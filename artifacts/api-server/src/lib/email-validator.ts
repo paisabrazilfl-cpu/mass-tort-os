@@ -51,8 +51,10 @@ function findFuzzyProviderMatch(domain: string): string | null {
   if (tld !== ".com") return null;
   if (prefix.length < 3) return null;
   let best: { canonical: string; distance: number } | null = null;
-  for (const { prefix: known, canonical, minLen } of COMMON_PROVIDERS_FUZZY) {
-    if (prefix.length < minLen) continue;
+  for (let i = 0; i < COMMON_PROVIDERS_FUZZY.length; i++) {
+    const knownItem = COMMON_PROVIDERS_FUZZY[i]!;
+    const known = knownItem.prefix;
+    if (prefix.length < knownItem.minLen) continue;
     if (prefix === known) return null;
     // Anchor on the first character to avoid classifying real-but-similar
     // domains (ymail.com, email.com, cloud.com) as typos of gmail/icloud.
@@ -60,17 +62,29 @@ function findFuzzyProviderMatch(domain: string): string | null {
     const dist = levenshtein(prefix, known);
     const threshold = known.length <= 7 ? 3 : 4;
     if (dist === 0 || dist > threshold) continue;
-    if (!best || dist < best.distance) best = { canonical, distance: dist };
+    if (!best || dist < best.distance) best = { canonical: knownItem.canonical, distance: dist };
   }
   return best?.canonical ?? null;
 }
 
 const RFC_EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
 
-const DISPOSABLE_DOMAINS = [
+// PERF: Convert array to Set for O(1) lookups instead of O(N) array scans
+const DISPOSABLE_DOMAINS = new Set([
   "tempmail.com", "throwaway.email", "guerrillamail.com", "mailinator.com",
   "yopmail.com", "sharklasers.com", "trashmail.com", "10minutemail.com",
   "fakeinbox.com", "dispostable.com", "maildrop.cc", "guerrillamailblock.com",
+]);
+
+// PERF: Hoist static RegExp patterns to module scope to avoid re-instantiating on every call
+const SUSPICIOUS_PATTERNS = [
+  /^test@/,
+  /^fake@/,
+  /^none@/,
+  /^noemail@/,
+  /^na@/,
+  /^asdf/,
+  /^aaa+@/,
 ];
 
 export interface EmailValidationResult {
@@ -132,7 +146,9 @@ export function validateEmail(email: string): EmailValidationResult {
     }
   }
 
-  for (const tld of MALFORMED_TLDS) {
+  // PERF: Indexed loop avoids iterator allocation overhead
+  for (let i = 0; i < MALFORMED_TLDS.length; i++) {
+    const tld = MALFORMED_TLDS[i]!;
     if (trimmed.endsWith(tld)) {
       errors.push("MALFORMED_TLD");
       const corrected = trimmed.slice(0, -tld.length) + ".com";
@@ -141,29 +157,30 @@ export function validateEmail(email: string): EmailValidationResult {
     }
   }
 
-  if (DISPOSABLE_DOMAINS.includes(domain)) {
+  // PERF: O(1) Set lookup replacing O(N) array search
+  if (DISPOSABLE_DOMAINS.has(domain)) {
     errors.push("DISPOSABLE_EMAIL");
   }
 
-  const suspiciousPatterns = [
-    /^test@/,
-    /^fake@/,
-    /^none@/,
-    /^noemail@/,
-    /^na@/,
-    /^asdf/,
-    /^aaa+@/,
-  ];
-  for (const pat of suspiciousPatterns) {
-    if (pat.test(trimmed)) {
+  // PERF: Loop over pre-compiled module-scoped RegExp instances
+  for (let i = 0; i < SUSPICIOUS_PATTERNS.length; i++) {
+    if (SUSPICIOUS_PATTERNS[i]!.test(trimmed)) {
       errors.push("SUSPICIOUS_EMAIL_PATTERN");
       break;
     }
   }
 
-  const hardErrors = errors.filter((e) => !ADVISORY_CODES.has(e));
+  // PERF: Direct loop check instead of allocating an intermediate array and closure callback via .filter()
+  let hasHardError = false;
+  for (let i = 0; i < errors.length; i++) {
+    if (!ADVISORY_CODES.has(errors[i]!)) {
+      hasHardError = true;
+      break;
+    }
+  }
+
   return {
-    valid: hardErrors.length === 0,
+    valid: !hasHardError,
     errors,
     suggestion,
   };
