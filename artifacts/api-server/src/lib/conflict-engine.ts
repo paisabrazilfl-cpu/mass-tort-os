@@ -1,5 +1,3 @@
-import { db, reviewQueueTable } from "@workspace/db";
-import { auditLog } from "./audit";
 import { logger } from "./logger";
 
 export type ConflictType =
@@ -314,6 +312,7 @@ export async function routeToReview(conflict: ConflictResult, ctx: ConflictCheck
     "CONFLICT DETECTED — routing to REVIEW_STATE"
   );
 
+  const { db, reviewQueueTable } = await import("@workspace/db");
   const [item] = await db
     .insert(reviewQueueTable)
     .values({
@@ -335,6 +334,7 @@ export async function routeToReview(conflict: ConflictResult, ctx: ConflictCheck
     })
     .returning({ id: reviewQueueTable.id });
 
+  const { auditLog } = await import("./audit");
   await auditLog(ctx.entity_type, ctx.entity_id, "conflict_detected", {
     conflict_type: conflict.conflict_type,
     severity: conflict.severity,

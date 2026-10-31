@@ -1,3 +1,5 @@
+process.env["DATABASE_URL"] = process.env["DATABASE_URL"] || "postgres://localhost:5432/test";
+
 import { checkLogicalConflicts, checkDataIntegrity, type ConflictCheckContext } from "../conflict-engine";
 
 const sampleContexts: ConflictCheckContext[] = [

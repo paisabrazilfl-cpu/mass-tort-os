@@ -1,3 +1,5 @@
+process.env["DATABASE_URL"] = process.env["DATABASE_URL"] || "postgres://localhost:5432/test";
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
