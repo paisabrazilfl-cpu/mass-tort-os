@@ -31,14 +31,25 @@ export interface ConflictCheckContext {
   user_settings?: Record<string, unknown>;
 }
 
-const VALID_LOCATIONS = [
+// PERF: Module-scoped Set for O(1) membership lookups replacing O(N) array scans
+const VALID_LOCATIONS = new Set<string>([
   "USA", "US", "UNITED STATES",
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA",
   "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA",
   "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY",
   "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX",
   "UT", "VT", "VA", "WA", "WV", "WI", "WY",
-];
+]);
+
+// PERF: Hoist static regular expressions to module scope to avoid per-call RegExp compilation
+const LOCATION_SPLIT_RE = /[\s,]+/;
+const REPEATED_CHARS_RE = /^(.)\1+$/;
+const TORT_GARBAGE_RE = /^[^a-zA-Z]*$|^(.)\1{3,}$/;
+const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const NON_DIGITS_RE = /\D/g;
+
+// PERF: Hoist static required fields array to avoid per-call array allocation
+const REQUIRED_FIELDS = ["name", "tort_type"] as const;
 
 const KNOWN_TORT_CONDITIONS: Record<string, string[]> = {
   "Camp Lejeune": ["cancer", "leukemia", "kidney disease", "liver disease", "parkinson", "bladder cancer", "non-hodgkin"],
@@ -59,8 +70,16 @@ export function checkLogicalConflicts(ctx: ConflictCheckContext): ConflictResult
 
   const locationRaw = String(lead.location_name || lead.location || "").toUpperCase().trim();
   if (locationRaw) {
-    const locationWords = locationRaw.split(/[\s,]+/).map((w) => w.trim()).filter(Boolean);
-    const matchesUS = locationWords.some((word) => VALID_LOCATIONS.includes(word));
+    // PERF: Split once and check Set membership with early break, avoiding .map().filter().some() allocations
+    const words = locationRaw.split(LOCATION_SPLIT_RE);
+    let matchesUS = false;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i]!.trim();
+      if (w && VALID_LOCATIONS.has(w)) {
+        matchesUS = true;
+        break;
+      }
+    }
     if (!matchesUS) {
       details.push(`Location "${lead.location_name || lead.location}" is outside allowed US geography`);
     }
@@ -68,20 +87,30 @@ export function checkLogicalConflicts(ctx: ConflictCheckContext): ConflictResult
 
   const tortType = String(lead.tort_type || "").trim();
   const diagnosisType = String(lead.diagnosis_type || "").toLowerCase().trim();
-  if (tortType && diagnosisType && KNOWN_TORT_CONDITIONS[tortType]) {
+  if (tortType && diagnosisType) {
     const validConditions = KNOWN_TORT_CONDITIONS[tortType];
-    const matchesAny = validConditions.some((c) => diagnosisType.includes(c));
-    if (!matchesAny) {
-      details.push(
-        `Diagnosis "${lead.diagnosis_type}" does not match known conditions for tort "${tortType}" (expected: ${validConditions.join(", ")})`
-      );
+    if (validConditions) {
+      // PERF: Indexed loop with early break avoids closure allocation from .some()
+      let matchesAny = false;
+      for (let i = 0; i < validConditions.length; i++) {
+        if (diagnosisType.includes(validConditions[i]!)) {
+          matchesAny = true;
+          break;
+        }
+      }
+      if (!matchesAny) {
+        details.push(
+          `Diagnosis "${lead.diagnosis_type}" does not match known conditions for tort "${tortType}" (expected: ${validConditions.join(", ")})`
+        );
+      }
     }
   }
 
   if (lead.exposure_start && lead.exposure_end) {
-    const start = new Date(String(lead.exposure_start));
-    const end = new Date(String(lead.exposure_end));
-    if (start > end) {
+    // PERF: Date.parse returns primitive numeric timestamps, avoiding new Date() heap object allocations
+    const startMs = Date.parse(String(lead.exposure_start));
+    const endMs = Date.parse(String(lead.exposure_end));
+    if (!Number.isNaN(startMs) && !Number.isNaN(endMs) && startMs > endMs) {
       details.push(`Exposure start date (${lead.exposure_start}) is after end date (${lead.exposure_end})`);
     }
   }
@@ -103,48 +132,54 @@ export function checkLogicalConflicts(ctx: ConflictCheckContext): ConflictResult
 export function checkDataIntegrity(ctx: ConflictCheckContext): ConflictResult {
   const details: string[] = [];
   const lead = ctx.lead_data || {};
+  let hasRequired = false;
+  let hasGarbage = false;
 
-  const requiredFields = ["name", "tort_type"];
-  for (const field of requiredFields) {
+  // PERF: Track hasRequired and hasGarbage during inspection to eliminate redundant .some() scans over details
+  for (let i = 0; i < REQUIRED_FIELDS.length; i++) {
+    const field = REQUIRED_FIELDS[i]!;
     const val = lead[field];
     if (val === undefined || val === null || String(val).trim() === "") {
       details.push(`Required field "${field}" is missing or empty`);
+      hasRequired = true;
     }
   }
 
   const name = String(lead.name || "").trim();
-  if (name && name.length < 2) {
-    details.push(`Name "${name}" appears invalid (too short)`);
-  }
-  if (name && /^(.)\1+$/.test(name)) {
-    details.push(`Name "${name}" appears to be garbage input`);
+  if (name) {
+    if (name.length < 2) {
+      details.push(`Name "${name}" appears invalid (too short)`);
+    }
+    if (REPEATED_CHARS_RE.test(name)) {
+      details.push(`Name "${name}" appears to be garbage input`);
+      hasGarbage = true;
+    }
   }
 
   const tortType = String(lead.tort_type || "").trim();
-  if (tortType && tortType.length < 3) {
-    details.push(`Tort type "${tortType}" appears invalid`);
-  }
-  const garbagePattern = /^[^a-zA-Z]*$|^(.)\1{3,}$/;
-  if (tortType && garbagePattern.test(tortType)) {
-    details.push(`Tort type "${tortType}" appears to be garbage input`);
+  if (tortType) {
+    if (tortType.length < 3) {
+      details.push(`Tort type "${tortType}" appears invalid`);
+    }
+    if (TORT_GARBAGE_RE.test(tortType)) {
+      details.push(`Tort type "${tortType}" appears to be garbage input`);
+      hasGarbage = true;
+    }
   }
 
   const email = String(lead.email || "").trim();
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (email && !EMAIL_FORMAT_RE.test(email)) {
     details.push(`Email "${email}" format is invalid`);
   }
 
   const phone = String(lead.phone || "").trim();
-  if (phone && phone.replace(/\D/g, "").length < 10) {
+  if (phone && phone.replace(NON_DIGITS_RE, "").length < 10) {
     details.push(`Phone "${phone}" appears invalid (too few digits)`);
   }
 
   if (details.length === 0) {
     return { has_conflict: false, conflict_type: null, severity: "low", details: [], failsafe_mode: "SAFE_FAIL", output_state: "ACCEPT" };
   }
-
-  const hasRequired = details.some((d) => d.includes("Required field"));
-  const hasGarbage = details.some((d) => d.includes("garbage input"));
 
   return {
     has_conflict: true,
@@ -200,9 +235,22 @@ export function checkRuleOverrideConflict(
     const buyerLocs = Array.isArray(buyerCriteria.allowed_locations) ? buyerCriteria.allowed_locations : [buyerCriteria.allowed_locations];
     const globalLocs = Array.isArray(globalTortRules.allowed_locations) ? globalTortRules.allowed_locations : [globalTortRules.allowed_locations];
 
-    const buyerSet = new Set(buyerLocs.map((l: string) => String(l).toUpperCase()));
-    const globalSet = new Set(globalLocs.map((l: string) => String(l).toUpperCase()));
-    const extraLocs = [...buyerSet].filter((l) => !globalSet.has(l));
+    // PERF: Populate global Set directly to avoid intermediate .map() array allocation
+    const globalSet = new Set<string>();
+    for (let i = 0; i < globalLocs.length; i++) {
+      globalSet.add(String(globalLocs[i]).toUpperCase());
+    }
+    const extraLocs: string[] = [];
+    const seen = new Set<string>();
+    for (let i = 0; i < buyerLocs.length; i++) {
+      const loc = String(buyerLocs[i]).toUpperCase();
+      if (!seen.has(loc)) {
+        seen.add(loc);
+        if (!globalSet.has(loc)) {
+          extraLocs.push(loc);
+        }
+      }
+    }
     if (extraLocs.length > 0) {
       details.push(`Buyer criteria allows locations [${extraLocs.join(", ")}] that are excluded by global tort rules`);
     }
@@ -215,13 +263,15 @@ export function checkRuleOverrideConflict(
   }
 
   if (buyerCriteria.required_conditions && globalTortRules.required_conditions) {
-    const buyerConds = new Set(
-      (Array.isArray(buyerCriteria.required_conditions) ? buyerCriteria.required_conditions : []).map((c: string) =>
-        String(c).toLowerCase()
-      )
-    );
-    const globalConds = Array.isArray(globalTortRules.required_conditions) ? globalTortRules.required_conditions : [];
-    for (const gc of globalConds) {
+    // PERF: Populate buyerConds Set directly without intermediate array allocation
+    const buyerConds = new Set<string>();
+    const bConds = Array.isArray(buyerCriteria.required_conditions) ? buyerCriteria.required_conditions : [buyerCriteria.required_conditions];
+    for (let i = 0; i < bConds.length; i++) {
+      buyerConds.add(String(bConds[i]).toLowerCase());
+    }
+    const globalConds = Array.isArray(globalTortRules.required_conditions) ? globalTortRules.required_conditions : [globalTortRules.required_conditions];
+    for (let i = 0; i < globalConds.length; i++) {
+      const gc = globalConds[i];
       if (!buyerConds.has(String(gc).toLowerCase())) {
         details.push(`Global required condition "${gc}" is missing from buyer criteria`);
       }
